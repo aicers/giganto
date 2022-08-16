@@ -1,4 +1,8 @@
-use std::{env, path::PathBuf, process::exit};
+mod settings;
+
+use std::{env, process::exit};
+
+use settings::Settings;
 
 const USAGE: &str = "\
 USAGE:
@@ -13,38 +17,42 @@ ARG:
 ";
 
 #[tokio::main]
-async fn main() {
-    let _config_filename = parse();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _settings = if let Some(config_filename) = parse() {
+        Settings::from_file(&config_filename)?
+    } else {
+        Settings::from_file("config.toml")?
+    };
+    Ok(())
 }
 
 /// Parses the command line arguments and returns the first argument.
-fn parse() -> Option<PathBuf> {
-    let args = env::args().collect::<Vec<_>>();
-    if args.len() <= 1 {
-        return None;
-    }
-    if args.len() > 2 {
+fn parse() -> Option<String> {
+    let mut args = env::args();
+    args.next()?;
+    let arg = args.next()?;
+    if args.next().is_some() {
         eprintln!("Error: too many arguments");
         exit(1);
     }
 
-    if args[1] == "--help" || args[1] == "-h" {
+    if arg == "--help" || arg == "-h" {
         println!("{}", version());
         println!();
         print!("{}", USAGE);
         exit(0);
     }
-    if args[1] == "--version" || args[1] == "-V" {
+    if arg == "--version" || arg == "-V" {
         println!("{}", version());
         exit(0);
     }
-    if args[1].starts_with('-') {
-        eprintln!("Error: unknown option: {}", args[1]);
+    if arg.starts_with('-') {
+        eprintln!("Error: unknown option: {}", arg);
         eprintln!("\n{}", USAGE);
         exit(1);
     }
 
-    Some(PathBuf::from(&args[1]))
+    Some(arg)
 }
 
 fn version() -> String {
