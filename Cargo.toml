@@ -14,3 +14,6 @@ rustls = "0.20"
 rustls-pemfile = "1.0"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+url = "2"
