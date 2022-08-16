@@ -93,11 +93,10 @@ fn config_server() -> Result<ServerConfig> {
 
     let pv_key = rustls::PrivateKey(key);
     let cert_chain = vec![rustls::Certificate(cert)];
-    let mut server_crypto = rustls::ServerConfig::builder()
+    let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, pv_key)?;
-    server_crypto.alpn_protocols = vec!["gig".into()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
 
