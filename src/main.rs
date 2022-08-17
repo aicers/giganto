@@ -1,8 +1,8 @@
+mod ingestion;
 mod settings;
 
-use std::{env, process::exit};
-
 use settings::Settings;
+use std::{env, process::exit};
 
 const USAGE: &str = "\
 USAGE:
@@ -23,6 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Settings::from_file("config.toml")?
     };
+    let ingestion_server = ingestion::Server::new();
+    ingestion_server.run().await;
     Ok(())
 }
 
