@@ -1,7 +1,9 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, ServerConfig};
 use std::{fs, net::SocketAddr, sync::Arc};
+
+use crate::settings::Settings;
 
 pub struct Server {
     server_config: ServerConfig,
@@ -9,11 +11,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(server_address: &str) -> Self {
-        let server_config = config_server().expect("server configuration error");
+    pub fn new(s: &Settings) -> Self {
+        let server_config = config_server(&s.cert, &s.key).expect("server configuration error");
         Server {
             server_config,
-            server_address: server_addr(server_address),
+            server_address: server_addr(&s.ingestion_address),
         }
     }
 
@@ -78,16 +80,11 @@ fn server_addr(addr: &str) -> SocketAddr {
     addr.parse::<SocketAddr>().unwrap()
 }
 
-fn config_server() -> Result<ServerConfig> {
-    let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
-    let path = dirs.data_local_dir();
-    let cert_path = path.join("cert.der");
-    let key_path = path.join("key.der");
-    fs::create_dir_all(&path).context("failed to create cert dir")?;
+fn config_server(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
     let (cert, key) = match fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?))) {
         Ok(x) => x,
-        Err(e) => {
-            bail!("failed to read cert file, $HOME/Library/Application Support/com.einsis.giganto/('key.der', 'cert.der') {} ", e);
+        Err(_) => {
+            bail!("failed to read (cert, key) file, \n$HOME/Library/Application Support/com.einsis.giganto/('key.der', 'cert.der') or config file error ");
         }
     };
 
