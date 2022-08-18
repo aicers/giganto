@@ -25,7 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Settings::from_file("config.toml")?
     };
 
-    let ingestion_server = ingestion::Server::new(&settings.ingestion_address);
+    let ingestion_server = ingestion::Server::new(&settings);
+
     ingestion_server.run().await;
     Ok(())
 }
