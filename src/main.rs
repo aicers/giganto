@@ -1,5 +1,6 @@
 mod ingestion;
 mod settings;
+mod storage;
 
 use settings::Settings;
 use std::{env, process::exit};
