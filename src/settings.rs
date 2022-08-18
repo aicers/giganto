@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub cert: String,              // Path to the certificate file
     pub key: String,               // Path to the private key file

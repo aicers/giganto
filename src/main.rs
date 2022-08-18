@@ -18,12 +18,13 @@ ARG:
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _settings = if let Some(config_filename) = parse() {
+    let settings = if let Some(config_filename) = parse() {
         Settings::from_file(&config_filename)?
     } else {
         Settings::from_file("config.toml")?
     };
-    let ingestion_server = ingestion::Server::new();
+
+    let ingestion_server = ingestion::Server::new(&settings.ingestion_address);
     ingestion_server.run().await;
     Ok(())
 }

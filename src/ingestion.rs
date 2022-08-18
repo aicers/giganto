@@ -5,17 +5,21 @@ use std::{fs, net::SocketAddr, sync::Arc};
 
 pub struct Server {
     server_config: ServerConfig,
+    server_address: SocketAddr,
 }
 
 impl Server {
-    pub fn new() -> Self {
+    pub fn new(server_address: &str) -> Self {
         let server_config = config_server().expect("server configuration error");
-        Server { server_config }
+        Server {
+            server_config,
+            server_address: server_addr(server_address),
+        }
     }
 
     pub async fn run(self) {
         let (endpoint, mut incoming) =
-            Endpoint::server(self.server_config, server_addr()).expect("endpoint");
+            Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         println!(
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
@@ -70,8 +74,8 @@ async fn handle_request((mut _send, recv): (quinn::SendStream, quinn::RecvStream
     Ok(())
 }
 
-fn server_addr() -> SocketAddr {
-    "0.0.0.0:38400".parse::<SocketAddr>().unwrap()
+fn server_addr(addr: &str) -> SocketAddr {
+    addr.parse::<SocketAddr>().unwrap()
 }
 
 fn config_server() -> Result<ServerConfig> {
