@@ -1,7 +1,7 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, ServerConfig};
-use std::{fs, net::SocketAddr, sync::Arc};
+use std::{fs, net::SocketAddr, path::Path, sync::Arc};
 
 use crate::settings::Settings;
 
@@ -84,12 +84,48 @@ fn config_server(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
     let (cert, key) = match fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?))) {
         Ok(x) => x,
         Err(_) => {
-            bail!("failed to read (cert, key) file, \n$HOME/Library/Application Support/com.einsis.giganto/('key.der', 'cert.der') or config file error ");
+            bail!(
+                "failed to read (cert, key) file, {}, {} read file error",
+                cert_path,
+                key_path
+            );
         }
     };
 
-    let pv_key = rustls::PrivateKey(key);
-    let cert_chain = vec![rustls::Certificate(cert)];
+    let pv_key = if Path::new(key_path)
+        .extension()
+        .map_or(false, |x| x == "der")
+    {
+        rustls::PrivateKey(key)
+    } else {
+        let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
+            .context("malformed PKCS #8 private key")?;
+        match pkcs8.into_iter().next() {
+            Some(x) => rustls::PrivateKey(x),
+            None => {
+                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+                    .context("malformed PKCS #1 private key")?;
+                match rsa.into_iter().next() {
+                    Some(x) => rustls::PrivateKey(x),
+                    None => {
+                        anyhow::bail!("no private keys found");
+                    }
+                }
+            }
+        }
+    };
+    let cert_chain = if Path::new(cert_path)
+        .extension()
+        .map_or(false, |x| x == "der")
+    {
+        vec![rustls::Certificate(cert)]
+    } else {
+        rustls_pemfile::certs(&mut &*cert)
+            .context("invalid PEM-encoded certificate")?
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect()
+    };
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
