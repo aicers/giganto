@@ -1,4 +1,5 @@
 use quinn::{Connection, Endpoint};
+use rustls::Certificate;
 use std::{
     fs,
     net::{SocketAddr, ToSocketAddrs},
@@ -6,9 +7,9 @@ use std::{
 };
 use url::Url;
 
-const CERT: &str = "tests/cert.der";
+const CERT: &str = "tests/root.pem";
 const HOST: &str = "localhost";
-const SERVER_URL: &str = "https://127.0.0.1:38400";
+const SERVER_URL: &str = "https://127.0.0.1:38370";
 
 pub struct CommInfo {
     pub conn: Connection,
@@ -31,10 +32,14 @@ fn init_server() -> SocketAddr {
 fn init_client() -> Endpoint {
     let mut roots = rustls::RootCertStore::empty();
     let file = fs::read(CERT).expect("Failed to read file");
-    roots
-        .add(&rustls::Certificate(file))
-        .expect("Failed to add cert");
-
+    let certs: Vec<Certificate> = rustls_pemfile::certs(&mut &*file)
+        .unwrap()
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect();
+    for cert in certs {
+        roots.add(&cert).expect("Failed to add cert");
+    }
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(roots)

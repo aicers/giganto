@@ -1,9 +1,12 @@
+mod graphql;
 mod ingestion;
 mod settings;
 mod storage;
+mod web;
 
 use settings::Settings;
 use std::{env, process::exit};
+use tokio::task;
 
 const USAGE: &str = "\
 USAGE:
@@ -24,9 +27,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Settings::from_file("config.toml")?
     };
+    let s = settings.clone();
+    task::spawn(async move {
+        let schema = graphql::schema();
+        web::serve(schema, &s).await;
+    });
 
     let ingestion_server = ingestion::Server::new(&settings);
-
     ingestion_server.run().await;
     Ok(())
 }
