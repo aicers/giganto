@@ -1,4 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::prelude::DateTime;
+use chrono::{Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
 use quinn::{Endpoint, ServerConfig};
 use std::{fs, net::SocketAddr, path::Path, sync::Arc};
@@ -10,6 +12,13 @@ pub struct Server {
     server_config: ServerConfig,
     server_address: SocketAddr,
 }
+
+const REC_TYPE_LOC: usize = 0;
+const REC_TYPE_SIZE: usize = 4;
+const TIMESTAMP_LOC: usize = 4;
+const TIMESTAMP_SIZE: usize = 8;
+const RECODE_LOC: usize = 12;
+const RECODE_SIZE: usize = 4;
 
 impl Server {
     pub fn new(s: &Settings) -> Self {
@@ -94,14 +103,30 @@ async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
 }
 
 async fn handle_request((mut _send, recv): (quinn::SendStream, quinn::RecvStream)) -> Result<()> {
-    let _req = recv
+    let req = recv
         .read_to_end(64 * 1024)
         .await
         .map_err(|e| anyhow!("failed to reading request: {}", e))?;
-    // let resp = str::from_utf8(&req)?;
-    // println!("{}", resp); // resp 확인
 
+    let record_type =
+        u32::from_le_bytes(req[REC_TYPE_LOC..REC_TYPE_LOC + REC_TYPE_SIZE].try_into()?);
+    let timstamp =
+        i64::from_le_bytes(req[TIMESTAMP_LOC..TIMESTAMP_LOC + TIMESTAMP_SIZE].try_into()?);
+    let _record = u32::from_le_bytes(req[RECODE_LOC..RECODE_LOC + RECODE_SIZE].try_into()?);
+
+    println!(
+        "record_type: {:?}\ntimestamp: {:?}",
+        record_type,
+        client_utc_time(timstamp)
+    );
     Ok(())
+}
+
+fn client_utc_time(timestamp: i64) -> String {
+    let duration = Duration::nanoseconds(timestamp).num_seconds();
+    let datetime: DateTime<Utc> =
+        DateTime::from_utc(NaiveDateTime::from_timestamp(duration, 0), Utc);
+    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn server_addr(addr: &str) -> SocketAddr {
