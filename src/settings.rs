@@ -9,6 +9,7 @@ const DEFAULT_GRAPHQL_ADDRESS: &str = "127.0.0.1:8443";
 pub struct Settings {
     pub cert: String,              // Path to the certificate file
     pub key: String,               // Path to the private key file
+    pub roots: Vec<String>,        // Path to the rootCA file
     pub ingestion_address: String, // IP address & port to ingest data
     pub graphql_address: String,   // IP address & port to graphql
 }

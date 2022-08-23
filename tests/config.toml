@@ -1,0 +1,4 @@
+ key = "tests/key.pem"
+ cert = "tests/cert.pem"
+ roots = ["tests/root.pem"]
+ ingestion_address = "0.0.0.0:38370"
