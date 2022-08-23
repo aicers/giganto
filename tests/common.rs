@@ -1,5 +1,5 @@
 use quinn::{Connection, Endpoint};
-use rustls::Certificate;
+use std::path::Path;
 use std::{
     fs,
     net::{SocketAddr, ToSocketAddrs},
@@ -7,8 +7,10 @@ use std::{
 };
 use url::Url;
 
-const CERT: &str = "tests/root.pem";
+const CERT: &str = "tests/cert.pem";
 const HOST: &str = "localhost";
+const KEY: &str = "tests/key.pem";
+const ROOT: &str = "tests/root.pem";
 const SERVER_URL: &str = "https://127.0.0.1:38370";
 
 pub struct CommInfo {
@@ -30,20 +32,64 @@ fn init_server() -> SocketAddr {
 }
 
 fn init_client() -> Endpoint {
-    let mut roots = rustls::RootCertStore::empty();
-    let file = fs::read(CERT).expect("Failed to read file");
-    let certs: Vec<Certificate> = rustls_pemfile::certs(&mut &*file)
-        .unwrap()
+    let (cert, key) = match fs::read(CERT)
+        .and_then(|x| Ok((x, fs::read(KEY).expect("Failed to Read key file"))))
+    {
+        Ok(x) => x,
+        Err(_) => {
+            panic!(
+                "failed to read (cert, key) file, {}, {} read file error",
+                CERT, KEY
+            );
+        }
+    };
+
+    let pv_key = if Path::new(KEY).extension().map_or(false, |x| x == "der") {
+        rustls::PrivateKey(key)
+    } else {
+        let pkcs8 =
+            rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
+        match pkcs8.into_iter().next() {
+            Some(x) => rustls::PrivateKey(x),
+            None => {
+                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+                    .expect("malformed PKCS #1 private key");
+                match rsa.into_iter().next() {
+                    Some(x) => rustls::PrivateKey(x),
+                    None => {
+                        panic!("no private keys found");
+                    }
+                }
+            }
+        }
+    };
+    let cert_chain = if Path::new(CERT).extension().map_or(false, |x| x == "der") {
+        vec![rustls::Certificate(cert)]
+    } else {
+        rustls_pemfile::certs(&mut &*cert)
+            .expect("invalid PEM-encoded certificate")
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect()
+    };
+
+    let mut server_root = rustls::RootCertStore::empty();
+    let file = fs::read(ROOT).expect("Failed to read file");
+    let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
+        .expect("invalid PEM-encoded certificate")
         .into_iter()
         .map(rustls::Certificate)
         .collect();
-    for cert in certs {
-        roots.add(&cert).expect("Failed to add cert");
+
+    if let Some(cert) = root_cert.get(0) {
+        server_root.add(cert).expect("Failed to add cert");
     }
+
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        .with_root_certificates(server_root)
+        .with_single_cert(cert_chain, pv_key)
+        .unwrap();
 
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
