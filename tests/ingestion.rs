@@ -1,6 +1,9 @@
 mod common;
 
-const MESSAGE_TEST: &str = "Hello Server";
+use chrono::Utc;
+
+const RECORD_TYPE: u32 = 0x11223344;
+const RECORD: u32 = 0x55667788;
 
 #[tokio::test]
 async fn run() {
@@ -11,7 +14,13 @@ async fn run() {
         .await
         .expect("failed to open stream");
 
-    send.write_all(MESSAGE_TEST.as_bytes())
+    let timestamp: i64 = Utc::now().timestamp_nanos();
+    let mut send_data: Vec<u8> = Vec::new();
+    send_data.append(&mut RECORD_TYPE.to_le_bytes().to_vec());
+    send_data.append(&mut timestamp.to_le_bytes().to_vec());
+    send_data.append(&mut RECORD.to_le_bytes().to_vec());
+
+    send.write_all(&send_data)
         .await
         .expect("failed to send request");
     send.finish().await.expect("failed to shutdown stream");

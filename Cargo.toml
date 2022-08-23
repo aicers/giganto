@@ -8,6 +8,7 @@ anyhow = "1.0"
 async-graphql = "4.0"
 async-graphql-warp = "4.0"
 config = { version = "0.13", features = ["toml"], default-features = false }
+chrono = "0.4.22"
 directories = "4.0"
 futures-util = "0.3"
 quinn = "0.8"
