@@ -2,23 +2,51 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::prelude::DateTime;
 use chrono::{Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
-use quinn::{Endpoint, ServerConfig};
-use std::{fs, net::SocketAddr, path::Path, sync::Arc};
+use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
+use serde::Deserialize;
+use std::mem;
+use std::{
+    fs,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+    sync::Arc,
+};
 use x509_parser::nom::Parser;
 
 use crate::settings::Settings;
+
+#[allow(unused)]
+#[derive(Debug, Deserialize)]
+struct Conn {
+    orig_addr: IpAddr,
+    resp_addr: IpAddr,
+    orig_port: u16,
+    resp_port: u16,
+    proto: u8,
+    duration: i64,
+    orig_bytes: u64,
+    resp_bytes: u64,
+    orig_pkts: u64,
+    resp_pkts: u64,
+}
+
+#[allow(unused)]
+#[derive(Debug, Deserialize)]
+struct DNSConn {
+    orig_addr: IpAddr,
+    resp_addr: IpAddr,
+    orig_port: u16,
+    resp_port: u16,
+    proto: u8,
+    query: String,
+}
+
+type Log = (String, Vec<u8>);
 
 pub struct Server {
     server_config: ServerConfig,
     server_address: SocketAddr,
 }
-
-const REC_TYPE_LOC: usize = 0;
-const REC_TYPE_SIZE: usize = 4;
-const TIMESTAMP_LOC: usize = 4;
-const TIMESTAMP_SIZE: usize = 8;
-const RECODE_LOC: usize = 12;
-const RECODE_SIZE: usize = 4;
 
 impl Server {
     pub fn new(s: &Settings) -> Self {
@@ -102,23 +130,49 @@ async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
     Ok(())
 }
 
-async fn handle_request((mut _send, recv): (quinn::SendStream, quinn::RecvStream)) -> Result<()> {
-    let req = recv
-        .read_to_end(64 * 1024)
+async fn handle_request((mut _send, mut recv): (SendStream, RecvStream)) -> Result<()> {
+    let mut buf = [0; 4];
+    recv.read_exact(&mut buf)
         .await
-        .map_err(|e| anyhow!("failed to reading request: {}", e))?;
+        .map_err(|e| anyhow!("failed to read record type: {}", e))?;
+    let record_type = u32::from_le_bytes(buf);
+    match record_type {
+        0 => loop {
+            match handle_body(&mut recv, record_type).await {
+                Ok(r) => {
+                    println!("{:?}", bincode::deserialize::<Conn>(&r)?);
+                }
+                Err(quinn::ReadExactError::FinishedEarly) => {
+                    break;
+                }
+                Err(e) => bail!("handle tcpudp error: {}", e),
+            }
+        },
+        1 => loop {
+            match handle_body(&mut recv, record_type).await {
+                Ok(r) => {
+                    println!("{:?}", bincode::deserialize::<DNSConn>(&r)?);
+                }
+                Err(quinn::ReadExactError::FinishedEarly) => {
+                    break;
+                }
+                Err(e) => bail!("handle dns error: {}", e),
+            }
+        },
+        2 => loop {
+            match handle_body(&mut recv, record_type).await {
+                Ok(r) => {
+                    println!("{:?}", bincode::deserialize::<Log>(&r)?);
+                }
+                Err(quinn::ReadExactError::FinishedEarly) => {
+                    break;
+                }
+                Err(e) => bail!("handle log error: {}", e),
+            }
+        },
+        _ => bail!("invalid record type"),
+    };
 
-    let record_type =
-        u32::from_le_bytes(req[REC_TYPE_LOC..REC_TYPE_LOC + REC_TYPE_SIZE].try_into()?);
-    let timstamp =
-        i64::from_le_bytes(req[TIMESTAMP_LOC..TIMESTAMP_LOC + TIMESTAMP_SIZE].try_into()?);
-    let _record = u32::from_le_bytes(req[RECODE_LOC..RECODE_LOC + RECODE_SIZE].try_into()?);
-
-    println!(
-        "record_type: {:?}\ntimestamp: {:?}",
-        record_type,
-        client_utc_time(timstamp)
-    );
     Ok(())
 }
 
@@ -209,4 +263,29 @@ fn config_server(
         .max_concurrent_uni_streams(0_u8.into());
 
     Ok(server_config)
+}
+
+async fn handle_body(
+    recv: &mut RecvStream,
+    record_type: u32,
+) -> Result<Vec<u8>, quinn::ReadExactError> {
+    let mut ts_buf = [0; mem::size_of::<u64>()];
+    let mut len_buf = [0; mem::size_of::<u32>()];
+    let mut body_buf = Vec::new();
+
+    recv.read_exact(&mut ts_buf).await?;
+    let timestamp = i64::from_le_bytes(ts_buf);
+
+    println!(
+        "record_type: {:?}\ntimestamp: {:?}",
+        record_type,
+        client_utc_time(timestamp),
+    );
+    recv.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+
+    body_buf.resize(len, 0);
+    recv.read_exact(body_buf.as_mut_slice()).await?;
+
+    Ok(body_buf)
 }
