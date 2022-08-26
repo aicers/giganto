@@ -32,7 +32,7 @@ struct Conn {
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct DNSConn {
+struct DnsConn {
     orig_addr: IpAddr,
     resp_addr: IpAddr,
     orig_port: u16,
@@ -151,7 +151,7 @@ async fn handle_request((mut _send, mut recv): (SendStream, RecvStream)) -> Resu
         1 => loop {
             match handle_body(&mut recv, record_type).await {
                 Ok(r) => {
-                    println!("{:?}", bincode::deserialize::<DNSConn>(&r)?);
+                    println!("{:?}", bincode::deserialize::<DnsConn>(&r)?);
                 }
                 Err(quinn::ReadExactError::FinishedEarly) => {
                     break;
