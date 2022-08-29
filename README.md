@@ -11,12 +11,14 @@ Before running the app, create a toml extension file and write it in the format 
  cert = "cert.pem"
  roots = ["root_one.pem","root_two.pem","root_three.pem"]
  ingestion_address = "0.0.0.0:38370"
+ data_dir = "tests/data"
 ```
 
 * `key`: Giganto's key path.
 * `cert`: Giganto's cert path.
 * `roots`: RootCA's path of clients connected to Giganto.
 * `ingestion_address`: Address of Gignato.
+* `data_dir`: db storage path.
 
 Build and serve the app with Cargo as follows:
 
@@ -51,16 +53,18 @@ Run giganto with the prepared configuration file.
 cargo run -- tests/config.toml
 ```
 
-After Giganto is executed, execute as follows.
+To run a test for all record types, run.
 
 ```sh
 cargo test
 ```
 
-As a result of the test, the output is as follows.
+To run a test for a specific record type, run one of the commands below.
 
 ```sh
-Connected Client Name : einsis
+cargo test send_conn_info
+cargo test send_dns_info
+cargo test send_log_info
 ```
 
 ## License
