@@ -1,5 +1,6 @@
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "127.0.0.1:8443";
@@ -10,12 +11,16 @@ pub struct Settings {
     pub key: String,               // Path to the private key file
     pub roots: Vec<String>,        // Path to the rootCA file
     pub ingestion_address: String, // IP address & port to ingest data
+    pub data_dir: String,          // DB storage path
     pub graphql_address: String,   // IP address & port to graphql
 }
 
 impl Settings {
     pub fn from_file(cfg_path: &str) -> Result<Self, ConfigError> {
         let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
+        let db_dir =
+            directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
+        let db_path = db_dir.data_dir().to_str().unwrap();
         let path = dirs.config_dir();
         let cert_path = path.join("cert.pem");
         let key_path = path.join("key.pem");
@@ -29,6 +34,8 @@ impl Settings {
             .expect("valid address")
             .set_default("graphql_address", DEFAULT_GRAPHQL_ADDRESS)
             .expect("local address")
+            .set_default("data_dir", db_path)
+            .expect("data dir")
             .add_source(File::with_name(cfg_path))
             .build()?;
 

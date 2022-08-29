@@ -1,19 +1,18 @@
+use crate::settings::Settings;
+use crate::storage::Database;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::prelude::DateTime;
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{prelude::DateTime, Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use serde::Deserialize;
-use std::mem;
 use std::{
-    fs,
+    fmt::Debug,
+    fs, mem,
     net::{IpAddr, SocketAddr},
     path::Path,
     sync::Arc,
 };
 use x509_parser::nom::Parser;
-
-use crate::settings::Settings;
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
@@ -29,7 +28,6 @@ struct Conn {
     orig_pkts: u64,
     resp_pkts: u64,
 }
-
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
 struct DnsConn {
@@ -41,7 +39,30 @@ struct DnsConn {
     query: String,
 }
 
-type Log = (String, Vec<u8>);
+#[allow(unused)]
+#[derive(Debug, Deserialize)]
+struct Log {
+    log: (String, Vec<u8>),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RecordType {
+    Conn = 0,
+    Dns = 1,
+    Log = 2,
+}
+
+impl TryFrom<u32> for RecordType {
+    type Error = ();
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        match v {
+            x if x == RecordType::Conn as u32 => Ok(RecordType::Conn),
+            x if x == RecordType::Dns as u32 => Ok(RecordType::Dns),
+            x if x == RecordType::Log as u32 => Ok(RecordType::Log),
+            _ => Err(()),
+        }
+    }
+}
 
 pub struct Server {
     server_config: ServerConfig,
@@ -58,7 +79,7 @@ impl Server {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, db: Database) {
         let (endpoint, mut incoming) =
             Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         println!(
@@ -66,8 +87,9 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
+        let arc_db = Arc::new(db);
         while let Some(conn) = incoming.next().await {
-            let fut = handle_connection(conn);
+            let fut = handle_connection(conn, Arc::clone(&arc_db));
             tokio::spawn(async move {
                 if let Err(e) = fut.await {
                     eprintln!("connection failed: {}", e);
@@ -77,13 +99,14 @@ impl Server {
     }
 }
 
-async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
+async fn handle_connection(conn: quinn::Connecting, db: Arc<Database>) -> Result<()> {
     let quinn::NewConnection {
         connection,
         mut bi_streams,
         ..
     } = conn.await?;
 
+    let mut source = String::new();
     if let Some(conn_info) = connection.peer_identity() {
         if let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() {
             if let Some(cert) = cert_info.get(0) {
@@ -98,6 +121,7 @@ async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
                             .next()
                             .and_then(|cn| cn.as_str().ok())
                             .unwrap();
+                        source.push_str(issuer);
                         println!("Connected Client Name : {}", issuer);
                     }
                     _ => anyhow::bail!("x509 parsing failed: {:?}", res),
@@ -117,7 +141,8 @@ async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
                 }
                 Ok(s) => s,
             };
-            let fut = handle_request(stream);
+
+            let fut = handle_request(source.clone(), stream, Arc::clone(&db));
             tokio::spawn(async move {
                 if let Err(e) = fut.await {
                     eprintln!("failed: {}", e);
@@ -130,50 +155,82 @@ async fn handle_connection(conn: quinn::Connecting) -> Result<()> {
     Ok(())
 }
 
-async fn handle_request((mut _send, mut recv): (SendStream, RecvStream)) -> Result<()> {
+async fn handle_request<'a>(
+    source: String,
+    (mut _send, mut recv): (SendStream, RecvStream),
+    db: Arc<Database>,
+) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
-    let record_type = u32::from_le_bytes(buf);
-    match record_type {
-        0 => loop {
-            match handle_body(&mut recv, record_type).await {
-                Ok(r) => {
-                    println!("{:?}", bincode::deserialize::<Conn>(&r)?);
+
+    if let Ok(record_type) = RecordType::try_from(u32::from_le_bytes(buf)) {
+        match record_type {
+            RecordType::Conn => {
+                let conn_store = db.conn_store()?;
+                loop {
+                    match handle_body(&mut recv).await {
+                        Ok((raw_event, timestamp)) => {
+                            print_record_format::<Conn>(record_type, timestamp, &raw_event);
+                            conn_store.append(&source, timestamp, &raw_event)?;
+                        }
+                        Err(quinn::ReadExactError::FinishedEarly) => {
+                            break;
+                        }
+                        Err(e) => bail!("handle tcpudp error: {}", e),
+                    }
                 }
-                Err(quinn::ReadExactError::FinishedEarly) => {
-                    break;
-                }
-                Err(e) => bail!("handle tcpudp error: {}", e),
             }
-        },
-        1 => loop {
-            match handle_body(&mut recv, record_type).await {
-                Ok(r) => {
-                    println!("{:?}", bincode::deserialize::<DnsConn>(&r)?);
+            RecordType::Dns => {
+                let dns_store = db.dns_store()?;
+                loop {
+                    match handle_body(&mut recv).await {
+                        Ok((raw_event, timestamp)) => {
+                            print_record_format::<DnsConn>(record_type, timestamp, &raw_event);
+                            dns_store.append(&source, timestamp, &raw_event)?;
+                        }
+                        Err(quinn::ReadExactError::FinishedEarly) => {
+                            break;
+                        }
+                        Err(e) => bail!("handle dns error: {}", e),
+                    }
                 }
-                Err(quinn::ReadExactError::FinishedEarly) => {
-                    break;
-                }
-                Err(e) => bail!("handle dns error: {}", e),
             }
-        },
-        2 => loop {
-            match handle_body(&mut recv, record_type).await {
-                Ok(r) => {
-                    println!("{:?}", bincode::deserialize::<Log>(&r)?);
+            RecordType::Log => {
+                let log_store = db.log_store()?;
+                loop {
+                    match handle_body(&mut recv).await {
+                        Ok((raw_event, timestamp)) => {
+                            print_record_format::<Log>(record_type, timestamp, &raw_event);
+                            log_store.append(&source, timestamp, &raw_event)?;
+                        }
+                        Err(quinn::ReadExactError::FinishedEarly) => {
+                            break;
+                        }
+                        Err(e) => bail!("handle log error: {}", e),
+                    }
                 }
-                Err(quinn::ReadExactError::FinishedEarly) => {
-                    break;
-                }
-                Err(e) => bail!("handle log error: {}", e),
             }
-        },
-        _ => bail!("invalid record type"),
-    };
+        };
+    } else {
+        bail!("failed to convert RecordType, invalid record type");
+    }
 
     Ok(())
+}
+
+///print the raw data
+fn print_record_format<'a, T>(record_type: RecordType, timestamp: i64, raw_event: &'a [u8])
+where
+    T: Debug + Deserialize<'a>,
+{
+    println!(
+        "record_type: {:?}\ntimestamp: {:?}\nrecord: {:?}",
+        record_type,
+        client_utc_time(timestamp),
+        bincode::deserialize::<T>(raw_event).unwrap()
+    );
 }
 
 fn client_utc_time(timestamp: i64) -> String {
@@ -265,10 +322,7 @@ fn config_server(
     Ok(server_config)
 }
 
-async fn handle_body(
-    recv: &mut RecvStream,
-    record_type: u32,
-) -> Result<Vec<u8>, quinn::ReadExactError> {
+async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
     let mut ts_buf = [0; mem::size_of::<u64>()];
     let mut len_buf = [0; mem::size_of::<u32>()];
     let mut body_buf = Vec::new();
@@ -276,16 +330,11 @@ async fn handle_body(
     recv.read_exact(&mut ts_buf).await?;
     let timestamp = i64::from_le_bytes(ts_buf);
 
-    println!(
-        "record_type: {:?}\ntimestamp: {:?}",
-        record_type,
-        client_utc_time(timestamp),
-    );
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
 
     body_buf.resize(len, 0);
     recv.read_exact(body_buf.as_mut_slice()).await?;
 
-    Ok(body_buf)
+    Ok((body_buf, timestamp))
 }

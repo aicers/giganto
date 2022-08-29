@@ -2,3 +2,4 @@
  cert = "tests/cert.pem"
  roots = ["tests/root.pem"]
  ingestion_address = "0.0.0.0:38370"
+ data_dir = "tests/data"

@@ -5,6 +5,7 @@ mod storage;
 mod web;
 
 use settings::Settings;
+use std::path::Path;
 use std::{env, process::exit};
 use tokio::task;
 
@@ -33,8 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         web::serve(schema, &s).await;
     });
 
+    let db_path = Path::new(&settings.data_dir).join("db");
+    let db = storage::Database::open(&db_path)?;
+
     let ingestion_server = ingestion::Server::new(&settings);
-    ingestion_server.run().await;
+    ingestion_server.run(db).await;
     Ok(())
 }
 
