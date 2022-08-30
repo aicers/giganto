@@ -1,6 +1,5 @@
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
-use std::fs;
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "127.0.0.1:8443";
@@ -20,7 +19,6 @@ impl Settings {
         let path = dirs.config_dir();
         let cert_path = path.join("cert.pem");
         let key_path = path.join("key.pem");
-        fs::create_dir_all(&path).expect("failed to create cert dir");
 
         let s = Config::builder()
             .set_default("cert", cert_path.to_str().expect("path to string"))
