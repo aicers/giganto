@@ -65,6 +65,8 @@ To run a test for a specific record type, run one of the commands below.
 cargo test send_conn_info
 cargo test send_dns_info
 cargo test send_log_info
+cargo test send_http_info
+cargo test send_rdp_info
 ```
 
 ## License
