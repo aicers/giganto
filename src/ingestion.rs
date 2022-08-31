@@ -16,17 +16,17 @@ use x509_parser::nom::Parser;
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct Conn {
-    orig_addr: IpAddr,
-    resp_addr: IpAddr,
-    orig_port: u16,
-    resp_port: u16,
-    proto: u8,
-    duration: i64,
-    orig_bytes: u64,
-    resp_bytes: u64,
-    orig_pkts: u64,
-    resp_pkts: u64,
+pub struct Conn {
+    pub orig_addr: IpAddr,
+    pub resp_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
+    pub orig_bytes: u64,
+    pub resp_bytes: u64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
 }
 #[allow(unused)]
 #[derive(Debug, Deserialize)]

@@ -29,16 +29,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Settings::from_file("config.toml")?
     };
     let s = settings.clone();
+
+    let db_path = Path::new(&settings.data_dir).join("db");
+    let database = storage::Database::open(&db_path)?;
+
+    let db = database.clone();
     task::spawn(async move {
-        let schema = graphql::schema();
+        let schema = graphql::schema(db);
         web::serve(schema, &s).await;
     });
 
-    let db_path = Path::new(&settings.data_dir).join("db");
-    let db = storage::Database::open(&db_path)?;
-
     let ingestion_server = ingestion::Server::new(&settings);
-    ingestion_server.run(db).await;
+    ingestion_server.run(database).await;
+
     Ok(())
 }
 

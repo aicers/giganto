@@ -1,13 +1,13 @@
 //! Raw event storage based on RocksDB.
 use anyhow::{Context, Result};
 use rocksdb::{ColumnFamily, Options, DB};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 const COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
-const TIMESTAMP_SIZE: usize = 8;
 
+#[derive(Clone)]
 pub struct Database {
-    db: DB,
+    db: Arc<DB>,
 }
 
 impl Database {
@@ -17,7 +17,7 @@ impl Database {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
         let db = DB::open_cf(&opts, path, COLUMN_FAMILY_NAMES).context("cannot open database")?;
-        Ok(Database { db })
+        Ok(Database { db: Arc::new(db) })
     }
 
     /// Returns the raw event store for connections.
@@ -82,13 +82,16 @@ impl<'db> RawEventStore<'db> {
 
     #[allow(unused)]
     /// Returns the all raw event.
-    pub fn all_raw_event(&self) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-        let val = self.db.iterator_cf(self.cf, rocksdb::IteratorMode::Start);
-        let mut events: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
-        for (key, val) in val.flatten() {
-            let (source, timestamp) = key.split_at(key.len() - TIMESTAMP_SIZE);
-            events.push((source.to_vec(), timestamp.to_vec(), val.to_vec()));
+    pub fn all_raw_event(&self) -> Vec<Vec<u8>> {
+        let mut raw = Vec::new();
+        let iter = self
+            .db
+            .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
+            .flatten();
+        for (_key, val) in iter {
+            raw.push(val.to_vec());
         }
-        events
+
+        raw
     }
 }
