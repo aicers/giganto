@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = if let Some(config_filename) = parse() {
         Settings::from_file(&config_filename)?
     } else {
-        Settings::from_file("config.toml")?
+        Settings::new()?
     };
     let s = settings.clone();
 
