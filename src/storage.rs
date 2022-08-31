@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use rocksdb::{ColumnFamily, Options, DB};
 use std::path::Path;
 
-const COLUMN_FAMILY_NAMES: [&str; 3] = ["conn", "dns", "log"];
+const COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
 const TIMESTAMP_SIZE: usize = 8;
 
 pub struct Database {
