@@ -41,6 +41,31 @@ struct DnsConn {
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
+struct HttpConn {
+    orig_addr: IpAddr,
+    resp_addr: IpAddr,
+    orig_port: u16,
+    resp_port: u16,
+    method: String,
+    host: String,
+    uri: String,
+    referrer: String,
+    user_agent: String,
+    status_code: u16,
+}
+
+#[allow(unused)]
+#[derive(Debug, Deserialize)]
+struct RdpConn {
+    orig_addr: IpAddr,
+    resp_addr: IpAddr,
+    orig_port: u16,
+    resp_port: u16,
+    cookie: String,
+}
+
+#[allow(unused)]
+#[derive(Debug, Deserialize)]
 struct Log {
     log: (String, Vec<u8>),
 }
@@ -50,6 +75,8 @@ enum RecordType {
     Conn = 0,
     Dns = 1,
     Log = 2,
+    Http = 3,
+    Rdp = 4,
 }
 
 impl TryFrom<u32> for RecordType {
@@ -59,6 +86,8 @@ impl TryFrom<u32> for RecordType {
             x if x == RecordType::Conn as u32 => Ok(RecordType::Conn),
             x if x == RecordType::Dns as u32 => Ok(RecordType::Dns),
             x if x == RecordType::Log as u32 => Ok(RecordType::Log),
+            x if x == RecordType::Http as u32 => Ok(RecordType::Http),
+            x if x == RecordType::Rdp as u32 => Ok(RecordType::Rdp),
             _ => Err(()),
         }
     }
@@ -209,6 +238,36 @@ async fn handle_request<'a>(
                             break;
                         }
                         Err(e) => bail!("handle log error: {}", e),
+                    }
+                }
+            }
+            RecordType::Http => {
+                let http_store = db.http_store()?;
+                loop {
+                    match handle_body(&mut recv).await {
+                        Ok((raw_event, timestamp)) => {
+                            print_record_format::<HttpConn>(record_type, timestamp, &raw_event);
+                            http_store.append(&source, timestamp, &raw_event)?;
+                        }
+                        Err(quinn::ReadExactError::FinishedEarly) => {
+                            break;
+                        }
+                        Err(e) => bail!("handle httpconn error: {}", e),
+                    }
+                }
+            }
+            RecordType::Rdp => {
+                let rdp_store = db.rdp_store()?;
+                loop {
+                    match handle_body(&mut recv).await {
+                        Ok((raw_event, timestamp)) => {
+                            print_record_format::<RdpConn>(record_type, timestamp, &raw_event);
+                            rdp_store.append(&source, timestamp, &raw_event)?;
+                        }
+                        Err(quinn::ReadExactError::FinishedEarly) => {
+                            break;
+                        }
+                        Err(e) => bail!("handle rdpconn error: {}", e),
                     }
                 }
             }

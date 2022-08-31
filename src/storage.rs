@@ -34,7 +34,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle("dns")
-            .context("cannot access conn column family")?;
+            .context("cannot access dns column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
 
@@ -43,7 +43,23 @@ impl Database {
         let cf = self
             .db
             .cf_handle("log")
-            .context("cannot access conn column family")?;
+            .context("cannot access log column family")?;
+        Ok(RawEventStore { db: &self.db, cf })
+    }
+    /// Returns the raw event store for http.
+    pub fn http_store(&self) -> Result<RawEventStore> {
+        let cf = self
+            .db
+            .cf_handle("http")
+            .context("cannot access http column family")?;
+        Ok(RawEventStore { db: &self.db, cf })
+    }
+    /// Returns the raw event store for rdp.
+    pub fn rdp_store(&self) -> Result<RawEventStore> {
+        let cf = self
+            .db
+            .cf_handle("rdp")
+            .context("cannot access rdp column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
 }
