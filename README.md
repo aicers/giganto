@@ -55,13 +55,13 @@ Run giganto with the prepared configuration file.
 cargo run -- tests/config.toml
 ```
 
-To run a test for all record types, run.
+To test one-time transmission for all record types, execute as follows.
 
 ```sh
-cargo test
+cargo test send
 ```
 
-To run a test for a specific record type, run one of the commands below.
+To test one-time transmission for specific record types, execute as follows.
 
 ```sh
 cargo test send_conn_info
@@ -69,6 +69,12 @@ cargo test send_dns_info
 cargo test send_log_info
 cargo test send_http_info
 cargo test send_rdp_info
+```
+
+To test ack reception after multi-transmission, execute as follows.
+
+```sh
+cargo test ack_info
 ```
 
 ## License
