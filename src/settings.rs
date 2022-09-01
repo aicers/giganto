@@ -14,6 +14,7 @@ pub struct Settings {
     pub roots: Vec<String>,        // Path to the rootCA file
     pub ingestion_address: String, // IP address & port to ingest data
     pub data_dir: String,          // DB storage path
+    pub retention: String,         // Data retention period
     pub graphql_address: String,   // IP address & port to graphql
 }
 
@@ -69,4 +70,6 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("local address")
         .set_default("data_dir", db_path)
         .expect("data dir")
+        .set_default("retention", "100d")
+        .expect("retention")
 }

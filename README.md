@@ -12,6 +12,7 @@ Before running the app, create a toml extension file and write it in the format 
  roots = ["root_one.pem","root_two.pem","root_three.pem"]
  ingestion_address = "0.0.0.0:38370"
  data_dir = "tests/data"
+ retention = "100d"
 ```
 
 * `key`: Giganto's key path.
@@ -19,6 +20,7 @@ Before running the app, create a toml extension file and write it in the format 
 * `roots`: RootCA's path of clients connected to Giganto.
 * `ingestion_address`: Address of Gignato.
 * `data_dir`: db storage path.
+* `retention`: Data retention effective range time.
 
 Build and serve the app with Cargo as follows:
 
