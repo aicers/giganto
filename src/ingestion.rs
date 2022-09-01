@@ -116,11 +116,10 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
-        let arc_db = Arc::new(db);
         while let Some(conn) = incoming.next().await {
-            let fut = handle_connection(conn, Arc::clone(&arc_db));
+            let db = db.clone();
             tokio::spawn(async move {
-                if let Err(e) = fut.await {
+                if let Err(e) = handle_connection(conn, db).await {
                     eprintln!("connection failed: {}", e);
                 }
             });
@@ -128,7 +127,7 @@ impl Server {
     }
 }
 
-async fn handle_connection(conn: quinn::Connecting, db: Arc<Database>) -> Result<()> {
+async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> {
     let quinn::NewConnection {
         connection,
         mut bi_streams,
@@ -171,9 +170,10 @@ async fn handle_connection(conn: quinn::Connecting, db: Arc<Database>) -> Result
                 Ok(s) => s,
             };
 
-            let fut = handle_request(source.clone(), stream, Arc::clone(&db));
+            let source = source.clone();
+            let db = db.clone();
             tokio::spawn(async move {
-                if let Err(e) = fut.await {
+                if let Err(e) = handle_request(source, stream, db).await {
                     eprintln!("failed: {}", e);
                 }
             });
@@ -187,7 +187,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Arc<Database>) -> Result
 async fn handle_request<'a>(
     source: String,
     (mut _send, mut recv): (SendStream, RecvStream),
-    db: Arc<Database>,
+    db: Database,
 ) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
