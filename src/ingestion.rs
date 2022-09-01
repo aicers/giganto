@@ -1,18 +1,27 @@
-use crate::settings::Settings;
 use crate::storage::Database;
+use crate::{settings::Settings, storage::RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{prelude::DateTime, Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use std::{
     fmt::Debug,
     fs, mem,
     net::{IpAddr, SocketAddr},
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicI64, AtomicU8, Ordering},
+        Arc,
+    },
 };
+use tokio::{select, sync::mpsc::channel, sync::Mutex, task, time};
 use x509_parser::nom::Parser;
+
+const ACK_ROTATION_CNT: u8 = 128;
+const ACK_INTERVAL_TIME: u64 = 60 * 60;
+const ITV_RESET: bool = true;
+const NO_TIMESTAMP: i64 = 0;
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
@@ -184,92 +193,31 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     Ok(())
 }
 
-async fn handle_request<'a>(
+async fn handle_request(
     source: String,
-    (mut _send, mut recv): (SendStream, RecvStream),
+    (send, mut recv): (SendStream, RecvStream),
     db: Database,
 ) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
-
     if let Ok(record_type) = RecordType::try_from(u32::from_le_bytes(buf)) {
         match record_type {
             RecordType::Conn => {
-                let conn_store = db.conn_store()?;
-                loop {
-                    match handle_body(&mut recv).await {
-                        Ok((raw_event, timestamp)) => {
-                            print_record_format::<Conn>(record_type, timestamp, &raw_event);
-                            conn_store.append(&source, timestamp, &raw_event)?;
-                        }
-                        Err(quinn::ReadExactError::FinishedEarly) => {
-                            break;
-                        }
-                        Err(e) => bail!("handle tcpudp error: {}", e),
-                    }
-                }
+                handle_data::<Conn>(send, recv, record_type, source, db.conn_store()?).await?;
             }
             RecordType::Dns => {
-                let dns_store = db.dns_store()?;
-                loop {
-                    match handle_body(&mut recv).await {
-                        Ok((raw_event, timestamp)) => {
-                            print_record_format::<DnsConn>(record_type, timestamp, &raw_event);
-                            dns_store.append(&source, timestamp, &raw_event)?;
-                        }
-                        Err(quinn::ReadExactError::FinishedEarly) => {
-                            break;
-                        }
-                        Err(e) => bail!("handle dns error: {}", e),
-                    }
-                }
+                handle_data::<DnsConn>(send, recv, record_type, source, db.dns_store()?).await?;
             }
             RecordType::Log => {
-                let log_store = db.log_store()?;
-                loop {
-                    match handle_body(&mut recv).await {
-                        Ok((raw_event, timestamp)) => {
-                            print_record_format::<Log>(record_type, timestamp, &raw_event);
-                            log_store.append(&source, timestamp, &raw_event)?;
-                        }
-                        Err(quinn::ReadExactError::FinishedEarly) => {
-                            break;
-                        }
-                        Err(e) => bail!("handle log error: {}", e),
-                    }
-                }
+                handle_data::<Log>(send, recv, record_type, source, db.log_store()?).await?;
             }
             RecordType::Http => {
-                let http_store = db.http_store()?;
-                loop {
-                    match handle_body(&mut recv).await {
-                        Ok((raw_event, timestamp)) => {
-                            print_record_format::<HttpConn>(record_type, timestamp, &raw_event);
-                            http_store.append(&source, timestamp, &raw_event)?;
-                        }
-                        Err(quinn::ReadExactError::FinishedEarly) => {
-                            break;
-                        }
-                        Err(e) => bail!("handle httpconn error: {}", e),
-                    }
-                }
+                handle_data::<HttpConn>(send, recv, record_type, source, db.http_store()?).await?;
             }
             RecordType::Rdp => {
-                let rdp_store = db.rdp_store()?;
-                loop {
-                    match handle_body(&mut recv).await {
-                        Ok((raw_event, timestamp)) => {
-                            print_record_format::<RdpConn>(record_type, timestamp, &raw_event);
-                            rdp_store.append(&source, timestamp, &raw_event)?;
-                        }
-                        Err(quinn::ReadExactError::FinishedEarly) => {
-                            break;
-                        }
-                        Err(e) => bail!("handle rdpconn error: {}", e),
-                    }
-                }
+                handle_data::<RdpConn>(send, recv, record_type, source, db.rdp_store()?).await?;
             }
         };
     } else {
@@ -279,7 +227,7 @@ async fn handle_request<'a>(
     Ok(())
 }
 
-///print the raw data
+///Print the raw data
 fn print_record_format<'a, T>(record_type: RecordType, timestamp: i64, raw_event: &'a [u8])
 where
     T: Debug + Deserialize<'a>,
@@ -379,6 +327,87 @@ fn config_server(
         .max_concurrent_uni_streams(0_u8.into());
 
     Ok(server_config)
+}
+
+async fn handle_data<T>(
+    send: SendStream,
+    mut recv: RecvStream,
+    record_type: RecordType,
+    source: String,
+    store: RawEventStore<'_>,
+) -> Result<()>
+where
+    T: Debug + DeserializeOwned,
+{
+    let sender_rotation = Arc::new(Mutex::new(send));
+    let sender_interval = Arc::clone(&sender_rotation);
+
+    let ack_cnt_rotation = Arc::new(AtomicU8::new(0));
+    let ack_cnt_interval = Arc::clone(&ack_cnt_rotation);
+
+    let ack_time_rotation = Arc::new(AtomicI64::new(NO_TIMESTAMP));
+    let ack_time_interval = Arc::clone(&ack_time_rotation);
+
+    let mut itv = time::interval(time::Duration::from_secs(ACK_INTERVAL_TIME));
+    let (tx, mut rx) = channel(1);
+
+    let handler = task::spawn(async move {
+        loop {
+            select! {
+                _ = itv.tick() => {
+                    let last_timestamp = ack_time_interval.load(Ordering::SeqCst);
+                    if last_timestamp !=  NO_TIMESTAMP {
+                        if sender_interval
+                            .lock()
+                            .await
+                            .write_all(&last_timestamp.to_be_bytes())
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        ack_cnt_interval.store(0, Ordering::SeqCst);
+                    }
+                }
+                Some(_) = rx.recv() => {
+                    itv.reset();
+                }
+            }
+        }
+    });
+
+    loop {
+        match handle_body(&mut recv).await {
+            Ok((raw_event, timestamp)) => {
+                print_record_format::<T>(record_type, timestamp, &raw_event);
+                store.append(&source, timestamp, &raw_event)?;
+                if store.flush().is_ok() {
+                    ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
+                    ack_time_rotation.store(timestamp, Ordering::SeqCst);
+                    if ACK_ROTATION_CNT <= ack_cnt_rotation.load(Ordering::SeqCst) {
+                        sender_rotation
+                            .lock()
+                            .await
+                            .write_all(&timestamp.to_be_bytes())
+                            .await
+                            .expect("failed to send request");
+                        ack_cnt_rotation.store(0, Ordering::SeqCst);
+                        tx.send(ITV_RESET).await?;
+                    }
+                }
+            }
+            Err(quinn::ReadExactError::FinishedEarly) => {
+                handler.abort();
+                break;
+            }
+            Err(e) => {
+                handler.abort();
+                bail!("handle {:?} error: {}", record_type, e)
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {

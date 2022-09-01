@@ -101,9 +101,14 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
-    /// Returns the all raw events.
+    pub fn flush(&self) -> Result<()> {
+        self.db.flush_cf(self.cf)?;
+        Ok(())
+    }
+
+    /// Returns the all raw event.
     #[allow(unused)]
-    pub fn all_raw_events(&self) -> Vec<Vec<u8>> {
+    pub fn all_raw_event(&self) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
         let iter = self
             .db
