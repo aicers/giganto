@@ -1,9 +1,12 @@
 //! Raw event storage based on RocksDB.
 use anyhow::{Context, Result};
+use chrono::Utc;
 use rocksdb::{ColumnFamily, Options, DB};
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
+use tokio::time;
 
 const COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
+const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Clone)]
 pub struct Database {
@@ -18,6 +21,19 @@ impl Database {
         opts.create_missing_column_families(true);
         let db = DB::open_cf(&opts, path, COLUMN_FAMILY_NAMES).context("cannot open database")?;
         Ok(Database { db: Arc::new(db) })
+    }
+
+    /// Returns the raw event store for all type.
+    pub fn all_store(&self) -> Result<Vec<RawEventStore>> {
+        let mut stores: Vec<RawEventStore> = Vec::new();
+        for store in COLUMN_FAMILY_NAMES {
+            let cf = self
+                .db
+                .cf_handle(store)
+                .context("cannot access column family")?;
+            stores.push(RawEventStore { db: &self.db, cf });
+        }
+        Ok(stores)
     }
 
     /// Returns the raw event store for connections.
@@ -80,7 +96,11 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
-    #[allow(unused)]
+    pub fn delete(&self, key: &[u8]) -> Result<()> {
+        self.db.delete_cf(self.cf, key)?;
+        Ok(())
+    }
+
     /// Returns the all raw event.
     pub fn all_raw_event(&self) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
@@ -91,7 +111,42 @@ impl<'db> RawEventStore<'db> {
         for (_key, val) in iter {
             raw.push(val.to_vec());
         }
-
         raw
+    }
+
+    // Returns the all key values ​​of column family.
+    pub fn all_keys(&self) -> Vec<Vec<u8>> {
+        let mut keys = Vec::new();
+        let iter = self
+            .db
+            .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
+            .flatten();
+        for (key, _val) in iter {
+            keys.push(key.to_vec());
+        }
+        keys
+    }
+}
+
+pub async fn retain_periodically(
+    duration: Duration,
+    retention: String,
+    db: Database,
+) -> Result<()> {
+    let mut itv = time::interval(duration);
+    let stores = db.all_store()?;
+    let retention_duration = i64::try_from(humantime::parse_duration(&retention)?.as_nanos())?;
+    loop {
+        itv.tick().await;
+        let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
+        for store in &stores {
+            for key in store.all_keys() {
+                let store_duration =
+                    i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+                if standard_duration > store_duration {
+                    store.delete(&key)?;
+                }
+            }
+        }
     }
 }

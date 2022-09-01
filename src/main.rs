@@ -7,8 +7,9 @@ mod web;
 use settings::Settings;
 use std::path::Path;
 use std::{env, process::exit};
-use tokio::task;
+use tokio::{task, time};
 
+const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
 USAGE:
     giganto [CONFIG]
@@ -38,6 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let schema = graphql::schema(db);
         web::serve(schema, &s).await;
     });
+
+    let db = database.clone();
+    task::spawn(storage::retain_periodically(
+        time::Duration::from_secs(ONE_DAY),
+        settings.retention.clone(),
+        db,
+    ));
 
     let ingestion_server = ingestion::Server::new(&settings);
     ingestion_server.run(database).await;
