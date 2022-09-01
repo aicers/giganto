@@ -66,8 +66,8 @@ struct RdpConn {
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct Log {
-    log: (String, Vec<u8>),
+pub struct Log {
+    pub log: (String, Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug)]

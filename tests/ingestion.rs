@@ -151,7 +151,10 @@ async fn send_log_info() {
         .expect("failed to open stream");
 
     let mut log_data: Vec<u8> = Vec::new();
-    let log_body: Log = (String::from("Hello Server I am Log"), vec![0; 10]);
+    let log_body: Log = (
+        String::from("Hello"),
+        base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+    );
     let mut ser_log_body = bincode::serialize(&log_body).unwrap();
 
     log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());

@@ -101,8 +101,9 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
-    /// Returns the all raw event.
-    pub fn all_raw_event(&self) -> Vec<Vec<u8>> {
+    /// Returns the all raw events.
+    #[allow(unused)]
+    pub fn all_raw_events(&self) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
         let iter = self
             .db
@@ -114,7 +115,27 @@ impl<'db> RawEventStore<'db> {
         raw
     }
 
-    // Returns the all key values ​​of column family.
+    /// Returns all raw events given source
+    pub fn src_raw_events(&self, source: &str) -> Vec<Vec<u8>> {
+        let mut raw = Vec::new();
+        let iter = self
+            .db
+            .iterator_cf(
+                self.cf,
+                rocksdb::IteratorMode::From(source.as_bytes(), rocksdb::Direction::Forward),
+            )
+            .flatten();
+        for (key, val) in iter {
+            let (src, _ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
+            if source == std::str::from_utf8(src).expect("src to string") {
+                raw.push(val.to_vec());
+            }
+        }
+
+        raw
+    }
+
+    /// Returns the all key values ​​of column family.
     pub fn all_keys(&self) -> Vec<Vec<u8>> {
         let mut keys = Vec::new();
         let iter = self
