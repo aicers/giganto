@@ -4,6 +4,7 @@ mod settings;
 mod storage;
 mod web;
 
+use anyhow::{Context, Result};
 use settings::Settings;
 use std::path::Path;
 use std::{env, process::exit};
@@ -23,7 +24,7 @@ ARG:
 ";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let settings = if let Some(config_filename) = parse() {
         Settings::from_file(&config_filename)?
     } else {
@@ -41,9 +42,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let db = database.clone();
+    let retention_period = humantime::parse_duration(&settings.retention)
+        .with_context(|| format!("invalid retention period: {}", settings.retention))?;
     task::spawn(storage::retain_periodically(
         time::Duration::from_secs(ONE_DAY),
-        settings.retention.clone(),
+        retention_period,
         db,
     ));
 

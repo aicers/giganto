@@ -130,12 +130,12 @@ impl<'db> RawEventStore<'db> {
 
 pub async fn retain_periodically(
     duration: Duration,
-    retention: String,
+    retention_period: Duration,
     db: Database,
 ) -> Result<()> {
     let mut itv = time::interval(duration);
     let stores = db.all_store()?;
-    let retention_duration = i64::try_from(humantime::parse_duration(&retention)?.as_nanos())?;
+    let retention_duration = i64::try_from(retention_period.as_nanos())?;
     loop {
         itv.tick().await;
         let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
