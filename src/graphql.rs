@@ -6,26 +6,26 @@ pub struct Query;
 
 #[derive(SimpleObject, Debug)]
 pub struct ConnRawEvent {
-    pub orig_addr: String,
-    pub resp_addr: String,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub duration: i64,
-    pub orig_bytes: u64,
-    pub resp_bytes: u64,
-    pub orig_pkts: u64,
-    pub resp_pkts: u64,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    proto: u8,
+    duration: i64,
+    orig_bytes: u64,
+    resp_bytes: u64,
+    orig_pkts: u64,
+    resp_pkts: u64,
 }
 
 #[derive(SimpleObject, Debug)]
 pub struct DnsRawEvent {
-    pub orig_addr: String,
-    pub resp_addr: String,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub query: String,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    proto: u8,
+    query: String,
 }
 
 impl From<ingestion::Conn> for ConnRawEvent {
