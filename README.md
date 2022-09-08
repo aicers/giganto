@@ -7,12 +7,12 @@ Giganto is the raw-event storage system for AICE.
 Before running the app, create a toml extension file and write it in the format below.
 
 ```toml
- key = "key.pem"
- cert = "cert.pem"
- roots = ["root_one.pem","root_two.pem","root_three.pem"]
- ingestion_address = "0.0.0.0:38370"
- data_dir = "tests/data"
- retention = "100d"
+key = "key.pem"
+cert = "cert.pem"
+roots = ["root_one.pem","root_two.pem","root_three.pem"]
+ingestion_address = "0.0.0.0:38370"
+data_dir = "tests/data"
+retention = "100d"
 ```
 
 * `key`: Giganto's key path.
