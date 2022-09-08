@@ -5,7 +5,7 @@ use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, S
 pub struct Query;
 
 #[derive(SimpleObject, Debug)]
-pub struct ConnRawEvents {
+pub struct ConnRawEvent {
     pub orig_addr: String,
     pub resp_addr: String,
     pub orig_port: u16,
@@ -18,9 +18,9 @@ pub struct ConnRawEvents {
     pub resp_pkts: u64,
 }
 
-impl From<ingestion::Conn> for ConnRawEvents {
-    fn from(c: ingestion::Conn) -> ConnRawEvents {
-        ConnRawEvents {
+impl From<ingestion::Conn> for ConnRawEvent {
+    fn from(c: ingestion::Conn) -> ConnRawEvent {
+        ConnRawEvent {
             orig_addr: c.orig_addr.to_string(),
             resp_addr: c.resp_addr.to_string(),
             orig_port: c.orig_port,
@@ -41,7 +41,7 @@ impl Query {
         &self,
         ctx: &Context<'ctx>,
         source: String,
-    ) -> Result<Vec<ConnRawEvents>> {
+    ) -> Result<Vec<ConnRawEvent>> {
         let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
@@ -49,7 +49,7 @@ impl Query {
         };
         for raw_data in db.conn_store()?.src_raw_events(&source) {
             let de_conn = bincode::deserialize::<ingestion::Conn>(&raw_data)?;
-            raw_vec.push(ConnRawEvents::from(de_conn));
+            raw_vec.push(ConnRawEvent::from(de_conn));
         }
 
         Ok(raw_vec)
