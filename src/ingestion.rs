@@ -39,13 +39,13 @@ pub struct Conn {
 }
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct DnsConn {
-    orig_addr: IpAddr,
-    resp_addr: IpAddr,
-    orig_port: u16,
-    resp_port: u16,
-    proto: u8,
-    query: String,
+pub struct DnsConn {
+    pub orig_addr: IpAddr,
+    pub resp_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub query: String,
 }
 
 #[allow(unused)]
