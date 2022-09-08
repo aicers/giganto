@@ -89,7 +89,7 @@ impl Query {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.log_store()?.src_raw_events(&source) {
+        for raw_data in db.log_store()?.log_events(&source, &kind) {
             let de_log = bincode::deserialize::<ingestion::Log>(&raw_data)?;
             let (k, r) = de_log.log;
             if k == kind {
