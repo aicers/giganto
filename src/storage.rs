@@ -5,6 +5,8 @@ use rocksdb::{ColumnFamily, Options, DB};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::time;
 
+use crate::ingestion;
+
 const COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
 const TIMESTAMP_SIZE: usize = 8;
 
@@ -96,6 +98,18 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
+    pub fn append_log(&self, source: &str, timestamp: i64, raw_event: &[u8]) -> Result<()> {
+        let mut key: Vec<u8> = Vec::new();
+        let de_log = bincode::deserialize::<ingestion::Log>(raw_event)?;
+        let (kind, _) = de_log.log;
+        key.append(&mut source.as_bytes().to_vec());
+        key.push(0);
+        key.append(&mut kind.as_bytes().to_vec());
+        key.append(&mut timestamp.to_be_bytes().to_vec());
+        self.db.put_cf(self.cf, key, raw_event)?;
+        Ok(())
+    }
+
     pub fn delete(&self, key: &[u8]) -> Result<()> {
         self.db.delete_cf(self.cf, key)?;
         Ok(())
@@ -136,8 +150,29 @@ impl<'db> RawEventStore<'db> {
                 raw.push(val.to_vec());
             }
         }
-
         raw
+    }
+
+    pub fn log_events(&self, source: &str, kind: &str) -> Vec<Vec<u8>> {
+        let mut logs = Vec::new();
+        let mut source_kind: Vec<u8> = Vec::new();
+        source_kind.append(&mut source.as_bytes().to_vec());
+        source_kind.push(0);
+        source_kind.append(&mut kind.as_bytes().to_vec());
+        let iter = self
+            .db
+            .iterator_cf(
+                self.cf,
+                rocksdb::IteratorMode::From(&source_kind, rocksdb::Direction::Forward),
+            )
+            .flatten();
+        for (key, val) in iter {
+            let (src_kind, _ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
+            if source_kind == src_kind {
+                logs.push(val.to_vec());
+            }
+        }
+        logs
     }
 
     /// Returns the all key values ​​of column family.

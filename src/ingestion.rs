@@ -340,7 +340,10 @@ where
     loop {
         match handle_body(&mut recv).await {
             Ok((raw_event, timestamp)) => {
-                store.append(&source, timestamp, &raw_event)?;
+                match record_type {
+                    RecordType::Log => store.append_log(&source, timestamp, &raw_event)?,
+                    _ => store.append(&source, timestamp, &raw_event)?,
+                }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
