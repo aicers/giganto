@@ -18,6 +18,16 @@ pub struct ConnRawEvent {
     pub resp_pkts: u64,
 }
 
+#[derive(SimpleObject, Debug)]
+pub struct DnsRawEvent {
+    pub orig_addr: String,
+    pub resp_addr: String,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub query: String,
+}
+
 impl From<ingestion::Conn> for ConnRawEvent {
     fn from(c: ingestion::Conn) -> ConnRawEvent {
         ConnRawEvent {
@@ -31,6 +41,19 @@ impl From<ingestion::Conn> for ConnRawEvent {
             resp_bytes: c.resp_bytes,
             orig_pkts: c.orig_pkts,
             resp_pkts: c.resp_pkts,
+        }
+    }
+}
+
+impl From<ingestion::DnsConn> for DnsRawEvent {
+    fn from(d: ingestion::DnsConn) -> DnsRawEvent {
+        DnsRawEvent {
+            orig_addr: d.orig_addr.to_string(),
+            resp_addr: d.resp_addr.to_string(),
+            orig_port: d.orig_port,
+            resp_port: d.resp_port,
+            proto: d.proto,
+            query: d.query,
         }
     }
 }
@@ -73,6 +96,24 @@ impl Query {
                 raw_vec.push(base64::encode(r));
             }
         }
+        Ok(raw_vec)
+    }
+
+    pub async fn dns_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        source: String,
+    ) -> Result<Vec<DnsRawEvent>> {
+        let mut raw_vec = Vec::new();
+        let db = match ctx.data::<Database>() {
+            Ok(r) => r,
+            Err(e) => bail!("{:?}", e),
+        };
+        for raw_data in db.dns_store()?.src_raw_events(&source) {
+            let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
+            raw_vec.push(DnsRawEvent::from(de_dns));
+        }
+
         Ok(raw_vec)
     }
 }
