@@ -23,7 +23,6 @@ const ACK_INTERVAL_TIME: u64 = 60 * 60;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 
-#[allow(unused)]
 #[derive(Debug, Deserialize)]
 pub struct Conn {
     pub orig_addr: IpAddr,
@@ -37,7 +36,7 @@ pub struct Conn {
     pub orig_pkts: u64,
     pub resp_pkts: u64,
 }
-#[allow(unused)]
+
 #[derive(Debug, Deserialize)]
 pub struct DnsConn {
     pub orig_addr: IpAddr,
@@ -73,7 +72,6 @@ struct RdpConn {
     cookie: String,
 }
 
-#[allow(unused)]
 #[derive(Debug, Deserialize)]
 pub struct Log {
     pub log: (String, Vec<u8>),
