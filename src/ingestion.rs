@@ -3,6 +3,7 @@ use crate::{settings::Settings, storage::RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{prelude::DateTime, Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
+use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
@@ -77,27 +78,14 @@ pub struct Log {
     pub log: (String, Vec<u8>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[repr(u32)]
 enum RecordType {
     Conn = 0,
     Dns = 1,
     Log = 2,
     Http = 3,
     Rdp = 4,
-}
-
-impl TryFrom<u32> for RecordType {
-    type Error = ();
-    fn try_from(v: u32) -> Result<Self, Self::Error> {
-        match v {
-            x if x == RecordType::Conn as u32 => Ok(RecordType::Conn),
-            x if x == RecordType::Dns as u32 => Ok(RecordType::Dns),
-            x if x == RecordType::Log as u32 => Ok(RecordType::Log),
-            x if x == RecordType::Http as u32 => Ok(RecordType::Http),
-            x if x == RecordType::Rdp as u32 => Ok(RecordType::Rdp),
-            _ => Err(()),
-        }
-    }
 }
 
 pub struct Server {
@@ -200,27 +188,23 @@ async fn handle_request(
     recv.read_exact(&mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
-    if let Ok(record_type) = RecordType::try_from(u32::from_le_bytes(buf)) {
-        match record_type {
-            RecordType::Conn => {
-                handle_data::<Conn>(send, recv, record_type, source, db.conn_store()?).await?;
-            }
-            RecordType::Dns => {
-                handle_data::<DnsConn>(send, recv, record_type, source, db.dns_store()?).await?;
-            }
-            RecordType::Log => {
-                handle_data::<Log>(send, recv, record_type, source, db.log_store()?).await?;
-            }
-            RecordType::Http => {
-                handle_data::<HttpConn>(send, recv, record_type, source, db.http_store()?).await?;
-            }
-            RecordType::Rdp => {
-                handle_data::<RdpConn>(send, recv, record_type, source, db.rdp_store()?).await?;
-            }
-        };
-    } else {
-        bail!("failed to convert RecordType, invalid record type");
-    }
+    match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
+        RecordType::Conn => {
+            handle_data::<Conn>(send, recv, RecordType::Conn, source, db.conn_store()?).await?;
+        }
+        RecordType::Dns => {
+            handle_data::<DnsConn>(send, recv, RecordType::Dns, source, db.dns_store()?).await?;
+        }
+        RecordType::Log => {
+            handle_data::<Log>(send, recv, RecordType::Log, source, db.log_store()?).await?;
+        }
+        RecordType::Http => {
+            handle_data::<HttpConn>(send, recv, RecordType::Http, source, db.http_store()?).await?;
+        }
+        RecordType::Rdp => {
+            handle_data::<RdpConn>(send, recv, RecordType::Rdp, source, db.rdp_store()?).await?;
+        }
+    };
 
     Ok(())
 }
