@@ -1,7 +1,6 @@
 use crate::storage::Database;
 use crate::{settings::Settings, storage::RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{prelude::DateTime, Duration, NaiveDateTime, Utc};
 use futures_util::StreamExt;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
@@ -209,26 +208,6 @@ async fn handle_request(
     Ok(())
 }
 
-///Print the raw data
-fn print_record_format<'a, T>(record_type: RecordType, timestamp: i64, raw_event: &'a [u8])
-where
-    T: Debug + Deserialize<'a>,
-{
-    println!(
-        "record_type: {:?}\ntimestamp: {:?}\nrecord: {:?}",
-        record_type,
-        client_utc_time(timestamp),
-        bincode::deserialize::<T>(raw_event).unwrap()
-    );
-}
-
-fn client_utc_time(timestamp: i64) -> String {
-    let duration = Duration::nanoseconds(timestamp).num_seconds();
-    let datetime: DateTime<Utc> =
-        DateTime::from_utc(NaiveDateTime::from_timestamp(duration, 0), Utc);
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 fn server_addr(addr: &str) -> SocketAddr {
     addr.parse::<SocketAddr>().unwrap()
 }
@@ -361,7 +340,6 @@ where
     loop {
         match handle_body(&mut recv).await {
             Ok((raw_event, timestamp)) => {
-                print_record_format::<T>(record_type, timestamp, &raw_event);
                 store.append(&source, timestamp, &raw_event)?;
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
