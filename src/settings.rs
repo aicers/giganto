@@ -54,7 +54,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
     let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
     let db_dir =
         directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
-    let db_path = db_dir.data_dir().to_str().unwrap();
+    let db_path = db_dir.data_dir().to_str().expect("unreachable db path");
     let config_dir = dirs.config_dir();
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");

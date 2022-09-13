@@ -31,6 +31,10 @@ pub async fn serve(schema: Schema<graphql::Query, EmptyMutation, EmptySubscripti
         .tls()
         .cert_path(&s.cert)
         .key_path(&s.key)
-        .run(s.graphql_address.parse::<SocketAddr>().unwrap())
+        .run(
+            s.graphql_address
+                .parse::<SocketAddr>()
+                .expect("error while parsing socket address"),
+        )
         .await;
 }
