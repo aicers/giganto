@@ -95,8 +95,8 @@ pub struct Server {
 
 impl Server {
     pub fn new(s: &Settings) -> Self {
-        let server_config =
-            config_server(&s.cert, &s.key, &s.roots).expect("server configuration error");
+        let server_config = config_server(&s.cert, &s.key, &s.roots)
+            .expect("server configuration error with cert, key or root");
         Server {
             server_config,
             server_address: server_addr(&s.ingestion_address),
@@ -143,7 +143,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
                             .iter_common_name()
                             .next()
                             .and_then(|cn| cn.as_str().ok())
-                            .unwrap();
+                            .expect("the issuer of the certificate is not valid");
                         source.push_str(issuer);
                         info!("Connected Client Name : {}", issuer);
                     }
@@ -210,7 +210,8 @@ async fn handle_request(
 }
 
 fn server_addr(addr: &str) -> SocketAddr {
-    addr.parse::<SocketAddr>().unwrap()
+    addr.parse::<SocketAddr>()
+        .expect("error while parsing socket address")
 }
 
 fn config_server(
@@ -222,7 +223,7 @@ fn config_server(
         Ok(x) => x,
         Err(_) => {
             bail!(
-                "failed to read (cert, key) file, {}, {} read file error",
+                "failed to read (cert, key) file, {}, {} read file error. Check the location of cert or key and try again.",
                 cert_path,
                 key_path
             );
@@ -245,7 +246,7 @@ fn config_server(
                 match rsa.into_iter().next() {
                     Some(x) => rustls::PrivateKey(x),
                     None => {
-                        anyhow::bail!("no private keys found");
+                        bail!("no private keys found. Check the location of the private key and try again.");
                     }
                 }
             }

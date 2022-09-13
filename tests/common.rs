@@ -38,8 +38,9 @@ fn init_client() -> Endpoint {
         Ok(x) => x,
         Err(_) => {
             panic!(
-                "failed to read (cert, key) file, {}, {} read file error",
-                CERT, KEY
+                "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
+                CERT,
+                KEY
             );
         }
     };
@@ -57,7 +58,9 @@ fn init_client() -> Endpoint {
                 match rsa.into_iter().next() {
                     Some(x) => rustls::PrivateKey(x),
                     None => {
-                        panic!("no private keys found");
+                        panic!(
+                            "no private keys found. Private key doesn't exist in default test folder"
+                        );
                     }
                 }
             }
@@ -89,7 +92,7 @@ fn init_client() -> Endpoint {
         .with_safe_defaults()
         .with_root_certificates(server_root)
         .with_single_cert(cert_chain, pv_key)
-        .unwrap();
+        .expect("the server root, cert chain or private key are not valid");
 
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
