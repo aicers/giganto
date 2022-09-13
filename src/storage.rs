@@ -120,20 +120,6 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
-    /// Returns the all raw event.
-    #[allow(unused)]
-    pub fn all_raw_event(&self) -> Vec<Vec<u8>> {
-        let mut raw = Vec::new();
-        let iter = self
-            .db
-            .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
-            .flatten();
-        for (_key, val) in iter {
-            raw.push(val.to_vec());
-        }
-        raw
-    }
-
     /// Returns all raw events given source
     pub fn src_raw_events(&self, source: &str) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
