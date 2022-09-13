@@ -28,6 +28,20 @@ pub struct DnsRawEvent {
     query: String,
 }
 
+#[derive(SimpleObject, Debug)]
+pub struct HttpRawEvent {
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    method: String,
+    host: String,
+    uri: String,
+    referrer: String,
+    user_agent: String,
+    status_code: u16,
+}
+
 impl From<ingestion::Conn> for ConnRawEvent {
     fn from(c: ingestion::Conn) -> ConnRawEvent {
         ConnRawEvent {
@@ -54,6 +68,23 @@ impl From<ingestion::DnsConn> for DnsRawEvent {
             resp_port: d.resp_port,
             proto: d.proto,
             query: d.query,
+        }
+    }
+}
+
+impl From<ingestion::HttpConn> for HttpRawEvent {
+    fn from(h: ingestion::HttpConn) -> HttpRawEvent {
+        HttpRawEvent {
+            orig_addr: h.orig_addr.to_string(),
+            resp_addr: h.resp_addr.to_string(),
+            orig_port: h.orig_port,
+            resp_port: h.resp_port,
+            method: h.method,
+            host: h.host,
+            uri: h.uri,
+            referrer: h.referrer,
+            user_agent: h.user_agent,
+            status_code: h.status_code,
         }
     }
 }
@@ -112,6 +143,24 @@ impl Query {
         for raw_data in db.dns_store()?.src_raw_events(&source) {
             let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
             raw_vec.push(DnsRawEvent::from(de_dns));
+        }
+
+        Ok(raw_vec)
+    }
+
+    pub async fn http_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        source: String,
+    ) -> Result<Vec<HttpRawEvent>> {
+        let mut raw_vec = Vec::new();
+        let db = match ctx.data::<Database>() {
+            Ok(r) => r,
+            Err(e) => bail!("{:?}", e),
+        };
+        for raw_data in db.http_store()?.src_raw_events(&source) {
+            let de_http = bincode::deserialize::<ingestion::HttpConn>(&raw_data)?;
+            raw_vec.push(HttpRawEvent::from(de_http));
         }
 
         Ok(raw_vec)
