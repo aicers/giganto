@@ -49,17 +49,17 @@ pub struct DnsConn {
 
 #[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct HttpConn {
-    orig_addr: IpAddr,
-    resp_addr: IpAddr,
-    orig_port: u16,
-    resp_port: u16,
-    method: String,
-    host: String,
-    uri: String,
-    referrer: String,
-    user_agent: String,
-    status_code: u16,
+pub struct HttpConn {
+    pub orig_addr: IpAddr,
+    pub resp_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub method: String,
+    pub host: String,
+    pub uri: String,
+    pub referrer: String,
+    pub user_agent: String,
+    pub status_code: u16,
 }
 
 #[allow(unused)]
