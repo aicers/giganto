@@ -1,13 +1,13 @@
 //! Raw event storage based on RocksDB.
+use crate::ingestion;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rocksdb::{ColumnFamily, Options, DB};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::time;
 
-use crate::ingestion;
-
-const COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
+const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Clone)]
@@ -19,16 +19,20 @@ impl Database {
     /// Opens the database at the given path.
     pub fn open(path: &Path) -> Result<Database> {
         let mut opts = Options::default();
+        let mut cfs: Vec<&str> = Vec::new();
+        cfs.append(&mut RAW_DATA_COLUMN_FAMILY_NAMES.to_vec());
+        cfs.append(&mut META_DATA_COLUMN_FAMILY_NAMES.to_vec());
+
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
-        let db = DB::open_cf(&opts, path, COLUMN_FAMILY_NAMES).context("cannot open database")?;
+        let db = DB::open_cf(&opts, path, cfs).context("cannot open database")?;
         Ok(Database { db: Arc::new(db) })
     }
 
     /// Returns the raw event store for all type.
     pub fn all_store(&self) -> Result<Vec<RawEventStore>> {
         let mut stores: Vec<RawEventStore> = Vec::new();
-        for store in COLUMN_FAMILY_NAMES {
+        for store in RAW_DATA_COLUMN_FAMILY_NAMES {
             let cf = self
                 .db
                 .cf_handle(store)
@@ -80,6 +84,15 @@ impl Database {
             .context("cannot access rdp column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
+
+    /// Returns the raw event store for connection sources
+    pub fn sources_store(&self) -> Result<RawEventStore> {
+        let cf = self
+            .db
+            .cf_handle("sources")
+            .context("cannot access sources column family")?;
+        Ok(RawEventStore { db: &self.db, cf })
+    }
 }
 
 pub struct RawEventStore<'db> {
@@ -107,6 +120,11 @@ impl<'db> RawEventStore<'db> {
         key.append(&mut kind.as_bytes().to_vec());
         key.append(&mut timestamp.to_be_bytes().to_vec());
         self.db.put_cf(self.cf, key, raw_event)?;
+        Ok(())
+    }
+
+    pub fn append_sources(&self, source: &str, timestamp: i64) -> Result<()> {
+        self.db.put_cf(self.cf, source, timestamp.to_be_bytes())?;
         Ok(())
     }
 

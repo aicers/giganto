@@ -1,11 +1,16 @@
-use crate::storage::Database;
-use crate::{settings::Settings, storage::RawEventStore};
+use crate::{
+    settings::Settings,
+    storage::{Database, RawEventStore},
+};
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
+use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
+    collections::HashMap,
     fmt::Debug,
     fs, mem,
     net::{IpAddr, SocketAddr},
@@ -15,7 +20,12 @@ use std::{
         Arc,
     },
 };
-use tokio::{select, sync::mpsc::channel, sync::Mutex, task, time};
+use tokio::{
+    select,
+    sync::mpsc::{channel, Receiver, Sender},
+    sync::Mutex,
+    task, time,
+};
 use tracing::{error, info};
 use x509_parser::nom::Parser;
 
@@ -23,6 +33,13 @@ const ACK_ROTATION_CNT: u8 = 128;
 const ACK_INTERVAL_TIME: u64 = 60 * 60;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
+const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
+
+type Sources = (String, DateTime<Utc>, bool);
+
+lazy_static! {
+    pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Conn {
@@ -109,10 +126,54 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
+        let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
+        itv.reset();
+        let (tx, mut rx): (Sender<Sources>, Receiver<Sources>) = channel(100);
+
+        let source_db = db.clone();
+        task::spawn(async move {
+            let source_store = source_db
+                .sources_store()
+                .expect("Failed to open source store");
+            loop {
+                select! {
+                    _ = itv.tick() => {
+                        let mut sources = SOURCES.lock().await;
+                        let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
+
+                        for source_key in keys {
+                            let timestamp = Utc::now();
+                            sources.insert(source_key.clone(), timestamp);
+                            if source_store.append_sources(&source_key, timestamp.timestamp_nanos()).is_err(){
+                                error!("Failed to append Source store");
+                            }
+                        }
+                    }
+
+                    Some((source_key,timestamp_val,is_close)) = rx.recv() => {
+                        if is_close{
+                            if source_store.append_sources(&source_key, timestamp_val.timestamp_nanos()).is_err(){
+                                error!("Failed to append Source store");
+                            }
+                            //SOURCES.lock().await.remove(&source_key);
+
+                        }else{
+                            SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
+                            if source_store.append_sources(&source_key, timestamp_val.timestamp_nanos()).is_err(){
+                                error!("Failed to append Source store");
+                            }
+                        }
+
+                    }
+                }
+            }
+        });
+
         while let Some(conn) = incoming.next().await {
+            let sender = tx.clone();
             let db = db.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db).await {
+                if let Err(e) = handle_connection(conn, db, sender).await {
                     error!("connection failed: {}", e);
                 }
             });
@@ -120,7 +181,11 @@ impl Server {
     }
 }
 
-async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> {
+async fn handle_connection(
+    conn: quinn::Connecting,
+    db: Database,
+    sender: Sender<Sources>,
+) -> Result<()> {
     let quinn::NewConnection {
         connection,
         mut bi_streams,
@@ -151,13 +216,23 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
         }
     }
 
+    if let Err(error) = sender.send((source.clone(), Utc::now(), false)).await {
+        error!("Faild to send channel data : {}", error);
+    }
     async {
         while let Some(stream) = bi_streams.next().await {
+            let source = source.clone();
             let stream = match stream {
                 Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                    if let Err(error) = sender.send((source, Utc::now(), true)).await {
+                        error!("Faild to send channel data : {}", error);
+                    }
                     return Ok(());
                 }
                 Err(e) => {
+                    if let Err(error) = sender.send((source, Utc::now(), true)).await {
+                        error!("Faild to send channel data : {}", error);
+                    }
                     return Err(e);
                 }
                 Ok(s) => s,
@@ -330,6 +405,7 @@ where
                         ack_cnt_interval.store(0, Ordering::SeqCst);
                     }
                 }
+
                 Some(_) = rx.recv() => {
                     itv.reset();
                 }
