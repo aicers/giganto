@@ -2,8 +2,11 @@ use crate::{
     ingestion,
     storage::{gen_key, Database, RawEventStore},
 };
-use anyhow::{bail, Result};
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, SimpleObject};
+use anyhow::{anyhow, bail, Result};
+use async_graphql::{
+    connection::{query, Connection, Edge},
+    Context, EmptyMutation, EmptySubscription, Object, SimpleObject,
+};
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -62,6 +65,13 @@ struct RdpRawEvent {
 #[derive(SimpleObject, Debug)]
 struct LogRawEvent {
     log: String,
+}
+
+pub enum PagingType {
+    First(usize),
+    Last(usize),
+    AfterFirst(String, usize),
+    BeforeLast(String, usize),
 }
 
 impl From<ingestion::Conn> for ConnRawEvent {
@@ -147,21 +157,46 @@ impl Query {
         response_raw_events::<ingestion::Conn, ConnRawEvent>(&source, &db.conn_store()?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn log_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
         kind: String,
-    ) -> Result<Vec<LogRawEvent>> {
-        let db = match ctx.data::<Database>() {
-            Ok(r) => r,
-            Err(e) => bail!("{:?}", e),
-        };
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, LogRawEvent>, async_graphql::Error> {
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                let paging_type = check_paging_type(after, before, first, last)?;
 
-        let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec(), kind.as_bytes().to_vec()];
-        let source = String::from_utf8(gen_key(args))?;
+                let db = match ctx.data::<Database>() {
+                    Ok(r) => r,
+                    Err(e) => bail!("{:?}", e),
+                };
 
-        response_raw_events::<ingestion::Log, LogRawEvent>(&source, &db.log_store()?)
+                let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec(), kind.as_bytes().to_vec()];
+                let source_kind = String::from_utf8(gen_key(args))?;
+
+                let (logs, prev, next) = db.log_store()?.log_events(&source_kind, paging_type);
+                let mut connection: Connection<String, LogRawEvent> = Connection::new(prev, next);
+                for log_data in logs {
+                    let (key, raw_data) = log_data;
+                    let de_log = bincode::deserialize::<ingestion::Log>(&raw_data)?;
+                    connection
+                        .edges
+                        .push(Edge::new(base64::encode(key), LogRawEvent::from(de_log)));
+                }
+                Ok(connection)
+            },
+        )
+        .await
     }
 
     async fn dns_raw_events<'ctx>(
@@ -223,6 +258,27 @@ where
         raw_vec.push(K::from(de_data));
     }
     Ok(raw_vec)
+}
+
+fn check_paging_type(
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<PagingType> {
+    if let Some(val) = first {
+        if let Some(cursor) = after {
+            return Ok(PagingType::AfterFirst(cursor, val));
+        }
+        return Ok(PagingType::First(val));
+    }
+    if let Some(val) = last {
+        if let Some(cursor) = before {
+            return Ok(PagingType::BeforeLast(cursor, val));
+        }
+        return Ok(PagingType::Last(val));
+    }
+    Err(anyhow!("Invalid paging type"))
 }
 
 pub fn schema(database: Database) -> Schema {

@@ -1,4 +1,5 @@
 //! Raw event storage based on RocksDB.
+use crate::graphql::PagingType;
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rocksdb::{ColumnFamily, Options, DB};
@@ -9,6 +10,9 @@ use tracing::error;
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
+const TIMESTAMP_WITH_DIV_SIZE: usize = TIMESTAMP_SIZE + 1;
+
+type Pages = (Vec<(Vec<u8>, Vec<u8>)>, bool, bool);
 
 #[derive(Clone)]
 pub struct Database {
@@ -172,6 +176,74 @@ impl<'db> RawEventStore<'db> {
             }
         }
         dns_time
+    }
+
+    pub fn log_events(&self, source_kind: &str, paging_type: PagingType) -> Pages {
+        let mut logs = Vec::new();
+        let source_kind = source_kind.as_bytes().to_vec();
+
+        let (iter, next_idx, mut prev, mut next) = match paging_type {
+            PagingType::First(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source_kind, rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::Last(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source_kind, rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+            PagingType::AfterFirst(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::BeforeLast(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+        };
+
+        for (idx, (key, val)) in iter.enumerate() {
+            if idx == next_idx {
+                (prev, next) = (true, true);
+                break;
+            }
+            let (src_kind, _ts) = key.split_at(key.len() - TIMESTAMP_WITH_DIV_SIZE);
+            if source_kind == src_kind {
+                logs.push((key.to_vec(), val.to_vec()));
+            }
+        }
+        (logs, prev, next)
     }
 
     /// Returns the all key values ​​of column family.
