@@ -4,6 +4,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, SimpleObject};
+use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
@@ -167,13 +168,21 @@ impl Query {
         &self,
         ctx: &Context<'ctx>,
         source: String,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> Result<Vec<DnsRawEvent>> {
+        let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
 
-        response_raw_events::<ingestion::DnsConn, DnsRawEvent>(&source, &db.dns_store()?)
+        for raw_data in db.dns_store()?.dns_time_events(&source, &start, &end) {
+            let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
+            raw_vec.push(DnsRawEvent::from(de_dns));
+        }
+
+        Ok(raw_vec)
     }
 
     async fn http_raw_events<'ctx>(
