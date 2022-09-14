@@ -132,6 +132,48 @@ impl<'db> RawEventStore<'db> {
         raw
     }
 
+    pub fn dns_time_events(
+        &self,
+        source: &str,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+    ) -> Vec<Vec<u8>> {
+        let mut dns_time = Vec::new();
+        let mut dns_key: Vec<u8> = Vec::new();
+        let start_vec = start.timestamp().to_be_bytes();
+        dns_key.append(&mut source.as_bytes().to_vec());
+        dns_key.push(00);
+        dns_key.append(&mut start_vec.to_vec());
+
+        let iter = self
+            .db
+            .iterator_cf(
+                self.cf,
+                rocksdb::IteratorMode::From(&dns_key, rocksdb::Direction::Forward),
+            )
+            .flatten();
+
+        let end_vec = end.timestamp_nanos().to_be_bytes().to_vec();
+        let end_time = i64::from_be_bytes(end_vec.try_into().unwrap());
+
+        for (key, val) in iter {
+            let (src, ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
+            let src = &src[0..src.len() - 1];
+            let ts_nano = i64::from_be_bytes(ts.to_vec().try_into().unwrap());
+
+            if src == source.as_bytes() {
+                if ts_nano <= end_time {
+                    dns_time.push(val.to_vec());
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        dns_time
+    }
+
     /// Returns the all key values ​​of column family.
     pub fn all_keys(&self) -> Vec<Vec<u8>> {
         let mut keys = Vec::new();
