@@ -42,6 +42,15 @@ pub struct HttpRawEvent {
     status_code: u16,
 }
 
+#[derive(SimpleObject, Debug)]
+pub struct RdpRawEvent {
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    cookie: String,
+}
+
 impl From<ingestion::Conn> for ConnRawEvent {
     fn from(c: ingestion::Conn) -> ConnRawEvent {
         ConnRawEvent {
@@ -85,6 +94,18 @@ impl From<ingestion::HttpConn> for HttpRawEvent {
             referrer: h.referrer,
             user_agent: h.user_agent,
             status_code: h.status_code,
+        }
+    }
+}
+
+impl From<ingestion::RdpConn> for RdpRawEvent {
+    fn from(r: ingestion::RdpConn) -> RdpRawEvent {
+        RdpRawEvent {
+            orig_addr: r.orig_addr.to_string(),
+            resp_addr: r.resp_addr.to_string(),
+            orig_port: r.orig_port,
+            resp_port: r.resp_port,
+            cookie: r.cookie,
         }
     }
 }
@@ -161,6 +182,24 @@ impl Query {
         for raw_data in db.http_store()?.src_raw_events(&source) {
             let de_http = bincode::deserialize::<ingestion::HttpConn>(&raw_data)?;
             raw_vec.push(HttpRawEvent::from(de_http));
+        }
+
+        Ok(raw_vec)
+    }
+
+    pub async fn rdp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        source: String,
+    ) -> Result<Vec<RdpRawEvent>> {
+        let mut raw_vec = Vec::new();
+        let db = match ctx.data::<Database>() {
+            Ok(r) => r,
+            Err(e) => bail!("{:?}", e),
+        };
+        for raw_data in db.rdp_store()?.src_raw_events(&source) {
+            let de_rdp = bincode::deserialize::<ingestion::RdpConn>(&raw_data)?;
+            raw_vec.push(RdpRawEvent::from(de_rdp));
         }
 
         Ok(raw_vec)

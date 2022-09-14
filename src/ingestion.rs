@@ -48,7 +48,6 @@ pub struct DnsConn {
     pub query: String,
 }
 
-#[allow(unused)]
 #[derive(Debug, Deserialize)]
 pub struct HttpConn {
     pub orig_addr: IpAddr,
@@ -63,14 +62,13 @@ pub struct HttpConn {
     pub status_code: u16,
 }
 
-#[allow(unused)]
 #[derive(Debug, Deserialize)]
-struct RdpConn {
-    orig_addr: IpAddr,
-    resp_addr: IpAddr,
-    orig_port: u16,
-    resp_port: u16,
-    cookie: String,
+pub struct RdpConn {
+    pub orig_addr: IpAddr,
+    pub resp_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub cookie: String,
 }
 
 #[derive(Debug, Deserialize)]
