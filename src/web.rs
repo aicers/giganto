@@ -1,15 +1,11 @@
-use crate::{graphql, settings::Settings};
-use async_graphql::{
-    http::{playground_source, GraphQLPlaygroundConfig},
-    EmptyMutation, EmptySubscription, Schema,
-};
+use crate::{graphql::Schema, settings::Settings};
+use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use std::{convert::Infallible, net::SocketAddr};
 use warp::{http::Response as HttpResponse, Filter};
 
-pub async fn serve(schema: Schema<graphql::Query, EmptyMutation, EmptySubscription>, s: &Settings) {
-    type MySchema = Schema<graphql::Query, EmptyMutation, EmptySubscription>;
+pub async fn serve(schema: Schema, s: &Settings) {
     let filter = async_graphql_warp::graphql(schema).and_then(
-        |(schema, request): (MySchema, async_graphql::Request)| async move {
+        |(schema, request): (Schema, async_graphql::Request)| async move {
             let resp = schema.execute(request).await;
 
             Ok::<_, Infallible>(async_graphql_warp::GraphQLResponse::from(resp))

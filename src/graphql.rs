@@ -3,11 +3,13 @@ use crate::{
     storage::{gen_key, Database, RawEventStore},
 };
 use anyhow::{bail, Result};
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject};
+use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, SimpleObject};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
 pub struct Query;
+
+pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
 
 #[derive(SimpleObject, Debug)]
 pub struct ConnRawEvent {
@@ -214,7 +216,7 @@ where
     Ok(raw_vec)
 }
 
-pub fn schema(database: Database) -> Schema<Query, EmptyMutation, EmptySubscription> {
+pub fn schema(database: Database) -> Schema {
     Schema::build(Query, EmptyMutation, EmptySubscription)
         .data(database)
         .finish()
