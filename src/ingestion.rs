@@ -16,6 +16,7 @@ use std::{
     },
 };
 use tokio::{select, sync::mpsc::channel, sync::Mutex, task, time};
+use tracing::{error, info};
 use x509_parser::nom::Parser;
 
 const ACK_ROTATION_CNT: u8 = 128;
@@ -105,7 +106,7 @@ impl Server {
     pub async fn run(self, db: Database) {
         let (endpoint, mut incoming) =
             Endpoint::server(self.server_config, self.server_address).expect("endpoint");
-        println!(
+        info!(
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
@@ -114,7 +115,7 @@ impl Server {
             let db = db.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_connection(conn, db).await {
-                    eprintln!("connection failed: {}", e);
+                    error!("connection failed: {}", e);
                 }
             });
         }
@@ -144,7 +145,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
                             .and_then(|cn| cn.as_str().ok())
                             .unwrap();
                         source.push_str(issuer);
-                        println!("Connected Client Name : {}", issuer);
+                        info!("Connected Client Name : {}", issuer);
                     }
                     _ => anyhow::bail!("x509 parsing failed: {:?}", res),
                 }
@@ -168,7 +169,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
             let db = db.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_request(source, stream, db).await {
-                    eprintln!("failed: {}", e);
+                    error!("failed: {}", e);
                 }
             });
         }

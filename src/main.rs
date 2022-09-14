@@ -35,6 +35,8 @@ async fn main() -> Result<()> {
     let db_path = Path::new(&settings.data_dir).join("db");
     let database = storage::Database::open(&db_path)?;
 
+    tracing_subscriber::fmt::init();
+
     let db = database.clone();
     task::spawn(async move {
         let schema = graphql::schema(db);
