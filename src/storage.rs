@@ -1,5 +1,4 @@
 //! Raw event storage based on RocksDB.
-use crate::ingestion;
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rocksdb::{ColumnFamily, Options, DB};
@@ -109,28 +108,8 @@ pub struct RawEventStore<'db> {
 unsafe impl<'db> Send for RawEventStore<'db> {}
 
 impl<'db> RawEventStore<'db> {
-    pub fn append(&self, source: &str, timestamp: i64, raw_event: &[u8]) -> Result<()> {
-        let mut key: Vec<u8> = Vec::new();
-        key.append(&mut source.as_bytes().to_vec());
-        key.append(&mut timestamp.to_be_bytes().to_vec());
+    pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
         self.db.put_cf(self.cf, key, raw_event)?;
-        Ok(())
-    }
-
-    pub fn append_log(&self, source: &str, timestamp: i64, raw_event: &[u8]) -> Result<()> {
-        let mut key: Vec<u8> = Vec::new();
-        let de_log = bincode::deserialize::<ingestion::Log>(raw_event)?;
-        let (kind, _) = de_log.log;
-        key.append(&mut source.as_bytes().to_vec());
-        key.push(0);
-        key.append(&mut kind.as_bytes().to_vec());
-        key.append(&mut timestamp.to_be_bytes().to_vec());
-        self.db.put_cf(self.cf, key, raw_event)?;
-        Ok(())
-    }
-
-    pub fn append_sources(&self, source: &str, timestamp: i64) -> Result<()> {
-        self.db.put_cf(self.cf, source, timestamp.to_be_bytes())?;
         Ok(())
     }
 
@@ -147,42 +126,10 @@ impl<'db> RawEventStore<'db> {
     /// Returns all raw events given source
     pub fn src_raw_events(&self, source: &str) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
-        let iter = self
-            .db
-            .iterator_cf(
-                self.cf,
-                rocksdb::IteratorMode::From(source.as_bytes(), rocksdb::Direction::Forward),
-            )
-            .flatten();
-        for (key, val) in iter {
-            let (src, _ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
-            if source == std::str::from_utf8(src).expect("src to string") {
-                raw.push(val.to_vec());
-            }
+        for (_, val) in self.db.prefix_iterator_cf(self.cf, source).flatten() {
+            raw.push(val.to_vec());
         }
         raw
-    }
-
-    pub fn log_events(&self, source: &str, kind: &str) -> Vec<Vec<u8>> {
-        let mut logs = Vec::new();
-        let mut source_kind: Vec<u8> = Vec::new();
-        source_kind.append(&mut source.as_bytes().to_vec());
-        source_kind.push(0);
-        source_kind.append(&mut kind.as_bytes().to_vec());
-        let iter = self
-            .db
-            .iterator_cf(
-                self.cf,
-                rocksdb::IteratorMode::From(&source_kind, rocksdb::Direction::Forward),
-            )
-            .flatten();
-        for (key, val) in iter {
-            let (src_kind, _ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
-            if source_kind == src_kind {
-                logs.push(val.to_vec());
-            }
-        }
-        logs
     }
 
     /// Returns the all key values ​​of column family.
@@ -197,6 +144,16 @@ impl<'db> RawEventStore<'db> {
         }
         keys
     }
+}
+
+pub fn gen_key(args: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut key: Vec<u8> = Vec::new();
+    for arg in args {
+        key.extend_from_slice(&arg);
+        key.push(0x00);
+    }
+    key.pop();
+    key
 }
 
 pub async fn retain_periodically(
@@ -220,9 +177,11 @@ pub async fn retain_periodically(
 
         for source in sources {
             let mut from: Vec<u8> = source.clone();
+            from.push(0x00);
             from.extend_from_slice(&from_timestamp);
 
             let mut to: Vec<u8> = source.clone();
+            to.push(0x00);
             to.extend_from_slice(&standard_duration_vec);
 
             for store in &all_store {
