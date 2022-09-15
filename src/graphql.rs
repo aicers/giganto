@@ -1,6 +1,11 @@
-use crate::{ingestion, storage::Database};
+use crate::{
+    ingestion,
+    storage::{gen_key, Database, RawEventStore},
+};
 use anyhow::{bail, Result};
 use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject};
+use serde::de::DeserializeOwned;
+use std::fmt::Debug;
 
 pub struct Query;
 
@@ -49,6 +54,11 @@ pub struct RdpRawEvent {
     orig_port: u16,
     resp_port: u16,
     cookie: String,
+}
+
+#[derive(SimpleObject, Debug)]
+pub struct LogRawEvent {
+    pub log: String,
 }
 
 impl From<ingestion::Conn> for ConnRawEvent {
@@ -110,6 +120,15 @@ impl From<ingestion::RdpConn> for RdpRawEvent {
     }
 }
 
+impl From<ingestion::Log> for LogRawEvent {
+    fn from(l: ingestion::Log) -> LogRawEvent {
+        let (_, log) = l.log;
+        LogRawEvent {
+            log: base64::encode(log),
+        }
+    }
+}
+
 #[Object]
 impl Query {
     pub async fn conn_raw_events<'ctx>(
@@ -117,17 +136,12 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<ConnRawEvent>> {
-        let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.conn_store()?.src_raw_events(&source) {
-            let de_conn = bincode::deserialize::<ingestion::Conn>(&raw_data)?;
-            raw_vec.push(ConnRawEvent::from(de_conn));
-        }
 
-        Ok(raw_vec)
+        response_raw_events::<ingestion::Conn, ConnRawEvent>(&source, &db.conn_store()?)
     }
 
     pub async fn log_raw_events<'ctx>(
@@ -135,20 +149,16 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
         kind: String,
-    ) -> Result<Vec<String>> {
-        let mut raw_vec = Vec::new();
+    ) -> Result<Vec<LogRawEvent>> {
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.log_store()?.log_events(&source, &kind) {
-            let de_log = bincode::deserialize::<ingestion::Log>(&raw_data)?;
-            let (k, r) = de_log.log;
-            if k == kind {
-                raw_vec.push(base64::encode(r));
-            }
-        }
-        Ok(raw_vec)
+
+        let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec(), kind.as_bytes().to_vec()];
+        let source = String::from_utf8(gen_key(args))?;
+
+        response_raw_events::<ingestion::Log, LogRawEvent>(&source, &db.log_store()?)
     }
 
     pub async fn dns_raw_events<'ctx>(
@@ -156,17 +166,12 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<DnsRawEvent>> {
-        let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.dns_store()?.src_raw_events(&source) {
-            let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
-            raw_vec.push(DnsRawEvent::from(de_dns));
-        }
 
-        Ok(raw_vec)
+        response_raw_events::<ingestion::DnsConn, DnsRawEvent>(&source, &db.dns_store()?)
     }
 
     pub async fn http_raw_events<'ctx>(
@@ -174,17 +179,12 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<HttpRawEvent>> {
-        let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.http_store()?.src_raw_events(&source) {
-            let de_http = bincode::deserialize::<ingestion::HttpConn>(&raw_data)?;
-            raw_vec.push(HttpRawEvent::from(de_http));
-        }
 
-        Ok(raw_vec)
+        response_raw_events::<ingestion::HttpConn, HttpRawEvent>(&source, &db.http_store()?)
     }
 
     pub async fn rdp_raw_events<'ctx>(
@@ -192,18 +192,26 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<RdpRawEvent>> {
-        let mut raw_vec = Vec::new();
         let db = match ctx.data::<Database>() {
             Ok(r) => r,
             Err(e) => bail!("{:?}", e),
         };
-        for raw_data in db.rdp_store()?.src_raw_events(&source) {
-            let de_rdp = bincode::deserialize::<ingestion::RdpConn>(&raw_data)?;
-            raw_vec.push(RdpRawEvent::from(de_rdp));
-        }
 
-        Ok(raw_vec)
+        response_raw_events::<ingestion::RdpConn, RdpRawEvent>(&source, &db.rdp_store()?)
     }
+}
+
+fn response_raw_events<'a, T, K>(source: &str, store: &RawEventStore<'a>) -> Result<Vec<K>>
+where
+    T: Debug + DeserializeOwned,
+    K: From<T>,
+{
+    let mut raw_vec = Vec::new();
+    for raw_data in store.src_raw_events(source) {
+        let de_data = bincode::deserialize::<T>(&raw_data)?;
+        raw_vec.push(K::from(de_data));
+    }
+    Ok(raw_vec)
 }
 
 pub fn schema(database: Database) -> Schema<Query, EmptyMutation, EmptySubscription> {

@@ -1,6 +1,6 @@
 use crate::{
     settings::Settings,
-    storage::{Database, RawEventStore},
+    storage::{gen_key, Database, RawEventStore},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -144,7 +144,7 @@ impl Server {
                         for source_key in keys {
                             let timestamp = Utc::now();
                             sources.insert(source_key.clone(), timestamp);
-                            if source_store.append_sources(&source_key, timestamp.timestamp_nanos()).is_err(){
+                            if source_store.append(source_key.as_bytes(), &timestamp.timestamp_nanos().to_be_bytes()).is_err(){
                                 error!("Failed to append Source store");
                             }
                         }
@@ -152,14 +152,13 @@ impl Server {
 
                     Some((source_key,timestamp_val,is_close)) = rx.recv() => {
                         if is_close{
-                            if source_store.append_sources(&source_key, timestamp_val.timestamp_nanos()).is_err(){
+                            if source_store.append(source_key.as_bytes(), &timestamp_val.timestamp_nanos().to_be_bytes()).is_err(){
                                 error!("Failed to append Source store");
                             }
-                            //SOURCES.lock().await.remove(&source_key);
-
+                            SOURCES.lock().await.remove(&source_key);
                         }else{
                             SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
-                            if source_store.append_sources(&source_key, timestamp_val.timestamp_nanos()).is_err(){
+                            if source_store.append(source_key.as_bytes(), &timestamp_val.timestamp_nanos().to_be_bytes()).is_err(){
                                 error!("Failed to append Source store");
                             }
                         }
@@ -416,10 +415,14 @@ where
     loop {
         match handle_body(&mut recv).await {
             Ok((raw_event, timestamp)) => {
-                match record_type {
-                    RecordType::Log => store.append_log(&source, timestamp, &raw_event)?,
-                    _ => store.append(&source, timestamp, &raw_event)?,
+                let mut args: Vec<Vec<u8>> = Vec::new();
+                args.push(source.as_bytes().to_vec());
+                if record_type == RecordType::Log {
+                    let (kind, _) = bincode::deserialize::<Log>(&raw_event)?.log;
+                    args.push(kind.as_bytes().to_vec());
                 }
+                args.push(timestamp.to_be_bytes().to_vec());
+                store.append(&gen_key(args), &raw_event)?;
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
