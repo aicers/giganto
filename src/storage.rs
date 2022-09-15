@@ -1,10 +1,11 @@
 //! Raw event storage based on RocksDB.
 use crate::ingestion;
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use rocksdb::{ColumnFamily, Options, DB};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::time;
+use tracing::error;
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
@@ -26,18 +27,21 @@ impl Database {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
         let db = DB::open_cf(&opts, path, cfs).context("cannot open database")?;
+
         Ok(Database { db: Arc::new(db) })
     }
 
-    /// Returns the raw event store for all type.
-    pub fn all_store(&self) -> Result<Vec<RawEventStore>> {
+    /// Returns the raw event store for all type. (exclude log type)
+    pub fn retain_period_store(&self) -> Result<Vec<RawEventStore>> {
         let mut stores: Vec<RawEventStore> = Vec::new();
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
-            let cf = self
-                .db
-                .cf_handle(store)
-                .context("cannot access column family")?;
-            stores.push(RawEventStore { db: &self.db, cf });
+            if !store.eq("log") {
+                let cf = self
+                    .db
+                    .cf_handle(store)
+                    .context("cannot access column family")?;
+                stores.push(RawEventStore { db: &self.db, cf });
+            }
         }
         Ok(stores)
     }
@@ -68,6 +72,7 @@ impl Database {
             .context("cannot access log column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
+
     /// Returns the raw event store for http.
     pub fn http_store(&self) -> Result<RawEventStore> {
         let cf = self
@@ -76,6 +81,7 @@ impl Database {
             .context("cannot access http column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
+
     /// Returns the raw event store for rdp.
     pub fn rdp_store(&self) -> Result<RawEventStore> {
         let cf = self
@@ -199,17 +205,44 @@ pub async fn retain_periodically(
     db: Database,
 ) -> Result<()> {
     let mut itv = time::interval(duration);
-    let stores = db.all_store()?;
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
+    let from_timestamp = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(61, 0), Utc)
+        .timestamp_nanos()
+        .to_be_bytes()
+        .to_vec();
     loop {
         itv.tick().await;
         let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
-        for store in &stores {
-            for key in store.all_keys() {
-                let store_duration =
-                    i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                if standard_duration > store_duration {
-                    store.delete(&key)?;
+        let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
+        let sources = db.sources_store()?.all_keys();
+        let all_store = db.retain_period_store()?;
+        let log_store = db.log_store()?;
+
+        for source in sources {
+            let mut from: Vec<u8> = source.clone();
+            from.extend_from_slice(&from_timestamp);
+
+            let mut to: Vec<u8> = source.clone();
+            to.extend_from_slice(&standard_duration_vec);
+
+            for store in &all_store {
+                if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
+                    error!("Failed to delete range data");
+                }
+            }
+
+            for (key, _) in log_store
+                .db
+                .prefix_iterator_cf(log_store.cf, source.clone())
+                .flatten()
+                .filter(|(key, _)| {
+                    let store_duration =
+                        i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into().unwrap());
+                    standard_duration > store_duration
+                })
+            {
+                if log_store.delete(&key).is_err() {
+                    error!("Failed to delete log data");
                 }
             }
         }
