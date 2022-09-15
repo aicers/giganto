@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
+const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "127.0.0.1:8443";
 
 /// The application settings.
@@ -13,6 +14,7 @@ pub struct Settings {
     pub key: String,               // Path to the private key file
     pub roots: Vec<String>,        // Path to the rootCA file
     pub ingestion_address: String, // IP address & port to ingest data
+    pub publish_address: String,   // IP address & port to publish data
     pub data_dir: String,          // DB storage path
     pub retention: String,         // Data retention period
     pub graphql_address: String,   // IP address & port to graphql
@@ -65,6 +67,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .set_default("key", key_path.to_str().expect("path to string"))
         .expect("default key dir")
         .set_default("ingestion_address", DEFAULT_INGESTION_ADDRESS)
+        .expect("valid address")
+        .set_default("publish_address", DEFAULT_PUBLISH_ADDRESS)
         .expect("valid address")
         .set_default("graphql_address", DEFAULT_GRAPHQL_ADDRESS)
         .expect("local address")
