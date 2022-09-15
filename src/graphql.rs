@@ -10,7 +10,7 @@ use std::fmt::Debug;
 pub struct Query;
 
 #[derive(SimpleObject, Debug)]
-pub struct ConnRawEvent {
+struct ConnRawEvent {
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -24,7 +24,7 @@ pub struct ConnRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-pub struct DnsRawEvent {
+struct DnsRawEvent {
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -34,7 +34,7 @@ pub struct DnsRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-pub struct HttpRawEvent {
+struct HttpRawEvent {
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -48,7 +48,7 @@ pub struct HttpRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-pub struct RdpRawEvent {
+struct RdpRawEvent {
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -57,8 +57,8 @@ pub struct RdpRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-pub struct LogRawEvent {
-    pub log: String,
+struct LogRawEvent {
+    log: String,
 }
 
 impl From<ingestion::Conn> for ConnRawEvent {
@@ -131,7 +131,7 @@ impl From<ingestion::Log> for LogRawEvent {
 
 #[Object]
 impl Query {
-    pub async fn conn_raw_events<'ctx>(
+    async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
@@ -144,7 +144,7 @@ impl Query {
         response_raw_events::<ingestion::Conn, ConnRawEvent>(&source, &db.conn_store()?)
     }
 
-    pub async fn log_raw_events<'ctx>(
+    async fn log_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
@@ -161,7 +161,7 @@ impl Query {
         response_raw_events::<ingestion::Log, LogRawEvent>(&source, &db.log_store()?)
     }
 
-    pub async fn dns_raw_events<'ctx>(
+    async fn dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
@@ -174,7 +174,7 @@ impl Query {
         response_raw_events::<ingestion::DnsConn, DnsRawEvent>(&source, &db.dns_store()?)
     }
 
-    pub async fn http_raw_events<'ctx>(
+    async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
@@ -187,7 +187,7 @@ impl Query {
         response_raw_events::<ingestion::HttpConn, HttpRawEvent>(&source, &db.http_store()?)
     }
 
-    pub async fn rdp_raw_events<'ctx>(
+    async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
