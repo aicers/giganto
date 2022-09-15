@@ -1,55 +1,37 @@
 # Giganto
 
-Giganto is the raw-event storage system for AICE.
+Giganto is the raw-event storage system for AICE. It receives raw events through
+QUIC channels and stores them in a database. It also provides a GraphQL API to
+query the stored events.
 
 ## Usage
 
-Before running the app, create a toml extension file and write it in the format below.
+You can run giganto by invoking the following command:
+
+```sh
+giganto <path to config file>
+```
+
+In the config file, you can specify the following options:
 
 ```toml
-key = "key.pem"
-cert = "cert.pem"
-roots = ["root_one.pem","root_two.pem","root_three.pem"]
-ingestion_address = "0.0.0.0:38370"
-data_dir = "tests/data"
-retention = "100d"
+key = "key.pem"                            # path to private key file
+cert = "cert.pem"                          # path to certificate file
+roots = ["ca1.pem", "ca2.pem", "ca3.pem"]  # paths to CA certificate files
+ingestion_address = "0.0.0.0:38370"        # address to listen for QUIC connections
+data_dir = "tests/data"                    # path to directory to store data
+retention = "100d"                         # retention period for data
 ```
 
-* `key`: Giganto's key path.
-* `cert`: Giganto's cert path.
-* `roots`: RootCA's path of clients connected to Giganto.
-* `ingestion_address`: Address of Gignato.
-* `data_dir`: db storage path.
-* `retention`: Data retention effective range time.
+By default, giganto reads the config file from the following directories:
 
-Build and serve the app with Cargo as follows:
+* Linux: `$HOME/.config/giganto/config.toml`
+* macOS: `$HOME/Library/Application Support/com.einsis.giganto/config.toml`
 
-```sh
-cargo run [-- FLAGS | OPTION]
-```
+## Test
 
-When you run the program, Giganto reads the config file from the default folder.
-
-To run without giving the config file option, save the file to the path below.
-
-```sh
-"/Users/[username]/Library/Application Support/com.einsis.giganto/config.toml"
-```
-
-## FLAGS
-
-* `-h`, `--help`: Prints help information
-* `-V`, `--version`: Prints version information
-
-## OPTION
-
-* `config_file`: The path to the toml file containing server config info.
-
-## TEST
-
-Run giganto with the prepared configuration file.
-
-(Settings to use the certificate/key from the tests folder.)
+Run giganto with the prepared configuration file. (Settings to use the
+certificate/key from the tests folder.)
 
 ```sh
 cargo run -- tests/config.toml
