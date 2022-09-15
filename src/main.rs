@@ -1,5 +1,6 @@
 mod graphql;
 mod ingestion;
+mod publish;
 mod settings;
 mod storage;
 mod web;
@@ -49,8 +50,11 @@ async fn main() -> Result<()> {
     task::spawn(storage::retain_periodically(
         time::Duration::from_secs(ONE_DAY),
         retention_period,
-        db,
+        db.clone(),
     ));
+
+    let publish_server = publish::Server::new(&settings);
+    task::spawn(publish_server.run(db.clone()));
 
     let ingestion_server = ingestion::Server::new(&settings);
     ingestion_server.run(database).await;
