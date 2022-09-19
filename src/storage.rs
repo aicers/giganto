@@ -130,8 +130,12 @@ impl<'db> RawEventStore<'db> {
     /// Returns all raw events given source
     pub fn src_raw_events(&self, source: &str) -> Vec<Vec<u8>> {
         let mut raw = Vec::new();
-        for (_, val) in self.db.prefix_iterator_cf(self.cf, source).flatten() {
-            raw.push(val.to_vec());
+        for (key, val) in self.db.prefix_iterator_cf(self.cf, source).flatten() {
+            if (key.len() - TIMESTAMP_WITH_DIV_SIZE) == source.as_bytes().len() {
+                raw.push(val.to_vec());
+            } else {
+                break;
+            }
         }
         raw
     }
