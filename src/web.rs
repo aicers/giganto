@@ -3,7 +3,7 @@ use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use std::{convert::Infallible, net::SocketAddr};
 use warp::{http::Response as HttpResponse, Filter};
 
-pub async fn serve(schema: Schema, s: &Settings) {
+pub async fn serve(schema: Schema, s: &Settings, cert: &Vec<u8>, key: &Vec<u8>) {
     let filter = async_graphql_warp::graphql(schema).and_then(
         |(schema, request): (Schema, async_graphql::Request)| async move {
             let resp = schema.execute(request).await;
@@ -25,8 +25,8 @@ pub async fn serve(schema: Schema, s: &Settings) {
 
     warp::serve(routes)
         .tls()
-        .cert_path(&s.cert)
-        .key_path(&s.key)
+        .cert(cert)
+        .key(key)
         .run(
             s.graphql_address
                 .parse::<SocketAddr>()
