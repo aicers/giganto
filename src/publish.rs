@@ -3,7 +3,7 @@ use crate::storage::Database;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use std::{fs, net::SocketAddr, path::Path, sync::Arc};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 use tracing::{error, info};
 
 pub struct Server {
@@ -12,8 +12,8 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(s: &Settings) -> Self {
-        let server_config = config_server(&s.cert, &s.key, &s.roots)
+    pub fn new(s: &Settings, cert: Vec<u8>, key: Vec<u8>, files: Vec<Vec<u8>>) -> Self {
+        let server_config = config_server(&s.cert, &s.key, cert, key, files)
             .expect("server configuration error with cert, key or root");
         Server {
             server_config,
@@ -85,19 +85,10 @@ fn server_addr(addr: &str) -> SocketAddr {
 fn config_server(
     cert_path: &str,
     key_path: &str,
-    roots_path: &Vec<String>,
+    cert: Vec<u8>,
+    key: Vec<u8>,
+    files: Vec<Vec<u8>>,
 ) -> Result<ServerConfig> {
-    let (cert, key) = match fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?))) {
-        Ok(x) => x,
-        Err(_) => {
-            bail!(
-                "failed to read (cert, key) file, {}, {} read file error. Check the location of cert or key and try again.",
-                cert_path,
-                key_path
-            );
-        }
-    };
-
     let pv_key = if Path::new(key_path)
         .extension()
         .map_or(false, |x| x == "der")
@@ -134,8 +125,7 @@ fn config_server(
     };
 
     let mut client_auth_roots = rustls::RootCertStore::empty();
-    for root in roots_path {
-        let file = fs::read(root).expect("Failed to read file");
+    for file in files {
         let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
             .context("invalid PEM-encoded certificate")?
             .into_iter()
