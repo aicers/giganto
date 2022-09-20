@@ -10,6 +10,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Accepts QUIC connections from subscribers.
+- `logRawEvents` supports cursor-based pagination.
+
+### Changed
+
+- `dnsRawEvents` takes `start` and `end` parameters to specify the time range
+  of the query.
+
+### Fixed
+
+- A query for a certain source no longer returns events from other sources.
 
 ## [0.1.0] - 2022-09-16
 
