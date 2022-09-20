@@ -2,10 +2,10 @@ use crate::{
     ingestion,
     storage::{gen_key, Database, RawEventStore},
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::anyhow;
 use async_graphql::{
     connection::{query, Connection, Edge},
-    Context, EmptyMutation, EmptySubscription, Object, SimpleObject,
+    Context, EmptyMutation, EmptySubscription, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -149,11 +149,7 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<ConnRawEvent>> {
-        let db = match ctx.data::<Database>() {
-            Ok(r) => r,
-            Err(e) => bail!("{:?}", e),
-        };
-
+        let db = ctx.data::<Database>()?;
         response_raw_events::<ingestion::Conn, ConnRawEvent>(&source, &db.conn_store()?)
     }
 
@@ -167,33 +163,14 @@ impl Query {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-    ) -> Result<Connection<String, LogRawEvent>, async_graphql::Error> {
+    ) -> Result<Connection<String, LogRawEvent>> {
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                let paging_type = check_paging_type(after, before, first, last)?;
-
-                let db = match ctx.data::<Database>() {
-                    Ok(r) => r,
-                    Err(e) => bail!("{:?}", e),
-                };
-
-                let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec(), kind.as_bytes().to_vec()];
-                let source_kind = String::from_utf8(gen_key(args))?;
-
-                let (logs, prev, next) = db.log_store()?.log_events(&source_kind, paging_type);
-                let mut connection: Connection<String, LogRawEvent> = Connection::new(prev, next);
-                for log_data in logs {
-                    let (key, raw_data) = log_data;
-                    let de_log = bincode::deserialize::<ingestion::Log>(&raw_data)?;
-                    connection
-                        .edges
-                        .push(Edge::new(base64::encode(key), LogRawEvent::from(de_log)));
-                }
-                Ok(connection)
+                load_paging_type(ctx, &source, &kind, after, before, first, last)
             },
         )
         .await
@@ -207,10 +184,7 @@ impl Query {
         end: DateTime<Utc>,
     ) -> Result<Vec<DnsRawEvent>> {
         let mut raw_vec = Vec::new();
-        let db = match ctx.data::<Database>() {
-            Ok(r) => r,
-            Err(e) => bail!("{:?}", e),
-        };
+        let db = ctx.data::<Database>()?;
 
         for raw_data in db.dns_store()?.dns_time_events(&source, &start, &end) {
             let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
@@ -225,11 +199,7 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<HttpRawEvent>> {
-        let db = match ctx.data::<Database>() {
-            Ok(r) => r,
-            Err(e) => bail!("{:?}", e),
-        };
-
+        let db = ctx.data::<Database>()?;
         response_raw_events::<ingestion::HttpConn, HttpRawEvent>(&source, &db.http_store()?)
     }
 
@@ -238,11 +208,7 @@ impl Query {
         ctx: &Context<'ctx>,
         source: String,
     ) -> Result<Vec<RdpRawEvent>> {
-        let db = match ctx.data::<Database>() {
-            Ok(r) => r,
-            Err(e) => bail!("{:?}", e),
-        };
-
+        let db = ctx.data::<Database>()?;
         response_raw_events::<ingestion::RdpConn, RdpRawEvent>(&source, &db.rdp_store()?)
     }
 }
@@ -265,7 +231,7 @@ fn check_paging_type(
     before: Option<String>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<PagingType> {
+) -> anyhow::Result<PagingType> {
     if let Some(val) = first {
         if let Some(cursor) = after {
             return Ok(PagingType::AfterFirst(cursor, val));
@@ -279,6 +245,33 @@ fn check_paging_type(
         return Ok(PagingType::Last(val));
     }
     Err(anyhow!("Invalid paging type"))
+}
+
+fn load_paging_type(
+    ctx: &Context<'_>,
+    source: &str,
+    kind: &str,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<Connection<String, LogRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let paging_type = check_paging_type(after, before, first, last)?;
+
+    let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec(), kind.as_bytes().to_vec()];
+    let source_kind = String::from_utf8(gen_key(args))?;
+
+    let (logs, prev, next) = db.log_store()?.log_events(&source_kind, paging_type);
+    let mut connection: Connection<String, LogRawEvent> = Connection::new(prev, next);
+    for log_data in logs {
+        let (key, raw_data) = log_data;
+        let de_log = bincode::deserialize::<ingestion::Log>(&raw_data)?;
+        connection
+            .edges
+            .push(Edge::new(base64::encode(key), LogRawEvent::from(de_log)));
+    }
+    Ok(connection)
 }
 
 pub fn schema(database: Database) -> Schema {
