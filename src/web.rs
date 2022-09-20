@@ -1,9 +1,9 @@
-use crate::{graphql::Schema, settings::Settings};
+use crate::graphql::Schema;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use std::{convert::Infallible, net::SocketAddr};
 use warp::{http::Response as HttpResponse, Filter};
 
-pub async fn serve(schema: Schema, s: &Settings, cert: &Vec<u8>, key: &Vec<u8>) {
+pub async fn serve(schema: Schema, addr: SocketAddr, cert: Vec<u8>, key: Vec<u8>) {
     let filter = async_graphql_warp::graphql(schema).and_then(
         |(schema, request): (Schema, async_graphql::Request)| async move {
             let resp = schema.execute(request).await;
@@ -27,10 +27,6 @@ pub async fn serve(schema: Schema, s: &Settings, cert: &Vec<u8>, key: &Vec<u8>) 
         .tls()
         .cert(cert)
         .key(key)
-        .run(
-            s.graphql_address
-                .parse::<SocketAddr>()
-                .expect("error while parsing socket address"),
-        )
+        .run(addr)
         .await;
 }

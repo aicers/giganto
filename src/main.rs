@@ -5,8 +5,9 @@ mod settings;
 mod storage;
 mod web;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use settings::Settings;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::{env, fs, process::exit};
 use tokio::{task, time};
@@ -31,48 +32,45 @@ async fn main() -> Result<()> {
     } else {
         Settings::new()?
     };
-    let s = settings.clone();
+
+    let cert = fs::read(&settings.cert)
+        .with_context(|| format!("cannot read certificate from {}", settings.cert))?;
+    let key = fs::read(&settings.key)
+        .with_context(|| format!("cannot read private key from {}", settings.key))?;
 
     let db_path = Path::new(&settings.data_dir).join("db");
     let database = storage::Database::open(&db_path)?;
 
     tracing_subscriber::fmt::init();
 
-    let (cert, key) = match fs::read(&s.cert).and_then(|x| Ok((x, fs::read(&s.key)?))) {
-        Ok(x) => x,
-        Err(_) => {
-            bail!(
-                "failed to read (cert, key) file, {}, {} read file error. Check the location of cert or key and try again.",
-                &s.cert,
-                &s.key,
-            );
-        }
-    };
-
     let mut files: Vec<Vec<u8>> = Vec::new();
-    for root in &s.roots {
+    for root in &settings.roots {
         let file = fs::read(root).expect("Failed to read file");
         files.push(file);
     }
 
-    let db = database.clone();
-    let (c, k) = (cert.clone(), key.clone());
-    task::spawn(async move {
-        let schema = graphql::schema(db);
-        web::serve(schema, &s, &c, &k).await;
-    });
+    let schema = graphql::schema(database.clone());
+    let web_addr = settings
+        .graphql_address
+        .parse::<SocketAddr>()
+        .with_context(|| {
+            format!(
+                "invalid GraphQL server address: {}",
+                settings.graphql_address
+            )
+        })?;
+    task::spawn(web::serve(schema, web_addr, cert.clone(), key.clone()));
 
-    let db = database.clone();
     let retention_period = humantime::parse_duration(&settings.retention)
         .with_context(|| format!("invalid retention period: {}", settings.retention))?;
     task::spawn(storage::retain_periodically(
         time::Duration::from_secs(ONE_DAY),
         retention_period,
-        db.clone(),
+        database.clone(),
     ));
 
     let publish_server = publish::Server::new(&settings, cert.clone(), key.clone(), files.clone());
-    task::spawn(publish_server.run(db.clone()));
+    task::spawn(publish_server.run(database.clone()));
 
     let ingestion_server =
         ingestion::Server::new(&settings, cert.clone(), key.clone(), files.clone());
