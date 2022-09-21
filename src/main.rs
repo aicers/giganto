@@ -7,7 +7,6 @@ mod web;
 
 use anyhow::{Context, Result};
 use settings::Settings;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::{env, fs, process::exit};
 use tokio::{task, time};
@@ -50,16 +49,12 @@ async fn main() -> Result<()> {
     }
 
     let schema = graphql::schema(database.clone());
-    let web_addr = settings
-        .graphql_address
-        .parse::<SocketAddr>()
-        .with_context(|| {
-            format!(
-                "invalid GraphQL server address: {}",
-                settings.graphql_address
-            )
-        })?;
-    task::spawn(web::serve(schema, web_addr, cert.clone(), key.clone()));
+    task::spawn(web::serve(
+        schema,
+        settings.graphql_address,
+        cert.clone(),
+        key.clone(),
+    ));
 
     let retention_period = humantime::parse_duration(&settings.retention)
         .with_context(|| format!("invalid retention period: {}", settings.retention))?;
