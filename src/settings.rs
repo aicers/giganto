@@ -1,23 +1,26 @@
 //! Configurations for the application.
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
-use serde::Deserialize;
-use std::path::PathBuf;
+use serde::{de::Error, Deserialize, Deserializer};
+use std::{net::SocketAddr, path::PathBuf};
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
-const DEFAULT_GRAPHQL_ADDRESS: &str = "127.0.0.1:8443";
+const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub cert: String,              // Path to the certificate file
-    pub key: String,               // Path to the private key file
-    pub roots: Vec<String>,        // Path to the rootCA file
-    pub ingestion_address: String, // IP address & port to ingest data
-    pub publish_address: String,   // IP address & port to publish data
-    pub data_dir: String,          // DB storage path
-    pub retention: String,         // Data retention period
-    pub graphql_address: String,   // IP address & port to graphql
+    pub cert: String,       // Path to the certificate file
+    pub key: String,        // Path to the private key file
+    pub roots: Vec<String>, // Path to the rootCA file
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub ingestion_address: SocketAddr, // IP address & port to ingest data
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub publish_address: SocketAddr, // IP address & port to publish data
+    pub data_dir: String,   // DB storage path
+    pub retention: String,  // Data retention period
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub graphql_address: SocketAddr, // IP address & port to graphql
 }
 
 impl Settings {
@@ -76,4 +79,18 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("data dir")
         .set_default("retention", "100d")
         .expect("retention")
+}
+
+/// Deserializes a socket address.
+///
+/// # Errors
+///
+/// Returns an error if the address is not in the form of 'IP:PORT'.
+fn deserialize_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let addr = String::deserialize(deserializer)?;
+    addr.parse()
+        .map_err(|e| D::Error::custom(format!("invalid address \"{}\": {}", addr, e)))
 }

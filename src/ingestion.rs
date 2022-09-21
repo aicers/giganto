@@ -114,7 +114,7 @@ impl Server {
             .expect("server configuration error with cert, key or root");
         Server {
             server_config,
-            server_address: server_addr(&s.ingestion_address),
+            server_address: s.ingestion_address,
         }
     }
 
@@ -279,11 +279,6 @@ async fn handle_request(
     };
 
     Ok(())
-}
-
-fn server_addr(addr: &str) -> SocketAddr {
-    addr.parse::<SocketAddr>()
-        .expect("error while parsing socket address")
 }
 
 fn config_server(

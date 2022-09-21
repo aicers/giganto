@@ -17,7 +17,7 @@ impl Server {
             .expect("server configuration error with cert, key or root");
         Server {
             server_config,
-            server_address: server_addr(&s.publish_address),
+            server_address: s.publish_address,
         }
     }
 
@@ -75,11 +75,6 @@ async fn handle_request((_send, mut recv): (SendStream, RecvStream), _db: Databa
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
 
     Ok(())
-}
-
-fn server_addr(addr: &str) -> SocketAddr {
-    addr.parse::<SocketAddr>()
-        .expect("error while parsing socket address")
 }
 
 fn config_server(
