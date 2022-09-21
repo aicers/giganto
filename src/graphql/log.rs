@@ -48,14 +48,14 @@ impl LogQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_paging_type(ctx, &source, &kind, after, before, first, last)
+                load_paging_type_log(ctx, &source, &kind, after, before, first, last)
             },
         )
         .await
     }
 }
 
-fn load_paging_type(
+fn load_paging_type_log(
     ctx: &Context<'_>,
     source: &str,
     kind: &str,

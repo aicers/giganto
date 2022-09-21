@@ -127,59 +127,72 @@ impl<'db> RawEventStore<'db> {
         Ok(())
     }
 
-    /// Returns all raw events given source
-    pub fn src_raw_events(&self, source: &str) -> Vec<Vec<u8>> {
-        let mut raw = Vec::new();
-        for (key, val) in self.db.prefix_iterator_cf(self.cf, source).flatten() {
-            if (key.len() - TIMESTAMP_WITH_DIV_SIZE) == source.as_bytes().len() {
-                raw.push(val.to_vec());
-            } else {
+    pub fn conn_events(&self, source: &str, paging_type: PagingType) -> Pages {
+        let mut conn = Vec::new();
+        let source = source.as_bytes().to_vec();
+
+        let (iter, next_idx, mut prev, mut next) = match paging_type {
+            PagingType::First(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::Last(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+            PagingType::AfterFirst(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::BeforeLast(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+        };
+
+        for (idx, (key, val)) in iter.enumerate() {
+            if idx == next_idx {
+                (prev, next) = (true, true);
                 break;
             }
-        }
-        raw
-    }
-
-    pub fn dns_time_events(
-        &self,
-        source: &str,
-        start: &DateTime<Utc>,
-        end: &DateTime<Utc>,
-    ) -> Vec<Vec<u8>> {
-        let mut dns_time = Vec::new();
-        let mut dns_key: Vec<u8> = Vec::new();
-        let start_vec = start.timestamp().to_be_bytes();
-        dns_key.append(&mut source.as_bytes().to_vec());
-        dns_key.push(00);
-        dns_key.append(&mut start_vec.to_vec());
-
-        let iter = self
-            .db
-            .iterator_cf(
-                self.cf,
-                rocksdb::IteratorMode::From(&dns_key, rocksdb::Direction::Forward),
-            )
-            .flatten();
-
-        let end_vec = end.timestamp_nanos().to_be_bytes().to_vec();
-        let end_time = i64::from_be_bytes(end_vec.try_into().unwrap());
-
-        for (key, val) in iter {
-            let (src, ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
-            let src = &src[0..src.len() - 1];
-            let ts_nano = i64::from_be_bytes(ts.to_vec().try_into().unwrap());
-
-            if src == source.as_bytes() {
-                if ts_nano <= end_time {
-                    dns_time.push(val.to_vec());
-                } else {
-                    break;
-                }
-            } else {
-                break;
+            let (src, _ts) = key.split_at(key.len() - TIMESTAMP_WITH_DIV_SIZE);
+            if source == src {
+                conn.push((key.to_vec(), val.to_vec()));
             }
         }
-        dns_time
+        (conn, prev, next)
     }
 
     pub fn log_events(&self, source_kind: &str, paging_type: PagingType) -> Pages {
@@ -248,6 +261,233 @@ impl<'db> RawEventStore<'db> {
             }
         }
         (logs, prev, next)
+    }
+
+    pub fn dns_time_events(
+        &self,
+        source: &str,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        paging_type: PagingType,
+    ) -> Pages {
+        let mut dns_time = Vec::new();
+        let mut dns_key = Vec::new();
+        let start_vec = start.timestamp().to_be_bytes();
+        dns_key.append(&mut source.as_bytes().to_vec());
+        dns_key.push(00);
+        dns_key.append(&mut start_vec.to_vec());
+
+        let (iter, next_idx, mut prev, mut next) = match paging_type {
+            PagingType::First(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&dns_key, rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::Last(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&dns_key, rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+            PagingType::AfterFirst(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::BeforeLast(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+        };
+
+        let end_vec = end.timestamp_nanos().to_be_bytes().to_vec();
+        let end_time = i64::from_be_bytes(end_vec.try_into().unwrap());
+
+        for (idx, (key, val)) in iter.enumerate() {
+            let (src, ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
+            let src = &src[0..src.len() - 1];
+            let ts_nano = i64::from_be_bytes(ts.to_vec().try_into().unwrap());
+
+            if idx == next_idx {
+                (prev, next) = (true, true);
+                break;
+            }
+            if src == source.as_bytes() {
+                if ts_nano <= end_time {
+                    dns_time.push((key.to_vec(), val.to_vec()));
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        (dns_time, prev, next)
+    }
+
+    pub fn http_events(&self, source: &str, paging_type: PagingType) -> Pages {
+        let mut http = Vec::new();
+        let source = source.as_bytes().to_vec();
+
+        let (iter, next_idx, mut prev, mut next) = match paging_type {
+            PagingType::First(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::Last(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+            PagingType::AfterFirst(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::BeforeLast(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+        };
+
+        for (idx, (key, val)) in iter.enumerate() {
+            if idx == next_idx {
+                (prev, next) = (true, true);
+                break;
+            }
+            let (src, _ts) = key.split_at(key.len() - TIMESTAMP_WITH_DIV_SIZE);
+            if source == src {
+                http.push((key.to_vec(), val.to_vec()));
+            }
+        }
+        (http, prev, next)
+    }
+
+    pub fn rdp_events(&self, source: &str, paging_type: PagingType) -> Pages {
+        let mut rdp = Vec::new();
+        let source = source.as_bytes().to_vec();
+
+        let (iter, next_idx, mut prev, mut next) = match paging_type {
+            PagingType::First(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::Last(val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(&source, rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+            PagingType::AfterFirst(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Forward),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                true,
+                false,
+            ),
+            PagingType::BeforeLast(cursor, val) => (
+                self.db
+                    .iterator_cf(
+                        self.cf,
+                        rocksdb::IteratorMode::From(cursor.as_bytes(), rocksdb::Direction::Reverse),
+                    )
+                    .take(val + 1)
+                    .flatten(),
+                val,
+                false,
+                true,
+            ),
+        };
+
+        for (idx, (key, val)) in iter.enumerate() {
+            if idx == next_idx {
+                (prev, next) = (true, true);
+                break;
+            }
+            let (src, _ts) = key.split_at(key.len() - TIMESTAMP_WITH_DIV_SIZE);
+            if source == src {
+                rdp.push((key.to_vec(), val.to_vec()));
+            }
+        }
+        (rdp, prev, next)
     }
 
     /// Returns the all key values ​​of column family.
