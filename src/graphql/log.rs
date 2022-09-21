@@ -102,3 +102,73 @@ fn check_paging_type(
     }
     Err(anyhow!("Invalid paging type"))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graphql::TestSchema;
+    use chrono::Utc;
+
+    #[tokio::test]
+    async fn log_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            logRawEvents (source: "einsis", kind: "Hello", first: 0) {
+                edges {
+                    node {
+                        log
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(res.data.to_string(), "{logRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn log_with_data() {
+        let schema = TestSchema::new();
+
+        let mut source_kind: Vec<u8> = Vec::new();
+        let source = "einsis";
+        let kind = "Hello";
+
+        source_kind.append(&mut source.as_bytes().to_vec());
+        source_kind.push(0);
+        source_kind.append(&mut kind.as_bytes().to_vec());
+        source_kind.push(00);
+        source_kind.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+
+        let log_body = (
+            String::from("Hello"),
+            base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+        );
+        let ser_log_body = bincode::serialize(&log_body).unwrap();
+
+        schema
+            .db
+            .log_store()
+            .unwrap()
+            .append(&source_kind[..], &ser_log_body)
+            .unwrap();
+
+        let query = r#"
+        {
+            logRawEvents (source: "einsis", kind: "Hello", first: 1) {
+                edges {
+                    node {
+                        log
+                    }
+                }
+                pageInfo {
+                    hasPreviousPage
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{logRawEvents: {edges: [{node: {log: \"aGVsbG8gd29ybGQ=\"}}],pageInfo: {hasPreviousPage: true}}}"
+        );
+    }
+}

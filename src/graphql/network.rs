@@ -339,3 +339,299 @@ fn load_paging_type_rdp(
     }
     Ok(connection)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graphql::TestSchema;
+    use crate::ingestion::{Conn, DnsConn, HttpConn, RdpConn};
+    use chrono::{Duration, Utc};
+    use std::net::IpAddr;
+
+    #[tokio::test]
+    async fn conn_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            connRawEvents (source: "einsis", first: 0) {
+                edges {
+                    node {
+                        origAddr
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(res.data.to_string(), "{connRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn conn_with_data() {
+        let schema = TestSchema::new();
+
+        let mut key: Vec<u8> = Vec::new();
+        let source = "einsis";
+        key.append(&mut source.as_bytes().to_vec());
+        key.push(00);
+        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+
+        let tmp_dur = Duration::nanoseconds(12345);
+        let conn_body = Conn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            proto: 6,
+            duration: tmp_dur.num_nanoseconds().unwrap(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+        };
+        let ser_conn_body = bincode::serialize(&conn_body).unwrap();
+
+        schema
+            .db
+            .conn_store()
+            .unwrap()
+            .append(&key[..], &ser_conn_body)
+            .unwrap();
+
+        let query = r#"
+        {
+            connRawEvents (source: "einsis", first: 1) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                        respPort,
+                        proto,
+                        duration,
+                        origBytes,
+                        respBytes,
+                        origPkts,
+                        respPkts,
+                    }
+                }
+                pageInfo {
+                    hasPreviousPage
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: true}}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dns_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            dnsRawEvents (source: "einsis", start:"1998-07-01T00:00:00Z", end:"2023-07-01T00:00:00Z", first: 0) {
+                edges {
+                    node {
+                        origAddr
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(res.data.to_string(), "{dnsRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn dns_with_data() {
+        let schema = TestSchema::new();
+
+        let mut key: Vec<u8> = Vec::new();
+        let source = "einsis";
+        key.append(&mut source.as_bytes().to_vec());
+        key.push(00);
+        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+
+        let dns_body = DnsConn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            proto: 17,
+            query: "Hello Server Hello Server Hello Server".to_string(),
+        };
+        let ser_dns_body = bincode::serialize(&dns_body).unwrap();
+
+        schema
+            .db
+            .dns_store()
+            .unwrap()
+            .append(&key[..], &ser_dns_body)
+            .unwrap();
+
+        let query = r#"
+        {
+            dnsRawEvents (source: "einsis", start:"1998-07-01T00:00:00Z", end:"2023-07-01T00:00:00Z", first: 1) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                        respPort,
+                        proto,
+                        query,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"31.3.245.133\",origPort: 46378,respPort: 80,proto: 17,query: \"Hello Server Hello Server Hello Server\"}}]}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            httpRawEvents (source: "einsis", first: 0) {
+                edges {
+                    node {
+                        origAddr
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(res.data.to_string(), "{httpRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn http_with_data() {
+        let schema = TestSchema::new();
+
+        let mut key: Vec<u8> = Vec::new();
+        let source = "einsis";
+        key.append(&mut source.as_bytes().to_vec());
+        key.push(00);
+        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+
+        let http_body = HttpConn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            method: "POST".to_string(),
+            host: "einsis".to_string(),
+            uri: "/einsis.gif".to_string(),
+            referrer: "einsis.com".to_string(),
+            user_agent: "giganto".to_string(),
+            status_code: 200,
+        };
+        let ser_http_body = bincode::serialize(&http_body).unwrap();
+
+        schema
+            .db
+            .http_store()
+            .unwrap()
+            .append(&key[..], &ser_http_body)
+            .unwrap();
+
+        let query = r#"
+        {
+            httpRawEvents (source: "einsis", first: 1) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                        respPort,
+                        method,
+                        host,
+                        uri,
+                        referrer,
+                        userAgent,
+                        statusCode,
+                    }
+                }
+                pageInfo {
+                    hasPreviousPage
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,method: \"POST\",host: \"einsis\",uri: \"/einsis.gif\",referrer: \"einsis.com\",userAgent: \"giganto\",statusCode: 200}}],pageInfo: {hasPreviousPage: true}}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rdp_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            rdpRawEvents (source: "einsis", first: 0) {
+                edges {
+                    node {
+                        origAddr
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(res.data.to_string(), "{rdpRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn rdp_with_data() {
+        let schema = TestSchema::new();
+
+        let mut key: Vec<u8> = Vec::new();
+        let source = "einsis";
+        key.append(&mut source.as_bytes().to_vec());
+        key.push(00);
+        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+
+        let rdp_body = RdpConn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            cookie: "rdp_test".to_string(),
+        };
+        let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
+
+        schema
+            .db
+            .rdp_store()
+            .unwrap()
+            .append(&key[..], &ser_rdp_body)
+            .unwrap();
+
+        let query = r#"
+        {
+            rdpRawEvents (source: "einsis", first: 1) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                        respPort,
+                        cookie,
+                    }
+                }
+                pageInfo {
+                    hasPreviousPage
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,cookie: \"rdp_test\"}}],pageInfo: {hasPreviousPage: true}}}"
+        );
+    }
+}
