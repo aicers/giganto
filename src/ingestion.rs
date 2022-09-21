@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -41,7 +41,7 @@ lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Conn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -55,7 +55,7 @@ pub struct Conn {
     pub resp_pkts: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DnsConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -65,7 +65,7 @@ pub struct DnsConn {
     pub query: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HttpConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -79,7 +79,7 @@ pub struct HttpConn {
     pub status_code: u16,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RdpConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
