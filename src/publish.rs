@@ -92,16 +92,15 @@ fn config_server(
     } else {
         let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
             .context("malformed PKCS #8 private key")?;
-        match pkcs8.into_iter().next() {
-            Some(x) => rustls::PrivateKey(x),
-            None => {
-                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                    .context("malformed PKCS #1 private key")?;
-                match rsa.into_iter().next() {
-                    Some(x) => rustls::PrivateKey(x),
-                    None => {
-                        bail!("no private keys found. Check the location of the private key and try again.");
-                    }
+        if let Some(x) = pkcs8.into_iter().next() {
+            rustls::PrivateKey(x)
+        } else {
+            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+                .context("malformed PKCS #1 private key")?;
+            match rsa.into_iter().next() {
+                Some(x) => rustls::PrivateKey(x),
+                None => {
+                    bail!("no private keys found. Check the location of the private key and try again.");
                 }
             }
         }
