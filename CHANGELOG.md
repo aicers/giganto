@@ -10,7 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Accepts QUIC connections from subscribers.
-- `logRawEvents` supports cursor-based pagination.
+- GraphQL API supports cursor-based pagination.
 
 ### Changed
 
