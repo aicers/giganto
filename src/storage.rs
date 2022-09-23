@@ -272,7 +272,7 @@ impl<'db> RawEventStore<'db> {
     ) -> Pages {
         let mut dns_time = Vec::new();
         let mut dns_key = Vec::new();
-        let start_vec = start.timestamp().to_be_bytes();
+        let start_vec = start.timestamp_nanos().to_be_bytes();
         dns_key.append(&mut source.as_bytes().to_vec());
         dns_key.push(00);
         dns_key.append(&mut start_vec.to_vec());
