@@ -38,3 +38,18 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --bin giganto --verbose
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Rust
+      uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: stable
+    - uses: actions/checkout@v2
+    - name: Install Tarpaulin
+      run: cargo install cargo-tarpaulin
+    - name: Generate coverage report
+      run: cargo tarpaulin --out Xml
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v1
