@@ -60,6 +60,7 @@ struct RdpConn {
 type Log = (String, Vec<u8>);
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn send_conn_info() {
     let comm_info = common::setup().await;
     let (mut send_tcp_udp, _) = comm_info
@@ -104,6 +105,7 @@ async fn send_conn_info() {
 }
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn send_dns_info() {
     let comm_info = common::setup().await;
     let (mut send_dns, _) = comm_info
@@ -142,6 +144,7 @@ async fn send_dns_info() {
 }
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn send_log_info() {
     let comm_info = common::setup().await;
     let (mut send_log, _) = comm_info
@@ -173,6 +176,7 @@ async fn send_log_info() {
 }
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn send_http_info() {
     let comm_info = common::setup().await;
     let (mut send_http, _) = comm_info
@@ -213,6 +217,7 @@ async fn send_http_info() {
 }
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn send_rdp_info() {
     let comm_info = common::setup().await;
     let (mut send_rdp, _) = comm_info
@@ -247,6 +252,7 @@ async fn send_rdp_info() {
 }
 
 #[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn ack_info() {
     let comm_info = common::setup().await;
     let (mut send_log, mut recv_log) = comm_info
