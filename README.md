@@ -4,6 +4,8 @@ Giganto is the raw-event storage system for AICE. It receives raw events through
 QUIC channels and stores them in a database. It also provides a GraphQL API to
 query the stored events.
 
+[![Coverage Status](https://codecov.io/gh/aicers/github-dashboard-server/branch/main/graphs/badge.svg)](https://codecov.io/gh/aicers/github-dashboard-server)
+
 ## Usage
 
 You can run giganto by invoking the following command:
