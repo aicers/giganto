@@ -3,7 +3,7 @@ use crate::graphql::PagingType;
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rocksdb::{ColumnFamily, Options, DB};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
@@ -23,9 +23,11 @@ impl Database {
     /// Opens the database at the given path.
     pub fn open(path: &Path) -> Result<Database> {
         let mut opts = Options::default();
-        let mut cfs: Vec<&str> = Vec::new();
-        cfs.append(&mut RAW_DATA_COLUMN_FAMILY_NAMES.to_vec());
-        cfs.append(&mut META_DATA_COLUMN_FAMILY_NAMES.to_vec());
+        let mut cfs: Vec<&str> = Vec::with_capacity(
+            RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
+        );
+        cfs.extend(&RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs.extend(&META_DATA_COLUMN_FAMILY_NAMES);
 
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
@@ -271,11 +273,10 @@ impl<'db> RawEventStore<'db> {
         paging_type: PagingType,
     ) -> Pages {
         let mut dns_time = Vec::new();
-        let mut dns_key = Vec::new();
-        let start_vec = start.timestamp_nanos().to_be_bytes();
-        dns_key.append(&mut source.as_bytes().to_vec());
-        dns_key.push(00);
-        dns_key.append(&mut start_vec.to_vec());
+        let mut dns_key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        dns_key.extend(source.as_bytes());
+        dns_key.push(0);
+        dns_key.extend(start.timestamp_nanos().to_be_bytes());
 
         let (iter, next_idx, mut prev, mut next) = match paging_type {
             PagingType::First(val) => (

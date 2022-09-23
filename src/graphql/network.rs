@@ -368,11 +368,8 @@ mod tests {
     async fn conn_with_data() {
         let schema = TestSchema::new();
 
-        let mut key: Vec<u8> = Vec::new();
-        let source = "einsis";
-        key.append(&mut source.as_bytes().to_vec());
-        key.push(00);
-        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+        let mut key = b"einsis\x00".to_vec();
+        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
 
         let tmp_dur = Duration::nanoseconds(12345);
         let conn_body = Conn {
@@ -446,11 +443,8 @@ mod tests {
     async fn dns_with_data() {
         let schema = TestSchema::new();
 
-        let mut key: Vec<u8> = Vec::new();
-        let source = "einsis";
-        key.append(&mut source.as_bytes().to_vec());
-        key.push(00);
-        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+        let mut key = b"einsis\x00".to_vec();
+        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
 
         let dns_body = DnsConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -512,11 +506,8 @@ mod tests {
     async fn http_with_data() {
         let schema = TestSchema::new();
 
-        let mut key: Vec<u8> = Vec::new();
-        let source = "einsis";
-        key.append(&mut source.as_bytes().to_vec());
-        key.push(00);
-        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+        let mut key = b"einsis\x00".to_vec();
+        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
 
         let http_body = HttpConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -589,11 +580,8 @@ mod tests {
     async fn rdp_with_data() {
         let schema = TestSchema::new();
 
-        let mut key: Vec<u8> = Vec::new();
-        let source = "einsis";
-        key.append(&mut source.as_bytes().to_vec());
-        key.push(00);
-        key.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+        let mut key = b"einsis\x00".to_vec();
+        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
 
         let rdp_body = RdpConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
