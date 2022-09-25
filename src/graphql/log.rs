@@ -129,15 +129,8 @@ mod tests {
     async fn log_with_data() {
         let schema = TestSchema::new();
 
-        let mut source_kind: Vec<u8> = Vec::new();
-        let source = "einsis";
-        let kind = "Hello";
-
-        source_kind.append(&mut source.as_bytes().to_vec());
-        source_kind.push(0);
-        source_kind.append(&mut kind.as_bytes().to_vec());
-        source_kind.push(00);
-        source_kind.append(&mut Utc::now().timestamp_nanos().to_be_bytes().to_vec());
+        let mut source_kind = b"einsis\x00Hello\x00".to_vec();
+        source_kind.extend(Utc::now().timestamp_nanos().to_be_bytes());
 
         let log_body = (
             String::from("Hello"),
