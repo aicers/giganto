@@ -1,7 +1,7 @@
 //! Configurations for the application.
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
@@ -10,15 +10,16 @@ const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub cert: String,       // Path to the certificate file
-    pub key: String,        // Path to the private key file
-    pub roots: Vec<String>, // Path to the rootCA file
+    pub cert: PathBuf,       // Path to the certificate file
+    pub key: PathBuf,        // Path to the private key file
+    pub roots: Vec<PathBuf>, // Path to the rootCA file
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub ingestion_address: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub publish_address: SocketAddr, // IP address & port to publish data
-    pub data_dir: String,   // DB storage path
-    pub retention: String,  // Data retention period
+    pub data_dir: PathBuf,   // DB storage path
+    #[serde(with = "humantime_serde")]
+    pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_address: SocketAddr, // IP address & port to graphql
 }
