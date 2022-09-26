@@ -9,7 +9,7 @@ use async_graphql::{
 use chrono::{DateTime, Utc};
 use std::fmt::Debug;
 
-use super::PagingType;
+use super::check_paging_type;
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
@@ -208,27 +208,6 @@ impl NetworkQuery {
         )
         .await
     }
-}
-
-fn check_paging_type(
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> anyhow::Result<PagingType> {
-    if let Some(val) = first {
-        if let Some(cursor) = after {
-            return Ok(PagingType::AfterFirst(cursor, val));
-        }
-        return Ok(PagingType::First(val));
-    }
-    if let Some(val) = last {
-        if let Some(cursor) = before {
-            return Ok(PagingType::BeforeLast(cursor, val));
-        }
-        return Ok(PagingType::Last(val));
-    }
-    Err(anyhow::anyhow!("Invalid paging type"))
 }
 
 fn load_paging_type_conn(

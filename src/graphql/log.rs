@@ -2,7 +2,6 @@ use crate::{
     ingestion,
     storage::{gen_key, Database},
 };
-use anyhow::anyhow;
 use async_graphql::{
     connection::{query, Connection, Edge},
     Context, Object, Result, SimpleObject,
@@ -10,7 +9,7 @@ use async_graphql::{
 
 use std::fmt::Debug;
 
-use super::PagingType;
+use super::check_paging_type;
 
 #[derive(SimpleObject, Debug)]
 struct LogRawEvent {
@@ -80,27 +79,6 @@ fn load_paging_type_log(
             .push(Edge::new(base64::encode(key), LogRawEvent::from(de_log)));
     }
     Ok(connection)
-}
-
-fn check_paging_type(
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> anyhow::Result<PagingType> {
-    if let Some(val) = first {
-        if let Some(cursor) = after {
-            return Ok(PagingType::AfterFirst(cursor, val));
-        }
-        return Ok(PagingType::First(val));
-    }
-    if let Some(val) = last {
-        if let Some(cursor) = before {
-            return Ok(PagingType::BeforeLast(cursor, val));
-        }
-        return Ok(PagingType::Last(val));
-    }
-    Err(anyhow!("Invalid paging type"))
 }
 
 #[cfg(test)]
