@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -260,24 +260,15 @@ async fn handle_request(
     recv.read_exact(&mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
-    match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
-        RecordType::Conn => {
-            handle_data::<Conn>(send, recv, RecordType::Conn, source, db.conn_store()?).await?;
-        }
-        RecordType::Dns => {
-            handle_data::<DnsConn>(send, recv, RecordType::Dns, source, db.dns_store()?).await?;
-        }
-        RecordType::Log => {
-            handle_data::<Log>(send, recv, RecordType::Log, source, db.log_store()?).await?;
-        }
-        RecordType::Http => {
-            handle_data::<HttpConn>(send, recv, RecordType::Http, source, db.http_store()?).await?;
-        }
-        RecordType::Rdp => {
-            handle_data::<RdpConn>(send, recv, RecordType::Rdp, source, db.rdp_store()?).await?;
-        }
-    };
-
+    let (record_type, store) =
+        match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
+            RecordType::Conn => (RecordType::Conn, db.conn_store()?),
+            RecordType::Dns => (RecordType::Dns, db.dns_store()?),
+            RecordType::Log => (RecordType::Log, db.log_store()?),
+            RecordType::Http => (RecordType::Http, db.http_store()?),
+            RecordType::Rdp => (RecordType::Rdp, db.rdp_store()?),
+        };
+    handle_data(send, recv, record_type, source, store).await?;
     Ok(())
 }
 
@@ -348,16 +339,13 @@ fn config_server(
     Ok(server_config)
 }
 
-async fn handle_data<T>(
+async fn handle_data(
     send: SendStream,
     mut recv: RecvStream,
     record_type: RecordType,
     source: String,
     store: RawEventStore<'_>,
-) -> Result<()>
-where
-    T: Debug + DeserializeOwned,
-{
+) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
 
