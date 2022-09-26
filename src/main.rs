@@ -7,7 +7,6 @@ mod web;
 
 use anyhow::{Context, Result};
 use settings::Settings;
-use std::path::Path;
 use std::{env, fs, process::exit};
 use tokio::{task, time};
 
@@ -33,11 +32,11 @@ async fn main() -> Result<()> {
     };
 
     let cert = fs::read(&settings.cert)
-        .with_context(|| format!("cannot read certificate from {}", settings.cert))?;
+        .with_context(|| format!("cannot read certificate from {}", settings.cert.display()))?;
     let key = fs::read(&settings.key)
-        .with_context(|| format!("cannot read private key from {}", settings.key))?;
+        .with_context(|| format!("cannot read private key from {}", settings.key.display()))?;
 
-    let db_path = Path::new(&settings.data_dir).join("db");
+    let db_path = settings.data_dir.join("db");
     let database = storage::Database::open(&db_path)?;
 
     tracing_subscriber::fmt::init();
@@ -56,11 +55,9 @@ async fn main() -> Result<()> {
         key.clone(),
     ));
 
-    let retention_period = humantime::parse_duration(&settings.retention)
-        .with_context(|| format!("invalid retention period: {}", settings.retention))?;
     task::spawn(storage::retain_periodically(
         time::Duration::from_secs(ONE_DAY),
-        retention_period,
+        settings.retention,
         database.clone(),
     ));
 

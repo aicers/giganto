@@ -78,16 +78,13 @@ async fn handle_request((_send, mut recv): (SendStream, RecvStream), _db: Databa
 }
 
 fn config_server(
-    cert_path: &str,
-    key_path: &str,
+    cert_path: &Path,
+    key_path: &Path,
     cert: Vec<u8>,
     key: Vec<u8>,
     files: Vec<Vec<u8>>,
 ) -> Result<ServerConfig> {
-    let pv_key = if Path::new(key_path)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
+    let pv_key = if key_path.extension().map_or(false, |x| x == "der") {
         rustls::PrivateKey(key)
     } else {
         let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
@@ -105,10 +102,7 @@ fn config_server(
             }
         }
     };
-    let cert_chain = if Path::new(cert_path)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
+    let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
         vec![rustls::Certificate(cert)]
     } else {
         rustls_pemfile::certs(&mut &*cert)
