@@ -32,21 +32,21 @@ async fn main() -> Result<()> {
         Settings::new()?
     };
 
-    let pem = fs::read(&settings.cert).with_context(|| {
+    let cert_pem = fs::read(&settings.cert).with_context(|| {
         format!(
             "failed to read certificate file: {}",
             settings.cert.display()
         )
     })?;
-    let cert = to_cert_chain(&pem).context("cannot read certificate chain")?;
+    let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
     assert!(!cert.is_empty());
-    let pem = fs::read(&settings.key).with_context(|| {
+    let key_pem = fs::read(&settings.key).with_context(|| {
         format!(
             "failed to read private key file: {}",
             settings.key.display()
         )
     })?;
-    let key = to_private_key(&pem).context("cannot read private key")?;
+    let key = to_private_key(&key_pem).context("cannot read private key")?;
 
     let db_path = settings.data_dir.join("db");
     let database = storage::Database::open(&db_path)?;
@@ -63,8 +63,8 @@ async fn main() -> Result<()> {
     task::spawn(web::serve(
         schema,
         settings.graphql_address,
-        cert.first().expect("non-empty").clone(),
-        pem,
+        cert_pem,
+        key_pem,
     ));
 
     task::spawn(storage::retain_periodically(
@@ -81,12 +81,7 @@ async fn main() -> Result<()> {
     );
     task::spawn(publish_server.run(database.clone()));
 
-    let ingestion_server = ingestion::Server::new(
-        settings.ingestion_address,
-        cert.clone(),
-        key.clone(),
-        files.clone(),
-    );
+    let ingestion_server = ingestion::Server::new(settings.ingestion_address, cert, key, files);
     ingestion_server.run(database).await;
 
     Ok(())
