@@ -3,12 +3,23 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tracing::{error, info};
+
+const TIMESTAMP_SIZE: usize = 8;
 
 pub struct Server {
     server_config: ServerConfig,
     server_address: SocketAddr,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Message {
+    source: String,
+    kind: String,
+    start: i64,
+    end: i64,
 }
 
 impl Server {
@@ -73,12 +84,62 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     Ok(())
 }
 
-async fn handle_request((_send, mut recv): (SendStream, RecvStream), _db: Database) -> Result<()> {
+#[allow(clippy::cast_possible_truncation)]
+async fn handle_request(
+    (mut send, mut recv): (SendStream, RecvStream),
+    db: Database,
+) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
         .await
-        .map_err(|e| anyhow!("failed to read record type: {}", e))?;
+        .map_err(|e| anyhow!("failed to read message code: {}", e))?;
 
+    let mut frame_length = [0; 4];
+    recv.read_exact(&mut frame_length)
+        .await
+        .map_err(|e| anyhow!("failed to read frame length: {}", e))?;
+    let len = u32::from_le_bytes(frame_length);
+
+    let mut rest_buf = vec![0; len.try_into().unwrap()];
+    recv.read_exact(&mut rest_buf)
+        .await
+        .map_err(|e| anyhow!("failed to read rest of request: {}", e))?;
+
+    let msg = bincode::deserialize::<Message>(&rest_buf)
+        .map_err(|e| anyhow!("failed to deseralize message: {}", e))?;
+
+    let iter = db
+        .log_store()
+        .unwrap()
+        .log_iter(
+            &bincode::serialize(&msg.start)
+                .map_err(|e| anyhow!("failed to seralize start value: {}", e))?,
+            rocksdb::Direction::Forward,
+        )
+        .flatten();
+
+    let mut events = Vec::new();
+    for (key, val) in iter {
+        let (_src, ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
+        let timestamp = i64::from_be_bytes(ts.to_vec().try_into().unwrap());
+
+        if timestamp >= msg.end {
+            break;
+        }
+        events.push(&rest_buf);
+        let events_len = [events.len() as u8; 4];
+
+        send.write(&events_len)
+            .await
+            .map_err(|e| anyhow!("failed to write bincode sequence: {}", e))?;
+
+        let sequence = bincode::serialize(&(timestamp, val))
+            .map_err(|e| anyhow!("failed to seralize sequence: {}", e))?;
+
+        send.write(&sequence)
+            .await
+            .map_err(|e| anyhow!("failed to write bincode sequence: {}", e))?;
+    }
     Ok(())
 }
 
