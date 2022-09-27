@@ -329,7 +329,7 @@ async fn handle_data(
 
     let mut itv = time::interval(time::Duration::from_secs(ACK_INTERVAL_TIME));
     itv.reset();
-    let (tx, mut rx) = channel(1);
+    let (tx, mut rx) = channel(100);
 
     let handler = task::spawn(async move {
         loop {
@@ -465,4 +465,24 @@ fn handshake_buffer(resp: Option<&str>) -> Vec<u8> {
     resp_buf.extend(resp_data_len);
     resp_buf.extend(resp_data);
     resp_buf
+}
+
+#[allow(unused)]
+async fn reqeust_command_channel(connection: quinn::Connection) -> Result<()> {
+    let (mut send, mut recv) = connection.open_bi().await?;
+    send.write_all(&Utc::now().timestamp_nanos().to_le_bytes())
+        .await
+        .expect("Failed to send request");
+
+    let mut recv_buf = [0; std::mem::size_of::<u64>()];
+    match recv.read_exact(&mut recv_buf).await {
+        Ok(()) => {
+            let recv_timestamp = i64::from_le_bytes(recv_buf);
+            info!("Command channel response :{}", recv_timestamp);
+            Ok(())
+        }
+        Err(e) => {
+            bail!("Command receiver error: {}", e);
+        }
+    }
 }
