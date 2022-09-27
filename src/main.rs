@@ -5,7 +5,8 @@ mod settings;
 mod storage;
 mod web;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use rustls::{Certificate, PrivateKey};
 use settings::Settings;
 use std::{env, fs, process::exit};
 use tokio::{task, time};
@@ -31,10 +32,21 @@ async fn main() -> Result<()> {
         Settings::new()?
     };
 
-    let cert = fs::read(&settings.cert)
-        .with_context(|| format!("cannot read certificate from {}", settings.cert.display()))?;
-    let key = fs::read(&settings.key)
-        .with_context(|| format!("cannot read private key from {}", settings.key.display()))?;
+    let pem = fs::read(&settings.cert).with_context(|| {
+        format!(
+            "failed to read certificate file: {}",
+            settings.cert.display()
+        )
+    })?;
+    let cert = to_cert_chain(&pem).context("cannot read certificate chain")?;
+    assert!(!cert.is_empty());
+    let pem = fs::read(&settings.key).with_context(|| {
+        format!(
+            "failed to read private key file: {}",
+            settings.key.display()
+        )
+    })?;
+    let key = to_private_key(&pem).context("cannot read private key")?;
 
     let db_path = settings.data_dir.join("db");
     let database = storage::Database::open(&db_path)?;
@@ -51,7 +63,7 @@ async fn main() -> Result<()> {
     task::spawn(web::serve(
         schema,
         settings.graphql_address,
-        cert.clone(),
+        cert.first().expect("non-empty").clone(),
         key.clone(),
     ));
 
@@ -61,11 +73,20 @@ async fn main() -> Result<()> {
         database.clone(),
     ));
 
-    let publish_server = publish::Server::new(&settings, cert.clone(), key.clone(), files.clone());
+    let publish_server = publish::Server::new(
+        settings.publish_address,
+        cert.clone(),
+        key.clone(),
+        files.clone(),
+    );
     task::spawn(publish_server.run(database.clone()));
 
-    let ingestion_server =
-        ingestion::Server::new(&settings, cert.clone(), key.clone(), files.clone());
+    let ingestion_server = ingestion::Server::new(
+        settings.ingestion_address,
+        cert.clone(),
+        key.clone(),
+        files.clone(),
+    );
     ingestion_server.run(database).await;
 
     Ok(())
@@ -102,4 +123,24 @@ fn parse() -> Option<String> {
 
 fn version() -> String {
     format!("giganto {}", env!("CARGO_PKG_VERSION"))
+}
+
+fn to_cert_chain(pem: &[u8]) -> Result<Vec<Certificate>> {
+    let certs = rustls_pemfile::certs(&mut &*pem).context("cannot parse certificate chain")?;
+    if certs.is_empty() {
+        return Err(anyhow!("no certificate found"));
+    }
+    Ok(certs.into_iter().map(Certificate).collect())
+}
+
+fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
+    match rustls_pemfile::read_one(&mut &*pem)
+        .context("cannot parse private key")?
+        .ok_or_else(|| anyhow!("empty private key"))?
+    {
+        rustls_pemfile::Item::PKCS8Key(key) | rustls_pemfile::Item::RSAKey(key) => {
+            Ok(PrivateKey(key))
+        }
+        _ => Err(anyhow!("unknown private key format")),
+    }
 }
