@@ -1,20 +1,17 @@
-use crate::{
-    settings::Settings,
-    storage::{gen_key, Database, RawEventStore},
-};
+use crate::storage::{gen_key, Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
+use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::Debug,
     mem,
     net::{IpAddr, SocketAddr},
-    path::Path,
     sync::{
         atomic::{AtomicI64, AtomicU8, Ordering},
         Arc,
@@ -109,12 +106,17 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(s: &Settings, cert: Vec<u8>, key: Vec<u8>, files: Vec<Vec<u8>>) -> Self {
-        let server_config = config_server(&s.cert, &s.key, cert, key, files)
+    pub fn new(
+        addr: SocketAddr,
+        certs: Vec<Certificate>,
+        key: PrivateKey,
+        files: Vec<Vec<u8>>,
+    ) -> Self {
+        let server_config = config_server(certs, key, files)
             .expect("server configuration error with cert, key or root");
         Server {
             server_config,
-            server_address: s.ingestion_address,
+            server_address: addr,
         }
     }
 
@@ -273,40 +275,10 @@ async fn handle_request(
 }
 
 fn config_server(
-    cert_path: &Path,
-    key_path: &Path,
-    cert: Vec<u8>,
-    key: Vec<u8>,
+    certs: Vec<Certificate>,
+    key: PrivateKey,
     files: Vec<Vec<u8>>,
 ) -> Result<ServerConfig> {
-    let pv_key = if key_path.extension().map_or(false, |x| x == "der") {
-        rustls::PrivateKey(key)
-    } else {
-        let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
-            .context("malformed PKCS #8 private key")?;
-        if let Some(x) = pkcs8.into_iter().next() {
-            rustls::PrivateKey(x)
-        } else {
-            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                .context("malformed PKCS #1 private key")?;
-            match rsa.into_iter().next() {
-                Some(x) => rustls::PrivateKey(x),
-                None => {
-                    bail!("no private keys found. Check the location of the private key and try again.");
-                }
-            }
-        }
-    };
-    let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
-        vec![rustls::Certificate(cert)]
-    } else {
-        rustls_pemfile::certs(&mut &*cert)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect()
-    };
-
     let mut client_auth_roots = rustls::RootCertStore::empty();
     for file in files {
         let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
@@ -322,7 +294,7 @@ fn config_server(
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_auth)
-        .with_single_cert(cert_chain, pv_key)?;
+        .with_single_cert(certs, key)?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
 
