@@ -350,6 +350,7 @@ async fn handle_data(
     let ack_time_interval = Arc::clone(&ack_time_rotation);
 
     let mut itv = time::interval(time::Duration::from_secs(ACK_INTERVAL_TIME));
+    itv.reset();
     let (tx, mut rx) = channel(1);
 
     let handler = task::spawn(async move {
