@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         schema,
         settings.graphql_address,
         cert.first().expect("non-empty").clone(),
-        key.clone(),
+        pem,
     ));
 
     task::spawn(storage::retain_periodically(

@@ -1,10 +1,10 @@
 use crate::graphql::Schema;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use rustls::{Certificate, PrivateKey};
+use rustls::Certificate;
 use std::{convert::Infallible, net::SocketAddr};
 use warp::{http::Response as HttpResponse, Filter};
 
-pub async fn serve(schema: Schema, addr: SocketAddr, cert: Certificate, key: PrivateKey) {
+pub async fn serve(schema: Schema, addr: SocketAddr, cert: Certificate, key: Vec<u8>) {
     let filter = async_graphql_warp::graphql(schema).and_then(
         |(schema, request): (Schema, async_graphql::Request)| async move {
             let resp = schema.execute(request).await;
@@ -27,7 +27,7 @@ pub async fn serve(schema: Schema, addr: SocketAddr, cert: Certificate, key: Pri
     warp::serve(routes)
         .tls()
         .cert(cert)
-        .key(key.0)
+        .key(key)
         .run(addr)
         .await;
 }
