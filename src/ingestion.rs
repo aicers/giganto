@@ -88,7 +88,7 @@ pub struct RdpConn {
     pub cookie: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Log {
     pub log: (String, Vec<u8>),
 }
