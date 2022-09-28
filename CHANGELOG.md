@@ -9,6 +9,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add protocol compatibility check communication with connected Programs.
 - Accepts QUIC connections from subscribers.
 - GraphQL API supports cursor-based pagination.
 

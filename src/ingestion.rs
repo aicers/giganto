@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
-use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
+use quinn::{Connection, Endpoint, IncomingBiStreams, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering::{Equal, Greater, Less},
     collections::HashMap,
     fmt::Debug,
     mem,
@@ -31,6 +32,8 @@ const ACK_INTERVAL_TIME: u64 = 60 * 60;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
+const COMPITABLE_MIN_VERSION: &str = "0.1.0";
+const COMPITABLE_MAX_VERSION: &str = "0.2.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
@@ -193,6 +196,8 @@ async fn handle_connection(
         ..
     } = conn.await?;
 
+    server_handshake(&connection, &mut bi_streams).await?;
+
     let mut source = String::new();
     if let Some(conn_info) = connection.peer_identity() {
         if let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() {
@@ -220,6 +225,7 @@ async fn handle_connection(
     if let Err(error) = sender.send((source.clone(), Utc::now(), false)).await {
         error!("Faild to send channel data : {}", error);
     }
+
     async {
         while let Some(stream) = bi_streams.next().await {
             let source = source.clone();
@@ -406,4 +412,57 @@ async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::Rea
     recv.read_exact(body_buf.as_mut_slice()).await?;
 
     Ok((body_buf, timestamp))
+}
+
+async fn server_handshake(
+    connection: &Connection,
+    bi_streams: &mut IncomingBiStreams,
+) -> Result<()> {
+    if let Some(stream) = bi_streams.next().await {
+        let (mut send, mut recv) = stream?;
+
+        let mut version_len = [0; mem::size_of::<u64>()];
+        recv.read_exact(&mut version_len).await?;
+        let len = u64::from_le_bytes(version_len);
+
+        let mut version_buf = Vec::new();
+        version_buf.resize(len.try_into()?, 0);
+        recv.read_exact(version_buf.as_mut_slice()).await?;
+        let version = String::from_utf8(version_buf).unwrap();
+
+        match COMPITABLE_MIN_VERSION.cmp(&version) {
+            Less | Equal => match COMPITABLE_MAX_VERSION.cmp(&version) {
+                Greater => {
+                    send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION"))))
+                        .await?;
+                    send.finish().await?;
+                    info!("Compitable Version");
+                }
+                Less | Equal => {
+                    send.write_all(&handshake_buffer(None)).await?;
+                    send.finish().await?;
+                    connection.close(quinn::VarInt::from_u32(0), b"Incompitable version");
+                    bail!("Incompitable version")
+                }
+            },
+            Greater => {
+                send.write_all(&handshake_buffer(None)).await?;
+                send.finish().await?;
+                connection.close(quinn::VarInt::from_u32(0), b"Incompitable version");
+                bail!("Incompitable version")
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handshake_buffer(resp: Option<&str>) -> Vec<u8> {
+    let resp_data = bincode::serialize::<Option<&str>>(&resp).unwrap();
+    let resp_data_len = u64::try_from(resp_data.len())
+        .expect("less than u64::MAX")
+        .to_le_bytes();
+    let mut resp_buf = Vec::with_capacity(resp_data_len.len() + resp_data.len());
+    resp_buf.extend(resp_data_len);
+    resp_buf.extend(resp_data);
+    resp_buf
 }
