@@ -1,9 +1,11 @@
 //! Raw event storage based on RocksDB.
-use crate::graphql::PagingType;
+use crate::{graphql::PagingType, ingestion};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use rocksdb::{ColumnFamily, Options, DB};
-use std::{mem, path::Path, sync::Arc, time::Duration};
+pub use rocksdb::Direction;
+use rocksdb::{ColumnFamily, DBIteratorWithThreadMode, Options, DB};
+use serde::de::DeserializeOwned;
+use std::{marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
@@ -195,6 +197,13 @@ impl<'db> RawEventStore<'db> {
             }
         }
         (conn, prev, next)
+    }
+
+    #[allow(unused)] // required by #79
+    pub fn log_iter(&self, start: &[u8], direction: Direction) -> Iter<'db, ingestion::Log> {
+        self.db
+            .iterator_cf(self.cf, rocksdb::IteratorMode::From(start, direction))
+            .into()
     }
 
     pub fn log_events(&self, source_kind: &str, paging_type: PagingType) -> Pages {
@@ -502,6 +511,34 @@ impl<'db> RawEventStore<'db> {
             keys.push(key.to_vec());
         }
         keys
+    }
+}
+
+pub struct Iter<'d, T> {
+    inner: DBIteratorWithThreadMode<'d, DB>,
+    phantom: PhantomData<T>,
+}
+
+impl<'d, T> From<DBIteratorWithThreadMode<'d, DB>> for Iter<'d, T> {
+    fn from(iter: DBIteratorWithThreadMode<'d, DB>) -> Self {
+        Self {
+            inner: iter,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<'d, T> Iterator for Iter<'d, T>
+where
+    T: DeserializeOwned,
+{
+    type Item = anyhow::Result<(Box<[u8]>, T)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|item| {
+            let (key, value) = item?;
+            Ok((key, bincode::deserialize::<T>(&value)?))
+        })
     }
 }
 
