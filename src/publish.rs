@@ -1,4 +1,4 @@
-use crate::storage::Database;
+use crate::storage::{lower_bound_key, upper_bound_key, Database};
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
@@ -108,12 +108,14 @@ async fn handle_request(
     let msg = bincode::deserialize::<Message>(&rest_buf)
         .map_err(|e| anyhow!("failed to deseralize message: {}", e))?;
 
+    let key_prefix = bincode::serialize(&msg.start)
+        .map_err(|e| anyhow!("failed to seralize start value: {}", e))?;
     let iter = db
         .log_store()
         .unwrap()
         .log_iter(
-            &bincode::serialize(&msg.start)
-                .map_err(|e| anyhow!("failed to seralize start value: {}", e))?,
+            &lower_bound_key(&key_prefix, None),
+            &upper_bound_key(&key_prefix, None),
             rocksdb::Direction::Forward,
         )
         .flatten();
