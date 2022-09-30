@@ -1,15 +1,14 @@
+use super::load_connection;
 use crate::{
     ingestion,
-    storage::{gen_key, Database},
+    storage::{Database, RawEventStore},
 };
 use async_graphql::{
-    connection::{query, Connection, Edge},
+    connection::{query, Connection},
     Context, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
 use std::fmt::Debug;
-
-use super::PagingType;
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
@@ -131,13 +130,27 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ConnRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.conn_store()?;
+        let key_prefix = key_prefix(&source);
+
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                load_paging_type_conn(ctx, &source, after, before, first, last)
+                load_connection(
+                    &store,
+                    &key_prefix,
+                    RawEventStore::conn_iter,
+                    None,
+                    None,
+                    after,
+                    before,
+                    first,
+                    last,
+                )
             },
         )
         .await
@@ -155,13 +168,27 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, DnsRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.dns_store()?;
+        let key_prefix = key_prefix(&source);
+
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                load_paging_type_dns(ctx, &source, start, end, after, before, first, last)
+                load_connection(
+                    &store,
+                    &key_prefix,
+                    RawEventStore::dns_iter,
+                    Some(start),
+                    Some(end),
+                    after,
+                    before,
+                    first,
+                    last,
+                )
             },
         )
         .await
@@ -176,13 +203,27 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, HttpRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.http_store()?;
+        let key_prefix = key_prefix(&source);
+
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                load_paging_type_http(ctx, &source, after, before, first, last)
+                load_connection(
+                    &store,
+                    &key_prefix,
+                    RawEventStore::http_iter,
+                    None,
+                    None,
+                    after,
+                    before,
+                    first,
+                    last,
+                )
             },
         )
         .await
@@ -197,147 +238,38 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, RdpRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.rdp_store()?;
+        let key_prefix = key_prefix(&source);
+
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                load_paging_type_rdp(ctx, &source, after, before, first, last)
+                load_connection(
+                    &store,
+                    &key_prefix,
+                    RawEventStore::rdp_iter,
+                    None,
+                    None,
+                    after,
+                    before,
+                    first,
+                    last,
+                )
             },
         )
         .await
     }
 }
 
-fn check_paging_type(
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> anyhow::Result<PagingType> {
-    if let Some(val) = first {
-        if let Some(cursor) = after {
-            return Ok(PagingType::AfterFirst(cursor, val));
-        }
-        return Ok(PagingType::First(val));
-    }
-    if let Some(val) = last {
-        if let Some(cursor) = before {
-            return Ok(PagingType::BeforeLast(cursor, val));
-        }
-        return Ok(PagingType::Last(val));
-    }
-    Err(anyhow::anyhow!("Invalid paging type"))
-}
-
-fn load_paging_type_conn(
-    ctx: &Context<'_>,
-    source: &str,
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> Result<Connection<String, ConnRawEvent>> {
-    let db = ctx.data::<Database>()?;
-    let paging_type = check_paging_type(after, before, first, last)?;
-
-    let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec()];
-    let source = String::from_utf8(gen_key(args))?;
-
-    let (conn, prev, next) = db.conn_store()?.conn_events(&source, paging_type);
-    let mut connection: Connection<String, ConnRawEvent> = Connection::new(prev, next);
-    for conn_data in conn {
-        let (key, raw_data) = conn_data;
-        let de_conn = bincode::deserialize::<ingestion::Conn>(&raw_data)?;
-        connection
-            .edges
-            .push(Edge::new(base64::encode(key), ConnRawEvent::from(de_conn)));
-    }
-    Ok(connection)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn load_paging_type_dns(
-    ctx: &Context<'_>,
-    source: &str,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> Result<Connection<String, DnsRawEvent>> {
-    let db = ctx.data::<Database>()?;
-    let paging_type = check_paging_type(after, before, first, last)?;
-
-    let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec()];
-    let source = String::from_utf8(gen_key(args))?;
-
-    let (dns, prev, next) = db
-        .dns_store()?
-        .dns_time_events(&source, &start, &end, paging_type);
-    let mut connection: Connection<String, DnsRawEvent> = Connection::new(prev, next);
-    for dns_data in dns {
-        let (key, raw_data) = dns_data;
-        let de_dns = bincode::deserialize::<ingestion::DnsConn>(&raw_data)?;
-        connection
-            .edges
-            .push(Edge::new(base64::encode(key), DnsRawEvent::from(de_dns)));
-    }
-    Ok(connection)
-}
-
-fn load_paging_type_http(
-    ctx: &Context<'_>,
-    source: &str,
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> Result<Connection<String, HttpRawEvent>> {
-    let db = ctx.data::<Database>()?;
-    let paging_type = check_paging_type(after, before, first, last)?;
-
-    let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec()];
-    let source = String::from_utf8(gen_key(args))?;
-
-    let (http, prev, next) = db.http_store()?.http_events(&source, paging_type);
-    let mut connection: Connection<String, HttpRawEvent> = Connection::new(prev, next);
-    for http_data in http {
-        let (key, raw_data) = http_data;
-        let de_http = bincode::deserialize::<ingestion::HttpConn>(&raw_data)?;
-        connection
-            .edges
-            .push(Edge::new(base64::encode(key), HttpRawEvent::from(de_http)));
-    }
-    Ok(connection)
-}
-
-fn load_paging_type_rdp(
-    ctx: &Context<'_>,
-    source: &str,
-    after: Option<String>,
-    before: Option<String>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> Result<Connection<String, RdpRawEvent>> {
-    let db = ctx.data::<Database>()?;
-    let paging_type = check_paging_type(after, before, first, last)?;
-
-    let args: Vec<Vec<u8>> = vec![source.as_bytes().to_vec()];
-    let source = String::from_utf8(gen_key(args))?;
-
-    let (rdp, prev, next) = db.rdp_store()?.rdp_events(&source, paging_type);
-    let mut connection: Connection<String, RdpRawEvent> = Connection::new(prev, next);
-    for rdp_data in rdp {
-        let (key, raw_data) = rdp_data;
-        let de_rdp = bincode::deserialize::<ingestion::RdpConn>(&raw_data)?;
-        connection
-            .edges
-            .push(Edge::new(base64::encode(key), RdpRawEvent::from(de_rdp)));
-    }
-    Ok(connection)
+fn key_prefix(source: &str) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(source.len() + 1);
+    prefix.extend_from_slice(source.as_bytes());
+    prefix.push(0);
+    prefix
 }
 
 #[cfg(test)]
@@ -418,7 +350,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: true}}}"
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: false}}}"
         );
     }
 
@@ -555,7 +487,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,method: \"POST\",host: \"einsis\",uri: \"/einsis.gif\",referrer: \"einsis.com\",userAgent: \"giganto\",statusCode: 200}}],pageInfo: {hasPreviousPage: true}}}"
+            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,method: \"POST\",host: \"einsis\",uri: \"/einsis.gif\",referrer: \"einsis.com\",userAgent: \"giganto\",statusCode: 200}}],pageInfo: {hasPreviousPage: false}}}"
         );
     }
 
@@ -619,7 +551,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,cookie: \"rdp_test\"}}],pageInfo: {hasPreviousPage: true}}}"
+            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,cookie: \"rdp_test\"}}],pageInfo: {hasPreviousPage: false}}}"
         );
     }
 }
