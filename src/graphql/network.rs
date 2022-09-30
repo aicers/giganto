@@ -276,7 +276,9 @@ fn key_prefix(source: &str) -> Vec<u8> {
 mod tests {
     use crate::graphql::TestSchema;
     use crate::ingestion::{Conn, DnsConn, HttpConn, RdpConn};
+    use crate::storage::RawEventStore;
     use chrono::{Duration, Utc};
+    use std::mem;
     use std::net::IpAddr;
 
     #[tokio::test]
@@ -299,35 +301,14 @@ mod tests {
     #[tokio::test]
     async fn conn_with_data() {
         let schema = TestSchema::new();
+        let store = schema.db.conn_store().unwrap();
 
-        let mut key = b"einsis\x00".to_vec();
-        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
-
-        let tmp_dur = Duration::nanoseconds(12345);
-        let conn_body = Conn {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_port: 80,
-            proto: 6,
-            duration: tmp_dur.num_nanoseconds().unwrap(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-        };
-        let ser_conn_body = bincode::serialize(&conn_body).unwrap();
-
-        schema
-            .db
-            .conn_store()
-            .unwrap()
-            .append(&key[..], &ser_conn_body)
-            .unwrap();
+        insert_conn_raw_event(&store, "src 1", 1);
+        insert_conn_raw_event(&store, "src 1", 2);
 
         let query = r#"
         {
-            connRawEvents (source: "einsis", first: 1) {
+            connRawEvents (source: "src 1", last: 1) {
                 edges {
                     node {
                         origAddr,
@@ -350,8 +331,32 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: false}}}"
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: true}}}"
         );
+    }
+
+    fn insert_conn_raw_event(store: &RawEventStore, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let tmp_dur = Duration::nanoseconds(12345);
+        let conn_body = Conn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            proto: 6,
+            duration: tmp_dur.num_nanoseconds().unwrap(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+        };
+        let ser_conn_body = bincode::serialize(&conn_body).unwrap();
+
+        store.append(&key, &ser_conn_body).unwrap();
     }
 
     #[tokio::test]

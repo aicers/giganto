@@ -239,6 +239,18 @@ pub fn lower_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u
     bound
 }
 
+/// Creates a key corresponding to the given `prefix` and `time`.
+pub fn upper_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
+    bound.extend(prefix);
+    if let Some(time) = time {
+        bound.extend(time.timestamp_nanos().to_be_bytes());
+    } else {
+        bound.extend(i64::MAX.to_be_bytes());
+    }
+    bound
+}
+
 /// Creates a key that follows the key calculated from the given `prefix` and
 /// `time`.
 pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
