@@ -23,7 +23,8 @@ pub fn schema(database: Database) -> Schema {
 
 /// The default page size for connections when neither `first` nor `last` is
 /// provided.
-const DEFAULT_PAGE_SIZE: usize = 100;
+/// Maximum size: 100.
+const MAXIMUM_PAGE_SIZE: usize = 100;
 
 #[allow(clippy::too_many_arguments)]
 fn load_connection<'c, N, I, T>(
@@ -48,7 +49,7 @@ where
         if first.is_some() {
             return Err("'before' and 'first' cannot be specified simultaneously".into());
         }
-        let last = last.unwrap_or(DEFAULT_PAGE_SIZE);
+        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(before)?;
         let mut iter = iter_builder(
             store,
@@ -72,7 +73,7 @@ where
         if last.is_some() {
             return Err("'after' and 'last' cannot be specified simultaneously".into());
         }
-        let first = first.unwrap_or(DEFAULT_PAGE_SIZE);
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(after)?;
         let mut iter = iter_builder(
             store,
@@ -92,6 +93,7 @@ where
         if first.is_some() {
             return Err("first and last cannot be used together".into());
         }
+        let last = last.min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
             store,
             key_prefix,
@@ -102,7 +104,7 @@ where
         records.reverse();
         (records, has_previous, false)
     } else {
-        let first = first.unwrap_or(DEFAULT_PAGE_SIZE);
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
             store,
             key_prefix,
