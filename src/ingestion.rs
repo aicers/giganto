@@ -32,8 +32,8 @@ const ACK_INTERVAL_TIME: u64 = 60 * 60;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const COMPITABLE_MIN_VERSION: &str = "0.1.0";
-const COMPITABLE_MAX_VERSION: &str = "0.2.0";
+const COMPATIBLE_MIN_VERSION: &str = "0.1.0";
+const COMPATIBLE_MAX_VERSION: &str = "0.2.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
@@ -430,26 +430,26 @@ async fn server_handshake(
         recv.read_exact(version_buf.as_mut_slice()).await?;
         let version = String::from_utf8(version_buf).unwrap();
 
-        match COMPITABLE_MIN_VERSION.cmp(&version) {
-            Less | Equal => match COMPITABLE_MAX_VERSION.cmp(&version) {
+        match COMPATIBLE_MIN_VERSION.cmp(&version) {
+            Less | Equal => match COMPATIBLE_MAX_VERSION.cmp(&version) {
                 Greater => {
                     send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION"))))
                         .await?;
                     send.finish().await?;
-                    info!("Compitable Version");
+                    info!("Compatible Version");
                 }
                 Less | Equal => {
                     send.write_all(&handshake_buffer(None)).await?;
                     send.finish().await?;
-                    connection.close(quinn::VarInt::from_u32(0), b"Incompitable version");
-                    bail!("Incompitable version")
+                    connection.close(quinn::VarInt::from_u32(0), b"Incompatible version");
+                    bail!("Incompatible version")
                 }
             },
             Greater => {
                 send.write_all(&handshake_buffer(None)).await?;
                 send.finish().await?;
-                connection.close(quinn::VarInt::from_u32(0), b"Incompitable version");
-                bail!("Incompitable version")
+                connection.close(quinn::VarInt::from_u32(0), b"Incompatible version");
+                bail!("Incompatible version")
             }
         }
     }
