@@ -11,6 +11,7 @@ const CERT: &str = "tests/cert.pem";
 const HOST: &str = "localhost";
 const KEY: &str = "tests/key.pem";
 const ROOT: &str = "tests/root.pem";
+const PROTOCOL_VERSION: &str = "0.2.0";
 const SERVER_URL: &str = "https://127.0.0.1:38370";
 
 pub struct CommInfo {
@@ -113,5 +114,37 @@ pub async fn setup() -> CommInfo {
     let quinn::NewConnection {
         connection: conn, ..
     } = new_conn;
+    connection_handshake(&conn).await;
     CommInfo { conn, endpoint }
+}
+
+pub async fn connection_handshake(conn: &Connection) {
+    let (mut send, mut recv) = conn
+        .open_bi()
+        .await
+        .expect("Failed to open bidirection channel");
+    let version_len = u64::try_from(PROTOCOL_VERSION.len())
+        .expect("less than u64::MAX")
+        .to_le_bytes();
+
+    let mut handshake_buf = Vec::with_capacity(version_len.len() + PROTOCOL_VERSION.len());
+    handshake_buf.extend(version_len);
+    handshake_buf.extend(PROTOCOL_VERSION.as_bytes());
+    send.write_all(&handshake_buf)
+        .await
+        .expect("Failed to send handshake data");
+
+    let mut resp_len_buf = [0; std::mem::size_of::<u64>()];
+    recv.read_exact(&mut resp_len_buf)
+        .await
+        .expect("Failed to receive handshake data");
+    let len = u64::from_le_bytes(resp_len_buf);
+
+    let mut resp_buf = Vec::new();
+    resp_buf.resize(len.try_into().expect("Failed to convert data type"), 0);
+    recv.read_exact(resp_buf.as_mut_slice()).await.unwrap();
+
+    bincode::deserialize::<Option<&str>>(&resp_buf)
+        .expect("Failed to deserialize recv data")
+        .expect("Incompatible version");
 }
