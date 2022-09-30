@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
-use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
+use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
@@ -212,36 +212,48 @@ impl<'db> RawEventStore<'db> {
     }
 }
 
+/// Creates a key corresponding to the given `prefix` and `time`.
+pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
+    bound.extend(prefix);
+    if let Some(time) = time {
+        bound.extend(time.timestamp_nanos().to_be_bytes());
+    }
+    bound
+}
+
 /// Creates a key that precedes the key calculated from the given `prefix` and
 /// `time`.
-pub fn lower_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut lower_bound = Vec::with_capacity(prefix.len() + 1);
-    lower_bound.extend(prefix);
-    lower_bound.push(0);
+pub fn lower_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>() + 1);
+    bound.extend(prefix);
     if let Some(time) = time {
         let ns = time.timestamp_nanos();
         if let Some(ns) = ns.checked_sub(1) {
             if ns >= 0 {
-                lower_bound.extend(ns.to_be_bytes());
+                bound.extend(ns.to_be_bytes());
+                return bound;
             }
         }
     }
-    lower_bound
+    bound
 }
 
-/// Creates a key that corresponds to the key calculated from the given `prefix`
-/// and `time`.
-pub fn upper_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut upper_bound = Vec::with_capacity(prefix.len() + 1);
-    upper_bound.extend(prefix);
+/// Creates a key that follows the key calculated from the given `prefix` and
+/// `time`.
+pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>() + 1);
+    bound.extend(prefix);
     if let Some(time) = time {
         let ns = time.timestamp_nanos();
-        upper_bound.push(0);
-        upper_bound.extend(ns.to_be_bytes());
-    } else {
-        upper_bound.push(1);
+        if let Some(ns) = ns.checked_add(1) {
+            bound.extend(ns.to_be_bytes());
+            return bound;
+        }
     }
-    upper_bound
+    bound.extend(i64::MAX.to_be_bytes());
+    bound.push(0);
+    bound
 }
 
 pub type KeyValue<T> = (Box<[u8]>, T);
@@ -283,13 +295,13 @@ where
         self.inner.next().and_then(|item| match item {
             Ok((key, value)) => {
                 if key.as_ref().cmp(&self.boundary) == self.cond {
-                    None
-                } else {
                     Some(
                         bincode::deserialize::<T>(&value)
                             .map(|value| (key, value))
                             .map_err(Into::into),
                     )
+                } else {
+                    None
                 }
             }
             Err(e) => Some(Err(e.into())),
