@@ -7,6 +7,7 @@ use async_graphql::{
     connection::{query, Connection},
     Context, Object, Result, SimpleObject,
 };
+use chrono::{DateTime, Utc};
 
 use std::fmt::Debug;
 
@@ -35,6 +36,8 @@ impl LogQuery {
         ctx: &Context<'ctx>,
         source: String,
         kind: String,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -59,8 +62,8 @@ impl LogQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::log_iter,
-                    None,
-                    None,
+                    start,
+                    end,
                     after,
                     before,
                     first,
