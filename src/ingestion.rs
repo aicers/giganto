@@ -41,7 +41,7 @@ lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Conn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -55,7 +55,7 @@ pub struct Conn {
     pub resp_pkts: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -65,7 +65,7 @@ pub struct DnsConn {
     pub query: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HttpConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -79,7 +79,7 @@ pub struct HttpConn {
     pub status_code: u16,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RdpConn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,

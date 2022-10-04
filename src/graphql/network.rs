@@ -1,3 +1,4 @@
+use super::RawEventFilterInput;
 use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     ingestion,
@@ -137,9 +138,7 @@ impl NetworkQuery {
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        source: String,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        filter: RawEventFilterInput,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -147,7 +146,7 @@ impl NetworkQuery {
     ) -> Result<Connection<String, ConnRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.conn_store()?;
-        let key_prefix = key_prefix(&source);
+        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -159,8 +158,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::conn_iter,
-                    start,
-                    end,
+                    filter,
                     after,
                     before,
                     first,
@@ -175,9 +173,7 @@ impl NetworkQuery {
     async fn dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        source: String,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        filter: RawEventFilterInput,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -185,7 +181,7 @@ impl NetworkQuery {
     ) -> Result<Connection<String, DnsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.dns_store()?;
-        let key_prefix = key_prefix(&source);
+        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -197,8 +193,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::dns_iter,
-                    start,
-                    end,
+                    filter,
                     after,
                     before,
                     first,
@@ -213,9 +208,7 @@ impl NetworkQuery {
     async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        source: String,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        filter: RawEventFilterInput,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -223,7 +216,7 @@ impl NetworkQuery {
     ) -> Result<Connection<String, HttpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.http_store()?;
-        let key_prefix = key_prefix(&source);
+        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -235,8 +228,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::http_iter,
-                    start,
-                    end,
+                    filter,
                     after,
                     before,
                     first,
@@ -251,9 +243,7 @@ impl NetworkQuery {
     async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        source: String,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        filter: RawEventFilterInput,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -261,7 +251,7 @@ impl NetworkQuery {
     ) -> Result<Connection<String, RdpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.rdp_store()?;
-        let key_prefix = key_prefix(&source);
+        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -273,8 +263,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::rdp_iter,
-                    start,
-                    end,
+                    filter,
                     after,
                     before,
                     first,
@@ -306,11 +295,24 @@ mod tests {
     async fn conn_empty() {
         let schema = TestSchema::new();
         let query = r#"
-        {
-            connRawEvents (source: "einsis", first: 0) {
+        query {
+            connRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    source: "a"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 100, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
-                        origAddr
+                        origAddr,
+                        respAddr,
+                        origPort,
                     }
                 }
             }
@@ -328,31 +330,32 @@ mod tests {
         insert_conn_raw_event(&store, "src 1", 2);
 
         let query = r#"
-        {
-            connRawEvents (source: "src 1", last: 1) {
+        query {
+            connRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 100, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
                         origAddr,
                         respAddr,
                         origPort,
-                        respPort,
-                        proto,
-                        duration,
-                        origBytes,
-                        respBytes,
-                        origPkts,
-                        respPkts,
                     }
-                }
-                pageInfo {
-                    hasPreviousPage
                 }
             }
         }"#;
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,proto: 6,duration: 12345,origBytes: 77,respBytes: 295,origPkts: 397,respPkts: 511}}],pageInfo: {hasPreviousPage: true}}}"
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
         );
     }
 
@@ -384,11 +387,24 @@ mod tests {
     async fn dns_empty() {
         let schema = TestSchema::new();
         let query = r#"
-        {
-            dnsRawEvents (source: "einsis", start:"1998-07-01T00:00:00Z", end:"2023-07-01T00:00:00Z", first: 0) {
+        query {
+            dnsRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 100, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
-                        origAddr
+                        origAddr,
+                        respAddr,
+                        origPort,
                     }
                 }
             }
@@ -423,16 +439,24 @@ mod tests {
             .unwrap();
 
         let query = r#"
-        {
-            dnsRawEvents (source: "einsis", start:"1998-07-01T00:00:00Z", end:"2023-07-01T00:00:00Z", first: 1) {
+        query {
+            dnsRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
                         origAddr,
                         respAddr,
                         origPort,
-                        respPort,
-                        proto,
-                        query,
                     }
                 }
             }
@@ -440,7 +464,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"31.3.245.133\",origPort: 46378,respPort: 80,proto: 17,query: \"Hello Server Hello Server Hello Server\"}}]}}"
+            "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"31.3.245.133\",origPort: 46378}}]}}"
         );
     }
 
@@ -448,11 +472,24 @@ mod tests {
     async fn http_empty() {
         let schema = TestSchema::new();
         let query = r#"
-        {
-            httpRawEvents (source: "einsis", first: 0) {
+        query {
+            httpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
-                        origAddr
+                        origAddr,
+                        respAddr,
+                        origPort,
                     }
                 }
             }
@@ -491,31 +528,32 @@ mod tests {
             .unwrap();
 
         let query = r#"
-        {
-            httpRawEvents (source: "einsis", first: 1) {
+        query {
+            httpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
                         origAddr,
                         respAddr,
                         origPort,
-                        respPort,
-                        method,
-                        host,
-                        uri,
-                        referrer,
-                        userAgent,
-                        statusCode,
                     }
-                }
-                pageInfo {
-                    hasPreviousPage
                 }
             }
         }"#;
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,method: \"POST\",host: \"einsis\",uri: \"/einsis.gif\",referrer: \"einsis.com\",userAgent: \"giganto\",statusCode: 200}}],pageInfo: {hasPreviousPage: false}}}"
+            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
         );
     }
 
@@ -523,11 +561,24 @@ mod tests {
     async fn rdp_empty() {
         let schema = TestSchema::new();
         let query = r#"
-        {
-            rdpRawEvents (source: "einsis", first: 0) {
+        query {
+            rdpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
-                        origAddr
+                        origAddr,
+                        respAddr,
+                        origPort,
                     }
                 }
             }
@@ -561,26 +612,32 @@ mod tests {
             .unwrap();
 
         let query = r#"
-        {
-            rdpRawEvents (source: "einsis", first: 1) {
+        query {
+            rdpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "einsis"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) 
+            {
                 edges {
                     node {
                         origAddr,
                         respAddr,
                         origPort,
-                        respPort,
-                        cookie,
                     }
-                }
-                pageInfo {
-                    hasPreviousPage
                 }
             }
         }"#;
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80,cookie: \"rdp_test\"}}],pageInfo: {hasPreviousPage: false}}}"
+            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
         );
     }
 }
