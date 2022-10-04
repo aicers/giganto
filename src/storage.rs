@@ -222,23 +222,6 @@ pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec
     bound
 }
 
-/// Creates a key that precedes the key calculated from the given `prefix` and
-/// `time`.
-pub fn lower_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>() + 1);
-    bound.extend(prefix);
-    if let Some(time) = time {
-        let ns = time.timestamp_nanos();
-        if let Some(ns) = ns.checked_sub(1) {
-            if ns >= 0 {
-                bound.extend(ns.to_be_bytes());
-                return bound;
-            }
-        }
-    }
-    bound
-}
-
 /// Creates a key corresponding to the given `prefix` and `time`.
 pub fn upper_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
     let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
@@ -258,9 +241,11 @@ pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u
     bound.extend(prefix);
     if let Some(time) = time {
         let ns = time.timestamp_nanos();
-        if let Some(ns) = ns.checked_add(1) {
-            bound.extend(ns.to_be_bytes());
-            return bound;
+        if let Some(ns) = ns.checked_sub(1) {
+            if ns >= 0 {
+                bound.extend(ns.to_be_bytes());
+                return bound;
+            }
         }
     }
     bound.extend(i64::MAX.to_be_bytes());
@@ -284,8 +269,8 @@ impl<'d, T> Iter<'d, T> {
         direction: Direction,
     ) -> Self {
         let cond = match direction {
-            Direction::Forward => cmp::Ordering::Less,
-            Direction::Reverse => cmp::Ordering::Greater,
+            Direction::Forward => cmp::Ordering::Greater,
+            Direction::Reverse => cmp::Ordering::Less,
         };
 
         Self {
@@ -307,13 +292,13 @@ where
         self.inner.next().and_then(|item| match item {
             Ok((key, value)) => {
                 if key.as_ref().cmp(&self.boundary) == self.cond {
+                    None
+                } else {
                     Some(
                         bincode::deserialize::<T>(&value)
                             .map(|value| (key, value))
                             .map_err(Into::into),
                     )
-                } else {
-                    None
                 }
             }
             Err(e) => Some(Err(e.into())),

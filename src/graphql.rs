@@ -2,7 +2,7 @@ mod log;
 mod network;
 
 use crate::storage::{
-    lower_open_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
+    lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
     KeyValue, RawEventStore,
 };
 use async_graphql::{
@@ -52,10 +52,14 @@ where
         }
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(before)?;
+        let time = upper_closed_bound_key(key_prefix, end);
+        if cursor.cmp(&time) == std::cmp::Ordering::Greater {
+            return Err("invalid cursor".into());
+        }
         let mut iter = iter_builder(
             store,
             &cursor,
-            &lower_open_bound_key(key_prefix, start),
+            &lower_closed_bound_key(key_prefix, start),
             Direction::Reverse,
         )
         .peekable();
@@ -76,6 +80,10 @@ where
         }
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(after)?;
+        let time = lower_closed_bound_key(key_prefix, start);
+        if cursor.cmp(&time) == std::cmp::Ordering::Less {
+            return Err("invalid cursor".into());
+        }
         let mut iter = iter_builder(
             store,
             &cursor,
@@ -97,8 +105,8 @@ where
         let last = last.min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
             store,
-            &upper_closed_bound_key(key_prefix, None),
-            &lower_open_bound_key(key_prefix, start),
+            &upper_open_bound_key(key_prefix, end),
+            &lower_closed_bound_key(key_prefix, start),
             Direction::Reverse,
         );
         let (mut records, has_previous) = collect_records(iter, last)?;
@@ -108,7 +116,7 @@ where
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
             store,
-            key_prefix,
+            &lower_closed_bound_key(key_prefix, start),
             &upper_open_bound_key(key_prefix, end),
             Direction::Forward,
         );
