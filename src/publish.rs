@@ -1,4 +1,4 @@
-use crate::storage::{lower_bound_key, upper_bound_key, Database};
+use crate::storage::{lower_closed_bound_key, upper_open_bound_key, Database};
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
@@ -114,8 +114,8 @@ async fn handle_request(
         .log_store()
         .unwrap()
         .log_iter(
-            &lower_bound_key(&key_prefix, None),
-            &upper_bound_key(&key_prefix, None),
+            &lower_closed_bound_key(&key_prefix, None),
+            &upper_open_bound_key(&key_prefix, None),
             rocksdb::Direction::Forward,
         )
         .flatten();

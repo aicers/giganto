@@ -2,7 +2,8 @@ mod log;
 mod network;
 
 use crate::storage::{
-    lower_bound_key, upper_bound_key, Database, Direction, KeyValue, RawEventStore,
+    lower_open_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
+    KeyValue, RawEventStore,
 };
 use async_graphql::{
     connection::{Connection, Edge},
@@ -54,7 +55,7 @@ where
         let mut iter = iter_builder(
             store,
             &cursor,
-            &lower_bound_key(key_prefix, start),
+            &lower_open_bound_key(key_prefix, start),
             Direction::Reverse,
         )
         .peekable();
@@ -78,7 +79,7 @@ where
         let mut iter = iter_builder(
             store,
             &cursor,
-            &upper_bound_key(key_prefix, end),
+            &upper_open_bound_key(key_prefix, end),
             Direction::Forward,
         )
         .peekable();
@@ -96,8 +97,8 @@ where
         let last = last.min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
             store,
-            key_prefix,
-            &lower_bound_key(key_prefix, start),
+            &upper_closed_bound_key(key_prefix, None),
+            &lower_open_bound_key(key_prefix, start),
             Direction::Reverse,
         );
         let (mut records, has_previous) = collect_records(iter, last)?;
@@ -108,7 +109,7 @@ where
         let iter = iter_builder(
             store,
             key_prefix,
-            &upper_bound_key(key_prefix, end),
+            &upper_open_bound_key(key_prefix, end),
             Direction::Forward,
         );
         let (records, has_next) = collect_records(iter, first)?;

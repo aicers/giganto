@@ -74,8 +74,9 @@ impl LogQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::TestSchema;
-    use chrono::Utc;
+    use std::mem;
+
+    use crate::{graphql::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn log_empty() {
@@ -97,26 +98,14 @@ mod tests {
     #[tokio::test]
     async fn log_with_data() {
         let schema = TestSchema::new();
+        let store = schema.db.log_store().unwrap();
 
-        let mut source_kind = b"einsis\x00Hello\x00".to_vec();
-        source_kind.extend(Utc::now().timestamp_nanos().to_be_bytes());
-
-        let log_body = (
-            String::from("Hello"),
-            base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
-        );
-        let ser_log_body = bincode::serialize(&log_body).unwrap();
-
-        schema
-            .db
-            .log_store()
-            .unwrap()
-            .append(&source_kind[..], &ser_log_body)
-            .unwrap();
+        insert_raw_event(&store, "src 1", 1, "kind 1", b"log 1");
+        insert_raw_event(&store, "src 1", 2, "kind 2", b"log 2");
 
         let query = r#"
         {
-            logRawEvents (source: "einsis", kind: "Hello", first: 1) {
+            logRawEvents (source: "src 1", kind: "kind 1", first: 2) {
                 edges {
                     node {
                         log
@@ -130,7 +119,24 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{logRawEvents: {edges: [{node: {log: \"aGVsbG8gd29ybGQ=\"}}],pageInfo: {hasPreviousPage: false}}}"
+            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}],pageInfo: {{hasPreviousPage: false}}}}}}", base64::encode("log 1"))
         );
+    }
+
+    fn insert_raw_event(
+        store: &RawEventStore,
+        source: &str,
+        timestamp: i64,
+        kind: &str,
+        body: &[u8],
+    ) {
+        let mut key = Vec::with_capacity(source.len() + kind.len() + 2 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend_from_slice(kind.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+        let value = bincode::serialize(&(kind, body)).unwrap();
+        store.append(&key, &value).unwrap();
     }
 }
