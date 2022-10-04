@@ -12,11 +12,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add protocol compatibility check communication with connected Programs.
 - Accepts QUIC connections from subscribers.
 - GraphQL API supports cursor-based pagination.
-
-### Changed
-
-- `dnsRawEvents` takes `start` and `end` parameters to specify the time range
-  of the query.
+- GraphQL API takes `start` and `end` parameters to specify the time range of
+  the query.
 
 ### Fixed
 

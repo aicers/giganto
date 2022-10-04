@@ -121,10 +121,13 @@ impl From<ingestion::RdpConn> for RdpRawEvent {
 
 #[Object]
 impl NetworkQuery {
+    #[allow(clippy::too_many_arguments)]
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -144,8 +147,8 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::conn_iter,
-                    None,
-                    None,
+                    start,
+                    end,
                     after,
                     before,
                     first,
@@ -161,8 +164,8 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'ctx>,
         source: String,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -182,8 +185,8 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::dns_iter,
-                    Some(start),
-                    Some(end),
+                    start,
+                    end,
                     after,
                     before,
                     first,
@@ -194,10 +197,13 @@ impl NetworkQuery {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -217,8 +223,8 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::http_iter,
-                    None,
-                    None,
+                    start,
+                    end,
                     after,
                     before,
                     first,
@@ -229,10 +235,13 @@ impl NetworkQuery {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         source: String,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -252,8 +261,8 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::rdp_iter,
-                    None,
-                    None,
+                    start,
+                    end,
                     after,
                     before,
                     first,
