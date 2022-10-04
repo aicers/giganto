@@ -83,7 +83,6 @@ mod tests {
     use std::mem;
 
     #[test]
-    #[should_panic] // TODO: this should not panic
     fn load_time_range() {
         let schema = TestSchema::new();
         let store = schema.db.log_store().unwrap();
@@ -179,11 +178,11 @@ mod tests {
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
             Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 1),
+                NaiveDateTime::from_timestamp(0, 2),
                 Utc,
             )),
             Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 2),
+                NaiveDateTime::from_timestamp(0, 3),
                 Utc,
             )),
             None,
@@ -195,7 +194,7 @@ mod tests {
         assert_eq!(connection.edges.len(), 1);
         assert_eq!(
             base64::decode(&connection.edges[0].node.log).unwrap(),
-            b"log1"
+            b"log2"
         );
 
         // forward traversal `start..`
