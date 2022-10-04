@@ -77,9 +77,179 @@ impl LogQuery {
 
 #[cfg(test)]
 mod tests {
+    use super::LogRawEvent;
+    use crate::{graphql::TestSchema, storage::RawEventStore};
+    use chrono::{DateTime, NaiveDateTime, Utc};
     use std::mem;
 
-    use crate::{graphql::TestSchema, storage::RawEventStore};
+    #[test]
+    #[should_panic] // TODO: this should not panic
+    fn load_time_range() {
+        let schema = TestSchema::new();
+        let store = schema.db.log_store().unwrap();
+
+        insert_raw_event(&store, "src1", 1, "kind1", b"log1");
+        insert_raw_event(&store, "src1", 2, "kind1", b"log2");
+        insert_raw_event(&store, "src1", 3, "kind1", b"log3");
+
+        // backward traversal in `start..end`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 1),
+                Utc,
+            )),
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 3),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+
+        // backward traversal in `start..`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 2),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log3"
+        );
+
+        // backward traversal in `..end`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            None,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 3),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+
+        // forward traversal in `start..end`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 1),
+                Utc,
+            )),
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 2),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 1);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+
+        // forward traversal `start..`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 2),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log3"
+        );
+
+        // forward traversal `..end`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            None,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 3),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+    }
 
     #[tokio::test]
     async fn log_empty() {
