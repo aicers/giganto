@@ -1,4 +1,4 @@
-use super::{get_timestamp, load_connection, FromKeyValue};
+use super::{get_timestamp, load_connection_log, FromKeyValue};
 use crate::{
     ingestion,
     storage::{Database, RawEventStore},
@@ -37,17 +37,17 @@ impl LogQuery {
     async fn log_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        source: String,
-        kind: String,
+        source: Option<String>,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
+        kind: String,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, LogRawEvent>> {
-        let mut key_prefix = Vec::with_capacity(source.len() + kind.len() + 2);
-        key_prefix.extend_from_slice(source.as_bytes());
+        let mut key_prefix = Vec::with_capacity(source.as_ref().unwrap().len() + kind.len() + 2);
+        key_prefix.extend_from_slice(source.as_ref().unwrap().as_bytes());
         key_prefix.push(0);
         key_prefix.extend_from_slice(kind.as_bytes());
         key_prefix.push(0);
@@ -61,7 +61,7 @@ impl LogQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
+                load_connection_log(
                     &store,
                     &key_prefix,
                     RawEventStore::log_iter,
@@ -81,8 +81,11 @@ impl LogQuery {
 #[cfg(test)]
 mod tests {
     use super::LogRawEvent;
-    use crate::ingestion::Log;
-    use crate::{graphql::TestSchema, storage::RawEventStore};
+    use crate::{
+        graphql::{load_connection_log, TestSchema},
+        ingestion::Log,
+        storage::RawEventStore,
+    };
     use chrono::{DateTime, NaiveDateTime, Utc};
     use std::mem;
 
@@ -98,7 +101,7 @@ mod tests {
         insert_raw_event(&store, "src1", 5, "kind1", b"log5");
 
         // backward traversal in `start..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -127,7 +130,7 @@ mod tests {
         );
 
         // backward traversal in `start..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -157,7 +160,7 @@ mod tests {
         );
 
         // backward traversal in `..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -187,7 +190,7 @@ mod tests {
         );
 
         // forward traversal in `start..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -216,7 +219,7 @@ mod tests {
         );
 
         // forward traversal `start..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -246,7 +249,7 @@ mod tests {
         );
 
         // forward traversal `..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -272,7 +275,7 @@ mod tests {
         );
 
         // backward traversal in `start..end` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -303,7 +306,7 @@ mod tests {
         );
 
         // backward traversal in `start..` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -331,7 +334,7 @@ mod tests {
         );
 
         // backward traversal in `..end` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -363,7 +366,7 @@ mod tests {
         );
 
         // forward traversal in `start..end` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -394,7 +397,7 @@ mod tests {
         );
 
         // forward traversal `start..` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -422,7 +425,7 @@ mod tests {
         );
 
         // forward traversal `..end` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection_log::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
@@ -455,7 +458,7 @@ mod tests {
         let schema = TestSchema::new();
         let query = r#"
         {
-            logRawEvents (source: "einsis", kind: "Hello", first: 0) {
+            logRawEvents(source: "einsis", kind: "Hello", first: 1) {
                 edges {
                     node {
                         log
@@ -477,7 +480,7 @@ mod tests {
 
         let query = r#"
         {
-            logRawEvents (source: "src 1", kind: "kind 1", first: 2) {
+            logRawEvents(source: "src 1", kind: "kind 1", first: 1) {
                 edges {
                     node {
                         log
