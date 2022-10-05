@@ -1,4 +1,4 @@
-use super::load_connection;
+use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     ingestion,
     storage::{Database, RawEventStore},
@@ -15,6 +15,7 @@ pub(super) struct NetworkQuery;
 
 #[derive(SimpleObject, Debug)]
 struct ConnRawEvent {
+    timestamp: DateTime<Utc>,
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -29,6 +30,7 @@ struct ConnRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct DnsRawEvent {
+    timestamp: DateTime<Utc>,
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -39,6 +41,7 @@ struct DnsRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct HttpRawEvent {
+    timestamp: DateTime<Utc>,
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -53,6 +56,7 @@ struct HttpRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct RdpRawEvent {
+    timestamp: DateTime<Utc>,
     orig_addr: String,
     resp_addr: String,
     orig_port: u16,
@@ -60,9 +64,11 @@ struct RdpRawEvent {
     cookie: String,
 }
 
-impl From<ingestion::Conn> for ConnRawEvent {
-    fn from(c: ingestion::Conn) -> ConnRawEvent {
-        ConnRawEvent {
+impl FromKeyValue<ingestion::Conn> for ConnRawEvent {
+    fn from_key_value(key: &[u8], c: ingestion::Conn) -> Result<Self> {
+        let timestamp = get_timestamp(key)?;
+        Ok(ConnRawEvent {
+            timestamp,
             orig_addr: c.orig_addr.to_string(),
             resp_addr: c.resp_addr.to_string(),
             orig_port: c.orig_port,
@@ -73,26 +79,30 @@ impl From<ingestion::Conn> for ConnRawEvent {
             resp_bytes: c.resp_bytes,
             orig_pkts: c.orig_pkts,
             resp_pkts: c.resp_pkts,
-        }
+        })
     }
 }
 
-impl From<ingestion::DnsConn> for DnsRawEvent {
-    fn from(d: ingestion::DnsConn) -> DnsRawEvent {
-        DnsRawEvent {
+impl FromKeyValue<ingestion::DnsConn> for DnsRawEvent {
+    fn from_key_value(key: &[u8], d: ingestion::DnsConn) -> Result<Self> {
+        let timestamp = get_timestamp(key)?;
+        Ok(DnsRawEvent {
+            timestamp,
             orig_addr: d.orig_addr.to_string(),
             resp_addr: d.resp_addr.to_string(),
             orig_port: d.orig_port,
             resp_port: d.resp_port,
             proto: d.proto,
             query: d.query,
-        }
+        })
     }
 }
 
-impl From<ingestion::HttpConn> for HttpRawEvent {
-    fn from(h: ingestion::HttpConn) -> HttpRawEvent {
-        HttpRawEvent {
+impl FromKeyValue<ingestion::HttpConn> for HttpRawEvent {
+    fn from_key_value(key: &[u8], h: ingestion::HttpConn) -> Result<Self> {
+        let timestamp = get_timestamp(key)?;
+        Ok(HttpRawEvent {
+            timestamp,
             orig_addr: h.orig_addr.to_string(),
             resp_addr: h.resp_addr.to_string(),
             orig_port: h.orig_port,
@@ -103,19 +113,21 @@ impl From<ingestion::HttpConn> for HttpRawEvent {
             referrer: h.referrer,
             user_agent: h.user_agent,
             status_code: h.status_code,
-        }
+        })
     }
 }
 
-impl From<ingestion::RdpConn> for RdpRawEvent {
-    fn from(r: ingestion::RdpConn) -> RdpRawEvent {
-        RdpRawEvent {
+impl FromKeyValue<ingestion::RdpConn> for RdpRawEvent {
+    fn from_key_value(key: &[u8], r: ingestion::RdpConn) -> Result<Self> {
+        let timestamp = get_timestamp(key)?;
+        Ok(RdpRawEvent {
+            timestamp,
             orig_addr: r.orig_addr.to_string(),
             resp_addr: r.resp_addr.to_string(),
             orig_port: r.orig_port,
             resp_port: r.resp_port,
             cookie: r.cookie,
-        }
+        })
     }
 }
 
@@ -390,7 +402,8 @@ mod tests {
         let schema = TestSchema::new();
 
         let mut key = b"einsis\x00".to_vec();
-        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
+        let timestamp = Utc::now().timestamp_nanos();
+        key.extend(timestamp.to_be_bytes());
 
         let dns_body = DnsConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -453,7 +466,8 @@ mod tests {
         let schema = TestSchema::new();
 
         let mut key = b"einsis\x00".to_vec();
-        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
+        let timestamp = Utc::now().timestamp_nanos();
+        key.extend(timestamp.to_be_bytes());
 
         let http_body = HttpConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -527,7 +541,8 @@ mod tests {
         let schema = TestSchema::new();
 
         let mut key = b"einsis\x00".to_vec();
-        key.extend(Utc::now().timestamp_nanos().to_be_bytes());
+        let timestamp = Utc::now().timestamp_nanos();
+        key.extend(timestamp.to_be_bytes());
 
         let rdp_body = RdpConn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),

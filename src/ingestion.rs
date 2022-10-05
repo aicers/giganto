@@ -468,7 +468,7 @@ fn handshake_buffer(resp: Option<&str>) -> Vec<u8> {
 }
 
 #[allow(unused)]
-async fn reqeust_command_channel(connection: quinn::Connection) -> Result<()> {
+async fn request_command_channel(connection: quinn::Connection) -> Result<()> {
     let (mut send, mut recv) = connection.open_bi().await?;
     send.write_all(&Utc::now().timestamp_nanos().to_le_bytes())
         .await
