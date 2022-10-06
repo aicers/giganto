@@ -9,7 +9,8 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 5] = ["conn", "dns", "log", "http", "rdp"];
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 6] =
+    ["conn", "dns", "log", "http", "rdp", "periodic time series"];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
 
@@ -92,6 +93,15 @@ impl Database {
             .db
             .cf_handle("rdp")
             .context("cannot access rdp column family")?;
+        Ok(RawEventStore { db: &self.db, cf })
+    }
+
+    /// Returns the raw event store for periodic time series.
+    pub fn periodic_time_series_store(&self) -> Result<RawEventStore> {
+        let cf = self
+            .db
+            .cf_handle("periodic time series")
+            .context("cannot access periodic time series column family")?;
         Ok(RawEventStore { db: &self.db, cf })
     }
 
