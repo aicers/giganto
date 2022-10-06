@@ -5,6 +5,17 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- GraphQL API now accepts `filter`, which includes the source name, time range,
+  IP address ranges, and port ranges.
+
+### Fixed
+
+- Fixed a bug returning wrong events when the time range is specified.
+
 ## [0.2.0] - 2022-10-04
 
 ### Added
@@ -26,5 +37,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.2.0...main
 [0.2.0]: https://github.com/aicers/giganto/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/aicers/giganto/tree/0.1.0
