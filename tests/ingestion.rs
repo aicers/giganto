@@ -4,11 +4,12 @@ use chrono::{Duration, Utc};
 use serde::Serialize;
 use std::net::IpAddr;
 
+const RECORD_TYPE_PERIOD_TIME_SERIES: u32 = 0x05;
 const RECORD_TYPE_RDP: u32 = 0x04;
 const RECORD_TYPE_HTTP: u32 = 0x03;
 const RECORD_TYPE_LOG: u32 = 0x02;
 const RECORD_TYPE_DNS: u32 = 0x01;
-const RECORD_TYPE_TCPUDP: u32 = 0x00;
+const RECORD_TYPE_CONN: u32 = 0x00;
 
 #[derive(Serialize)]
 struct DNSConn {
@@ -59,17 +60,19 @@ struct RdpConn {
 
 type Log = (String, Vec<u8>);
 
+type PeriodicTimeSeries = (String, i64, i64, Vec<f64>);
+
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_conn_info() {
     let comm_info = common::setup().await;
-    let (mut send_tcp_udp, _) = comm_info
+    let (mut send_conn, _) = comm_info
         .conn
         .open_bi()
         .await
         .expect("failed to open stream");
 
-    let mut tcpudp_data: Vec<u8> = Vec::new();
+    let mut conn_data: Vec<u8> = Vec::new();
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -85,22 +88,19 @@ async fn send_conn_info() {
     };
     let mut ser_conn_body = bincode::serialize(&conn_body).unwrap();
 
-    tcpudp_data.append(&mut RECORD_TYPE_TCPUDP.to_le_bytes().to_vec());
-    tcpudp_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    tcpudp_data.append(&mut (ser_conn_body.len() as u32).to_le_bytes().to_vec());
-    tcpudp_data.append(&mut ser_conn_body);
+    conn_data.append(&mut RECORD_TYPE_CONN.to_le_bytes().to_vec());
+    conn_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
+    conn_data.append(&mut (ser_conn_body.len() as u32).to_le_bytes().to_vec());
+    conn_data.append(&mut ser_conn_body);
 
-    send_tcp_udp
-        .write_all(&tcpudp_data)
+    send_conn
+        .write_all(&conn_data)
         .await
         .expect("failed to send request");
 
-    send_tcp_udp
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_conn.finish().await.expect("failed to shutdown stream");
 
-    comm_info.conn.close(0u32.into(), b"tcp_udp_done");
+    comm_info.conn.close(0u32.into(), b"conn_done");
     comm_info.endpoint.wait_idle().await;
 }
 
@@ -248,6 +248,49 @@ async fn send_rdp_info() {
     send_rdp.finish().await.expect("failed to shutdown stream");
 
     comm_info.conn.close(0u32.into(), b"log_done");
+    comm_info.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+#[cfg(not(tarpaulin))]
+async fn send_periodic_time_series_info() {
+    let comm_info = common::setup().await;
+    let (mut send_periodic_time_series, _) = comm_info
+        .conn
+        .open_bi()
+        .await
+        .expect("failed to open stream");
+
+    let mut periodic_time_series_data: Vec<u8> = Vec::new();
+    let periodic_time_series_body: PeriodicTimeSeries = (
+        String::from("Hello"),
+        Utc::now().timestamp_nanos(),
+        10,
+        Vec::new(),
+    );
+    let mut ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
+
+    periodic_time_series_data.append(&mut RECORD_TYPE_PERIOD_TIME_SERIES.to_le_bytes().to_vec());
+    periodic_time_series_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
+    periodic_time_series_data.append(
+        &mut (ser_periodic_time_series_body.len() as u32)
+            .to_le_bytes()
+            .to_vec(),
+    );
+    periodic_time_series_data.append(&mut ser_periodic_time_series_body);
+
+    send_periodic_time_series
+        .write_all(&periodic_time_series_data)
+        .await
+        .expect("failed to send request");
+    send_periodic_time_series
+        .finish()
+        .await
+        .expect("failed to shutdown stream");
+
+    comm_info
+        .conn
+        .close(0u32.into(), b"periodic_time_series_done");
     comm_info.endpoint.wait_idle().await;
 }
 

@@ -22,11 +22,9 @@ pub(super) struct LogQuery;
 
 impl FromKeyValue<ingestion::Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: ingestion::Log) -> Result<Self> {
-        let (_, log) = l.log;
-        let timestamp = get_timestamp(key)?;
         Ok(LogRawEvent {
-            timestamp,
-            log: base64::encode(log),
+            timestamp: get_timestamp(key)?,
+            log: base64::encode(l.log),
         })
     }
 }
@@ -512,7 +510,8 @@ mod tests {
         key.push(0);
         key.extend(timestamp.to_be_bytes());
         let log_body = Log {
-            log: (kind.to_string(), body.to_vec()),
+            kind: kind.to_string(),
+            log: body.to_vec(),
         };
         let value = bincode::serialize(&log_body).unwrap();
         store.append(&key, &value).unwrap();

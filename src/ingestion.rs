@@ -90,7 +90,16 @@ pub struct RdpConn {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Log {
-    pub log: (String, Vec<u8>),
+    pub kind: String,
+    pub log: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeriodicTimeSeries {
+    kind: String,
+    start: i64,
+    period: i64,
+    data: Vec<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -101,6 +110,7 @@ enum RecordType {
     Log = 2,
     Http = 3,
     Rdp = 4,
+    PeriodicTimeSeries = 5,
 }
 
 pub struct Server {
@@ -275,6 +285,10 @@ async fn handle_request(
             RecordType::Log => (RecordType::Log, db.log_store()?),
             RecordType::Http => (RecordType::Http, db.http_store()?),
             RecordType::Rdp => (RecordType::Rdp, db.rdp_store()?),
+            RecordType::PeriodicTimeSeries => (
+                RecordType::PeriodicTimeSeries,
+                db.periodic_time_series_store()?,
+            ),
         };
     handle_data(send, recv, record_type, source, store).await?;
     Ok(())
@@ -359,14 +373,31 @@ async fn handle_data(
 
     loop {
         match handle_body(&mut recv).await {
-            Ok((raw_event, timestamp)) => {
+            Ok((mut raw_event, timestamp)) => {
                 let mut args: Vec<Vec<u8>> = Vec::new();
                 args.push(source.as_bytes().to_vec());
-                if record_type == RecordType::Log {
-                    let (kind, _) = bincode::deserialize::<Log>(&raw_event)?.log;
-                    args.push(kind.as_bytes().to_vec());
+                match record_type {
+                    RecordType::Log => {
+                        args.push(
+                            bincode::deserialize::<Log>(&raw_event)?
+                                .kind
+                                .as_bytes()
+                                .to_vec(),
+                        );
+                        args.push(timestamp.to_be_bytes().to_vec());
+                    }
+                    RecordType::PeriodicTimeSeries => {
+                        let periodic_time_series =
+                            bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
+                        args.push(periodic_time_series.kind.as_bytes().to_vec());
+                        args.push(periodic_time_series.start.to_be_bytes().to_vec());
+                        raw_event = bincode::serialize(&(
+                            periodic_time_series.period,
+                            periodic_time_series.data,
+                        ))?;
+                    }
+                    _ => args.push(timestamp.to_be_bytes().to_vec()),
                 }
-                args.push(timestamp.to_be_bytes().to_vec());
                 store.append(&gen_key(args), &raw_event)?;
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);

@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Support periodic time series.
+
 ### Changed
 
 - GraphQL API now accepts `filter`, which includes the source name, time range,
