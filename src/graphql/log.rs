@@ -1,4 +1,4 @@
-use super::load_connection;
+use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     ingestion,
     storage::{Database, RawEventStore},
@@ -13,18 +13,21 @@ use std::fmt::Debug;
 
 #[derive(SimpleObject, Debug)]
 struct LogRawEvent {
+    timestamp: DateTime<Utc>,
     log: String,
 }
 
 #[derive(Default)]
 pub(super) struct LogQuery;
 
-impl From<ingestion::Log> for LogRawEvent {
-    fn from(l: ingestion::Log) -> LogRawEvent {
+impl FromKeyValue<ingestion::Log> for LogRawEvent {
+    fn from_key_value(key: &[u8], l: ingestion::Log) -> Result<Self> {
         let (_, log) = l.log;
-        LogRawEvent {
+        let timestamp = get_timestamp(key)?;
+        Ok(LogRawEvent {
+            timestamp,
             log: base64::encode(log),
-        }
+        })
     }
 }
 
@@ -78,6 +81,7 @@ impl LogQuery {
 #[cfg(test)]
 mod tests {
     use super::LogRawEvent;
+    use crate::ingestion::Log;
     use crate::{graphql::TestSchema, storage::RawEventStore};
     use chrono::{DateTime, NaiveDateTime, Utc};
     use std::mem;
@@ -308,7 +312,10 @@ mod tests {
         key.extend_from_slice(kind.as_bytes());
         key.push(0);
         key.extend(timestamp.to_be_bytes());
-        let value = bincode::serialize(&(kind, body)).unwrap();
+        let log_body = Log {
+            log: (kind.to_string(), body.to_vec()),
+        };
+        let value = bincode::serialize(&log_body).unwrap();
         store.append(&key, &value).unwrap();
     }
 }

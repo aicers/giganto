@@ -5,14 +5,21 @@ use crate::storage::{
     lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
     KeyValue, RawEventStore,
 };
+use anyhow::anyhow;
 use async_graphql::{
     connection::{Connection, Edge},
     EmptyMutation, EmptySubscription, MergedObject, OutputType, Result,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
+
+const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
 pub struct Query(log::LogQuery, network::NetworkQuery);
+
+pub trait FromKeyValue<T>: Sized {
+    fn from_key_value(key: &[u8], value: T) -> Result<Self>;
+}
 
 pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
 
@@ -40,7 +47,7 @@ fn load_connection<'c, N, I, T>(
     last: Option<usize>,
 ) -> Result<Connection<String, N>>
 where
-    N: From<T> + OutputType,
+    N: FromKeyValue<T> + OutputType,
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + 'c,
 {
     let (records, has_previous, has_next) = if let Some(before) = before {
@@ -127,7 +134,12 @@ where
     let mut connection: Connection<String, N> = Connection::new(has_previous, has_next);
     connection.edges = records
         .into_iter()
-        .map(|(key, node)| Edge::new(base64::encode(key), N::from(node)))
+        .map(|(key, node)| {
+            Edge::new(
+                base64::encode(&key),
+                N::from_key_value(&key, node).expect("failed to convert value"),
+            )
+        })
         .collect();
     Ok(connection)
 }
@@ -147,6 +159,14 @@ where
         }
     }
     Ok((records, has_more))
+}
+
+fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+    if key.len() > TIMESTAMP_SIZE {
+        let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        return Ok(Utc.timestamp_nanos(nanos));
+    }
+    Err(anyhow!("invalid database key length"))
 }
 
 #[cfg(test)]
