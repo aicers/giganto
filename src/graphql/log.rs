@@ -94,6 +94,8 @@ mod tests {
         insert_raw_event(&store, "src1", 1, "kind1", b"log1");
         insert_raw_event(&store, "src1", 2, "kind1", b"log2");
         insert_raw_event(&store, "src1", 3, "kind1", b"log3");
+        insert_raw_event(&store, "src1", 4, "kind1", b"log4");
+        insert_raw_event(&store, "src1", 5, "kind1", b"log5");
 
         // backward traversal in `start..end`
         let connection = super::load_connection::<LogRawEvent, _, _>(
@@ -130,7 +132,7 @@ mod tests {
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
             Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 2),
+                NaiveDateTime::from_timestamp(0, 3),
                 Utc,
             )),
             None,
@@ -140,14 +142,18 @@ mod tests {
             Some(3),
         )
         .unwrap();
-        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(connection.edges.len(), 3);
         assert_eq!(
             base64::decode(&connection.edges[0].node.log).unwrap(),
-            b"log2"
+            b"log3"
         );
         assert_eq!(
             base64::decode(&connection.edges[1].node.log).unwrap(),
-            b"log3"
+            b"log4"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[2].node.log).unwrap(),
+            b"log5"
         );
 
         // backward traversal in `..end`
@@ -157,13 +163,46 @@ mod tests {
             RawEventStore::log_iter,
             None,
             Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 3),
+                NaiveDateTime::from_timestamp(0, 4),
                 Utc,
             )),
             None,
             None,
             None,
             Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 3);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[2].node.log).unwrap(),
+            b"log3"
+        );
+
+        // forward traversal in `start..end`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 1),
+                Utc,
+            )),
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 3),
+                Utc,
+            )),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
@@ -176,15 +215,11 @@ mod tests {
             b"log2"
         );
 
-        // forward traversal in `start..end`
+        // forward traversal `start..`
         let connection = super::load_connection::<LogRawEvent, _, _>(
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 2),
-                Utc,
-            )),
             Some(DateTime::<Utc>::from_utc(
                 NaiveDateTime::from_timestamp(0, 3),
                 Utc,
@@ -193,38 +228,21 @@ mod tests {
             None,
             None,
             None,
-        )
-        .unwrap();
-        assert_eq!(connection.edges.len(), 1);
-        assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
-            b"log2"
-        );
-
-        // forward traversal `start..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
-            &store,
-            b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
-            Some(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(0, 2),
-                Utc,
-            )),
-            None,
-            None,
-            None,
-            None,
             None,
         )
         .unwrap();
-        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(connection.edges.len(), 3);
         assert_eq!(
             base64::decode(&connection.edges[0].node.log).unwrap(),
-            b"log2"
+            b"log3"
         );
         assert_eq!(
             base64::decode(&connection.edges[1].node.log).unwrap(),
-            b"log3"
+            b"log4"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[2].node.log).unwrap(),
+            b"log5"
         );
 
         // forward traversal `..end`
@@ -251,6 +269,184 @@ mod tests {
         assert_eq!(
             base64::decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
+        );
+
+        // backward traversal in `start..end` and `before cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 1),
+                Utc,
+            )),
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 3),
+                Utc,
+            )),
+            None,
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03",
+            )),
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+
+        // backward traversal in `start..` and `before cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 2),
+                Utc,
+            )),
+            None,
+            None,
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04",
+            )),
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log3"
+        );
+
+        // backward traversal in `..end` and `before cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            None,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 5),
+                Utc,
+            )),
+            None,
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04",
+            )),
+            None,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 3);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log1"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[2].node.log).unwrap(),
+            b"log3"
+        );
+
+        // forward traversal in `start..end` and `after cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 1),
+                Utc,
+            )),
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 4),
+                Utc,
+            )),
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            )),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log3"
+        );
+
+        // forward traversal `start..` and `after cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 2),
+                Utc,
+            )),
+            None,
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03",
+            )),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log4"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log5"
+        );
+
+        // forward traversal `..end` and `after cursor`
+        let connection = super::load_connection::<LogRawEvent, _, _>(
+            &store,
+            b"src1\x00kind1\x00",
+            RawEventStore::log_iter,
+            None,
+            Some(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(0, 4),
+                Utc,
+            )),
+            Some(base64::encode(
+                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            )),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(connection.edges.len(), 2);
+        assert_eq!(
+            base64::decode(&connection.edges[0].node.log).unwrap(),
+            b"log2"
+        );
+        assert_eq!(
+            base64::decode(&connection.edges[1].node.log).unwrap(),
+            b"log3"
         );
     }
 
