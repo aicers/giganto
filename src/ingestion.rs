@@ -1,4 +1,7 @@
-use crate::storage::{gen_key, Database, RawEventStore};
+use crate::{
+    graphql::RawEventFilterInput,
+    storage::{gen_key, Database, RawEventStore},
+};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -41,7 +44,18 @@ lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+pub trait AddressFilter: Sized {
+    fn address_filter(&self, filter: &RawEventFilterInput) -> Result<bool>;
+}
+
+pub trait EventFilter {
+    fn orig_addr(&self) -> Option<IpAddr>;
+    fn resp_addr(&self) -> Option<IpAddr>;
+    fn orig_port(&self) -> Option<u16>;
+    fn resp_port(&self) -> Option<u16>;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Conn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
@@ -55,6 +69,21 @@ pub struct Conn {
     pub resp_pkts: u64,
 }
 
+impl EventFilter for Conn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsConn {
     pub orig_addr: IpAddr,
@@ -63,6 +92,21 @@ pub struct DnsConn {
     pub resp_port: u16,
     pub proto: u8,
     pub query: String,
+}
+
+impl EventFilter for DnsConn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,6 +123,21 @@ pub struct HttpConn {
     pub status_code: u16,
 }
 
+impl EventFilter for HttpConn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RdpConn {
     pub orig_addr: IpAddr,
@@ -88,10 +147,40 @@ pub struct RdpConn {
     pub cookie: String,
 }
 
+impl EventFilter for RdpConn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Log {
     pub kind: String,
     pub log: Vec<u8>,
+}
+
+impl EventFilter for Log {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
