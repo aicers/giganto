@@ -10,6 +10,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Support periodic time series.
+- GraphQL API supports filtering with source name, kind name of log, time range,
+  IP address range, port range.
 
 ### Changed
 

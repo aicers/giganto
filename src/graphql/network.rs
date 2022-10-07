@@ -1,5 +1,4 @@
-use super::RawEventFilterInput;
-use super::{get_timestamp, load_connection, FromKeyValue};
+use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilterInput};
 use crate::{
     ingestion,
     storage::{Database, RawEventStore},
@@ -158,7 +157,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::conn_iter,
-                    filter,
+                    &filter,
                     after,
                     before,
                     first,
@@ -193,7 +192,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::dns_iter,
-                    filter,
+                    &filter,
                     after,
                     before,
                     first,
@@ -228,7 +227,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::http_iter,
-                    filter,
+                    &filter,
                     after,
                     before,
                     first,
@@ -263,7 +262,7 @@ impl NetworkQuery {
                     &store,
                     &key_prefix,
                     RawEventStore::rdp_iter,
-                    filter,
+                    &filter,
                     after,
                     before,
                     first,
@@ -303,7 +302,7 @@ mod tests {
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 100, end: 200 }
+                    respPort: { start: 50, end: 200 }
                 }
                 first: 1
             ) {
@@ -325,19 +324,19 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
 
-        insert_conn_raw_event(&store, "src 1", 1);
-        insert_conn_raw_event(&store, "src 1", 2);
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
 
         let query = r#"
         {
             connRawEvents(
                 filter: {
-                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     source: "src 1"
-                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 100, end: 200 }
+                    origPort: { start: 46378, end: 46379 }
+                    respPort: { start: 50, end: 200 }
                 }
                 first: 1
             ) {
@@ -391,7 +390,7 @@ mod tests {
                     time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
                     source: "einsis"
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
                     origPort: { start: 46377, end: 46380 }
                     respPort: { start: 100, end: 200 }
                 }
@@ -445,14 +444,13 @@ mod tests {
         {
             dnsRawEvents(
                 filter: {
-                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
                     source: "einsis"
-                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
                     origPort: { start: 46377, end: 46380 }
                     respPort: { start: 0, end: 200 }
                 }
-                first: 1
+                last: 1
             ) {
                 edges {
                     node {
@@ -477,9 +475,8 @@ mod tests {
         {
             httpRawEvents(
                 filter: {
-                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    time: { start: "1992-06-05T00:00:00Z", end: "2024-09-22T00:00:00Z" }
                     source: "einsis"
-                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
                     respPort: { start: 0, end: 200 }
@@ -537,7 +534,6 @@ mod tests {
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 0, end: 200 }
                 }
                 first: 1
             ) {
@@ -568,7 +564,6 @@ mod tests {
                     source: "einsis"
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46377, end: 46380 }
                     respPort: { start: 0, end: 200 }
                 }
                 first: 1
@@ -617,7 +612,6 @@ mod tests {
                     time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
                     source: "einsis"
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
                     respPort: { start: 0, end: 200 }
                 }
