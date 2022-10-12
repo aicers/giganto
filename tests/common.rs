@@ -12,15 +12,14 @@ const HOST: &str = "localhost";
 const KEY: &str = "tests/key.pem";
 const ROOT: &str = "tests/root.pem";
 const PROTOCOL_VERSION: &str = "0.2.0";
-const SERVER_URL: &str = "https://127.0.0.1:38370";
 
 pub struct CommInfo {
     pub conn: Connection,
     pub endpoint: Endpoint,
 }
 
-fn init_server() -> SocketAddr {
-    let url = Url::parse(SERVER_URL).expect("Failed to parse server url");
+fn init_server(server_url: &str) -> SocketAddr {
+    let url = Url::parse(server_url).expect("Failed to parse server url");
     let remote = (
         url.host_str().expect("Failed to get host"),
         url.port().expect("Failed to get port"),
@@ -102,8 +101,8 @@ fn init_client() -> Endpoint {
     endpoint
 }
 
-pub async fn setup() -> CommInfo {
-    let remote = init_server();
+pub async fn setup(server_url: &str) -> CommInfo {
+    let remote = init_server(server_url);
     let endpoint = init_client();
 
     let new_conn = endpoint

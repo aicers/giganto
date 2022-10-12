@@ -534,7 +534,7 @@ async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::Rea
     Ok((body_buf, timestamp))
 }
 
-async fn server_handshake(
+pub async fn server_handshake(
     connection: &Connection,
     bi_streams: &mut IncomingBiStreams,
 ) -> Result<()> {

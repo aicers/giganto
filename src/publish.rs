@@ -1,13 +1,18 @@
-use crate::storage::{lower_closed_bound_key, upper_open_bound_key, Database};
-use anyhow::{anyhow, Context, Result};
+use crate::graphql::TIMESTAMP_SIZE;
+use crate::ingestion::server_handshake;
+use crate::storage::{
+    lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
+};
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{TimeZone, Utc};
 use futures_util::StreamExt;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, sync::Arc};
+use std::{mem, net::SocketAddr, sync::Arc};
 use tracing::{error, info};
 
-const TIMESTAMP_SIZE: usize = 8;
+const LOG_MESSAGE_CODE: u32 = 0x00;
 
 pub struct Server {
     server_config: ServerConfig,
@@ -20,6 +25,7 @@ struct Message {
     kind: String,
     start: i64,
     end: i64,
+    count: usize,
 }
 
 impl Server {
@@ -57,7 +63,13 @@ impl Server {
 }
 
 async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> {
-    let quinn::NewConnection { mut bi_streams, .. } = conn.await?;
+    let quinn::NewConnection {
+        connection,
+        mut bi_streams,
+        ..
+    } = conn.await?;
+
+    server_handshake(&connection, &mut bi_streams).await?;
 
     async {
         while let Some(stream) = bi_streams.next().await {
@@ -84,64 +96,36 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     Ok(())
 }
 
-#[allow(clippy::cast_possible_truncation)]
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
 ) -> Result<()> {
-    let mut buf = [0; 4];
-    recv.read_exact(&mut buf)
-        .await
-        .map_err(|e| anyhow!("failed to read message code: {}", e))?;
+    let msg = handle_request_message(&mut recv).await?;
+    let mut key_prefix = Vec::with_capacity(msg.source.len() + msg.kind.len() + 2);
+    key_prefix.extend_from_slice(msg.source.as_bytes());
+    key_prefix.push(0);
+    key_prefix.extend_from_slice(msg.kind.as_bytes());
+    key_prefix.push(0);
 
-    let mut frame_length = [0; 4];
-    recv.read_exact(&mut frame_length)
-        .await
-        .map_err(|e| anyhow!("failed to read frame length: {}", e))?;
-    let len = u32::from_le_bytes(frame_length);
+    let mut iter = RawEventStore::log_iter(
+        &db.log_store().context("Failed to open log storage")?,
+        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
+        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
+        Direction::Forward,
+    );
 
-    let mut rest_buf = vec![0; len.try_into().unwrap()];
-    recv.read_exact(&mut rest_buf)
-        .await
-        .map_err(|e| anyhow!("failed to read rest of request: {}", e))?;
-
-    let msg = bincode::deserialize::<Message>(&rest_buf)
-        .map_err(|e| anyhow!("failed to deseralize message: {}", e))?;
-
-    let key_prefix = bincode::serialize(&msg.start)
-        .map_err(|e| anyhow!("failed to seralize start value: {}", e))?;
-    let iter = db
-        .log_store()
-        .unwrap()
-        .log_iter(
-            &lower_closed_bound_key(&key_prefix, None),
-            &upper_open_bound_key(&key_prefix, None),
-            rocksdb::Direction::Forward,
-        )
-        .flatten();
-
-    let mut events = Vec::new();
-    for (key, val) in iter {
-        let (_src, ts) = key.split_at(key.len() - TIMESTAMP_SIZE);
-        let timestamp = i64::from_be_bytes(ts.to_vec().try_into().unwrap());
-
-        if timestamp >= msg.end {
+    let mut size = msg.count;
+    for item in &mut iter {
+        let (key, l) = item.context("Failed to read Database")?;
+        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        handle_response_message(&mut send, &Some((timestamp, l.log))).await?;
+        size -= 1;
+        if size == 0 {
             break;
         }
-        events.push(&rest_buf);
-        let events_len = [events.len() as u8; 4];
-
-        send.write(&events_len)
-            .await
-            .map_err(|e| anyhow!("failed to write bincode sequence: {}", e))?;
-
-        let sequence = bincode::serialize(&(timestamp, val))
-            .map_err(|e| anyhow!("failed to seralize sequence: {}", e))?;
-
-        send.write(&sequence)
-            .await
-            .map_err(|e| anyhow!("failed to write bincode sequence: {}", e))?;
     }
+    handle_response_message(&mut send, &None).await?;
+    send.finish().await?;
     Ok(())
 }
 
@@ -174,4 +158,45 @@ fn config_server(
         .max_concurrent_uni_streams(0_u8.into());
 
     Ok(server_config)
+}
+
+async fn handle_request_message(recv: &mut RecvStream) -> Result<Message> {
+    let mut buf = [0; mem::size_of::<u32>()];
+    recv.read_exact(&mut buf)
+        .await
+        .map_err(|e| anyhow!("Failed to read message code: {}", e))?;
+
+    if LOG_MESSAGE_CODE != u32::from_le_bytes(buf) {
+        bail!("Unknown message type");
+    }
+
+    let mut frame_length = [0; mem::size_of::<u32>()];
+    recv.read_exact(&mut frame_length)
+        .await
+        .map_err(|e| anyhow!("Failed to read frame length: {}", e))?;
+    let len = u32::from_le_bytes(frame_length);
+
+    let mut rest_buf = vec![0; len.try_into()?];
+    recv.read_exact(&mut rest_buf)
+        .await
+        .map_err(|e| anyhow!("Failed to read rest of request: {}", e))?;
+
+    let msg = bincode::deserialize::<Message>(&rest_buf)
+        .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+    Ok(msg)
+}
+
+async fn handle_response_message(
+    send: &mut SendStream,
+    resp_data: &Option<(i64, Vec<u8>)>,
+) -> Result<()> {
+    let record = bincode::serialize(resp_data)?;
+    let record_len = u32::try_from(record.len())?.to_le_bytes();
+    let mut send_buf = Vec::with_capacity(record_len.len() + record.len());
+    send_buf.extend_from_slice(&record_len);
+    send_buf.extend_from_slice(&record);
+    send.write_all(&send_buf)
+        .await
+        .map_err(|e| anyhow!("Failed to write record: {}", e))?;
+    Ok(())
 }
