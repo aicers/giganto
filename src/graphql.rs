@@ -1,5 +1,6 @@
 mod log;
-mod network;
+pub mod network;
+mod packet;
 
 use crate::{
     ingestion::EventFilter,
@@ -14,14 +15,15 @@ use async_graphql::{
     EmptyMutation, EmptySubscription, InputObject, MergedObject, OutputType, Result,
 };
 use chrono::{DateTime, TimeZone, Utc};
+use serde::Serialize;
 use std::net::IpAddr;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
-pub struct Query(log::LogQuery, network::NetworkQuery);
+pub struct Query(log::LogQuery, network::NetworkQuery, packet::PacketQuery);
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize)]
 pub struct TimeRange {
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,

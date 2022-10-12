@@ -1,3 +1,4 @@
+use crate::graphql::network::NetworkFilter;
 use crate::storage::{gen_key, Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -39,6 +40,7 @@ type Sources = (String, DateTime<Utc>, bool);
 
 lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
+    pub static ref PACKET_SOURCES: Mutex<HashMap<String, Connection>> = Mutex::new(HashMap::new());
 }
 
 pub trait EventFilter {
@@ -253,6 +255,7 @@ impl Server {
                                 error!("Failed to append Source store");
                             }
                             SOURCES.lock().await.remove(&source_key);
+                            PACKET_SOURCES.lock().await.remove(&source_key);
                         }else{
                             SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
                             if source_store.append(source_key.as_bytes(), &timestamp_val.timestamp_nanos().to_be_bytes()).is_err(){
@@ -313,6 +316,11 @@ async fn handle_connection(
             }
         }
     }
+
+    PACKET_SOURCES
+        .lock()
+        .await
+        .insert(source.clone(), connection.clone());
 
     if let Err(error) = sender.send((source.clone(), Utc::now(), false)).await {
         error!("Faild to send channel data : {}", error);
@@ -580,22 +588,26 @@ fn handshake_buffer(resp: Option<&str>) -> Vec<u8> {
     resp_buf
 }
 
-#[allow(unused)]
-async fn request_command_channel(connection: quinn::Connection) -> Result<()> {
+pub async fn request_packets(
+    connection: &quinn::Connection,
+    filter: NetworkFilter,
+) -> Result<Vec<String>> {
     let (mut send, mut recv) = connection.open_bi().await?;
-    send.write_all(&Utc::now().timestamp_nanos().to_le_bytes())
+    let record = bincode::serialize(&filter)?;
+    let record_len = u64::try_from(record.len())?.to_le_bytes();
+    let mut send_buf = Vec::with_capacity(record_len.len() + record.len());
+    send_buf.extend_from_slice(&record_len);
+    send_buf.extend_from_slice(&record);
+    send.write_all(&send_buf)
         .await
-        .expect("Failed to send request");
+        .map_err(|e| anyhow!("Failed to write record: {}", e))?;
+    let mut req_len = [0; std::mem::size_of::<u64>()];
+    let mut req_buf = Vec::new();
+    recv.read_exact(&mut req_len).await?;
+    let len = u64::from_le_bytes(req_len);
 
-    let mut recv_buf = [0; std::mem::size_of::<u64>()];
-    match recv.read_exact(&mut recv_buf).await {
-        Ok(()) => {
-            let recv_timestamp = i64::from_le_bytes(recv_buf);
-            info!("Command channel response :{}", recv_timestamp);
-            Ok(())
-        }
-        Err(e) => {
-            bail!("Command receiver error: {}", e);
-        }
-    }
+    req_buf.resize(len.try_into()?, 0);
+    recv.read_exact(&mut req_buf).await?;
+    let packets = bincode::deserialize::<Vec<String>>(&req_buf)?;
+    Ok(packets)
 }
