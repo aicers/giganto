@@ -9,29 +9,31 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
 
 #[allow(clippy::module_name_repetitions)]
-#[derive(InputObject)]
+#[derive(InputObject, Serialize)]
 pub struct NetworkFilter {
     time: Option<TimeRange>,
-    source: String,
+    #[serde(skip)]
+    pub source: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
     resp_port: Option<PortRange>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize)]
 pub struct IpRange {
     start: Option<String>,
     end: Option<String>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize)]
 pub struct PortRange {
     start: Option<u16>,
     end: Option<u16>,
