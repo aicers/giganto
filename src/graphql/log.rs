@@ -31,7 +31,6 @@ impl FromKeyValue<ingestion::Log> for LogRawEvent {
 
 #[Object]
 impl LogQuery {
-    #[allow(clippy::too_many_arguments)]
     async fn log_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
