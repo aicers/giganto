@@ -1,15 +1,19 @@
 mod common;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 use std::net::IpAddr;
 
+const PUBLISH_LOG_MESSAGE_CODE: u32 = 0x00;
 const RECORD_TYPE_PERIOD_TIME_SERIES: u32 = 0x05;
 const RECORD_TYPE_RDP: u32 = 0x04;
 const RECORD_TYPE_HTTP: u32 = 0x03;
 const RECORD_TYPE_LOG: u32 = 0x02;
 const RECORD_TYPE_DNS: u32 = 0x01;
 const RECORD_TYPE_CONN: u32 = 0x00;
+
+const SERVER_URL: &str = "https://127.0.0.1:38370";
+const PUBLISH_URL: &str = "https://127.0.0.1:38371";
 
 #[derive(Serialize)]
 struct DNSConn {
@@ -62,10 +66,19 @@ type Log = (String, Vec<u8>);
 
 type PeriodicTimeSeries = (String, i64, i64, Vec<f64>);
 
+#[derive(Serialize)]
+struct Message {
+    source: String,
+    kind: String,
+    start: i64,
+    end: i64,
+    count: usize,
+}
+
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_conn_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_conn, _) = comm_info
         .conn
         .open_bi()
@@ -107,7 +120,7 @@ async fn send_conn_info() {
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_dns_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_dns, _) = comm_info
         .conn
         .open_bi()
@@ -146,7 +159,7 @@ async fn send_dns_info() {
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_log_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_log, _) = comm_info
         .conn
         .open_bi()
@@ -178,7 +191,7 @@ async fn send_log_info() {
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_http_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_http, _) = comm_info
         .conn
         .open_bi()
@@ -219,7 +232,7 @@ async fn send_http_info() {
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_rdp_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_rdp, _) = comm_info
         .conn
         .open_bi()
@@ -254,7 +267,7 @@ async fn send_rdp_info() {
 #[tokio::test]
 #[cfg(not(tarpaulin))]
 async fn send_periodic_time_series_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_periodic_time_series, _) = comm_info
         .conn
         .open_bi()
@@ -296,8 +309,53 @@ async fn send_periodic_time_series_info() {
 
 #[tokio::test]
 #[cfg(not(tarpaulin))]
+async fn request_publish_log() {
+    let publish = common::setup(PUBLISH_URL).await;
+    let (mut send_pub_reg, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let start = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(1970, 1, 1).and_hms(00, 00, 00), Utc);
+    let end = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(2050, 12, 31).and_hms(23, 59, 59), Utc);
+    let mesaage = Message {
+        source: String::from("einsis"),
+        kind: String::from("Hello"),
+        start: start.timestamp_nanos(),
+        end: end.timestamp_nanos(),
+        count: 5,
+    };
+    let mut mesaage_buf = bincode::serialize(&mesaage).unwrap();
+
+    let mut request_buf: Vec<u8> = Vec::new();
+    request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+    request_buf.append(&mut (mesaage_buf.len() as u32).to_le_bytes().to_vec());
+    request_buf.append(&mut mesaage_buf);
+
+    send_pub_reg
+        .write_all(&request_buf)
+        .await
+        .expect("failed to send request");
+
+    loop {
+        let mut len_buf = [0; std::mem::size_of::<u32>()];
+        recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+        let len = u32::from_le_bytes(len_buf);
+
+        let mut resp_data = vec![0; len.try_into().unwrap()];
+        recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+        let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+        if resp.is_none() {
+            break;
+        }
+    }
+
+    publish.conn.close(0u32.into(), b"publish_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+#[cfg(not(tarpaulin))]
 async fn ack_info() {
-    let comm_info = common::setup().await;
+    let comm_info = common::setup(SERVER_URL).await;
     let (mut send_log, mut recv_log) = comm_info
         .conn
         .open_bi()

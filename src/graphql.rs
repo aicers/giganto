@@ -17,7 +17,7 @@ use async_graphql::{
 };
 use chrono::{DateTime, TimeZone, Utc};
 
-const TIMESTAMP_SIZE: usize = 8;
+pub const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
 pub struct Query(log::LogQuery, network::NetworkQuery);
