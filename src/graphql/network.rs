@@ -632,4 +632,40 @@ mod tests {
             "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
         );
     }
+
+    #[tokio::test]
+    async fn conn_with_start_or_end() {
+        let schema = TestSchema::new();
+        let store = schema.db.conn_store().unwrap();
+
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            connRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75" }
+                    origPort: { end: 46380 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                        respPort,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80}}]}}"
+        );
+    }
 }

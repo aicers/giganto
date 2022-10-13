@@ -1,7 +1,4 @@
-use crate::{
-    graphql::RawEventFilterInput,
-    storage::{gen_key, Database, RawEventStore},
-};
+use crate::storage::{gen_key, Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -42,10 +39,6 @@ type Sources = (String, DateTime<Utc>, bool);
 
 lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
-}
-
-pub trait AddressFilter: Sized {
-    fn address_filter(&self, filter: &RawEventFilterInput) -> Result<bool>;
 }
 
 pub trait EventFilter {
