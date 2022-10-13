@@ -36,39 +36,77 @@ pub struct RawEventFilterInput {
 impl RawEventFilterInput {
     fn check(
         &self,
-        o_a: Option<IpAddr>,
-        r_a: Option<IpAddr>,
-        o_p: Option<u16>,
-        r_p: Option<u16>,
+        orig_addr: Option<IpAddr>,
+        resp_addr: Option<IpAddr>,
+        orig_port: Option<u16>,
+        resp_port: Option<u16>,
     ) -> Result<bool> {
-        if let Some(orig_addr) = &self.orig_addr {
-            if let Some(o_a) = o_a {
-                if (o_a >= orig_addr.end.parse::<IpAddr>()?)
-                    || (o_a < orig_addr.start.parse::<IpAddr>()?)
-                {
+        if let Some(ip_range) = &self.orig_addr {
+            if let Some(orig_addr) = orig_addr {
+                let end = if let Some(end) = &ip_range.end {
+                    orig_addr >= end.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+
+                let start = if let Some(start) = &ip_range.start {
+                    orig_addr < start.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+                if end || start {
                     return Ok(false);
                 };
             }
         }
-        if let Some(resp_addr) = &self.resp_addr {
-            if let Some(r_a) = r_a {
-                if (r_a >= resp_addr.end.parse::<IpAddr>()?)
-                    || (r_a < resp_addr.start.parse::<IpAddr>()?)
-                {
+        if let Some(ip_range) = &self.resp_addr {
+            if let Some(resp_addr) = resp_addr {
+                let end = if let Some(end) = &ip_range.end {
+                    resp_addr >= end.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+
+                let start = if let Some(start) = &ip_range.start {
+                    resp_addr < start.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+                if end || start {
                     return Ok(false);
                 };
             }
         }
-        if let Some(orig_port) = &self.orig_port {
-            if let Some(o_p) = o_p {
-                if (o_p >= orig_port.end) || (o_p < orig_port.start) {
+        if let Some(port_range) = &self.orig_port {
+            if let Some(orig_port) = orig_port {
+                let end = if let Some(end) = port_range.end {
+                    orig_port >= end
+                } else {
+                    false
+                };
+                let start = if let Some(start) = port_range.start {
+                    orig_port < start
+                } else {
+                    false
+                };
+                if end || start {
                     return Ok(false);
                 };
             }
         }
-        if let Some(resp_port) = &self.resp_port {
-            if let Some(r_p) = r_p {
-                if (r_p >= resp_port.end) || (r_p < resp_port.start) {
+        if let Some(port_range) = &self.resp_port {
+            if let Some(resp_port) = resp_port {
+                let end = if let Some(end) = port_range.end {
+                    resp_port >= end
+                } else {
+                    false
+                };
+                let start = if let Some(start) = port_range.start {
+                    resp_port < start
+                } else {
+                    false
+                };
+                if end || start {
                     return Ok(false);
                 };
             }
@@ -85,14 +123,14 @@ struct TimeRange {
 
 #[derive(InputObject)]
 pub struct IpRange {
-    pub start: String,
-    pub end: String,
+    pub start: Option<String>,
+    pub end: Option<String>,
 }
 
 #[derive(InputObject)]
 pub struct PortRange {
-    pub start: u16,
-    pub end: u16,
+    pub start: Option<u16>,
+    pub end: Option<u16>,
 }
 
 pub trait FromKeyValue<T>: Sized {
