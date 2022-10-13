@@ -1,8 +1,6 @@
 mod log;
 mod network;
 
-use std::net::IpAddr;
-
 use crate::{
     ingestion::EventFilter,
     storage::{
@@ -16,6 +14,7 @@ use async_graphql::{
     EmptyMutation, EmptySubscription, InputObject, MergedObject, OutputType, Result,
 };
 use chrono::{DateTime, TimeZone, Utc};
+use std::net::IpAddr;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
@@ -23,114 +22,21 @@ pub const TIMESTAMP_SIZE: usize = 8;
 pub struct Query(log::LogQuery, network::NetworkQuery);
 
 #[derive(InputObject)]
-pub struct RawEventFilterInput {
-    time: Option<TimeRange>,
-    source: String,
-    kind: Option<String>,
-    pub orig_addr: Option<IpRange>,
-    pub resp_addr: Option<IpRange>,
-    pub orig_port: Option<PortRange>,
-    pub resp_port: Option<PortRange>,
+pub struct TimeRange {
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
 }
 
-impl RawEventFilterInput {
+pub trait RawEventFilter {
+    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
     fn check(
         &self,
         orig_addr: Option<IpAddr>,
         resp_addr: Option<IpAddr>,
         orig_port: Option<u16>,
         resp_port: Option<u16>,
-    ) -> Result<bool> {
-        if let Some(ip_range) = &self.orig_addr {
-            if let Some(orig_addr) = orig_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    orig_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-
-                let start = if let Some(start) = &ip_range.start {
-                    orig_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        if let Some(ip_range) = &self.resp_addr {
-            if let Some(resp_addr) = resp_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    resp_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-
-                let start = if let Some(start) = &ip_range.start {
-                    resp_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        if let Some(port_range) = &self.orig_port {
-            if let Some(orig_port) = orig_port {
-                let end = if let Some(end) = port_range.end {
-                    orig_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    orig_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        if let Some(port_range) = &self.resp_port {
-            if let Some(resp_port) = resp_port {
-                let end = if let Some(end) = port_range.end {
-                    resp_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    resp_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        Ok(true)
-    }
-}
-
-#[derive(InputObject)]
-struct TimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
-}
-
-#[derive(InputObject)]
-pub struct IpRange {
-    pub start: Option<String>,
-    pub end: Option<String>,
-}
-
-#[derive(InputObject)]
-pub struct PortRange {
-    pub start: Option<u16>,
-    pub end: Option<u16>,
+    ) -> Result<bool>;
 }
 
 pub trait FromKeyValue<T>: Sized {
@@ -155,7 +61,7 @@ fn load_connection<'c, N, I, T>(
     store: &RawEventStore<'c>,
     key_prefix: &[u8],
     iter_builder: fn(&RawEventStore<'c>, &[u8], &[u8], Direction) -> I,
-    filter: &RawEventFilterInput,
+    filter: &impl RawEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<usize>,
@@ -173,11 +79,7 @@ where
         if first.is_some() {
             return Err("'before' and 'first' cannot be specified simultaneously".into());
         }
-        let (start, end) = if let Some(ref time) = filter.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        };
+        let (start, end) = filter.time();
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(before)?;
@@ -207,11 +109,7 @@ where
         if last.is_some() {
             return Err("'after' and 'last' cannot be specified simultaneously".into());
         }
-        let (start, end) = if let Some(ref time) = filter.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        };
+        let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(after)?;
@@ -237,11 +135,7 @@ where
         if first.is_some() {
             return Err("first and last cannot be used together".into());
         }
-        let (start, end) = if let Some(ref time) = filter.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        };
+        let (start, end) = filter.time();
 
         let last = last.min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
@@ -254,11 +148,7 @@ where
         records.reverse();
         (records, has_previous, false)
     } else {
-        let (start, end) = if let Some(ref time) = filter.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        };
+        let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let iter = iter_builder(
@@ -287,7 +177,7 @@ where
 fn collect_records<I, T>(
     mut iter: I,
     size: usize,
-    filter: &RawEventFilterInput,
+    filter: &impl RawEventFilter,
 ) -> Result<(Vec<KeyValue<T>>, bool)>
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>>,

@@ -1,17 +1,131 @@
-use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilterInput};
+use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
+    graphql::{RawEventFilter, TimeRange},
     ingestion,
     storage::{Database, RawEventStore},
 };
 use async_graphql::{
     connection::{query, Connection},
-    Context, Object, Result, SimpleObject,
+    Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
-use std::fmt::Debug;
+use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject)]
+pub struct NetworkFilter {
+    time: Option<TimeRange>,
+    source: String,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
+}
+
+#[derive(InputObject)]
+pub struct IpRange {
+    start: Option<String>,
+    end: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct PortRange {
+    start: Option<u16>,
+    end: Option<u16>,
+}
+
+impl RawEventFilter for NetworkFilter {
+    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+
+    fn check(
+        &self,
+        orig_addr: Option<IpAddr>,
+        resp_addr: Option<IpAddr>,
+        orig_port: Option<u16>,
+        resp_port: Option<u16>,
+    ) -> Result<bool> {
+        if let Some(ip_range) = &self.orig_addr {
+            if let Some(orig_addr) = orig_addr {
+                let end = if let Some(end) = &ip_range.end {
+                    orig_addr >= end.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+
+                let start = if let Some(start) = &ip_range.start {
+                    orig_addr < start.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+                if end || start {
+                    return Ok(false);
+                };
+            }
+        }
+        if let Some(ip_range) = &self.resp_addr {
+            if let Some(resp_addr) = resp_addr {
+                let end = if let Some(end) = &ip_range.end {
+                    resp_addr >= end.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+
+                let start = if let Some(start) = &ip_range.start {
+                    resp_addr < start.parse::<IpAddr>()?
+                } else {
+                    false
+                };
+                if end || start {
+                    return Ok(false);
+                };
+            }
+        }
+        if let Some(port_range) = &self.orig_port {
+            if let Some(orig_port) = orig_port {
+                let end = if let Some(end) = port_range.end {
+                    orig_port >= end
+                } else {
+                    false
+                };
+                let start = if let Some(start) = port_range.start {
+                    orig_port < start
+                } else {
+                    false
+                };
+                if end || start {
+                    return Ok(false);
+                };
+            }
+        }
+        if let Some(port_range) = &self.resp_port {
+            if let Some(resp_port) = resp_port {
+                let end = if let Some(end) = port_range.end {
+                    resp_port >= end
+                } else {
+                    false
+                };
+                let start = if let Some(start) = port_range.start {
+                    resp_port < start
+                } else {
+                    false
+                };
+                if end || start {
+                    return Ok(false);
+                };
+            }
+        }
+        Ok(true)
+    }
+}
 
 #[derive(SimpleObject, Debug)]
 struct ConnRawEvent {
@@ -136,7 +250,7 @@ impl NetworkQuery {
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: RawEventFilterInput,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -170,7 +284,7 @@ impl NetworkQuery {
     async fn dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: RawEventFilterInput,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -204,7 +318,7 @@ impl NetworkQuery {
     async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: RawEventFilterInput,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -238,7 +352,7 @@ impl NetworkQuery {
     async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: RawEventFilterInput,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
