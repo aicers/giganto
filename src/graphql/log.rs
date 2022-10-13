@@ -1,24 +1,52 @@
-use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilterInput};
+use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
+    graphql::{RawEventFilter, TimeRange},
     ingestion,
     storage::{Database, RawEventStore},
 };
 use async_graphql::{
     connection::{query, Connection},
-    Context, Object, Result, SimpleObject,
+    Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
+use std::{fmt::Debug, net::IpAddr};
 
-use std::fmt::Debug;
+#[derive(Default)]
+pub(super) struct LogQuery;
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject)]
+pub struct LogFilter {
+    time: Option<TimeRange>,
+    source: String,
+    kind: Option<String>,
+}
+
+impl RawEventFilter for LogFilter {
+    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+
+    fn check(
+        &self,
+        _orig_addr: Option<IpAddr>,
+        _resp_addr: Option<IpAddr>,
+        _orig_port: Option<u16>,
+        _resp_port: Option<u16>,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+}
 
 #[derive(SimpleObject, Debug)]
 struct LogRawEvent {
     timestamp: DateTime<Utc>,
     log: String,
 }
-
-#[derive(Default)]
-pub(super) struct LogQuery;
 
 impl FromKeyValue<ingestion::Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: ingestion::Log) -> Result<Self> {
@@ -34,7 +62,7 @@ impl LogQuery {
     async fn log_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: RawEventFilterInput,
+        filter: LogFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -78,7 +106,7 @@ impl LogQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogRawEvent, RawEventFilterInput};
+    use super::{LogFilter, LogRawEvent};
     use crate::ingestion::Log;
     use crate::storage::gen_key;
     use crate::{
@@ -103,7 +131,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 1),
@@ -116,10 +144,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -142,7 +166,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 3),
@@ -152,10 +176,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -182,7 +202,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: None,
                     end: Some(DateTime::<Utc>::from_utc(
@@ -192,10 +212,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -222,7 +238,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 1),
@@ -235,10 +251,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -261,7 +273,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 3),
@@ -271,10 +283,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -301,7 +309,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: None,
                     end: Some(DateTime::<Utc>::from_utc(
@@ -311,10 +319,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
@@ -337,7 +341,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 1),
@@ -350,10 +354,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             Some(base64::encode(
@@ -378,7 +378,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 2),
@@ -388,10 +388,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             Some(base64::encode(
@@ -416,7 +412,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: None,
                     end: Some(DateTime::<Utc>::from_utc(
@@ -426,10 +422,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             Some(base64::encode(
@@ -458,7 +450,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 1),
@@ -471,10 +463,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             Some(base64::encode(
                 b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
@@ -499,7 +487,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
                         NaiveDateTime::from_timestamp(0, 2),
@@ -509,10 +497,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             Some(base64::encode(
                 b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03",
@@ -537,7 +521,7 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: None,
                     end: Some(DateTime::<Utc>::from_utc(
@@ -547,10 +531,6 @@ mod tests {
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             Some(base64::encode(
                 b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
@@ -575,17 +555,13 @@ mod tests {
             &store,
             b"src1\x00kind1\x00",
             RawEventStore::log_iter,
-            &RawEventFilterInput {
+            &LogFilter {
                 time: Some(TimeRange {
                     start: None,
                     end: None,
                 }),
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
-                orig_addr: None,
-                resp_addr: None,
-                orig_port: None,
-                resp_port: None,
             },
             None,
             None,
