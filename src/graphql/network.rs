@@ -133,7 +133,6 @@ impl FromKeyValue<ingestion::RdpConn> for RdpRawEvent {
 
 #[Object]
 impl NetworkQuery {
-    #[allow(clippy::too_many_arguments)]
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -168,7 +167,6 @@ impl NetworkQuery {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -203,7 +201,6 @@ impl NetworkQuery {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -238,7 +235,6 @@ impl NetworkQuery {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
