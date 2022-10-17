@@ -120,6 +120,8 @@ pub struct RawEventStore<'db> {
     cf: &'db ColumnFamily,
 }
 
+// RocksDB must manage thread safety for `ColumnFamily`.
+// See rust-rocksdb/rust-rocksdb#407.
 unsafe impl<'db> Send for RawEventStore<'db> {}
 
 impl<'db> RawEventStore<'db> {
