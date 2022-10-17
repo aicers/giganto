@@ -13,7 +13,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - GraphQL API supports filtering with source name, kind name of log, time range,
   IP address range, port range.
 - Publish check protocol compatibility with connected Programs.
-- Publish support log record data request/response through QUIC.
+- Publish support log/period time series record data request/response through QUIC.
 - Add Packets Request GraphQL API.
 
 ### Changed

@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::graphql::network::NetworkFilter;
+use crate::publish::PubMessage;
 use crate::storage::{gen_key, Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -181,12 +182,35 @@ impl EventFilter for Log {
     }
 }
 
+impl PubMessage for Log {
+    fn message(&self, timestamp: i64) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(&Some((timestamp, &self.log)))?)
+    }
+    fn done() -> Result<Vec<u8>> {
+        Ok(bincode::serialize::<Option<(i64, Vec<u8>)>>(&None)?)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeriodicTimeSeries {
     kind: String,
     start: i64,
+    data: PeriodicTimeSeriesData,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeriodicTimeSeriesData {
     period: i64,
     data: Vec<f64>,
+}
+
+impl PubMessage for PeriodicTimeSeriesData {
+    fn message(&self, timestamp: i64) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(&Some((timestamp, &self.data)))?)
+    }
+    fn done() -> Result<Vec<u8>> {
+        Ok(bincode::serialize::<Option<(i64, Vec<f64>)>>(&None)?)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -485,8 +509,8 @@ async fn handle_data(
                         args.push(periodic_time_series.kind.as_bytes().to_vec());
                         args.push(periodic_time_series.start.to_be_bytes().to_vec());
                         raw_event = bincode::serialize(&(
-                            periodic_time_series.period,
-                            periodic_time_series.data,
+                            periodic_time_series.data.period,
+                            periodic_time_series.data.data,
                         ))?;
                     }
                     _ => args.push(timestamp.to_be_bytes().to_vec()),
