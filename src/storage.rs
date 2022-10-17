@@ -210,6 +210,20 @@ impl<'db> RawEventStore<'db> {
         )
     }
 
+    pub fn period_time_iter(
+        &self,
+        from: &[u8],
+        to: &[u8],
+        direction: Direction,
+    ) -> Iter<'db, ingestion::PeriodicTimeSeriesData> {
+        Iter::new(
+            self.db
+                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
+            to.to_vec(),
+            direction,
+        )
+    }
+
     /// Returns the all key values ​​of column family.
     pub fn all_keys(&self) -> Vec<Vec<u8>> {
         let mut keys = Vec::new();

@@ -3,16 +3,27 @@ use crate::ingestion::server_handshake;
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{TimeZone, Utc};
 use futures_util::StreamExt;
+use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::{mem, net::SocketAddr, sync::Arc};
 use tracing::{error, info};
 
-const LOG_MESSAGE_CODE: u32 = 0x00;
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[repr(u32)]
+enum MessageCode {
+    Log = 0,
+    PeriodicTimeSeries = 1,
+}
+
+pub trait PubMessage {
+    fn message(&self, timestamp: i64) -> Result<Vec<u8>>;
+    fn done() -> Result<Vec<u8>>;
+}
 
 pub struct Server {
     server_config: ServerConfig,
@@ -100,32 +111,28 @@ async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
 ) -> Result<()> {
-    let msg = handle_request_message(&mut recv).await?;
-    let mut key_prefix = Vec::with_capacity(msg.source.len() + msg.kind.len() + 2);
-    key_prefix.extend_from_slice(msg.source.as_bytes());
-    key_prefix.push(0);
-    key_prefix.extend_from_slice(msg.kind.as_bytes());
-    key_prefix.push(0);
-
-    let mut iter = RawEventStore::log_iter(
-        &db.log_store().context("Failed to open log storage")?,
-        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
-        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
-        Direction::Forward,
-    );
-
-    let mut size = msg.count;
-    for item in &mut iter {
-        let (key, l) = item.context("Failed to read Database")?;
-        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        handle_response_message(&mut send, &Some((timestamp, l.log))).await?;
-        size -= 1;
-        if size == 0 {
-            break;
+    let (msg_type, msg) = handle_request_message(&mut recv).await?;
+    match msg_type {
+        MessageCode::Log => {
+            process_response_message(
+                &mut send,
+                db.log_store().context("Failed to open log store")?,
+                RawEventStore::log_iter,
+                msg,
+            )
+            .await?;
+        }
+        MessageCode::PeriodicTimeSeries => {
+            process_response_message(
+                &mut send,
+                db.periodic_time_series_store()
+                    .context("Failed to open periodic time series storage")?,
+                RawEventStore::period_time_iter,
+                msg,
+            )
+            .await?;
         }
     }
-    handle_response_message(&mut send, &None).await?;
-    send.finish().await?;
     Ok(())
 }
 
@@ -160,15 +167,13 @@ fn config_server(
     Ok(server_config)
 }
 
-async fn handle_request_message(recv: &mut RecvStream) -> Result<Message> {
+async fn handle_request_message(recv: &mut RecvStream) -> Result<(MessageCode, Message)> {
     let mut buf = [0; mem::size_of::<u32>()];
     recv.read_exact(&mut buf)
         .await
         .map_err(|e| anyhow!("Failed to read message code: {}", e))?;
 
-    if LOG_MESSAGE_CODE != u32::from_le_bytes(buf) {
-        bail!("Unknown message type");
-    }
+    let msg_type = MessageCode::try_from(u32::from_le_bytes(buf)).context("unknown record type")?;
 
     let mut frame_length = [0; mem::size_of::<u32>()];
     recv.read_exact(&mut frame_length)
@@ -183,14 +188,10 @@ async fn handle_request_message(recv: &mut RecvStream) -> Result<Message> {
 
     let msg = bincode::deserialize::<Message>(&rest_buf)
         .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
-    Ok(msg)
+    Ok((msg_type, msg))
 }
 
-async fn handle_response_message(
-    send: &mut SendStream,
-    resp_data: &Option<(i64, Vec<u8>)>,
-) -> Result<()> {
-    let record = bincode::serialize(resp_data)?;
+async fn handle_response_message(send: &mut SendStream, record: Vec<u8>) -> Result<()> {
     let record_len = u32::try_from(record.len())?.to_le_bytes();
     let mut send_buf = Vec::with_capacity(record_len.len() + record.len());
     send_buf.extend_from_slice(&record_len);
@@ -198,5 +199,43 @@ async fn handle_response_message(
     send.write_all(&send_buf)
         .await
         .map_err(|e| anyhow!("Failed to write record: {}", e))?;
+    Ok(())
+}
+
+async fn process_response_message<'c, I, T>(
+    send: &mut SendStream,
+    store: RawEventStore<'c>,
+    iter_builder: fn(&RawEventStore<'c>, &[u8], &[u8], Direction) -> I,
+    msg: Message,
+) -> Result<()>
+where
+    I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + 'c,
+    T: PubMessage,
+{
+    let mut key_prefix = Vec::with_capacity(msg.source.len() + msg.kind.len() + 2);
+    key_prefix.extend_from_slice(msg.source.as_bytes());
+    key_prefix.push(0);
+    key_prefix.extend_from_slice(msg.kind.as_bytes());
+    key_prefix.push(0);
+
+    let mut iter = iter_builder(
+        &store,
+        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
+        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
+        Direction::Forward,
+    );
+
+    let mut size = msg.count;
+    for item in &mut iter {
+        let (key, val) = item.context("Failed to read Database")?;
+        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        handle_response_message(send, val.message(timestamp)?).await?;
+        size -= 1;
+        if size == 0 {
+            break;
+        }
+    }
+    handle_response_message(send, T::done()?).await?;
+    send.finish().await?;
     Ok(())
 }
