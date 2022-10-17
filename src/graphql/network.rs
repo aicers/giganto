@@ -1,7 +1,7 @@
 use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion,
+    ingestion::{Conn, DnsConn, HttpConn, RdpConn},
     storage::{Database, RawEventStore},
 };
 use async_graphql::{
@@ -178,72 +178,48 @@ struct RdpRawEvent {
     cookie: String,
 }
 
-impl FromKeyValue<ingestion::Conn> for ConnRawEvent {
-    fn from_key_value(key: &[u8], c: ingestion::Conn) -> Result<Self> {
-        let timestamp = get_timestamp(key)?;
-        Ok(ConnRawEvent {
-            timestamp,
-            orig_addr: c.orig_addr.to_string(),
-            resp_addr: c.resp_addr.to_string(),
-            orig_port: c.orig_port,
-            resp_port: c.resp_port,
-            proto: c.proto,
-            duration: c.duration,
-            orig_bytes: c.orig_bytes,
-            resp_bytes: c.resp_bytes,
-            orig_pkts: c.orig_pkts,
-            resp_pkts: c.resp_pkts,
-        })
-    }
+macro_rules! from_key_value {
+    ($to:ty, $from:ty, $($fields:ident),*) => {
+        impl FromKeyValue<$from> for $to {
+            fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
+                let timestamp = get_timestamp(key)?;
+                Ok(Self {
+                    timestamp,
+                    orig_addr: val.orig_addr.to_string(),
+                    resp_addr: val.resp_addr.to_string(),
+                    orig_port: val.orig_port,
+                    resp_port: val.resp_port,
+                    $(
+                        $fields: val.$fields,
+                    )*
+                })
+            }
+        }
+    };
 }
 
-impl FromKeyValue<ingestion::DnsConn> for DnsRawEvent {
-    fn from_key_value(key: &[u8], d: ingestion::DnsConn) -> Result<Self> {
-        let timestamp = get_timestamp(key)?;
-        Ok(DnsRawEvent {
-            timestamp,
-            orig_addr: d.orig_addr.to_string(),
-            resp_addr: d.resp_addr.to_string(),
-            orig_port: d.orig_port,
-            resp_port: d.resp_port,
-            proto: d.proto,
-            query: d.query,
-        })
-    }
-}
-
-impl FromKeyValue<ingestion::HttpConn> for HttpRawEvent {
-    fn from_key_value(key: &[u8], h: ingestion::HttpConn) -> Result<Self> {
-        let timestamp = get_timestamp(key)?;
-        Ok(HttpRawEvent {
-            timestamp,
-            orig_addr: h.orig_addr.to_string(),
-            resp_addr: h.resp_addr.to_string(),
-            orig_port: h.orig_port,
-            resp_port: h.resp_port,
-            method: h.method,
-            host: h.host,
-            uri: h.uri,
-            referrer: h.referrer,
-            user_agent: h.user_agent,
-            status_code: h.status_code,
-        })
-    }
-}
-
-impl FromKeyValue<ingestion::RdpConn> for RdpRawEvent {
-    fn from_key_value(key: &[u8], r: ingestion::RdpConn) -> Result<Self> {
-        let timestamp = get_timestamp(key)?;
-        Ok(RdpRawEvent {
-            timestamp,
-            orig_addr: r.orig_addr.to_string(),
-            resp_addr: r.resp_addr.to_string(),
-            orig_port: r.orig_port,
-            resp_port: r.resp_port,
-            cookie: r.cookie,
-        })
-    }
-}
+from_key_value!(
+    ConnRawEvent,
+    Conn,
+    proto,
+    duration,
+    orig_bytes,
+    resp_bytes,
+    orig_pkts,
+    resp_pkts
+);
+from_key_value!(DnsRawEvent, DnsConn, proto, query);
+from_key_value!(
+    HttpRawEvent,
+    HttpConn,
+    method,
+    host,
+    uri,
+    referrer,
+    user_agent,
+    status_code
+);
+from_key_value!(RdpRawEvent, RdpConn, cookie);
 
 #[Object]
 impl NetworkQuery {
