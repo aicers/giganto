@@ -136,7 +136,7 @@ impl<'db> RawEventStore<'db> {
     }
 
     pub fn flush(&self) -> Result<()> {
-        self.db.flush_cf(self.cf)?;
+        self.db.flush_wal(true)?;
         Ok(())
     }
 
