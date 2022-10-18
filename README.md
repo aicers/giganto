@@ -39,22 +39,6 @@ certificate/key from the tests folder.)
 cargo run -- tests/config.toml
 ```
 
-To test one-time transmission for all record types, execute as follows.
-
-```sh
-cargo test send
-```
-
-To test one-time transmission for specific record types, execute as follows.
-
-```sh
-cargo test send_conn_info
-cargo test send_dns_info
-cargo test send_log_info
-cargo test send_http_info
-cargo test send_rdp_info
-```
-
 To test ack reception after multi-transmission, execute as follows.
 
 ```sh
