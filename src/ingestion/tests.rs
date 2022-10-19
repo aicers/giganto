@@ -467,3 +467,58 @@ async fn periodic_time_series() {
     client.conn.close(0u32.into(), b"periodic_time_series_done");
     client.endpoint.wait_idle().await;
 }
+
+#[tokio::test]
+async fn ack_info() {
+    const RECORD_TYPE_LOG: u32 = 0x02;
+
+    type Log = (String, Vec<u8>);
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path()).unwrap();
+    tokio::spawn(server().run(db));
+
+    let client = TestClient::new().await;
+    let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let mut log_data: Vec<u8> = Vec::new();
+    let log_body: Log = (String::from("Hello Server I am Log"), vec![0; 10]);
+    let mut ser_log_body = bincode::serialize(&log_body).unwrap();
+
+    log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());
+    log_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
+    log_data.append(&mut (ser_log_body.len() as u32).to_le_bytes().to_vec());
+    log_data.append(&mut ser_log_body);
+
+    send_log
+        .write_all(&log_data)
+        .await
+        .expect("failed to send request");
+
+    let mut last_timestamp: i64 = 0;
+    for _ in 0..127 {
+        let mut log_data: Vec<u8> = Vec::new();
+        let log_body: Log = (String::from("Hello Server I am Log"), vec![0; 10]);
+        let mut ser_log_body = bincode::serialize(&log_body).unwrap();
+        last_timestamp = Utc::now().timestamp_nanos();
+
+        log_data.append(&mut last_timestamp.to_le_bytes().to_vec());
+        log_data.append(&mut (ser_log_body.len() as u32).to_le_bytes().to_vec());
+        log_data.append(&mut ser_log_body);
+
+        send_log
+            .write_all(&log_data)
+            .await
+            .expect("failed to send request");
+    }
+
+    let mut ts_buf = [0; std::mem::size_of::<u64>()];
+    recv_log.read_exact(&mut ts_buf).await.unwrap();
+    let recv_timestamp = i64::from_be_bytes(ts_buf);
+
+    send_log.finish().await.expect("failed to shutdown stream");
+    client.conn.close(0u32.into(), b"log_done");
+    client.endpoint.wait_idle().await;
+    assert_eq!(last_timestamp, recv_timestamp);
+}
