@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use crate::graphql::network::NetworkFilter;
 use crate::storage::{gen_key, Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};

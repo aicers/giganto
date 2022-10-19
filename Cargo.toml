@@ -29,5 +29,6 @@ warp = { version = "0.3", features = ["tls"] }
 x509-parser = "0.14"
 
 [dev-dependencies]
-url = "2"
+lazy_static = "1"
 tempfile = "3"
+url = "2"
