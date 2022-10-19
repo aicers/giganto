@@ -52,7 +52,7 @@ impl FromKeyValue<ingestion::Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: ingestion::Log) -> Result<Self> {
         Ok(LogRawEvent {
             timestamp: get_timestamp(key)?,
-            log: base64::encode(l.log),
+            log: base64::encode(&l.log),
         })
     }
 }

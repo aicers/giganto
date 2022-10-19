@@ -20,6 +20,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - GraphQL API now accepts `filter`, which includes the source name, time range,
   IP address ranges, and port ranges.
+- GraphQL API returns readable log data
 
 ### Fixed
 
