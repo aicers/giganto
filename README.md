@@ -39,12 +39,6 @@ certificate/key from the tests folder.)
 cargo run -- tests/config.toml
 ```
 
-To test ack reception after multi-transmission, execute as follows.
-
-```sh
-cargo test ack_info
-```
-
 ## License
 
 Copyright 2022 EINSIS, Inc.

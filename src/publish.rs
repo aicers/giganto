@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingestion::server_handshake;
 use crate::storage::{
