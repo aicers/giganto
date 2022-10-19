@@ -15,7 +15,7 @@ use async_graphql::{
     EmptyMutation, EmptySubscription, InputObject, MergedObject, OutputType, Result,
 };
 use chrono::{DateTime, TimeZone, Utc};
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use std::net::IpAddr;
 
 pub const TIMESTAMP_SIZE: usize = 8;
@@ -59,10 +59,9 @@ pub fn schema(database: Database) -> Schema {
 const MAXIMUM_PAGE_SIZE: usize = 100;
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-fn load_connection<'c, N, I, T>(
-    store: &RawEventStore<'c>,
+fn load_connection<'c, N, T>(
+    store: &RawEventStore<'c, T>,
     key_prefix: &[u8],
-    iter_builder: fn(&RawEventStore<'c>, &[u8], &[u8], Direction) -> I,
     filter: &impl RawEventFilter,
     after: Option<String>,
     before: Option<String>,
@@ -71,8 +70,7 @@ fn load_connection<'c, N, I, T>(
 ) -> Result<Connection<String, N>>
 where
     N: FromKeyValue<T> + OutputType,
-    I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + 'c,
-    T: EventFilter,
+    T: DeserializeOwned + EventFilter,
 {
     let (records, has_previous, has_next) = if let Some(before) = before {
         if after.is_some() {
@@ -89,13 +87,13 @@ where
         if cursor.cmp(&time) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
         }
-        let mut iter = iter_builder(
-            store,
-            &cursor,
-            &lower_closed_bound_key(key_prefix, start),
-            Direction::Reverse,
-        )
-        .peekable();
+        let mut iter = store
+            .iter(
+                &cursor,
+                &lower_closed_bound_key(key_prefix, start),
+                Direction::Reverse,
+            )
+            .peekable();
         if let Some(Ok((key, _))) = iter.peek() {
             if key.as_ref() == cursor {
                 iter.next();
@@ -119,13 +117,13 @@ where
         if cursor.cmp(&time) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
         }
-        let mut iter = iter_builder(
-            store,
-            &cursor,
-            &upper_open_bound_key(key_prefix, end),
-            Direction::Forward,
-        )
-        .peekable();
+        let mut iter = store
+            .iter(
+                &cursor,
+                &upper_open_bound_key(key_prefix, end),
+                Direction::Forward,
+            )
+            .peekable();
         if let Some(Ok((key, _))) = iter.peek() {
             if key.as_ref() == cursor {
                 iter.next();
@@ -140,8 +138,7 @@ where
         let (start, end) = filter.time();
 
         let last = last.min(MAXIMUM_PAGE_SIZE);
-        let iter = iter_builder(
-            store,
+        let iter = store.iter(
             &upper_open_bound_key(key_prefix, end),
             &lower_closed_bound_key(key_prefix, start),
             Direction::Reverse,
@@ -153,8 +150,7 @@ where
         let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let iter = iter_builder(
-            store,
+        let iter = store.iter(
             &lower_closed_bound_key(key_prefix, start),
             &upper_open_bound_key(key_prefix, end),
             Direction::Forward,

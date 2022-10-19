@@ -2,7 +2,7 @@ use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     ingestion::{Conn, DnsConn, HttpConn, RdpConn},
-    storage::{Database, RawEventStore},
+    storage::Database,
 };
 use async_graphql::{
     connection::{query, Connection},
@@ -244,16 +244,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
-                    &store,
-                    &key_prefix,
-                    RawEventStore::conn_iter,
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
-                )
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
             },
         )
         .await
@@ -278,16 +269,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
-                    &store,
-                    &key_prefix,
-                    RawEventStore::dns_iter,
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
-                )
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
             },
         )
         .await
@@ -312,16 +294,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
-                    &store,
-                    &key_prefix,
-                    RawEventStore::http_iter,
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
-                )
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
             },
         )
         .await
@@ -346,16 +319,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
-                    &store,
-                    &key_prefix,
-                    RawEventStore::rdp_iter,
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
-                )
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
             },
         )
         .await
@@ -444,7 +408,7 @@ mod tests {
         );
     }
 
-    fn insert_conn_raw_event(store: &RawEventStore, source: &str, timestamp: i64) {
+    fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
         key.push(0);

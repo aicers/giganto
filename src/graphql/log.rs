@@ -2,7 +2,7 @@ use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     ingestion,
-    storage::{Database, RawEventStore},
+    storage::Database,
 };
 use async_graphql::{
     connection::{query, Connection},
@@ -88,16 +88,7 @@ impl LogQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(
-                    &store,
-                    &key_prefix,
-                    RawEventStore::log_iter,
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
-                )
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
             },
         )
         .await
@@ -127,10 +118,9 @@ mod tests {
         insert_raw_event(&store, "src1", 5, "kind1", b"log5");
 
         // backward traversal in `start..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -162,10 +152,9 @@ mod tests {
         );
 
         // backward traversal in `start..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -198,10 +187,9 @@ mod tests {
         );
 
         // backward traversal in `..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -234,10 +222,9 @@ mod tests {
         );
 
         // forward traversal in `start..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -269,10 +256,9 @@ mod tests {
         );
 
         // forward traversal `start..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -305,10 +291,9 @@ mod tests {
         );
 
         // forward traversal `..end`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -337,10 +322,9 @@ mod tests {
         );
 
         // backward traversal in `start..end` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -374,10 +358,9 @@ mod tests {
         );
 
         // backward traversal in `start..` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -408,10 +391,9 @@ mod tests {
         );
 
         // backward traversal in `..end` and `before cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -446,10 +428,9 @@ mod tests {
         );
 
         // forward traversal in `start..end` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -483,10 +464,9 @@ mod tests {
         );
 
         // forward traversal `start..` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -517,10 +497,9 @@ mod tests {
         );
 
         // forward traversal `..end` and `after cursor`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -551,10 +530,9 @@ mod tests {
         );
 
         // forward traversal `..`
-        let connection = super::load_connection::<LogRawEvent, _, _>(
+        let connection = super::load_connection::<LogRawEvent, _>(
             &store,
             b"src1\x00kind1\x00",
-            RawEventStore::log_iter,
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -626,7 +604,7 @@ mod tests {
     }
 
     fn insert_raw_event(
-        store: &RawEventStore,
+        store: &RawEventStore<Log>,
         source: &str,
         timestamp: i64,
         kind: &str,

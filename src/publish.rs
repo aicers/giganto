@@ -12,6 +12,7 @@ use futures_util::StreamExt;
 use num_enum::TryFromPrimitive;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{mem, net::SocketAddr, sync::Arc};
 use tracing::{error, info};
@@ -120,7 +121,6 @@ async fn handle_request(
             process_response_message(
                 &mut send,
                 db.log_store().context("Failed to open log store")?,
-                RawEventStore::log_iter,
                 msg,
             )
             .await?;
@@ -130,7 +130,6 @@ async fn handle_request(
                 &mut send,
                 db.periodic_time_series_store()
                     .context("Failed to open periodic time series storage")?,
-                RawEventStore::period_time_iter,
                 msg,
             )
             .await?;
@@ -205,15 +204,13 @@ async fn handle_response_message(send: &mut SendStream, record: Vec<u8>) -> Resu
     Ok(())
 }
 
-async fn process_response_message<'c, I, T>(
+async fn process_response_message<'c, T>(
     send: &mut SendStream,
-    store: RawEventStore<'c>,
-    iter_builder: fn(&RawEventStore<'c>, &[u8], &[u8], Direction) -> I,
+    store: RawEventStore<'c, T>,
     msg: Message,
 ) -> Result<()>
 where
-    I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + 'c,
-    T: PubMessage,
+    T: DeserializeOwned + PubMessage,
 {
     let mut key_prefix = Vec::with_capacity(msg.source.len() + msg.kind.len() + 2);
     key_prefix.extend_from_slice(msg.source.as_bytes());
@@ -221,8 +218,7 @@ where
     key_prefix.extend_from_slice(msg.kind.as_bytes());
     key_prefix.push(0);
 
-    let mut iter = iter_builder(
-        &store,
+    let mut iter = store.iter(
         &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
         &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
         Direction::Forward,

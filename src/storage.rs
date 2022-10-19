@@ -37,72 +37,74 @@ impl Database {
     }
 
     /// Returns the raw event store for all type. (exclude log type)
-    pub fn retain_period_store(&self) -> Result<Vec<RawEventStore>> {
-        let mut stores: Vec<RawEventStore> = Vec::new();
+    pub fn retain_period_store(&self) -> Result<Vec<RawEventStore<()>>> {
+        let mut stores: Vec<RawEventStore<()>> = Vec::new();
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
             if !store.eq("log") {
                 let cf = self
                     .db
                     .cf_handle(store)
                     .context("cannot access column family")?;
-                stores.push(RawEventStore { db: &self.db, cf });
+                stores.push(RawEventStore::new(&self.db, cf));
             }
         }
         Ok(stores)
     }
 
     /// Returns the raw event store for connections.
-    pub fn conn_store(&self) -> Result<RawEventStore> {
+    pub fn conn_store(&self) -> Result<RawEventStore<ingestion::Conn>> {
         let cf = self
             .db
             .cf_handle("conn")
             .context("cannot access conn column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for dns.
-    pub fn dns_store(&self) -> Result<RawEventStore> {
+    pub fn dns_store(&self) -> Result<RawEventStore<ingestion::DnsConn>> {
         let cf = self
             .db
             .cf_handle("dns")
             .context("cannot access dns column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for log.
-    pub fn log_store(&self) -> Result<RawEventStore> {
+    pub fn log_store(&self) -> Result<RawEventStore<ingestion::Log>> {
         let cf = self
             .db
             .cf_handle("log")
             .context("cannot access log column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for http.
-    pub fn http_store(&self) -> Result<RawEventStore> {
+    pub fn http_store(&self) -> Result<RawEventStore<ingestion::HttpConn>> {
         let cf = self
             .db
             .cf_handle("http")
             .context("cannot access http column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for rdp.
-    pub fn rdp_store(&self) -> Result<RawEventStore> {
+    pub fn rdp_store(&self) -> Result<RawEventStore<ingestion::RdpConn>> {
         let cf = self
             .db
             .cf_handle("rdp")
             .context("cannot access rdp column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for periodic time series.
-    pub fn periodic_time_series_store(&self) -> Result<RawEventStore> {
+    pub fn periodic_time_series_store(
+        &self,
+    ) -> Result<RawEventStore<ingestion::PeriodicTimeSeriesData>> {
         let cf = self
             .db
             .cf_handle("periodic time series")
             .context("cannot access periodic time series column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for connection sources
@@ -115,16 +117,25 @@ impl Database {
     }
 }
 
-pub struct RawEventStore<'db> {
+pub struct RawEventStore<'db, T> {
     db: &'db DB,
     cf: &'db ColumnFamily,
+    phantom: PhantomData<T>,
 }
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
-unsafe impl<'db> Send for RawEventStore<'db> {}
+unsafe impl<'db, T> Send for RawEventStore<'db, T> {}
 
-impl<'db> RawEventStore<'db> {
+impl<'db, T> RawEventStore<'db, T> {
+    fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<T> {
+        RawEventStore {
+            db,
+            cf,
+            phantom: PhantomData,
+        }
+    }
+
     pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
         self.db.put_cf(self.cf, key, raw_event)?;
         Ok(())
@@ -139,83 +150,10 @@ impl<'db> RawEventStore<'db> {
         self.db.flush_wal(true)?;
         Ok(())
     }
+}
 
-    pub fn conn_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::Conn> {
-        Iter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
-    }
-
-    pub fn dns_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::DnsConn> {
-        Iter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
-    }
-
-    pub fn http_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::HttpConn> {
-        Iter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
-    }
-
-    pub fn log_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::Log> {
-        Iter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
-    }
-
-    pub fn rdp_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::RdpConn> {
-        Iter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
-    }
-
-    pub fn period_time_iter(
-        &self,
-        from: &[u8],
-        to: &[u8],
-        direction: Direction,
-    ) -> Iter<'db, ingestion::PeriodicTimeSeriesData> {
+impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
+    pub fn iter(&self, from: &[u8], to: &[u8], direction: Direction) -> Iter<'db, T> {
         Iter::new(
             self.db
                 .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
