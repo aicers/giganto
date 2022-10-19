@@ -270,7 +270,7 @@ impl Server {
                         for source_key in keys {
                             let timestamp = Utc::now();
                             sources.insert(source_key.clone(), timestamp);
-                            if source_store.append(source_key.as_bytes(), &timestamp.timestamp_nanos().to_be_bytes()).is_err(){
+                            if source_store.insert(&source_key, timestamp).is_err(){
                                 error!("Failed to append Source store");
                             }
                         }
@@ -278,14 +278,14 @@ impl Server {
 
                     Some((source_key,timestamp_val,is_close)) = rx.recv() => {
                         if is_close{
-                            if source_store.append(source_key.as_bytes(), &timestamp_val.timestamp_nanos().to_be_bytes()).is_err(){
+                            if source_store.insert(&source_key, timestamp_val).is_err() {
                                 error!("Failed to append Source store");
                             }
                             SOURCES.lock().await.remove(&source_key);
                             PACKET_SOURCES.lock().await.remove(&source_key);
                         }else{
                             SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
-                            if source_store.append(source_key.as_bytes(), &timestamp_val.timestamp_nanos().to_be_bytes()).is_err(){
+                            if source_store.insert(&source_key, timestamp_val).is_err() {
                                 error!("Failed to append Source store");
                             }
                         }
