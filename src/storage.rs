@@ -105,13 +105,13 @@ impl Database {
         Ok(RawEventStore { db: &self.db, cf })
     }
 
-    /// Returns the raw event store for connection sources
-    pub fn sources_store(&self) -> Result<RawEventStore> {
+    /// Returns the store for connection sources
+    pub fn sources_store(&self) -> Result<SourceStore> {
         let cf = self
             .db
             .cf_handle("sources")
             .context("cannot access sources column family")?;
-        Ok(RawEventStore { db: &self.db, cf })
+        Ok(SourceStore { db: &self.db, cf })
     }
 }
 
@@ -223,20 +223,40 @@ impl<'db> RawEventStore<'db> {
             direction,
         )
     }
+}
 
-    /// Returns the all key values ​​of column family.
-    pub fn all_keys(&self) -> Vec<Vec<u8>> {
-        let mut keys = Vec::new();
+pub struct SourceStore<'db> {
+    db: &'db DB,
+    cf: &'db ColumnFamily,
+}
+
+impl<'db> SourceStore<'db> {
+    /// Inserts a source name and its last active time.
+    ///
+    /// If the source already exists, its last active time is updated.
+    pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
+        self.db
+            .put_cf(self.cf, name, last_active.timestamp_nanos().to_be_bytes())?;
+        Ok(())
+    }
+
+    /// Returns the names of all sources.
+    fn names(&self) -> Vec<Vec<u8>> {
+        let mut names = Vec::new();
         let iter = self
             .db
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
             .flatten();
         for (key, _val) in iter {
-            keys.push(key.to_vec());
+            names.push(key.to_vec());
         }
-        keys
+        names
     }
 }
+
+// RocksDB must manage thread safety for `ColumnFamily`.
+// See rust-rocksdb/rust-rocksdb#407.
+unsafe impl<'db> Send for SourceStore<'db> {}
 
 /// Creates a key corresponding to the given `prefix` and `time`.
 pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
@@ -357,7 +377,7 @@ pub async fn retain_periodically(
         itv.tick().await;
         let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
         let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
-        let sources = db.sources_store()?.all_keys();
+        let sources = db.sources_store()?.names();
         let all_store = db.retain_period_store()?;
         let log_store = db.log_store()?;
 
