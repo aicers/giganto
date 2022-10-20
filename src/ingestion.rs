@@ -38,7 +38,7 @@ const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const COMPATIBLE_MIN_VERSION: &str = "0.2.0";
-const COMPATIBLE_MAX_VERSION: &str = "0.3.0";
+const COMPATIBLE_MAX_VERSION: &str = "0.4.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
