@@ -99,7 +99,6 @@ impl LogQuery {
 mod tests {
     use super::{LogFilter, LogRawEvent};
     use crate::ingestion::Log;
-    use crate::storage::gen_key;
     use crate::{
         graphql::{TestSchema, TimeRange},
         storage::RawEventStore,
@@ -610,15 +609,17 @@ mod tests {
         kind: &str,
         body: &[u8],
     ) {
-        let mut args: Vec<Vec<u8>> = Vec::new();
-        args.push(source.as_bytes().to_vec());
-        args.push(kind.as_bytes().to_vec());
-        args.push(timestamp.to_be_bytes().to_vec());
+        let mut key: Vec<u8> = Vec::new();
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend_from_slice(kind.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&timestamp.to_be_bytes());
         let log_body = Log {
             kind: kind.to_string(),
             log: body.to_vec(),
         };
         let value = bincode::serialize(&log_body).unwrap();
-        store.append(&gen_key(args), &value).unwrap();
+        store.append(&key, &value).unwrap();
     }
 }

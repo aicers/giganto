@@ -290,16 +290,6 @@ where
     }
 }
 
-pub fn gen_key(args: Vec<Vec<u8>>) -> Vec<u8> {
-    let mut key: Vec<u8> = Vec::new();
-    for arg in args {
-        key.extend_from_slice(&arg);
-        key.push(0x00);
-    }
-    key.pop();
-    key
-}
-
 pub async fn retain_periodically(
     duration: Duration,
     retention_period: Duration,

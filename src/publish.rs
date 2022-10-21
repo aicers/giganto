@@ -2,11 +2,11 @@
 mod tests;
 
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::ingestion::server_handshake;
+use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use futures_util::StreamExt;
 use num_enum::TryFromPrimitive;
@@ -14,8 +14,11 @@ use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::{mem, net::SocketAddr, sync::Arc};
+use std::{mem, net::SocketAddr};
 use tracing::{error, info};
+
+const PUBLISH_COMPATIBLE_MIN_VERSION: &str = "0.2.0";
+const PUBLISH_COMPATIBLE_MAX_VERSION: &str = "0.4.0";
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
@@ -84,7 +87,25 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
         ..
     } = conn.await?;
 
-    server_handshake(&connection, &mut bi_streams).await?;
+    if let Some(stream) = bi_streams.next().await {
+        let (mut send, mut recv) = stream?;
+        if let Err(e) = server_handshake(
+            &mut send,
+            &mut recv,
+            PUBLISH_COMPATIBLE_MIN_VERSION,
+            PUBLISH_COMPATIBLE_MAX_VERSION,
+        )
+        .await
+        {
+            let err = format!("Handshake fail: {}", e);
+            send.finish().await?;
+            connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
+            bail!(err);
+        }
+        send.finish().await?;
+    }
+
+    let _source = certificate_info(&connection)?;
 
     async {
         while let Some(stream) = bi_streams.next().await {
@@ -136,37 +157,6 @@ async fn handle_request(
         }
     }
     Ok(())
-}
-
-fn config_server(
-    certs: Vec<Certificate>,
-    key: PrivateKey,
-    files: Vec<Vec<u8>>,
-) -> Result<ServerConfig> {
-    let mut client_auth_roots = rustls::RootCertStore::empty();
-    for file in files {
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_cert.get(0) {
-            client_auth_roots.add(cert)?;
-        }
-    }
-    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots);
-    let server_crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_client_cert_verifier(client_auth)
-        .with_single_cert(certs, key)?;
-
-    let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
-
-    Arc::get_mut(&mut server_config.transport)
-        .unwrap()
-        .max_concurrent_uni_streams(0_u8.into());
-
-    Ok(server_config)
 }
 
 async fn handle_request_message(recv: &mut RecvStream) -> Result<(MessageCode, Message)> {
