@@ -1,6 +1,7 @@
 mod graphql;
 mod ingestion;
 mod publish;
+mod server;
 mod settings;
 mod storage;
 mod web;

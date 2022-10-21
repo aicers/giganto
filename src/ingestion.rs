@@ -3,17 +3,17 @@ mod tests;
 
 use crate::graphql::network::NetworkFilter;
 use crate::publish::PubMessage;
-use crate::storage::{gen_key, Database, RawEventStore};
+use crate::server::{certificate_info, config_server, server_handshake};
+use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
-use quinn::{Connection, Endpoint, IncomingBiStreams, RecvStream, SendStream, ServerConfig};
+use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::Ordering::{Equal, Greater, Less},
     collections::HashMap,
     fmt::Debug,
     mem,
@@ -30,15 +30,14 @@ use tokio::{
     task, time,
 };
 use tracing::{error, info};
-use x509_parser::nom::Parser;
 
 const ACK_ROTATION_CNT: u8 = 128;
 const ACK_INTERVAL_TIME: u64 = 60 * 60;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const COMPATIBLE_MIN_VERSION: &str = "0.2.0";
-const COMPATIBLE_MAX_VERSION: &str = "0.4.0";
+const INGESTION_COMPATIBLE_MIN_VERSION: &str = "0.2.0";
+const INGESTION_COMPATIBLE_MAX_VERSION: &str = "0.4.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
@@ -252,48 +251,9 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
-        let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
-        itv.reset();
-        let (tx, mut rx): (Sender<Sources>, Receiver<Sources>) = channel(100);
-
+        let (tx, rx): (Sender<Sources>, Receiver<Sources>) = channel(100);
         let source_db = db.clone();
-        task::spawn(async move {
-            let source_store = source_db
-                .sources_store()
-                .expect("Failed to open source store");
-            loop {
-                select! {
-                    _ = itv.tick() => {
-                        let mut sources = SOURCES.lock().await;
-                        let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
-
-                        for source_key in keys {
-                            let timestamp = Utc::now();
-                            sources.insert(source_key.clone(), timestamp);
-                            if source_store.insert(&source_key, timestamp).is_err(){
-                                error!("Failed to append Source store");
-                            }
-                        }
-                    }
-
-                    Some((source_key,timestamp_val,is_close)) = rx.recv() => {
-                        if is_close{
-                            if source_store.insert(&source_key, timestamp_val).is_err() {
-                                error!("Failed to append Source store");
-                            }
-                            SOURCES.lock().await.remove(&source_key);
-                            PACKET_SOURCES.lock().await.remove(&source_key);
-                        }else{
-                            SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
-                            if source_store.insert(&source_key, timestamp_val).is_err() {
-                                error!("Failed to append Source store");
-                            }
-                        }
-
-                    }
-                }
-            }
-        });
+        task::spawn(check_sources_conn(source_db, rx));
 
         while let Some(conn) = incoming.next().await {
             let sender = tx.clone();
@@ -318,31 +278,25 @@ async fn handle_connection(
         ..
     } = conn.await?;
 
-    server_handshake(&connection, &mut bi_streams).await?;
-
-    let mut source = String::new();
-    if let Some(conn_info) = connection.peer_identity() {
-        if let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() {
-            if let Some(cert) = cert_info.get(0) {
-                let mut parser = x509_parser::certificate::X509CertificateParser::new()
-                    .with_deep_parse_extensions(false);
-                let res = parser.parse(cert.as_ref());
-                match res {
-                    Ok((_, x509)) => {
-                        let issuer = x509
-                            .issuer()
-                            .iter_common_name()
-                            .next()
-                            .and_then(|cn| cn.as_str().ok())
-                            .expect("the issuer of the certificate is not valid");
-                        source.push_str(issuer);
-                        info!("Connected Client Name : {}", issuer);
-                    }
-                    _ => anyhow::bail!("x509 parsing failed: {:?}", res),
-                }
-            }
+    if let Some(stream) = bi_streams.next().await {
+        let (mut send, mut recv) = stream?;
+        if let Err(e) = server_handshake(
+            &mut send,
+            &mut recv,
+            INGESTION_COMPATIBLE_MIN_VERSION,
+            INGESTION_COMPATIBLE_MAX_VERSION,
+        )
+        .await
+        {
+            let err = format!("Handshake fail: {}", e);
+            send.finish().await?;
+            connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
+            bail!(err);
         }
+        send.finish().await?;
     }
+
+    let source = certificate_info(&connection)?;
 
     PACKET_SOURCES
         .lock()
@@ -425,37 +379,6 @@ async fn handle_request(
     Ok(())
 }
 
-fn config_server(
-    certs: Vec<Certificate>,
-    key: PrivateKey,
-    files: Vec<Vec<u8>>,
-) -> Result<ServerConfig> {
-    let mut client_auth_roots = rustls::RootCertStore::empty();
-    for file in files {
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_cert.get(0) {
-            client_auth_roots.add(cert)?;
-        }
-    }
-    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots);
-    let server_crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_client_cert_verifier(client_auth)
-        .with_single_cert(certs, key)?;
-
-    let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
-
-    Arc::get_mut(&mut server_config.transport)
-        .unwrap()
-        .max_concurrent_uni_streams(0_u8.into());
-
-    Ok(server_config)
-}
-
 async fn handle_data<T>(
     send: SendStream,
     mut recv: RecvStream,
@@ -505,31 +428,31 @@ async fn handle_data<T>(
     loop {
         match handle_body(&mut recv).await {
             Ok((mut raw_event, timestamp)) => {
-                let mut args: Vec<Vec<u8>> = Vec::new();
-                args.push(source.as_bytes().to_vec());
+                let mut key: Vec<u8> = Vec::new();
+                key.extend_from_slice(source.as_bytes());
+                key.push(0);
                 match record_type {
                     RecordType::Log => {
-                        args.push(
-                            bincode::deserialize::<Log>(&raw_event)?
-                                .kind
-                                .as_bytes()
-                                .to_vec(),
+                        key.extend_from_slice(
+                            bincode::deserialize::<Log>(&raw_event)?.kind.as_bytes(),
                         );
-                        args.push(timestamp.to_be_bytes().to_vec());
+                        key.push(0);
+                        key.extend_from_slice(&timestamp.to_be_bytes());
                     }
                     RecordType::PeriodicTimeSeries => {
                         let periodic_time_series =
                             bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
-                        args.push(periodic_time_series.kind.as_bytes().to_vec());
-                        args.push(periodic_time_series.start.to_be_bytes().to_vec());
+                        key.extend_from_slice(periodic_time_series.kind.as_bytes());
+                        key.push(0);
+                        key.extend_from_slice(&periodic_time_series.start.to_be_bytes());
                         raw_event = bincode::serialize(&(
                             periodic_time_series.data.period,
                             periodic_time_series.data.data,
                         ))?;
                     }
-                    _ => args.push(timestamp.to_be_bytes().to_vec()),
+                    _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
-                store.append(&gen_key(args), &raw_event)?;
+                store.append(&key, &raw_event)?;
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
@@ -576,59 +499,6 @@ async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::Rea
     Ok((body_buf, timestamp))
 }
 
-pub async fn server_handshake(
-    connection: &Connection,
-    bi_streams: &mut IncomingBiStreams,
-) -> Result<()> {
-    if let Some(stream) = bi_streams.next().await {
-        let (mut send, mut recv) = stream?;
-
-        let mut version_len = [0; mem::size_of::<u64>()];
-        recv.read_exact(&mut version_len).await?;
-        let len = u64::from_le_bytes(version_len);
-
-        let mut version_buf = Vec::new();
-        version_buf.resize(len.try_into()?, 0);
-        recv.read_exact(version_buf.as_mut_slice()).await?;
-        let version = String::from_utf8(version_buf).unwrap();
-
-        match COMPATIBLE_MIN_VERSION.cmp(&version) {
-            Less | Equal => match COMPATIBLE_MAX_VERSION.cmp(&version) {
-                Greater => {
-                    send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION"))))
-                        .await?;
-                    send.finish().await?;
-                    info!("Compatible Version");
-                }
-                Less | Equal => {
-                    send.write_all(&handshake_buffer(None)).await?;
-                    send.finish().await?;
-                    connection.close(quinn::VarInt::from_u32(0), b"Incompatible version");
-                    bail!("Incompatible version")
-                }
-            },
-            Greater => {
-                send.write_all(&handshake_buffer(None)).await?;
-                send.finish().await?;
-                connection.close(quinn::VarInt::from_u32(0), b"Incompatible version");
-                bail!("Incompatible version")
-            }
-        }
-    }
-    Ok(())
-}
-
-fn handshake_buffer(resp: Option<&str>) -> Vec<u8> {
-    let resp_data = bincode::serialize::<Option<&str>>(&resp).unwrap();
-    let resp_data_len = u64::try_from(resp_data.len())
-        .expect("less than u64::MAX")
-        .to_le_bytes();
-    let mut resp_buf = Vec::with_capacity(resp_data_len.len() + resp_data.len());
-    resp_buf.extend(resp_data_len);
-    resp_buf.extend(resp_data);
-    resp_buf
-}
-
 pub async fn request_packets(
     connection: &quinn::Connection,
     filter: NetworkFilter,
@@ -651,4 +521,44 @@ pub async fn request_packets(
     recv.read_exact(&mut req_buf).await?;
     let packets = bincode::deserialize::<Vec<String>>(&req_buf)?;
     Ok(packets)
+}
+
+async fn check_sources_conn(source_db: Database, mut rx: Receiver<Sources>) -> Result<()> {
+    let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
+    itv.reset();
+    let source_store = source_db
+        .sources_store()
+        .expect("Failed to open source store");
+    loop {
+        select! {
+            _ = itv.tick() => {
+                let mut sources = SOURCES.lock().await;
+                let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
+
+                for source_key in keys {
+                    let timestamp = Utc::now();
+                    sources.insert(source_key.clone(), timestamp);
+                    if source_store.insert(&source_key, timestamp).is_err(){
+                        error!("Failed to append Source store");
+                    }
+                }
+            }
+
+            Some((source_key,timestamp_val,is_close)) = rx.recv() => {
+                if is_close{
+                    if source_store.insert(&source_key, timestamp_val).is_err(){
+                        error!("Failed to append Source store");
+                    }
+                    SOURCES.lock().await.remove(&source_key);
+                    PACKET_SOURCES.lock().await.remove(&source_key);
+                }else{
+                    SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
+                    if source_store.insert(&source_key, timestamp_val).is_err(){
+                        error!("Failed to append Source store");
+                    }
+                }
+
+            }
+        }
+    }
 }
