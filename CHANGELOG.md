@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Publish support network event(conn, dns, rdp, http) stream data through QUIC.
+
 ### Changed
 
 - Separate compatibility version check criteria for publish and ingestion.

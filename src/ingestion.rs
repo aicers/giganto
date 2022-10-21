@@ -2,7 +2,7 @@
 mod tests;
 
 use crate::graphql::network::NetworkFilter;
-use crate::publish::PubMessage;
+use crate::publish::{send_direct_network_stream, PubMessage};
 use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
@@ -351,25 +351,58 @@ async fn handle_request(
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
     match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
         RecordType::Conn => {
-            handle_data(send, recv, RecordType::Conn, source, db.conn_store()?).await?;
+            handle_data(
+                send,
+                recv,
+                RecordType::Conn,
+                Some(gen_network_key(&source, "conn")),
+                source,
+                db.conn_store()?,
+            )
+            .await?;
         }
         RecordType::Dns => {
-            handle_data(send, recv, RecordType::Dns, source, db.dns_store()?).await?;
+            handle_data(
+                send,
+                recv,
+                RecordType::Dns,
+                Some(gen_network_key(&source, "dns")),
+                source,
+                db.dns_store()?,
+            )
+            .await?;
         }
         RecordType::Log => {
-            handle_data(send, recv, RecordType::Log, source, db.log_store()?).await?;
+            handle_data(send, recv, RecordType::Log, None, source, db.log_store()?).await?;
         }
         RecordType::Http => {
-            handle_data(send, recv, RecordType::Http, source, db.http_store()?).await?;
+            handle_data(
+                send,
+                recv,
+                RecordType::Http,
+                Some(gen_network_key(&source, "http")),
+                source,
+                db.http_store()?,
+            )
+            .await?;
         }
         RecordType::Rdp => {
-            handle_data(send, recv, RecordType::Rdp, source, db.rdp_store()?).await?;
+            handle_data(
+                send,
+                recv,
+                RecordType::Rdp,
+                Some(gen_network_key(&source, "rdp")),
+                source,
+                db.rdp_store()?,
+            )
+            .await?;
         }
         RecordType::PeriodicTimeSeries => {
             handle_data(
                 send,
                 recv,
                 RecordType::PeriodicTimeSeries,
+                None,
                 source,
                 db.periodic_time_series_store()?,
             )
@@ -383,6 +416,7 @@ async fn handle_data<T>(
     send: SendStream,
     mut recv: RecvStream,
     record_type: RecordType,
+    network_key: Option<String>,
     source: String,
     store: RawEventStore<'_, T>,
 ) -> Result<()> {
@@ -453,6 +487,9 @@ async fn handle_data<T>(
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
                 store.append(&key, &raw_event)?;
+                if let Some(key) = network_key.as_ref() {
+                    send_direct_network_stream(key, &raw_event, timestamp).await?;
+                }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
@@ -561,4 +598,12 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<Sources>) -> R
             }
         }
     }
+}
+
+pub fn gen_network_key(source: &str, record: &str) -> String {
+    let mut network_key = String::new();
+    network_key.push_str(source);
+    network_key.push('\0');
+    network_key.push_str(record);
+    network_key
 }

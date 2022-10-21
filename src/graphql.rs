@@ -88,7 +88,7 @@ where
             return Err("invalid cursor".into());
         }
         let mut iter = store
-            .iter(
+            .boundary_iter(
                 &cursor,
                 &lower_closed_bound_key(key_prefix, start),
                 Direction::Reverse,
@@ -118,7 +118,7 @@ where
             return Err("invalid cursor".into());
         }
         let mut iter = store
-            .iter(
+            .boundary_iter(
                 &cursor,
                 &upper_open_bound_key(key_prefix, end),
                 Direction::Forward,
@@ -138,7 +138,7 @@ where
         let (start, end) = filter.time();
 
         let last = last.min(MAXIMUM_PAGE_SIZE);
-        let iter = store.iter(
+        let iter = store.boundary_iter(
             &upper_open_bound_key(key_prefix, end),
             &lower_closed_bound_key(key_prefix, start),
             Direction::Reverse,
@@ -150,7 +150,7 @@ where
         let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let iter = store.iter(
+        let iter = store.boundary_iter(
             &lower_closed_bound_key(key_prefix, start),
             &upper_open_bound_key(key_prefix, end),
             Direction::Forward,

@@ -9,16 +9,44 @@ use crate::storage::{
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use futures_util::StreamExt;
+use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
-use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
+use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::HashMap;
 use std::{mem, net::SocketAddr};
+use tokio::{
+    select,
+    sync::{
+        mpsc::{unbounded_channel, UnboundedSender},
+        RwLock,
+    },
+};
 use tracing::{error, info};
 
 const PUBLISH_COMPATIBLE_MIN_VERSION: &str = "0.2.0";
 const PUBLISH_COMPATIBLE_MAX_VERSION: &str = "0.4.0";
+
+lazy_static! {
+    pub static ref HOG_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
+        RwLock::new(HashMap::new());
+}
+
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[repr(u32)]
+enum StreamMessageCode {
+    Conn = 0,
+    Dns = 1,
+    Rdp = 2,
+    Http = 3,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StreamMessage {
+    source: String,
+    start: i64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
@@ -102,10 +130,10 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
             connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
             bail!(err);
         }
-        send.finish().await?;
-    }
 
-    let _source = certificate_info(&connection)?;
+        let source = certificate_info(&connection)?;
+        tokio::spawn(request_network_stream(connection, db.clone(), recv, source));
+    }
 
     async {
         while let Some(stream) = bi_streams.next().await {
@@ -208,7 +236,7 @@ where
     key_prefix.extend_from_slice(msg.kind.as_bytes());
     key_prefix.push(0);
 
-    let mut iter = store.iter(
+    let mut iter = store.boundary_iter(
         &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
         &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
         Direction::Forward,
@@ -226,5 +254,186 @@ where
     }
     handle_response_message(send, T::done()?).await?;
     send.finish().await?;
+    Ok(())
+}
+
+async fn handle_stream_request(
+    recv: &mut RecvStream,
+) -> Result<(StreamMessageCode, StreamMessage)> {
+    let mut buf = [0; mem::size_of::<u32>()];
+    recv.read_exact(&mut buf)
+        .await
+        .map_err(|e| anyhow!("Failed to read message code: {}", e))?;
+
+    let msg_type =
+        StreamMessageCode::try_from(u32::from_le_bytes(buf)).context("unknown record type")?;
+
+    let mut frame_length = [0; mem::size_of::<u32>()];
+    recv.read_exact(&mut frame_length)
+        .await
+        .map_err(|e| anyhow!("Failed to read frame length: {}", e))?;
+    let len = u32::from_le_bytes(frame_length);
+
+    let mut rest_buf = vec![0; len.try_into()?];
+    recv.read_exact(&mut rest_buf)
+        .await
+        .map_err(|e| anyhow!("Failed to read rest of request: {}", e))?;
+
+    let msg = bincode::deserialize::<StreamMessage>(&rest_buf)
+        .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+    Ok((msg_type, msg))
+}
+
+pub async fn send_direct_network_stream(
+    network_key: &str,
+    raw_event: &Vec<u8>,
+    timestamp: i64,
+) -> Result<()> {
+    for (key, sender) in HOG_DIRECT_CHANNEL.read().await.iter() {
+        if key.contains(&network_key) {
+            let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
+            let mut send_buf: Vec<u8> = Vec::new();
+            send_buf.extend_from_slice(&timestamp.to_le_bytes());
+            send_buf.extend_from_slice(&raw_len);
+            send_buf.extend_from_slice(raw_event);
+            sender.send(send_buf)?;
+        }
+    }
+    Ok(())
+}
+
+async fn send_network_stream<T>(
+    store: RawEventStore<'_, T>,
+    conn: Connection,
+    msg_type: &str,
+    msg: StreamMessage,
+    hog_source: String,
+) -> Result<()>
+where
+    T: DeserializeOwned,
+{
+    let mut sender = conn.open_uni().await?;
+    let mut key_prefix = Vec::with_capacity(&msg.source.len() + 1);
+    key_prefix.extend_from_slice(msg.source.as_bytes());
+    key_prefix.push(0);
+
+    let mut hog_key = String::new();
+    hog_key.push_str(&hog_source);
+    hog_key.push('\0');
+    hog_key.push_str(&msg.source);
+    hog_key.push('\0');
+    hog_key.push_str(msg_type);
+
+    let (send, mut recv) = unbounded_channel::<Vec<u8>>();
+    let hog_remove_key = hog_key.clone();
+    tokio::spawn(async move {
+        loop {
+            select! {
+                Some(buf) = recv.recv() => {
+                    if sender.write_all(&buf).await.is_err(){
+                        HOG_DIRECT_CHANNEL
+                        .write()
+                        .await
+                        .remove(&hog_remove_key);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    HOG_DIRECT_CHANNEL
+        .write()
+        .await
+        .insert(hog_key, send.clone());
+
+    let iter = store.iter(&lower_closed_bound_key(
+        &key_prefix,
+        Some(Utc.timestamp_nanos(msg.start)),
+    ));
+
+    for item in iter {
+        let (key, val) = item.context("Failed to read Database")?;
+        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let stream_data = val.to_vec();
+
+        let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
+
+        let mut send_buf: Vec<u8> = Vec::new();
+        send_buf.extend_from_slice(&timestamp.to_le_bytes());
+        send_buf.extend_from_slice(&stream_len);
+        send_buf.extend_from_slice(&stream_data);
+        send.send(send_buf)?;
+    }
+    Ok(())
+}
+
+async fn request_network_stream(
+    connection: Connection,
+    stream_db: Database,
+    mut recv: RecvStream,
+    hog_source: String,
+) -> Result<()> {
+    loop {
+        match handle_stream_request(&mut recv).await {
+            Ok((msg_type, msg)) => {
+                let db = stream_db.clone();
+                let conn = connection.clone();
+                let source = hog_source.clone();
+                tokio::spawn(async move {
+                    match msg_type {
+                        StreamMessageCode::Conn => {
+                            if let Ok(store) = db.conn_store() {
+                                if let Err(e) =
+                                    send_network_stream(store, conn, "conn", msg, source).await
+                                {
+                                    error!("Failed to send network stream : {}", e);
+                                }
+                            } else {
+                                error!("Failed to open conn store");
+                            }
+                        }
+                        StreamMessageCode::Dns => {
+                            if let Ok(store) = db.dns_store() {
+                                if let Err(e) =
+                                    send_network_stream(store, conn, "dns", msg, source).await
+                                {
+                                    error!("Failed to send network stream : {}", e);
+                                }
+                            } else {
+                                error!("Failed to open dns store");
+                            }
+                        }
+                        StreamMessageCode::Rdp => {
+                            if let Ok(store) = db.rdp_store() {
+                                if let Err(e) =
+                                    send_network_stream(store, conn, "rdp", msg, source).await
+                                {
+                                    error!("Failed to send network stream : {}", e);
+                                }
+                            } else {
+                                error!("Failed to open rdp store");
+                            }
+                        }
+                        StreamMessageCode::Http => {
+                            if let Ok(store) = db.http_store() {
+                                if let Err(e) =
+                                    send_network_stream(store, conn, "http", msg, source).await
+                                {
+                                    error!("Failed to send network stream : {}", e);
+                                }
+                            } else {
+                                error!("Failed to open http store");
+                            }
+                        }
+                    };
+                });
+            }
+            Err(e) => {
+                error!("{}", e);
+                break;
+            }
+        }
+    }
     Ok(())
 }

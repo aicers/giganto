@@ -153,13 +153,24 @@ impl<'db, T> RawEventStore<'db, T> {
 }
 
 impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
-    pub fn iter(&self, from: &[u8], to: &[u8], direction: Direction) -> Iter<'db, T> {
-        Iter::new(
+    pub fn boundary_iter(
+        &self,
+        from: &[u8],
+        to: &[u8],
+        direction: Direction,
+    ) -> BoundaryIter<'db, T> {
+        BoundaryIter::new(
             self.db
                 .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
             to.to_vec(),
             direction,
         )
+    }
+    pub fn iter(&self, from: &[u8]) -> Iter<'db> {
+        Iter::new(self.db.iterator_cf(
+            self.cf,
+            rocksdb::IteratorMode::From(from, Direction::Forward),
+        ))
     }
 }
 
@@ -238,15 +249,16 @@ pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u
 }
 
 pub type KeyValue<T> = (Box<[u8]>, T);
+pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
-pub struct Iter<'d, T> {
+pub struct BoundaryIter<'d, T> {
     inner: DBIteratorWithThreadMode<'d, DB>,
     boundary: Vec<u8>,
     cond: cmp::Ordering,
     phantom: PhantomData<T>,
 }
 
-impl<'d, T> Iter<'d, T> {
+impl<'d, T> BoundaryIter<'d, T> {
     pub fn new(
         inner: DBIteratorWithThreadMode<'d, DB>,
         boundary: Vec<u8>,
@@ -266,7 +278,7 @@ impl<'d, T> Iter<'d, T> {
     }
 }
 
-impl<'d, T> Iterator for Iter<'d, T>
+impl<'d, T> Iterator for BoundaryIter<'d, T>
 where
     T: DeserializeOwned,
 {
@@ -286,6 +298,27 @@ where
                 }
             }
             Err(e) => Some(Err(e.into())),
+        })
+    }
+}
+
+pub struct Iter<'d> {
+    inner: DBIteratorWithThreadMode<'d, DB>,
+}
+
+impl<'d> Iter<'d> {
+    pub fn new(inner: DBIteratorWithThreadMode<'d, DB>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'d> Iterator for Iter<'d> {
+    type Item = anyhow::Result<RawValue>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|item| match item {
+            Ok((key, value)) => Ok((key, value)),
+            Err(e) => Err(e.into()),
         })
     }
 }
