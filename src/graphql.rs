@@ -6,7 +6,7 @@ use crate::{
     ingestion::EventFilter,
     storage::{
         lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
-        KeyValue, RawEventStore,
+        FilteredIter, KeyValue, RawEventStore,
     },
 };
 use anyhow::anyhow;
@@ -17,6 +17,8 @@ use async_graphql::{
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 use std::net::IpAddr;
+
+use self::network::NetworkFilter;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
@@ -46,6 +48,7 @@ pub trait FromKeyValue<T>: Sized {
 }
 
 pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
+type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub fn schema(database: Database) -> Schema {
     Schema::build(Query::default(), EmptyMutation, EmptySubscription)
@@ -58,8 +61,7 @@ pub fn schema(database: Database) -> Schema {
 /// Maximum size: 100.
 const MAXIMUM_PAGE_SIZE: usize = 100;
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-fn load_connection<'c, N, T>(
+fn get_connection<'c, T>(
     store: &RawEventStore<'c, T>,
     key_prefix: &[u8],
     filter: &impl RawEventFilter,
@@ -67,9 +69,8 @@ fn load_connection<'c, N, T>(
     before: Option<String>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<Connection<String, N>>
+) -> Result<ConnArgs<T>>
 where
-    N: FromKeyValue<T> + OutputType,
     T: DeserializeOwned + EventFilter,
 {
     let (records, has_previous, has_next) = if let Some(before) = before {
@@ -158,6 +159,24 @@ where
         let (records, has_next) = collect_records(iter, first, filter)?;
         (records, false, has_next)
     };
+    Ok((records, has_previous, has_next))
+}
+
+fn load_connection<'c, N, T>(
+    store: &RawEventStore<'c, T>,
+    key_prefix: &[u8],
+    filter: &impl RawEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned + EventFilter,
+{
+    let (records, has_previous, has_next) =
+        get_connection(store, key_prefix, filter, after, before, first, last)?;
 
     let mut connection: Connection<String, N> = Connection::new(has_previous, has_next);
     connection.edges = records
@@ -208,6 +227,89 @@ fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
         return Ok(Utc.timestamp_nanos(nanos));
     }
     Err(anyhow!("invalid database key length"))
+}
+
+fn get_filtered_iter<'c, T>(
+    store: &RawEventStore<'c, T>,
+    key_prefix: &[u8],
+    filter: &'c NetworkFilter,
+    after: &Option<String>,
+    before: &Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<(FilteredIter<'c, T>, Option<Vec<u8>>, usize)>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let (iter, cursor, size) = if let Some(before) = before {
+        if after.is_some() {
+            return Err("cannot use both `after` and `before`".into());
+        }
+        if first.is_some() {
+            return Err("'before' and 'first' cannot be specified simultaneously".into());
+        }
+        let (start, end) = filter.time();
+
+        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        let cursor = base64::decode(before)?;
+        let time = upper_closed_bound_key(key_prefix, end);
+        if cursor.cmp(&time) == std::cmp::Ordering::Greater {
+            return Err("invalid cursor".into());
+        }
+        let iter = store.boundary_iter(
+            &cursor,
+            &lower_closed_bound_key(key_prefix, start),
+            Direction::Reverse,
+        );
+
+        (FilteredIter::new(iter, filter), Some(cursor), last)
+    } else if let Some(after) = after {
+        if before.is_some() {
+            return Err("cannot use both `after` and `before`".into());
+        }
+        if last.is_some() {
+            return Err("'after' and 'last' cannot be specified simultaneously".into());
+        }
+        let (start, end) = filter.time();
+
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        let cursor = base64::decode(after)?;
+        let time = lower_closed_bound_key(key_prefix, start);
+        if cursor.cmp(&time) == std::cmp::Ordering::Less {
+            return Err("invalid cursor".into());
+        }
+        let iter = store.boundary_iter(
+            &cursor,
+            &upper_open_bound_key(key_prefix, end),
+            Direction::Forward,
+        );
+        (FilteredIter::new(iter, filter), Some(cursor), first)
+    } else if let Some(last) = last {
+        if first.is_some() {
+            return Err("first and last cannot be used together".into());
+        }
+        let (start, end) = filter.time();
+
+        let last = last.min(MAXIMUM_PAGE_SIZE);
+        let iter = store.boundary_iter(
+            &upper_open_bound_key(key_prefix, end),
+            &lower_closed_bound_key(key_prefix, start),
+            Direction::Reverse,
+        );
+        (FilteredIter::new(iter, filter), None, last)
+    } else {
+        let (start, end) = filter.time();
+
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        let iter = store.boundary_iter(
+            &lower_closed_bound_key(key_prefix, start),
+            &upper_open_bound_key(key_prefix, end),
+            Direction::Forward,
+        );
+        (FilteredIter::new(iter, filter), None, first)
+    };
+
+    Ok((iter, cursor, size))
 }
 
 #[cfg(test)]

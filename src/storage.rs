@@ -1,5 +1,8 @@
 //! Raw event storage based on RocksDB.
-use crate::ingestion;
+use crate::{
+    graphql::{network::NetworkFilter, RawEventFilter},
+    ingestion::{self, EventFilter},
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 pub use rocksdb::Direction;
@@ -251,6 +254,41 @@ pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u
 pub type KeyValue<T> = (Box<[u8]>, T);
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
+pub struct FilteredIter<'d, T> {
+    inner: BoundaryIter<'d, T>,
+    filter: &'d NetworkFilter,
+}
+
+impl<'d, T> FilteredIter<'d, T> {
+    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d NetworkFilter) -> Self {
+        Self { inner, filter }
+    }
+}
+
+impl<'d, T> Iterator for FilteredIter<'d, T>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    type Item = KeyValue<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(Ok(elem)) = self.inner.next() {
+                if let Ok(true) = self.filter.check(
+                    elem.1.orig_addr(),
+                    elem.1.resp_addr(),
+                    elem.1.orig_port(),
+                    elem.1.resp_port(),
+                ) {
+                    return Some(elem);
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+}
+
 pub struct BoundaryIter<'d, T> {
     inner: DBIteratorWithThreadMode<'d, DB>,
     boundary: Vec<u8>,
@@ -362,8 +400,11 @@ pub async fn retain_periodically(
                 .prefix_iterator_cf(log_store.cf, source.clone())
                 .flatten()
                 .filter(|(key, _)| {
-                    let store_duration =
-                        i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into().unwrap());
+                    let store_duration = i64::from_be_bytes(
+                        key[(key.len() - TIMESTAMP_SIZE)..]
+                            .try_into()
+                            .expect("valid key"),
+                    );
                     standard_duration > store_duration
                 })
             {
