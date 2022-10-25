@@ -498,8 +498,7 @@ async fn handle_data<T>(
                             .lock()
                             .await
                             .write_all(&timestamp.to_be_bytes())
-                            .await
-                            .expect("failed to send request");
+                            .await?;
                         ack_cnt_rotation.store(0, Ordering::SeqCst);
                         tx.send(ITV_RESET).await?;
                     }

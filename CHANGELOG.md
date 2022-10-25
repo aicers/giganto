@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Publish support network event(conn, dns, rdp, http) stream data through QUIC.
+- GraphQL API returns all network raw events
 
 ### Changed
 
