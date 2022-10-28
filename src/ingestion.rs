@@ -30,9 +30,12 @@ use tokio::{
     task, time,
 };
 use tracing::{error, info};
+use x509_parser::nom::AsBytes;
 
 const ACK_ROTATION_CNT: u8 = 128;
 const ACK_INTERVAL_TIME: u64 = 60 * 60;
+const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
+const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
@@ -412,6 +415,7 @@ async fn handle_request(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn handle_data<T>(
     send: SendStream,
     mut recv: RecvStream,
@@ -467,6 +471,16 @@ async fn handle_data<T>(
                 key.push(0);
                 match record_type {
                     RecordType::Log => {
+                        if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
+                            && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
+                        {
+                            sender_rotation
+                                .lock()
+                                .await
+                                .write_all(&timestamp.to_be_bytes())
+                                .await?;
+                            continue;
+                        }
                         key.extend_from_slice(
                             bincode::deserialize::<Log>(&raw_event)?.kind.as_bytes(),
                         );

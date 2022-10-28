@@ -26,6 +26,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Publish check protocol compatibility with connected Programs.
 - Publish support log/period time series record data request/response through QUIC.
 - Add Packets Request GraphQL API.
+- Send acknowledgment of channel done messages sent by reproduce.
 
 ### Changed
 
