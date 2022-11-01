@@ -8,7 +8,6 @@ use crate::storage::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
-use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -25,8 +24,8 @@ use tokio::{
 };
 use tracing::{error, info};
 
-const PUBLISH_COMPATIBLE_MIN_VERSION: &str = "0.2.0";
-const PUBLISH_COMPATIBLE_MAX_VERSION: &str = "0.4.0";
+const PUBLISH_COMPATIBLE_MIN_VERSION: &str = "0.4.0";
+const PUBLISH_COMPATIBLE_MAX_VERSION: &str = "0.5.0";
 
 lazy_static! {
     pub static ref HOG_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
@@ -90,14 +89,13 @@ impl Server {
     }
 
     pub async fn run(self, db: Database) {
-        let (endpoint, mut incoming) =
-            Endpoint::server(self.server_config, self.server_address).expect("endpoint");
+        let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
 
-        while let Some(conn) = incoming.next().await {
+        while let Some(conn) = endpoint.accept().await {
             let db = db.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_connection(conn, db).await {
@@ -109,34 +107,35 @@ impl Server {
 }
 
 async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> {
-    let quinn::NewConnection {
-        connection,
-        mut bi_streams,
-        ..
-    } = conn.await?;
+    let connection = conn.await?;
+    let stream = connection.accept_bi().await;
 
-    if let Some(stream) = bi_streams.next().await {
-        let (mut send, mut recv) = stream?;
-        if let Err(e) = server_handshake(
-            &mut send,
-            &mut recv,
-            PUBLISH_COMPATIBLE_MIN_VERSION,
-            PUBLISH_COMPATIBLE_MAX_VERSION,
-        )
-        .await
-        {
-            let err = format!("Handshake fail: {}", e);
-            send.finish().await?;
-            connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
-            bail!(err);
-        }
-
-        let source = certificate_info(&connection)?;
-        tokio::spawn(request_network_stream(connection, db.clone(), recv, source));
+    let (mut send, mut recv) = stream?;
+    if let Err(e) = server_handshake(
+        &mut send,
+        &mut recv,
+        PUBLISH_COMPATIBLE_MIN_VERSION,
+        PUBLISH_COMPATIBLE_MAX_VERSION,
+    )
+    .await
+    {
+        let err = format!("Handshake fail: {}", e);
+        send.finish().await?;
+        connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
+        bail!(err);
     }
 
+    let source = certificate_info(&connection)?;
+    tokio::spawn(request_network_stream(
+        connection.clone(),
+        db.clone(),
+        recv,
+        source,
+    ));
+
     async {
-        while let Some(stream) = bi_streams.next().await {
+        loop {
+            let stream = connection.accept_bi().await;
             let stream = match stream {
                 Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
                     return Ok(());
@@ -154,7 +153,6 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
                 }
             });
         }
-        Ok(())
     }
     .await?;
     Ok(())

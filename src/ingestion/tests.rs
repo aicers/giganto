@@ -24,7 +24,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.2.0";
+const PROTOCOL_VERSION: &str = "0.4.0";
 
 struct TestClient {
     conn: Connection,
@@ -34,7 +34,7 @@ struct TestClient {
 impl TestClient {
     async fn new() -> Self {
         let endpoint = init_client();
-        let new_conn = endpoint
+        let conn = endpoint
             .connect(
                 SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
                 HOST,
@@ -44,9 +44,6 @@ impl TestClient {
             )
             .await
             .expect("Failed to connect server's endpoint, Please make sure the Server is alive");
-        let quinn::NewConnection {
-            connection: conn, ..
-        } = new_conn;
         connection_handshake(&conn).await;
         Self { conn, endpoint }
     }
