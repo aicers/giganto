@@ -5,9 +5,8 @@ use crate::{
     to_cert_chain, to_private_key,
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use futures_util::StreamExt;
 use lazy_static::lazy_static;
-use quinn::{Connection, Endpoint, IncomingUniStreams, RecvStream, SendStream};
+use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use serde::Serialize;
 use std::{
     cell::RefCell,
@@ -27,11 +26,10 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.2.0";
+const PROTOCOL_VERSION: &str = "0.4.0";
 
 struct TestClient {
     send: SendStream,
-    uni: IncomingUniStreams,
     conn: Connection,
     endpoint: Endpoint,
 }
@@ -39,7 +37,7 @@ struct TestClient {
 impl TestClient {
     async fn new() -> Self {
         let endpoint = init_client();
-        let new_conn = endpoint
+        let conn = endpoint
             .connect(
                 SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
                 HOST,
@@ -49,15 +47,9 @@ impl TestClient {
             )
             .await
             .expect("Failed to connect server's endpoint, Please make sure the Server is alive");
-        let quinn::NewConnection {
-            connection: conn,
-            uni_streams,
-            ..
-        } = new_conn;
         let send = connection_handshake(&conn).await;
         Self {
             send,
-            uni: uni_streams,
             conn,
             endpoint,
         }
@@ -465,13 +457,13 @@ async fn request_network_event_stream() {
     let mut publish = TestClient::new().await;
 
     {
-        //database conn newtowrk event
+        //database conn network event
         let conn_store = db.conn_store().unwrap();
         let send_conn_time = Utc::now().timestamp_nanos();
         let conn_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
         send_request_network_stream(&mut publish.send, NETWORK_STREAM_CONN, SOURCE, 0).await;
 
-        let send_conn_stream = Arc::new(RefCell::new(publish.uni.next().await.unwrap().unwrap()));
+        let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
 
         assert_eq!(send_conn_time, recv_timestamp);
@@ -497,7 +489,7 @@ async fn request_network_event_stream() {
         let dns_data = insert_dns_raw_event(&dns_store, SOURCE, send_dns_time);
         send_request_network_stream(&mut publish.send, NETWORK_STREAM_DNS, SOURCE, 0).await;
 
-        let send_dns_stream = Arc::new(RefCell::new(publish.uni.next().await.unwrap().unwrap()));
+        let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
 
         assert_eq!(send_dns_time, recv_timestamp);
@@ -523,7 +515,7 @@ async fn request_network_event_stream() {
         let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time);
         send_request_network_stream(&mut publish.send, NETWORK_STREAM_RDP, SOURCE, 0).await;
 
-        let send_rdp_stream = Arc::new(RefCell::new(publish.uni.next().await.unwrap().unwrap()));
+        let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
 
         assert_eq!(send_rdp_time, recv_timestamp);
@@ -549,7 +541,7 @@ async fn request_network_event_stream() {
         let http_data = insert_http_raw_event(&http_store, SOURCE, send_http_time);
         send_request_network_stream(&mut publish.send, NETWORK_STREAM_HTTP, SOURCE, 0).await;
 
-        let send_http_stream = Arc::new(RefCell::new(publish.uni.next().await.unwrap().unwrap()));
+        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
 
         assert_eq!(send_http_time, recv_timestamp);

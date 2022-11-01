@@ -7,7 +7,6 @@ use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -39,8 +38,8 @@ const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGESTION_COMPATIBLE_MIN_VERSION: &str = "0.2.0";
-const INGESTION_COMPATIBLE_MAX_VERSION: &str = "0.4.0";
+const INGESTION_COMPATIBLE_MIN_VERSION: &str = "0.4.0";
+const INGESTION_COMPATIBLE_MAX_VERSION: &str = "0.5.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
@@ -247,8 +246,7 @@ impl Server {
     }
 
     pub async fn run(self, db: Database) {
-        let (endpoint, mut incoming) =
-            Endpoint::server(self.server_config, self.server_address).expect("endpoint");
+        let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
@@ -258,7 +256,7 @@ impl Server {
         let source_db = db.clone();
         task::spawn(check_sources_conn(source_db, rx));
 
-        while let Some(conn) = incoming.next().await {
+        while let Some(conn) = endpoint.accept().await {
             let sender = tx.clone();
             let db = db.clone();
             tokio::spawn(async move {
@@ -275,29 +273,24 @@ async fn handle_connection(
     db: Database,
     sender: Sender<Sources>,
 ) -> Result<()> {
-    let quinn::NewConnection {
-        connection,
-        mut bi_streams,
-        ..
-    } = conn.await?;
+    let connection = conn.await?;
 
-    if let Some(stream) = bi_streams.next().await {
-        let (mut send, mut recv) = stream?;
-        if let Err(e) = server_handshake(
-            &mut send,
-            &mut recv,
-            INGESTION_COMPATIBLE_MIN_VERSION,
-            INGESTION_COMPATIBLE_MAX_VERSION,
-        )
-        .await
-        {
-            let err = format!("Handshake fail: {}", e);
-            send.finish().await?;
-            connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
-            bail!(err);
-        }
+    let stream = connection.accept_bi().await;
+    let (mut send, mut recv) = stream?;
+    if let Err(e) = server_handshake(
+        &mut send,
+        &mut recv,
+        INGESTION_COMPATIBLE_MIN_VERSION,
+        INGESTION_COMPATIBLE_MAX_VERSION,
+    )
+    .await
+    {
+        let err = format!("Handshake fail: {}", e);
         send.finish().await?;
+        connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
+        bail!(err);
     }
+    send.finish().await?;
 
     let source = certificate_info(&connection)?;
 
@@ -311,7 +304,8 @@ async fn handle_connection(
     }
 
     async {
-        while let Some(stream) = bi_streams.next().await {
+        loop {
+            let stream = connection.accept_bi().await;
             let source = source.clone();
             let stream = match stream {
                 Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
@@ -337,7 +331,6 @@ async fn handle_connection(
                 }
             });
         }
-        Ok(())
     }
     .await?;
     Ok(())
