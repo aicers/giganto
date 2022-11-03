@@ -288,7 +288,7 @@ pub async fn send_direct_network_stream(
     timestamp: i64,
 ) -> Result<()> {
     for (key, sender) in HOG_DIRECT_CHANNEL.read().await.iter() {
-        if key.contains(&network_key) {
+        if key.contains(network_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());

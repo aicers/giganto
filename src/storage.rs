@@ -29,8 +29,8 @@ impl Database {
         let mut cfs: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
         );
-        cfs.extend(&RAW_DATA_COLUMN_FAMILY_NAMES);
-        cfs.extend(&META_DATA_COLUMN_FAMILY_NAMES);
+        cfs.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs.extend(META_DATA_COLUMN_FAMILY_NAMES);
 
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
