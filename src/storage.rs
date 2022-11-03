@@ -131,7 +131,7 @@ pub struct RawEventStore<'db, T> {
 unsafe impl<'db, T> Send for RawEventStore<'db, T> {}
 
 impl<'db, T> RawEventStore<'db, T> {
-    fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<T> {
+    fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<'db, T> {
         RawEventStore {
             db,
             cf,
