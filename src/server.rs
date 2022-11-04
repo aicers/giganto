@@ -42,31 +42,28 @@ pub fn config_server(
 }
 
 pub fn certificate_info(connection: &Connection) -> Result<String> {
-    if let Some(conn_info) = connection.peer_identity() {
-        if let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() {
-            if let Some(cert) = cert_info.get(0) {
-                let mut parser = x509_parser::certificate::X509CertificateParser::new()
-                    .with_deep_parse_extensions(false);
-                let res = parser.parse(cert.as_ref());
-                match res {
-                    Ok((_, x509)) => {
-                        let issuer = x509
-                            .issuer()
-                            .iter_common_name()
-                            .next()
-                            .and_then(|cn| cn.as_str().ok())
-                            .context("the issuer of the certificate is not valid")?;
-                        info!("Connected Client Name : {}", issuer);
-                        return Ok(String::from(issuer));
-                    }
-                    _ => bail!("Failed to parse x509: {:?}", res),
-                }
-            }
-            bail!("Failed to get certificate info")
-        }
-        bail!("Failed to convert certificate info")
-    }
-    bail!("Failed to read peer identity")
+    let Some(conn_info) = connection.peer_identity() else {
+        bail!("no peer identity");
+    };
+    let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() else {
+        bail!("non-certificate identity");
+    };
+    let Some(cert) = cert_info.get(0) else {
+        bail!("no certificate in identity");
+    };
+    let mut parser =
+        x509_parser::certificate::X509CertificateParser::new().with_deep_parse_extensions(false);
+    let Ok((_, x509)) = parser.parse(cert.as_ref()) else {
+        bail!("invalid X.509 certificate");
+    };
+    let issuer = x509
+        .issuer()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .context("the issuer of the certificate is not valid")?;
+    info!("Connected Client Name : {}", issuer);
+    Ok(String::from(issuer))
 }
 
 #[allow(clippy::module_name_repetitions)]
