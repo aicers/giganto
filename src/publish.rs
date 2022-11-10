@@ -336,6 +336,7 @@ where
                         break;
                     }
                 }
+                else => break,
             }
         }
     });
