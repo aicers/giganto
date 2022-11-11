@@ -92,6 +92,7 @@ pub struct DnsConn {
     pub resp_port: u16,
     pub proto: u8,
     pub query: String,
+    pub answer: Vec<IpAddr>,
 }
 
 impl EventFilter for DnsConn {
@@ -214,6 +215,35 @@ impl PubMessage for PeriodicTimeSeriesData {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SmtpConn {
+    pub orig_addr: IpAddr,
+    pub resp_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_port: u16,
+    pub mailfrom: String,
+    pub date: String,
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub agent: String,
+}
+
+impl EventFilter for SmtpConn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
 enum RecordType {
@@ -223,6 +253,7 @@ enum RecordType {
     Http = 3,
     Rdp = 4,
     PeriodicTimeSeries = 5,
+    Smtp = 6,
 }
 
 pub struct Server {
@@ -401,6 +432,17 @@ async fn handle_request(
                 None,
                 source,
                 db.periodic_time_series_store()?,
+            )
+            .await?;
+        }
+        RecordType::Smtp => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Smtp,
+                Some(gen_network_key(&source, "smtp")),
+                source,
+                db.smtp_store()?,
             )
             .await?;
         }

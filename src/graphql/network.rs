@@ -1,7 +1,7 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion::{Conn, DnsConn, HttpConn, RdpConn},
+    ingestion::{Conn, DnsConn, HttpConn, RdpConn, SmtpConn},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -153,6 +153,7 @@ struct DnsRawEvent {
     resp_port: u16,
     proto: u8,
     query: String,
+    answer: Vec<String>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -178,6 +179,21 @@ struct RdpRawEvent {
     orig_port: u16,
     resp_port: u16,
     cookie: String,
+}
+
+#[derive(SimpleObject, Debug)]
+struct SmtpRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    mailfrom: String,
+    date: String,
+    from: String,
+    to: String,
+    subject: String,
+    agent: String,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -219,7 +235,6 @@ from_key_value!(
     orig_pkts,
     resp_pkts
 );
-from_key_value!(DnsRawEvent, DnsConn, proto, query);
 from_key_value!(
     HttpRawEvent,
     HttpConn,
@@ -231,6 +246,36 @@ from_key_value!(
     status_code
 );
 from_key_value!(RdpRawEvent, RdpConn, cookie);
+
+impl FromKeyValue<DnsConn> for DnsRawEvent {
+    fn from_key_value(key: &[u8], val: DnsConn) -> Result<Self> {
+        let timestamp = get_timestamp(key)?;
+        Ok(Self {
+            timestamp,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            query: val.query,
+            answer: val
+                .answer
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        })
+    }
+}
+from_key_value!(
+    SmtpRawEvent,
+    SmtpConn,
+    mailfrom,
+    date,
+    from,
+    to,
+    subject,
+    agent
+);
 
 #[Object]
 impl NetworkQuery {
@@ -320,6 +365,31 @@ impl NetworkQuery {
     ) -> Result<Connection<String, RdpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.rdp_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
+    async fn smtp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, SmtpRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.smtp_store()?;
         let key_prefix = key_prefix(&filter.source);
 
         query(
@@ -739,6 +809,7 @@ mod tests {
             resp_port: 80,
             proto: 17,
             query: "Hello Server Hello Server Hello Server".to_string(),
+            answer: vec!["1.1.1.1".parse::<IpAddr>().unwrap()],
         };
         let ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
