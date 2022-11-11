@@ -252,6 +252,10 @@ fn gen_dns_raw_event() -> Vec<u8> {
         query:
             "Hello ServerHello ServerHello ServerHello ServerHello ServerHello ServerHello Server"
                 .to_string(),
+        answer: vec![
+            "1.1.1.1".parse::<IpAddr>().unwrap(),
+            "2.2.2.2".parse::<IpAddr>().unwrap(),
+        ],
     };
     let ser_dns_body = bincode::serialize(&dns_body).unwrap();
     ser_dns_body

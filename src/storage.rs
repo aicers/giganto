@@ -12,8 +12,15 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 6] =
-    ["conn", "dns", "log", "http", "rdp", "periodic time series"];
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 7] = [
+    "conn",
+    "dns",
+    "log",
+    "http",
+    "rdp",
+    "periodic time series",
+    "smtp",
+];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
 
@@ -107,6 +114,15 @@ impl Database {
             .db
             .cf_handle("periodic time series")
             .context("cannot access periodic time series column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for smtp.
+    pub fn smtp_store(&self) -> Result<RawEventStore<ingestion::SmtpConn>> {
+        let cf = self
+            .db
+            .cf_handle("smtp")
+            .context("cannot access smtp column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
