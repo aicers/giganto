@@ -324,10 +324,42 @@ where
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let hog_remove_key = hog_key.clone();
+
+    HOG_DIRECT_CHANNEL
+        .write()
+        .await
+        .insert(hog_key, send.clone());
+
+    let iter = store.iter(&lower_closed_bound_key(
+        &key_prefix,
+        Some(Utc.timestamp_nanos(msg.start)),
+    ));
+
+    let mut last_ts = 0_i64;
+
+    for item in iter {
+        let (key, val) = item.context("Failed to read Database")?;
+        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let stream_data = val.to_vec();
+
+        let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
+
+        let mut send_buf: Vec<u8> = Vec::new();
+        send_buf.extend_from_slice(&timestamp.to_le_bytes());
+        send_buf.extend_from_slice(&stream_len);
+        send_buf.extend_from_slice(&stream_data);
+        sender.write_all(&send_buf).await?;
+        last_ts = timestamp;
+    }
+
     tokio::spawn(async move {
         loop {
             select! {
                 Some(buf) = recv.recv() => {
+                    let ts = i64::from_le_bytes(buf.get(..TIMESTAMP_SIZE).expect("timestamp_size").try_into().expect("timestamp"));
+                    if last_ts > ts {
+                        continue;
+                    }
                     if sender.write_all(&buf).await.is_err(){
                         HOG_DIRECT_CHANNEL
                         .write()
@@ -341,29 +373,6 @@ where
         }
     });
 
-    HOG_DIRECT_CHANNEL
-        .write()
-        .await
-        .insert(hog_key, send.clone());
-
-    let iter = store.iter(&lower_closed_bound_key(
-        &key_prefix,
-        Some(Utc.timestamp_nanos(msg.start)),
-    ));
-
-    for item in iter {
-        let (key, val) = item.context("Failed to read Database")?;
-        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        let stream_data = val.to_vec();
-
-        let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
-
-        let mut send_buf: Vec<u8> = Vec::new();
-        send_buf.extend_from_slice(&timestamp.to_le_bytes());
-        send_buf.extend_from_slice(&stream_len);
-        send_buf.extend_from_slice(&stream_data);
-        send.send(send_buf)?;
-    }
     Ok(())
 }
 
