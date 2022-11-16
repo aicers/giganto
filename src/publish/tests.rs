@@ -182,15 +182,14 @@ async fn connection_handshake(conn: &Connection) -> SendStream {
 async fn send_request_network_stream(
     send: &mut SendStream,
     msg_code: u32,
-    source: &str,
-    timestamp: i64,
+    node_type: u8,
+    mut msg: Vec<u8>,
 ) {
     let mut req_data: Vec<u8> = Vec::new();
+    req_data.append(&mut node_type.to_le_bytes().to_vec());
     req_data.append(&mut msg_code.to_le_bytes().to_vec());
-
-    let mut req_val = bincode::serialize(&(String::from(source), timestamp)).unwrap();
-    req_data.append(&mut (req_val.len() as u32).to_le_bytes().to_vec());
-    req_data.append(&mut req_val);
+    req_data.append(&mut (msg.len() as u32).to_le_bytes().to_vec());
+    req_data.append(&mut msg);
 
     send.write_all(&req_data)
         .await
@@ -228,7 +227,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_port: 80,
         proto: 6,
@@ -264,7 +263,7 @@ fn gen_dns_raw_event() -> Vec<u8> {
 fn gen_rdp_raw_event() -> Vec<u8> {
     let rdp_body = RdpConn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_port: 80,
         cookie: "rdp_test".to_string(),
@@ -276,7 +275,7 @@ fn gen_rdp_raw_event() -> Vec<u8> {
 fn gen_http_raw_event() -> Vec<u8> {
     let http_body = HttpConn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_port: 80,
         method: "POST".to_string(),
@@ -471,25 +470,67 @@ async fn request_publish_period_time_series() {
 async fn request_network_event_stream() {
     use crate::ingestion::gen_network_key;
     use crate::publish::send_direct_network_stream;
+
+    const HOG_TYPE: u8 = 0x00;
+    const CRUSHER_TYPE: u8 = 0x01;
     const NETWORK_STREAM_CONN: u32 = 0x00;
     const NETWORK_STREAM_DNS: u32 = 0x01;
     const NETWORK_STREAM_RDP: u32 = 0x02;
     const NETWORK_STREAM_HTTP: u32 = 0x03;
-    const SOURCE: &str = "src1";
+    const SOURCE_ONE: &str = "src1";
+    const SOURCE_TWO: &str = "src2";
+
+    #[derive(Serialize, Clone)]
+    struct TestHogStreamMsg {
+        start: i64,
+        source: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct TestCrusherStreamMsg {
+        start: i64,
+        id: String,
+        src_ip: Option<IpAddr>,
+        des_ip: Option<IpAddr>,
+        source: Option<String>,
+    }
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
 
+    let hog_msg = TestHogStreamMsg {
+        start: 0,
+        source: Some(String::from(SOURCE_ONE)),
+    };
+    let hog_stream_msg = bincode::serialize(&hog_msg).unwrap();
+
+    let crusher_msg = TestCrusherStreamMsg {
+        start: 0,
+        id: String::from("model_one"),
+        src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
+        des_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
+        source: Some(String::from(SOURCE_TWO)),
+    };
+    let crusher_stream_msg = bincode::serialize(&crusher_msg).unwrap();
+
     tokio::spawn(server().run(db.clone()));
     let mut publish = TestClient::new().await;
 
     {
-        //database conn network event
         let conn_store = db.conn_store().unwrap();
+
+        // database conn network event for hog
         let send_conn_time = Utc::now().timestamp_nanos();
-        let conn_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
-        send_request_network_stream(&mut publish.send, NETWORK_STREAM_CONN, SOURCE, 0).await;
+        let conn_data = insert_conn_raw_event(&conn_store, SOURCE_ONE, send_conn_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_CONN,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
 
         let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
@@ -497,10 +538,42 @@ async fn request_network_event_stream() {
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
-        //direct conn network event
+        // direct conn network event for hog
         let send_conn_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE, "conn");
+        let key = gen_network_key(SOURCE_ONE, "conn");
         let conn_data = gen_conn_raw_event();
+
+        send_direct_network_stream(&key, &conn_data, send_conn_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream).await;
+        assert_eq!(send_conn_time, recv_timestamp);
+        assert_eq!(conn_data, recv_data);
+
+        // database conn network event for crusher
+        let send_conn_time = Utc::now().timestamp_nanos();
+        let conn_data = insert_conn_raw_event(&conn_store, SOURCE_TWO, send_conn_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_CONN,
+            CRUSHER_TYPE,
+            crusher_stream_msg.clone(),
+        )
+        .await;
+
+        let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
+
+        assert_eq!(send_conn_time, recv_timestamp);
+        assert_eq!(conn_data, recv_data);
+
+        // direct conn network event for crusher
+        let send_conn_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_TWO, "conn");
+        let conn_data = gen_conn_raw_event();
+
         send_direct_network_stream(&key, &conn_data, send_conn_time)
             .await
             .unwrap();
@@ -511,11 +584,19 @@ async fn request_network_event_stream() {
     }
 
     {
-        //database dns network event
         let dns_store = db.dns_store().unwrap();
+
+        // database dns network event for hog
         let send_dns_time = Utc::now().timestamp_nanos();
-        let dns_data = insert_dns_raw_event(&dns_store, SOURCE, send_dns_time);
-        send_request_network_stream(&mut publish.send, NETWORK_STREAM_DNS, SOURCE, 0).await;
+        let dns_data = insert_dns_raw_event(&dns_store, SOURCE_ONE, send_dns_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_DNS,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
 
         let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
@@ -523,10 +604,41 @@ async fn request_network_event_stream() {
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
-        //direct dns network event
+        // direct dns network event for hog
         let send_dns_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE, "dns");
+        let key = gen_network_key(SOURCE_ONE, "dns");
         let dns_data = gen_dns_raw_event();
+        send_direct_network_stream(&key, &dns_data, send_dns_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream).await;
+        assert_eq!(send_dns_time, recv_timestamp);
+        assert_eq!(dns_data, recv_data);
+
+        // database dns network event for crusher
+        let send_dns_time = Utc::now().timestamp_nanos();
+        let dns_data = insert_dns_raw_event(&dns_store, SOURCE_TWO, send_dns_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_DNS,
+            CRUSHER_TYPE,
+            crusher_stream_msg.clone(),
+        )
+        .await;
+
+        let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
+
+        assert_eq!(send_dns_time, recv_timestamp);
+        assert_eq!(dns_data, recv_data);
+
+        // direct dns network event for crusher
+        let send_dns_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_TWO, "dns");
+        let dns_data = gen_dns_raw_event();
+
         send_direct_network_stream(&key, &dns_data, send_dns_time)
             .await
             .unwrap();
@@ -537,11 +649,19 @@ async fn request_network_event_stream() {
     }
 
     {
-        //database rdp network event
         let rdp_store = db.rdp_store().unwrap();
+
+        // database rdp network event for hog
         let send_rdp_time = Utc::now().timestamp_nanos();
-        let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time);
-        send_request_network_stream(&mut publish.send, NETWORK_STREAM_RDP, SOURCE, 0).await;
+        let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_ONE, send_rdp_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_RDP,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
 
         let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
@@ -549,9 +669,39 @@ async fn request_network_event_stream() {
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
-        //direct rdp network event
+        // direct rdp network event for hog
         let send_rdp_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE, "rdp");
+        let key = gen_network_key(SOURCE_ONE, "rdp");
+        let rdp_data = gen_rdp_raw_event();
+        send_direct_network_stream(&key, &rdp_data, send_rdp_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream).await;
+        assert_eq!(send_rdp_time, recv_timestamp);
+        assert_eq!(rdp_data, recv_data);
+
+        // database rdp network event for crusher
+        let send_rdp_time = Utc::now().timestamp_nanos();
+        let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_TWO, send_rdp_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_RDP,
+            CRUSHER_TYPE,
+            crusher_stream_msg.clone(),
+        )
+        .await;
+
+        let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
+
+        assert_eq!(send_rdp_time, recv_timestamp);
+        assert_eq!(rdp_data, recv_data);
+
+        // direct rdp network event for crusher
+        let send_rdp_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_TWO, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_network_stream(&key, &rdp_data, send_rdp_time)
             .await
@@ -563,11 +713,19 @@ async fn request_network_event_stream() {
     }
 
     {
-        //database http network event
         let http_store = db.http_store().unwrap();
+
+        // database http network event for hog
         let send_http_time = Utc::now().timestamp_nanos();
-        let http_data = insert_http_raw_event(&http_store, SOURCE, send_http_time);
-        send_request_network_stream(&mut publish.send, NETWORK_STREAM_HTTP, SOURCE, 0).await;
+        let http_data = insert_http_raw_event(&http_store, SOURCE_ONE, send_http_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_HTTP,
+            HOG_TYPE,
+            hog_stream_msg,
+        )
+        .await;
 
         let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
         let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
@@ -575,9 +733,39 @@ async fn request_network_event_stream() {
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
-        //direct http network event
+        // direct http network event for hog
         let send_http_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE, "http");
+        let key = gen_network_key(SOURCE_ONE, "http");
+        let http_data = gen_http_raw_event();
+        send_direct_network_stream(&key, &http_data, send_http_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream).await;
+        assert_eq!(send_http_time, recv_timestamp);
+        assert_eq!(http_data, recv_data);
+
+        // database http network event for crusher
+        let send_http_time = Utc::now().timestamp_nanos();
+        let http_data = insert_http_raw_event(&http_store, SOURCE_TWO, send_http_time);
+
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_HTTP,
+            CRUSHER_TYPE,
+            crusher_stream_msg,
+        )
+        .await;
+
+        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
+
+        assert_eq!(send_http_time, recv_timestamp);
+        assert_eq!(http_data, recv_data);
+
+        // direct http network event for crusher
+        let send_http_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_TWO, "http");
         let http_data = gen_http_raw_event();
         send_direct_network_stream(&key, &http_data, send_http_time)
             .await
