@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::graphql::TIMESTAMP_SIZE;
+use crate::ingestion::EventFilter;
 use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
@@ -13,8 +14,12 @@ use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::HashMap;
-use std::{mem, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    mem,
+    net::{IpAddr, SocketAddr},
+};
 use tokio::{
     select,
     sync::{
@@ -40,10 +45,11 @@ enum StreamMessageCode {
     Http = 3,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct StreamMessage {
-    source: String,
-    start: i64,
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[repr(u8)]
+enum NodeType {
+    Hog = 0,
+    Crusher = 1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -56,6 +62,114 @@ enum MessageCode {
 pub trait PubMessage {
     fn message(&self, timestamp: i64) -> Result<Vec<u8>>;
     fn done() -> Result<Vec<u8>>;
+}
+
+trait StreamMessage {
+    fn database_key(&self) -> Result<Vec<u8>>;
+    fn channel_key(&self, source: Option<String>, msg_type: &str) -> Result<String>;
+    fn start_time(&self) -> i64;
+    fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool;
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct HogStreamMessage {
+    start: i64,
+    source: Option<String>,
+}
+
+impl StreamMessage for HogStreamMessage {
+    fn database_key(&self) -> Result<Vec<u8>> {
+        if let Some(ref target_source) = self.source {
+            let mut key_prefix: Vec<u8> = Vec::new();
+            key_prefix.extend_from_slice(target_source.as_bytes());
+            key_prefix.push(0);
+            return Ok(key_prefix);
+        }
+        bail!("Failed to generate hog key, source is required.");
+    }
+
+    fn channel_key(&self, source: Option<String>, msg_type: &str) -> Result<String> {
+        if let Some(ref target_source) = self.source {
+            let mut hog_key = String::new();
+            hog_key.push_str(&source.unwrap());
+            hog_key.push('\0');
+            hog_key.push_str(target_source);
+            hog_key.push('\0');
+            hog_key.push_str(msg_type);
+            return Ok(hog_key);
+        }
+        bail!("Failed to generate hog channel key, source is required.");
+    }
+
+    fn start_time(&self) -> i64 {
+        self.start
+    }
+
+    fn filter_ip(&self, _orig_addr: IpAddr, _resp_addr: IpAddr) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CrusherStreamMessage {
+    start: i64,
+    id: String,
+    src_ip: Option<IpAddr>,
+    des_ip: Option<IpAddr>,
+    source: Option<String>,
+}
+
+impl StreamMessage for CrusherStreamMessage {
+    fn database_key(&self) -> Result<Vec<u8>> {
+        if let Some(ref target_source) = self.source {
+            let mut key_prefix: Vec<u8> = Vec::new();
+            key_prefix.extend_from_slice(target_source.as_bytes());
+            key_prefix.push(0);
+            return Ok(key_prefix);
+        }
+        bail!("Failed to generate crusher key, source is required.");
+    }
+
+    fn channel_key(&self, _source: Option<String>, msg_type: &str) -> Result<String> {
+        if let Some(ref target_source) = self.source {
+            let mut crusher_key = String::new();
+            crusher_key.push_str(&self.id);
+            crusher_key.push('\0');
+            crusher_key.push_str(target_source);
+            crusher_key.push('\0');
+            crusher_key.push_str(msg_type);
+            return Ok(crusher_key);
+        }
+        bail!("Failed to generate crusher channel key, source is required.");
+    }
+
+    fn start_time(&self) -> i64 {
+        self.start
+    }
+
+    fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool {
+        match (self.src_ip, self.des_ip) {
+            (Some(c_orig_addr), Some(c_resp_addr)) => {
+                if c_orig_addr == orig_addr && c_resp_addr == resp_addr {
+                    return true;
+                }
+            }
+            (None, Some(c_resp_addr)) => {
+                if c_resp_addr == resp_addr {
+                    return true;
+                }
+            }
+            (Some(c_orig_addr), None) => {
+                if c_orig_addr == orig_addr {
+                    return true;
+                }
+            }
+            (None, None) => {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub struct Server {
@@ -249,14 +363,20 @@ where
 
 async fn handle_stream_request(
     recv: &mut RecvStream,
-) -> Result<(StreamMessageCode, StreamMessage)> {
-    let mut buf = [0; mem::size_of::<u32>()];
-    recv.read_exact(&mut buf)
+) -> Result<(NodeType, StreamMessageCode, Vec<u8>)> {
+    let mut type_buf = [0; mem::size_of::<u8>()];
+    recv.read_exact(&mut type_buf)
+        .await
+        .map_err(|e| anyhow!("Failed to read Node Type: {}", e))?;
+    let node_type = NodeType::try_from(u8::from_le_bytes(type_buf)).context("unknown Node type")?;
+
+    let mut code_buf = [0; mem::size_of::<u32>()];
+    recv.read_exact(&mut code_buf)
         .await
         .map_err(|e| anyhow!("Failed to read message code: {}", e))?;
 
     let msg_type =
-        StreamMessageCode::try_from(u32::from_le_bytes(buf)).context("unknown record type")?;
+        StreamMessageCode::try_from(u32::from_le_bytes(code_buf)).context("unknown record type")?;
 
     let mut frame_length = [0; mem::size_of::<u32>()];
     recv.read_exact(&mut frame_length)
@@ -268,10 +388,7 @@ async fn handle_stream_request(
     recv.read_exact(&mut rest_buf)
         .await
         .map_err(|e| anyhow!("Failed to read rest of request: {}", e))?;
-
-    let msg = bincode::deserialize::<StreamMessage>(&rest_buf)
-        .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
-    Ok((msg_type, msg))
+    Ok((node_type, msg_type, rest_buf))
 }
 
 pub async fn send_direct_network_stream(
@@ -292,56 +409,78 @@ pub async fn send_direct_network_stream(
     Ok(())
 }
 
-async fn send_network_stream<T>(
+async fn send_network_stream<T, N>(
     store: RawEventStore<'_, T>,
     conn: Connection,
     msg_type: &str,
-    msg: StreamMessage,
-    hog_source: String,
+    msg: N,
+    source: Option<String>,
+    node_type: NodeType,
 ) -> Result<()>
 where
-    T: DeserializeOwned,
+    T: EventFilter + Serialize + DeserializeOwned,
+    N: StreamMessage,
 {
     let mut sender = conn.open_uni().await?;
-    let mut key_prefix = Vec::with_capacity(&msg.source.len() + 1);
-    key_prefix.extend_from_slice(msg.source.as_bytes());
-    key_prefix.push(0);
-
-    let mut hog_key = String::new();
-    hog_key.push_str(&hog_source);
-    hog_key.push('\0');
-    hog_key.push_str(&msg.source);
-    hog_key.push('\0');
-    hog_key.push_str(msg_type);
+    let db_key_prefix = msg.database_key()?;
+    let channel_key = msg.channel_key(source, msg_type)?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
-    let hog_remove_key = hog_key.clone();
+    let channel_remove_key = channel_key.clone();
 
-    HOG_DIRECT_CHANNEL
-        .write()
-        .await
-        .insert(hog_key, send.clone());
-
-    let iter = store.iter(&lower_closed_bound_key(
-        &key_prefix,
-        Some(Utc.timestamp_nanos(msg.start)),
-    ));
-
+    HOG_DIRECT_CHANNEL.write().await.insert(channel_key, send);
     let mut last_ts = 0_i64;
 
-    for item in iter {
-        let (key, val) = item.context("Failed to read Database")?;
-        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        let stream_data = val.to_vec();
+    match node_type {
+        NodeType::Hog => {
+            let iter = store.iter(&lower_closed_bound_key(
+                &db_key_prefix,
+                Some(Utc.timestamp_nanos(msg.start_time())),
+            ));
+            for item in iter {
+                let (key, val) = item.context("Failed to read Database")?;
+                let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+                let stream_data = val.to_vec();
+                let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
 
-        let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
+                let mut send_buf: Vec<u8> = Vec::new();
+                send_buf.extend_from_slice(&timestamp.to_le_bytes());
+                send_buf.extend_from_slice(&stream_len);
+                send_buf.extend_from_slice(&stream_data);
+                sender.write_all(&send_buf).await?;
+                last_ts = timestamp;
+            }
+        }
+        NodeType::Crusher => {
+            let iter = store.boundary_iter(
+                &lower_closed_bound_key(
+                    &db_key_prefix,
+                    Some(Utc.timestamp_nanos(msg.start_time())),
+                ),
+                &upper_open_bound_key(&db_key_prefix, None),
+                Direction::Forward,
+            );
 
-        let mut send_buf: Vec<u8> = Vec::new();
-        send_buf.extend_from_slice(&timestamp.to_le_bytes());
-        send_buf.extend_from_slice(&stream_len);
-        send_buf.extend_from_slice(&stream_data);
-        sender.write_all(&send_buf).await?;
-        last_ts = timestamp;
+            for item in iter {
+                let (key, val) = item.context("Failed to read Database")?;
+                let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
+                    bail!("Failed to deserialize database data");
+                };
+                if msg.filter_ip(orig_addr, resp_addr) {
+                    let timestamp =
+                        i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+                    let stream_data = bincode::serialize(&val)?;
+                    let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
+
+                    let mut send_buf: Vec<u8> = Vec::new();
+                    send_buf.extend_from_slice(&timestamp.to_le_bytes());
+                    send_buf.extend_from_slice(&stream_len);
+                    send_buf.extend_from_slice(&stream_data);
+                    sender.write_all(&send_buf).await?;
+                    last_ts = timestamp;
+                }
+            }
+        }
     }
 
     tokio::spawn(async move {
@@ -356,7 +495,7 @@ where
                         HOG_DIRECT_CHANNEL
                         .write()
                         .await
-                        .remove(&hog_remove_key);
+                        .remove(&channel_remove_key);
                         break;
                     }
                 }
@@ -364,7 +503,66 @@ where
             }
         }
     });
+    Ok(())
+}
 
+async fn process_network_stream<T>(
+    db: Database,
+    conn: Connection,
+    source: Option<String>,
+    node_type: NodeType,
+    msg_type: StreamMessageCode,
+    msg: T,
+) -> Result<()>
+where
+    T: StreamMessage,
+{
+    match msg_type {
+        StreamMessageCode::Conn => {
+            if let Ok(store) = db.conn_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "conn", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open conn store");
+            }
+        }
+        StreamMessageCode::Dns => {
+            if let Ok(store) = db.dns_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "dns", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open dns store");
+            }
+        }
+        StreamMessageCode::Rdp => {
+            if let Ok(store) = db.rdp_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "rdp", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open rdp store");
+            }
+        }
+        StreamMessageCode::Http => {
+            if let Ok(store) = db.http_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "http", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open http store");
+            }
+        }
+    };
     Ok(())
 }
 
@@ -372,61 +570,46 @@ async fn request_network_stream(
     connection: Connection,
     stream_db: Database,
     mut recv: RecvStream,
-    hog_source: String,
+    conn_source: String,
 ) -> Result<()> {
     loop {
         match handle_stream_request(&mut recv).await {
-            Ok((msg_type, msg)) => {
+            Ok((node_type, msg_type, raw_data)) => {
                 let db = stream_db.clone();
                 let conn = connection.clone();
-                let source = hog_source.clone();
+                let source = conn_source.clone();
                 tokio::spawn(async move {
-                    match msg_type {
-                        StreamMessageCode::Conn => {
-                            if let Ok(store) = db.conn_store() {
-                                if let Err(e) =
-                                    send_network_stream(store, conn, "conn", msg, source).await
+                    match node_type {
+                        NodeType::Hog => {
+                            if let Ok(msg) = bincode::deserialize::<HogStreamMessage>(&raw_data) {
+                                if let Err(e) = process_network_stream(
+                                    db,
+                                    conn,
+                                    Some(source),
+                                    node_type,
+                                    msg_type,
+                                    msg,
+                                )
+                                .await
                                 {
-                                    error!("Failed to send network stream : {}", e);
+                                    error!("{}", e);
                                 }
-                            } else {
-                                error!("Failed to open conn store");
                             }
+                            error!("Failed to deseralize hog message");
                         }
-                        StreamMessageCode::Dns => {
-                            if let Ok(store) = db.dns_store() {
+                        NodeType::Crusher => {
+                            if let Ok(msg) = bincode::deserialize::<CrusherStreamMessage>(&raw_data)
+                            {
                                 if let Err(e) =
-                                    send_network_stream(store, conn, "dns", msg, source).await
+                                    process_network_stream(db, conn, None, node_type, msg_type, msg)
+                                        .await
                                 {
-                                    error!("Failed to send network stream : {}", e);
+                                    error!("{}", e);
                                 }
-                            } else {
-                                error!("Failed to open dns store");
                             }
+                            error!("Failed to deseralize crusher message");
                         }
-                        StreamMessageCode::Rdp => {
-                            if let Ok(store) = db.rdp_store() {
-                                if let Err(e) =
-                                    send_network_stream(store, conn, "rdp", msg, source).await
-                                {
-                                    error!("Failed to send network stream : {}", e);
-                                }
-                            } else {
-                                error!("Failed to open rdp store");
-                            }
-                        }
-                        StreamMessageCode::Http => {
-                            if let Ok(store) = db.http_store() {
-                                if let Err(e) =
-                                    send_network_stream(store, conn, "http", msg, source).await
-                                {
-                                    error!("Failed to send network stream : {}", e);
-                                }
-                            } else {
-                                error!("Failed to open http store");
-                            }
-                        }
-                    };
+                    }
                 });
             }
             Err(e) => {
