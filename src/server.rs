@@ -1,11 +1,8 @@
 use anyhow::{bail, Context, Result};
 use quinn::{Connection, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
-use std::{
-    cmp::Ordering::{Equal, Greater, Less},
-    mem,
-    sync::Arc,
-};
+use semver::{Version, VersionReq};
+use std::{mem, sync::Arc};
 use tracing::info;
 use x509_parser::nom::Parser;
 
@@ -70,8 +67,7 @@ pub fn certificate_info(connection: &Connection) -> Result<String> {
 pub async fn server_handshake(
     send: &mut SendStream,
     recv: &mut RecvStream,
-    min_version: &str,
-    max_version: &str,
+    std_version: &str,
 ) -> Result<()> {
     let mut version_len = [0; mem::size_of::<u64>()];
     recv.read_exact(&mut version_len).await?;
@@ -80,25 +76,20 @@ pub async fn server_handshake(
     let mut version_buf = Vec::new();
     version_buf.resize(len.try_into()?, 0);
     recv.read_exact(version_buf.as_mut_slice()).await?;
-    let version = String::from_utf8(version_buf).context("string from utf")?;
 
-    match min_version.cmp(&version) {
-        Less | Equal => match max_version.cmp(&version) {
-            Greater => {
-                send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION")))?)
-                    .await?;
-                info!("Compatible Version");
-            }
-            Less | Equal => {
-                send.write_all(&handshake_buffer(None)?).await?;
-                bail!("Incompatible version")
-            }
-        },
-        Greater => {
-            send.write_all(&handshake_buffer(None)?).await?;
-            bail!("Incompatible version")
-        }
+    let version =
+        Version::parse(&String::from_utf8(version_buf).context("invalid byte conversion")?)?;
+    let req_version = VersionReq::parse(std_version)?;
+
+    if req_version.matches(&version) {
+        send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION")))?)
+            .await?;
+        info!("Compatible Version");
+    } else {
+        send.write_all(&handshake_buffer(None)?).await?;
+        bail!("Incompatible version")
     }
+
     Ok(())
 }
 

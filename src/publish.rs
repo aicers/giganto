@@ -24,8 +24,7 @@ use tokio::{
 };
 use tracing::{error, info};
 
-const PUBLISH_COMPATIBLE_MIN_VERSION: &str = "0.4.0";
-const PUBLISH_COMPATIBLE_MAX_VERSION: &str = "0.5.0";
+const PUBLISH_VERSION_REQ: &str = "0.4.0";
 
 lazy_static! {
     pub static ref HOG_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
@@ -111,14 +110,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     let stream = connection.accept_bi().await;
 
     let (mut send, mut recv) = stream?;
-    if let Err(e) = server_handshake(
-        &mut send,
-        &mut recv,
-        PUBLISH_COMPATIBLE_MIN_VERSION,
-        PUBLISH_COMPATIBLE_MAX_VERSION,
-    )
-    .await
-    {
+    if let Err(e) = server_handshake(&mut send, &mut recv, PUBLISH_VERSION_REQ).await {
         let err = format!("Handshake fail: {}", e);
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
