@@ -4,7 +4,7 @@ use crate::{
     ingestion::{self, EventFilter},
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
@@ -12,7 +12,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 11] = [
+pub const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 11] = [
     "conn",
     "dns",
     "log",
@@ -25,7 +25,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 11] = [
     "ssh",
     "dce rpc",
 ];
-const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+const META_DATA_COLUMN_FAMILY_NAMES: [&str; 2] = ["sources", "statistics"];
 const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Clone)]
@@ -37,6 +37,7 @@ impl Database {
     /// Opens the database at the given path.
     pub fn open(path: &Path) -> Result<Database> {
         let mut opts = Options::default();
+        opts.set_max_open_files(100);
         let mut cfs: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
         );
@@ -167,12 +168,21 @@ impl Database {
     }
 
     /// Returns the store for connection sources
-    pub fn sources_store(&self) -> Result<SourceStore> {
+    pub fn sources_store(&self) -> Result<MetaStore> {
         let cf = self
             .db
             .cf_handle("sources")
             .context("cannot access sources column family")?;
-        Ok(SourceStore { db: &self.db, cf })
+        Ok(MetaStore { db: &self.db, cf })
+    }
+
+    /// Returns the store for statistics
+    pub fn statistics_store(&self) -> Result<MetaStore> {
+        let cf = self
+            .db
+            .cf_handle("statistics")
+            .context("cannot access statistics column family")?;
+        Ok(MetaStore { db: &self.db, cf })
     }
 }
 
@@ -231,20 +241,29 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
             rocksdb::IteratorMode::From(from, Direction::Forward),
         ))
     }
+    pub fn iterator(&self) -> Iter<'db> {
+        Iter::new(self.db.iterator_cf(self.cf, rocksdb::IteratorMode::Start))
+    }
 }
 
-pub struct SourceStore<'db> {
+pub struct MetaStore<'db> {
     db: &'db DB,
     cf: &'db ColumnFamily,
 }
 
-impl<'db> SourceStore<'db> {
+impl<'db> MetaStore<'db> {
     /// Inserts a source name and its last active time.
     ///
     /// If the source already exists, its last active time is updated.
     pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
         self.db
             .put_cf(self.cf, name, last_active.timestamp_nanos().to_be_bytes())?;
+        Ok(())
+    }
+
+    /// Append raw data to store
+    pub fn append(&self, key: &[u8], raw: &[u8]) -> Result<()> {
+        self.db.put_cf(self.cf, key, raw)?;
         Ok(())
     }
 
@@ -264,7 +283,7 @@ impl<'db> SourceStore<'db> {
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
-unsafe impl<'db> Send for SourceStore<'db> {}
+unsafe impl<'db> Send for MetaStore<'db> {}
 
 /// Creates a key corresponding to the given `prefix` and `time`.
 pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
@@ -474,4 +493,50 @@ pub async fn retain_periodically(
             }
         }
     }
+}
+
+pub fn clear(db: &Database) -> Result<()> {
+    let from_timestamp = DateTime::<Utc>::from_utc(
+        NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
+        Utc,
+    )
+    .timestamp_nanos()
+    .to_be_bytes()
+    .to_vec();
+    let year_3000 = NaiveDate::from_ymd_opt(3000, 9, 9)
+        .unwrap()
+        .and_hms_nano_opt(9, 9, 9, 9)
+        .unwrap()
+        .and_local_timezone(Utc)
+        .unwrap()
+        .timestamp_nanos();
+    let year_3000_duration = year_3000.to_be_bytes().to_vec();
+    let sources = db.sources_store()?.names();
+    let all_store = db.retain_period_store()?;
+
+    for source in sources {
+        let mut from: Vec<u8> = source.clone();
+        from.push(0x00);
+        from.extend_from_slice(&from_timestamp);
+
+        let mut to: Vec<u8> = source.clone();
+        to.push(0x00);
+        to.extend_from_slice(&year_3000_duration);
+
+        for store in &all_store {
+            if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
+                error!("Failed to delete range data");
+            }
+        }
+    }
+
+    let log_store = db.log_store()?;
+    for (key, _) in log_store.iterator().flatten() {
+        let _r = log_store.delete(&key);
+    }
+    let periodic_store = db.periodic_time_series_store()?;
+    for (key, _) in periodic_store.iterator().flatten() {
+        let _r = periodic_store.delete(&key);
+    }
+    Ok(())
 }

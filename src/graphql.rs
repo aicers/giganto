@@ -1,3 +1,4 @@
+mod export;
 mod log;
 pub mod network;
 mod packet;
@@ -26,9 +27,10 @@ pub const TIMESTAMP_SIZE: usize = 8;
 #[derive(Default, MergedObject)]
 pub struct Query(
     log::LogQuery,
+    timeseries::TimeSeriesQuery,
+    export::ExportQuery,
     network::NetworkQuery,
     packet::PacketQuery,
-    timeseries::TimeSeriesQuery,
 );
 
 #[derive(InputObject, Serialize)]

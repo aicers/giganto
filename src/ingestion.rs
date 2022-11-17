@@ -6,7 +6,7 @@ pub(crate) use self::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smt
 use crate::graphql::network::NetworkFilter;
 use crate::publish::{send_direct_network_stream, PubMessage};
 use crate::server::{certificate_info, config_server, server_handshake};
-use crate::storage::{Database, RawEventStore};
+use crate::storage::{Database, RawEventStore, RAW_DATA_COLUMN_FAMILY_NAMES};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use num_enum::TryFromPrimitive;
@@ -14,6 +14,7 @@ use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::AtomicUsize;
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -30,7 +31,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     task, time,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use x509_parser::nom::AsBytes;
 
 const ACK_ROTATION_CNT: u8 = 128;
@@ -76,7 +77,7 @@ impl EventFilter for Log {
 
 impl Display for Log {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}: {:?}", self.kind, self.log)
+        write!(f, "{}: {:?}", self.kind, String::from_utf8_lossy(&self.log))
     }
 }
 
@@ -166,20 +167,23 @@ impl Server {
         );
 
         let (tx, rx): (Sender<SourceInfo>, Receiver<SourceInfo>) = channel(100);
+        let (stats_tx, stats_rx) = channel(30);
         let source_db = db.clone();
         task::spawn(check_sources_conn(
             source_db,
             packet_sources.clone(),
             sources,
             rx,
+            stats_rx,
         ));
 
         while let Some(conn) = endpoint.accept().await {
             let sender = tx.clone();
             let db = db.clone();
             let packet_sources = packet_sources.clone();
+            let stats = stats_tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db, packet_sources, sender).await {
+                if let Err(e) = handle_connection(conn, db, packet_sources, sender, stats).await {
                     error!("connection failed: {}", e);
                 }
             });
@@ -192,6 +196,7 @@ async fn handle_connection(
     db: Database,
     packet_sources: PacketSources,
     sender: Sender<SourceInfo>,
+    stats: Sender<(u32, usize)>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -199,6 +204,12 @@ async fn handle_connection(
     let (mut send, mut recv) = stream?;
     if let Err(e) = server_handshake(&mut send, &mut recv, INGESTION_VERSION_REQ).await {
         let err = format!("Handshake fail: {}", e);
+        error!(
+            "{}->{:?}. {}",
+            connection.remote_address(),
+            connection.local_ip(),
+            err
+        );
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
         bail!(err);
@@ -238,8 +249,9 @@ async fn handle_connection(
 
             let source = source.clone();
             let db = db.clone();
+            let stats = stats.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_request(source, stream, db).await {
+                if let Err(e) = handle_request(source, stream, db, stats).await {
                     error!("failed: {}", e);
                 }
             });
@@ -254,6 +266,7 @@ async fn handle_request(
     source: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
+    stats: Sender<(u32, usize)>,
 ) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
@@ -268,6 +281,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "conn")),
                 source,
                 db.conn_store()?,
+                stats,
             )
             .await?;
         }
@@ -279,6 +293,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dns")),
                 source,
                 db.dns_store()?,
+                stats,
             )
             .await?;
         }
@@ -290,6 +305,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "log")),
                 source,
                 db.log_store()?,
+                stats,
             )
             .await?;
         }
@@ -301,6 +317,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "http")),
                 source,
                 db.http_store()?,
+                stats,
             )
             .await?;
         }
@@ -312,6 +329,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "rdp")),
                 source,
                 db.rdp_store()?,
+                stats,
             )
             .await?;
         }
@@ -323,6 +341,7 @@ async fn handle_request(
                 None,
                 source,
                 db.periodic_time_series_store()?,
+                stats,
             )
             .await?;
         }
@@ -334,6 +353,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "smtp")),
                 source,
                 db.smtp_store()?,
+                stats,
             )
             .await?;
         }
@@ -345,6 +365,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
+                stats,
             )
             .await?;
         }
@@ -356,6 +377,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
+                stats,
             )
             .await?;
         }
@@ -367,6 +389,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ssh")),
                 source,
                 db.ssh_store()?,
+                stats,
             )
             .await?;
         }
@@ -378,11 +401,51 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
+                stats,
             )
             .await?;
         }
     };
     Ok(())
+}
+
+const MAX_RECORD_TYPE: u32 = 11;
+const PERIOD_STATISTICS: u64 = 60;
+struct Statistics {
+    stats: HashMap<u32, (AtomicI64, AtomicUsize)>,
+}
+impl Statistics {
+    fn new() -> Self {
+        let mut stats = HashMap::new();
+        let number_of_record =
+            u32::try_from(RAW_DATA_COLUMN_FAMILY_NAMES.len()).unwrap_or(MAX_RECORD_TYPE);
+        for k in 0..=number_of_record {
+            stats.insert(k, (AtomicI64::new(0), AtomicUsize::new(0)));
+        }
+        Self { stats }
+    }
+
+    fn append(&mut self, rec: u32, len: usize) {
+        self.stats
+            .entry(rec)
+            .and_modify(|(cnt, size)| {
+                cnt.fetch_add(1, Ordering::SeqCst);
+                size.fetch_add(len, Ordering::SeqCst);
+            })
+            .or_insert((AtomicI64::new(1), AtomicUsize::new(len)));
+    }
+
+    fn clear(&mut self) -> Vec<(u32, (i64, usize))> {
+        let mut res = Vec::new();
+        for (k, (cnt, size)) in &mut self.stats {
+            let count = *cnt.get_mut();
+            *cnt.get_mut() = 0;
+            let len = *size.get_mut();
+            *size.get_mut() = 0;
+            res.push((*k, (count, len)));
+        }
+        res
+    }
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -393,6 +456,7 @@ async fn handle_data<T>(
     network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
+    stats: Sender<(u32, usize)>,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -406,7 +470,6 @@ async fn handle_data<T>(
     let mut itv = time::interval(time::Duration::from_secs(ACK_INTERVAL_TIME));
     itv.reset();
     let (tx, mut rx) = channel(100);
-
     let handler = task::spawn(async move {
         loop {
             select! {
@@ -471,6 +534,9 @@ async fn handle_data<T>(
                 if let Some(network_key) = network_key.as_ref() {
                     send_direct_network_stream(network_key, &raw_event, timestamp).await?;
                 }
+                stats
+                    .send((record_type as u32, key.len() + raw_event.len()))
+                    .await?;
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
@@ -545,12 +611,20 @@ async fn check_sources_conn(
     packet_sources: PacketSources,
     sources: Sources,
     mut rx: Receiver<SourceInfo>,
+    mut stats_rx: Receiver<(u32, usize)>,
 ) -> Result<()> {
     let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
     itv.reset();
     let source_store = source_db
         .sources_store()
         .expect("Failed to open source store");
+    let statistics_store = source_db
+        .statistics_store()
+        .expect("Failed to open statistics store");
+    let mut stats = Statistics::new();
+    let mut period = time::interval(time::Duration::from_secs(PERIOD_STATISTICS));
+    period.tick().await;
+
     loop {
         select! {
             _ = itv.tick() => {
@@ -565,7 +639,6 @@ async fn check_sources_conn(
                     }
                 }
             }
-
             Some((source_key,timestamp_val,is_close)) = rx.recv() => {
                 if is_close {
                     if source_store.insert(&source_key, timestamp_val).is_err(){
@@ -580,6 +653,16 @@ async fn check_sources_conn(
                     }
                 }
 
+            }
+            Some((record_type, size)) = stats_rx.recv() => {
+                stats.append(record_type, size);
+            }
+            _ = period.tick() => {
+                let s = stats.clear();
+                debug!("Statistics: {:?}", s);
+                if statistics_store.append(&Utc::now().timestamp_nanos().to_be_bytes(), &bincode::serialize(&(PERIOD_STATISTICS, s))?).is_err() {
+                    error!("Failed to append statistics store");
+                }
             }
         }
     }

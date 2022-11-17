@@ -81,10 +81,14 @@ pub async fn server_handshake(
         Version::parse(&String::from_utf8(version_buf).context("invalid byte conversion")?)?;
     let req_version = VersionReq::parse(std_version)?;
 
+    info!(
+        "Handshaking: required = {}, requested = {}",
+        std_version, version
+    );
     if req_version.matches(&version) {
         send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION")))?)
             .await?;
-        info!("Compatible Version");
+        info!("Compatible version");
     } else {
         send.write_all(&handshake_buffer(None)?).await?;
         bail!("Incompatible version")
