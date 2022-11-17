@@ -340,8 +340,20 @@ async fn request_publish_log() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let start = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(1970, 1, 1).and_hms(00, 00, 00), Utc);
-    let end = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(2050, 12, 31).and_hms(23, 59, 59), Utc);
+    let start = DateTime::<Utc>::from_utc(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("vaild date")
+            .and_hms_opt(00, 00, 00)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_utc(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
     let message = Message {
         source: String::from("einsis"),
         kind: String::from("Hello"),
@@ -400,8 +412,20 @@ async fn request_publish_period_time_series() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let start = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(1970, 1, 1).and_hms(00, 00, 00), Utc);
-    let end = DateTime::<Utc>::from_utc(NaiveDate::from_ymd(2050, 12, 31).and_hms(23, 59, 59), Utc);
+    let start = DateTime::<Utc>::from_utc(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("vaild date")
+            .and_hms_opt(00, 00, 00)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_utc(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
     let mesaage = Message {
         source: String::from("einsis"),
         kind: String::from("Hello"),
