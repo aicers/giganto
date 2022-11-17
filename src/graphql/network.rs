@@ -1032,22 +1032,30 @@ mod tests {
         insert_conn_raw_event(
             &conn_store,
             "src 1",
-            Utc.ymd(2020, 1, 1).and_hms(0, 1, 1).timestamp_nanos(),
+            Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
         );
         insert_dns_raw_event(
             &dns_store,
             "src 1",
-            Utc.ymd(2021, 1, 1).and_hms(0, 1, 1).timestamp_nanos(),
+            Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
         );
         insert_http_raw_event(
             &http_store,
             "src 1",
-            Utc.ymd(2020, 6, 1).and_hms(0, 1, 1).timestamp_nanos(),
+            Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
         );
         insert_rdp_raw_event(
             &rdp_store,
             "src 1",
-            Utc.ymd(2020, 1, 5).and_hms(0, 1, 1).timestamp_nanos(),
+            Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
         );
 
         let query = r#"

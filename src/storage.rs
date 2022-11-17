@@ -384,10 +384,13 @@ pub async fn retain_periodically(
 ) -> Result<()> {
     let mut itv = time::interval(duration);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
-    let from_timestamp = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(61, 0), Utc)
-        .timestamp_nanos()
-        .to_be_bytes()
-        .to_vec();
+    let from_timestamp = DateTime::<Utc>::from_utc(
+        NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
+        Utc,
+    )
+    .timestamp_nanos()
+    .to_be_bytes()
+    .to_vec();
     loop {
         itv.tick().await;
         let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
