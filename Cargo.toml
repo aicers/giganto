@@ -21,6 +21,7 @@ quinn = "0.9"
 rocksdb = "0.19"
 rustls = "0.20"
 rustls-pemfile = "1.0"
+semver = "1.0"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"

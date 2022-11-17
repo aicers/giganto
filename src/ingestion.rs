@@ -38,8 +38,7 @@ const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGESTION_COMPATIBLE_MIN_VERSION: &str = "0.4.0";
-const INGESTION_COMPATIBLE_MAX_VERSION: &str = "0.5.0";
+const INGESTION_VERSION_REQ: &str = "0.4.0";
 
 type Sources = (String, DateTime<Utc>, bool);
 
@@ -308,14 +307,7 @@ async fn handle_connection(
 
     let stream = connection.accept_bi().await;
     let (mut send, mut recv) = stream?;
-    if let Err(e) = server_handshake(
-        &mut send,
-        &mut recv,
-        INGESTION_COMPATIBLE_MIN_VERSION,
-        INGESTION_COMPATIBLE_MAX_VERSION,
-    )
-    .await
-    {
+    if let Err(e) = server_handshake(&mut send, &mut recv, INGESTION_VERSION_REQ).await {
         let err = format!("Handshake fail: {}", e);
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
