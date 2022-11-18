@@ -53,14 +53,14 @@ pub fn certificate_info(connection: &Connection) -> Result<String> {
     let Ok((_, x509)) = parser.parse(cert.as_ref()) else {
         bail!("invalid X.509 certificate");
     };
-    let issuer = x509
-        .issuer()
+    let subject = x509
+        .subject()
         .iter_common_name()
         .next()
         .and_then(|cn| cn.as_str().ok())
-        .context("the issuer of the certificate is not valid")?;
-    info!("Connected Client Name : {}", issuer);
-    Ok(String::from(issuer))
+        .context("the subject of the certificate is not valid")?;
+    info!("Connected Client Name : {}", subject);
+    Ok(String::from(subject))
 }
 
 #[allow(clippy::module_name_repetitions)]
