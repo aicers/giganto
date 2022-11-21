@@ -109,7 +109,7 @@ impl Database {
     /// Returns the raw event store for periodic time series.
     pub fn periodic_time_series_store(
         &self,
-    ) -> Result<RawEventStore<ingestion::PeriodicTimeSeriesData>> {
+    ) -> Result<RawEventStore<ingestion::PeriodicTimeSeries>> {
         let cf = self
             .db
             .cf_handle("periodic time series")

@@ -194,18 +194,11 @@ impl PubMessage for Log {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeriodicTimeSeries {
-    kind: String,
-    start: i64,
-    data: PeriodicTimeSeriesData,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PeriodicTimeSeriesData {
-    period: i64,
+    id: String,
     data: Vec<f64>,
 }
 
-impl PubMessage for PeriodicTimeSeriesData {
+impl PubMessage for PeriodicTimeSeries {
     fn message(&self, timestamp: i64) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.data)))?)
     }
@@ -517,13 +510,11 @@ async fn handle_data<T>(
                     RecordType::PeriodicTimeSeries => {
                         let periodic_time_series =
                             bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
-                        key.extend_from_slice(periodic_time_series.kind.as_bytes());
+                        key.clear();
+                        key.extend_from_slice(periodic_time_series.id.as_bytes());
                         key.push(0);
-                        key.extend_from_slice(&periodic_time_series.start.to_be_bytes());
-                        raw_event = bincode::serialize(&(
-                            periodic_time_series.data.period,
-                            periodic_time_series.data.data,
-                        ))?;
+                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        raw_event = bincode::serialize(&periodic_time_series.data)?;
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
