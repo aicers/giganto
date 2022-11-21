@@ -423,7 +423,11 @@ async fn rdp() {
 async fn periodic_time_series() {
     const RECORD_TYPE_PERIOD_TIME_SERIES: u32 = 0x05;
 
-    type PeriodicTimeSeries = (String, i64, i64, Vec<f64>);
+    #[derive(Serialize)]
+    struct PeriodicTimeSeries {
+        id: String,
+        data: Vec<f64>,
+    }
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -435,12 +439,10 @@ async fn periodic_time_series() {
         client.conn.open_bi().await.expect("failed to open stream");
 
     let mut periodic_time_series_data: Vec<u8> = Vec::new();
-    let periodic_time_series_body: PeriodicTimeSeries = (
-        String::from("Hello"),
-        Utc::now().timestamp_nanos(),
-        10,
-        Vec::new(),
-    );
+    let periodic_time_series_body = PeriodicTimeSeries {
+        id: String::from("model_one"),
+        data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
+    };
     let mut ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
 
     periodic_time_series_data.append(&mut RECORD_TYPE_PERIOD_TIME_SERIES.to_le_bytes().to_vec());
