@@ -5,6 +5,13 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The subject name, rather than the issuer name, in the client certificate is
+  used as an identifier.
+
 ## [0.5.0] - 2022-11-17
 
 ### Added
@@ -69,6 +76,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.5.0...main
 [0.5.0]: https://github.com/aicers/giganto/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/aicers/giganto/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/aicers/giganto/compare/0.2.0...0.3.0
