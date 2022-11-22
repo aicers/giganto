@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The key in timeseries data includes timestamp.
+
 ### Fixed
 
 - The subject name, rather than the issuer name, in the client certificate is
