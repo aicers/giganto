@@ -83,6 +83,31 @@ impl EventFilter for Conn {
     }
 }
 
+impl PubMessage for Conn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let conn_csv = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            Conn::convert_time_format(timestamp),
+            source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            Conn::convert_time_format(self.duration),
+            self.orig_bytes,
+            self.resp_bytes,
+            self.orig_pkts,
+            self.resp_pkts
+        );
+
+        Ok(bincode::serialize(&Some((
+            timestamp,
+            &conn_csv.as_bytes(),
+        )))?)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsConn {
     pub orig_addr: IpAddr,
@@ -106,6 +131,35 @@ impl EventFilter for DnsConn {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+}
+
+impl PubMessage for DnsConn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let answer = if self.answer.is_empty() {
+            "-".to_string()
+        } else {
+            self.answer
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+
+        let dns_csv = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            DnsConn::convert_time_format(timestamp),
+            source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            self.query,
+            answer,
+        );
+
+        Ok(bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))?)
     }
 }
 
@@ -138,6 +192,47 @@ impl EventFilter for HttpConn {
     }
 }
 
+impl PubMessage for HttpConn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let http_csv = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            HttpConn::convert_time_format(timestamp),
+            source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            if self.method.is_empty() {
+                "-"
+            } else {
+                &self.method
+            },
+            if self.host.is_empty() {
+                "-"
+            } else {
+                &self.host
+            },
+            if self.uri.is_empty() { "-" } else { &self.uri },
+            if self.referrer.is_empty() {
+                "-"
+            } else {
+                &self.referrer
+            },
+            if self.user_agent.is_empty() {
+                "-"
+            } else {
+                &self.user_agent
+            },
+            self.status_code
+        );
+
+        Ok(bincode::serialize(&Some((
+            timestamp,
+            &http_csv.as_bytes(),
+        )))?)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RdpConn {
     pub orig_addr: IpAddr,
@@ -159,6 +254,23 @@ impl EventFilter for RdpConn {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+}
+
+impl PubMessage for RdpConn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let rdp_csv = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            RdpConn::convert_time_format(timestamp),
+            source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.cookie
+        );
+
+        Ok(bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))?)
     }
 }
 
@@ -184,22 +296,19 @@ impl EventFilter for Log {
 }
 
 impl PubMessage for Log {
-    fn message(&self, timestamp: i64) -> Result<Vec<u8>> {
+    fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.log)))?)
-    }
-    fn done() -> Result<Vec<u8>> {
-        Ok(bincode::serialize::<Option<(i64, Vec<u8>)>>(&None)?)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PeriodicTimeSeries {
-    id: String,
-    data: Vec<f64>,
+    pub id: String,
+    pub data: Vec<f64>,
 }
 
 impl PubMessage for PeriodicTimeSeries {
-    fn message(&self, timestamp: i64) -> Result<Vec<u8>> {
+    fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.data)))?)
     }
     fn done() -> Result<Vec<u8>> {
@@ -233,6 +342,51 @@ impl EventFilter for SmtpConn {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+}
+
+impl PubMessage for SmtpConn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let smtp_csv = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            SmtpConn::convert_time_format(timestamp),
+            source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            if self.mailfrom.is_empty() {
+                "-"
+            } else {
+                &self.mailfrom
+            },
+            if self.date.is_empty() {
+                "-"
+            } else {
+                &self.date
+            },
+            if self.from.is_empty() {
+                "-"
+            } else {
+                &self.from
+            },
+            if self.to.is_empty() { "-" } else { &self.to },
+            if self.subject.is_empty() {
+                "-"
+            } else {
+                &self.subject
+            },
+            if self.agent.is_empty() {
+                "-"
+            } else {
+                &self.agent
+            },
+        );
+
+        Ok(bincode::serialize(&Some((
+            timestamp,
+            &smtp_csv.as_bytes(),
+        )))?)
     }
 }
 
