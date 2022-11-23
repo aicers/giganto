@@ -8,7 +8,7 @@ use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{TimeZone, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -36,6 +36,28 @@ lazy_static! {
         RwLock::new(HashMap::new());
 }
 
+enum REconvergeKindType {
+    Conn,
+    Dns,
+    Rdp,
+    Http,
+    Log,
+    Smtp,
+}
+
+impl REconvergeKindType {
+    fn convert_type(input: &str) -> REconvergeKindType {
+        match input {
+            "conn" => REconvergeKindType::Conn,
+            "dns" => REconvergeKindType::Dns,
+            "rdp" => REconvergeKindType::Rdp,
+            "http" => REconvergeKindType::Http,
+            "smtp" => REconvergeKindType::Smtp,
+            _ => REconvergeKindType::Log,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
 enum StreamMessageCode {
@@ -60,8 +82,16 @@ enum MessageCode {
 }
 
 pub trait PubMessage {
-    fn message(&self, timestamp: i64) -> Result<Vec<u8>>;
-    fn done() -> Result<Vec<u8>>;
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>>;
+    fn done() -> Result<Vec<u8>> {
+        Ok(bincode::serialize::<Option<(i64, Vec<u8>)>>(&None)?)
+    }
+    fn convert_time_format(timestamp: i64) -> String {
+        const A_BILLION: i64 = 1_000_000_000;
+        let nsecs = u32::try_from(timestamp % A_BILLION).unwrap_or_default();
+        NaiveDateTime::from_timestamp_opt(timestamp / A_BILLION, nsecs)
+            .map_or("-".to_string(), |s| s.format("%s%.6f").to_string())
+    }
 }
 
 trait StreamMessage {
@@ -270,20 +300,69 @@ async fn handle_request(
 ) -> Result<()> {
     let (msg_type, msg) = handle_request_message(&mut recv).await?;
     match msg_type {
-        MessageCode::Log => {
-            process_response_message(
-                &mut send,
-                db.log_store().context("Failed to open log store")?,
-                msg,
-            )
-            .await?;
-        }
+        MessageCode::Log => match REconvergeKindType::convert_type(&msg.kind) {
+            REconvergeKindType::Conn => {
+                process_response_message(
+                    &mut send,
+                    db.conn_store().context("Failed to open conn store")?,
+                    msg,
+                    false,
+                )
+                .await?;
+            }
+            REconvergeKindType::Dns => {
+                process_response_message(
+                    &mut send,
+                    db.dns_store().context("Failed to open dns store")?,
+                    msg,
+                    false,
+                )
+                .await?;
+            }
+            REconvergeKindType::Rdp => {
+                process_response_message(
+                    &mut send,
+                    db.rdp_store().context("Failed to open rdp store")?,
+                    msg,
+                    false,
+                )
+                .await?;
+            }
+            REconvergeKindType::Http => {
+                process_response_message(
+                    &mut send,
+                    db.http_store().context("Failed to open http store")?,
+                    msg,
+                    false,
+                )
+                .await?;
+            }
+            REconvergeKindType::Smtp => {
+                process_response_message(
+                    &mut send,
+                    db.smtp_store().context("Failed to open smtp store")?,
+                    msg,
+                    false,
+                )
+                .await?;
+            }
+            REconvergeKindType::Log => {
+                process_response_message(
+                    &mut send,
+                    db.log_store().context("Failed to open log store")?,
+                    msg,
+                    true,
+                )
+                .await?;
+            }
+        },
         MessageCode::PeriodicTimeSeries => {
             process_response_message(
                 &mut send,
                 db.periodic_time_series_store()
                     .context("Failed to open periodic time series storage")?,
                 msg,
+                true,
             )
             .await?;
         }
@@ -330,15 +409,18 @@ async fn process_response_message<'c, T>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
     msg: Message,
+    availd_kind: bool,
 ) -> Result<()>
 where
     T: DeserializeOwned + PubMessage,
 {
-    let mut key_prefix = Vec::with_capacity(msg.source.len() + msg.kind.len() + 2);
+    let mut key_prefix = Vec::new();
     key_prefix.extend_from_slice(msg.source.as_bytes());
     key_prefix.push(0);
-    key_prefix.extend_from_slice(msg.kind.as_bytes());
-    key_prefix.push(0);
+    if availd_kind {
+        key_prefix.extend_from_slice(msg.kind.as_bytes());
+        key_prefix.push(0);
+    }
 
     let mut iter = store.boundary_iter(
         &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
@@ -350,7 +432,7 @@ where
     for item in &mut iter {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        handle_response_message(send, val.message(timestamp)?).await?;
+        handle_response_message(send, val.message(timestamp, &msg.source)?).await?;
         size -= 1;
         if size == 0 {
             break;
@@ -581,33 +663,41 @@ async fn request_network_stream(
                 tokio::spawn(async move {
                     match node_type {
                         NodeType::Hog => {
-                            if let Ok(msg) = bincode::deserialize::<HogStreamMessage>(&raw_data) {
-                                if let Err(e) = process_network_stream(
-                                    db,
-                                    conn,
-                                    Some(source),
-                                    node_type,
-                                    msg_type,
-                                    msg,
-                                )
-                                .await
-                                {
-                                    error!("{}", e);
+                            match bincode::deserialize::<HogStreamMessage>(&raw_data) {
+                                Ok(msg) => {
+                                    if let Err(e) = process_network_stream(
+                                        db,
+                                        conn,
+                                        Some(source),
+                                        node_type,
+                                        msg_type,
+                                        msg,
+                                    )
+                                    .await
+                                    {
+                                        error!("{}", e);
+                                    }
+                                }
+                                Err(_) => {
+                                    error!("Failed to deserialize hog message");
                                 }
                             }
-                            error!("Failed to deseralize hog message");
                         }
                         NodeType::Crusher => {
-                            if let Ok(msg) = bincode::deserialize::<CrusherStreamMessage>(&raw_data)
-                            {
-                                if let Err(e) =
-                                    process_network_stream(db, conn, None, node_type, msg_type, msg)
-                                        .await
-                                {
-                                    error!("{}", e);
+                            match bincode::deserialize::<CrusherStreamMessage>(&raw_data) {
+                                Ok(msg) => {
+                                    if let Err(e) = process_network_stream(
+                                        db, conn, None, node_type, msg_type, msg,
+                                    )
+                                    .await
+                                    {
+                                        error!("{}", e);
+                                    }
+                                }
+                                Err(_) => {
+                                    error!("Failed to deserialize crusher message");
                                 }
                             }
-                            error!("Failed to deseralize crusher message");
                         }
                     }
                 });

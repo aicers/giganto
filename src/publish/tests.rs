@@ -1,5 +1,5 @@
 use super::Server;
-use crate::ingestion::{Conn, DnsConn, HttpConn, RdpConn};
+use crate::ingestion::{Conn, DnsConn, HttpConn, Log, PeriodicTimeSeries, RdpConn, SmtpConn};
 use crate::{
     storage::{Database, RawEventStore},
     to_cert_chain, to_private_key,
@@ -215,10 +215,14 @@ async fn recv_network_stream(recv: Arc<RefCell<RecvStream>>) -> (i64, Vec<u8>) {
     (timestamp, body_buf)
 }
 
-fn gen_network_event_key(source: &str, timestamp: i64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+fn gen_network_event_key(source: &str, kind: Option<&str>, timestamp: i64) -> Vec<u8> {
+    let mut key = Vec::new();
     key.extend_from_slice(source.as_bytes());
     key.push(0);
+    if let Some(kind) = kind {
+        key.extend_from_slice(kind.as_bytes());
+        key.push(0);
+    }
     key.extend(timestamp.to_be_bytes());
     key
 }
@@ -289,37 +293,111 @@ fn gen_http_raw_event() -> Vec<u8> {
     ser_http_body
 }
 
+fn gen_smtp_raw_event() -> Vec<u8> {
+    let smtp_body = SmtpConn {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_port: 80,
+        mailfrom: "google".to_string(),
+        date: "2022-11-28".to_string(),
+        from: "safe2@einsis.com".to_string(),
+        to: "safe1@einsis.com".to_string(),
+        subject: "hello giganto".to_string(),
+        agent: "giganto".to_string(),
+    };
+    let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
+    ser_smtp_body
+}
+
+fn gen_log_raw_event() -> Vec<u8> {
+    let log_body = Log {
+        kind: String::from("Hello"),
+        log: base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+    };
+    let ser_log_body = bincode::serialize(&log_body).unwrap();
+    ser_log_body
+}
+
+fn gen_periodic_time_series_raw_event() -> Vec<u8> {
+    let periodic_time_series_body = PeriodicTimeSeries {
+        id: String::from("model_one"),
+        data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
+    };
+    let ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
+    ser_periodic_time_series_body
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, timestamp);
+    let key = gen_network_event_key(source, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
     store.append(&key, &ser_conn_body).unwrap();
     ser_conn_body
 }
 
 fn insert_dns_raw_event(store: &RawEventStore<DnsConn>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, timestamp);
+    let key = gen_network_event_key(source, None, timestamp);
     let ser_dns_body = gen_dns_raw_event();
     store.append(&key, &ser_dns_body).unwrap();
     ser_dns_body
 }
 
 fn insert_rdp_raw_event(store: &RawEventStore<RdpConn>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, timestamp);
+    let key = gen_network_event_key(source, None, timestamp);
     let ser_rdp_body = gen_rdp_raw_event();
     store.append(&key, &ser_rdp_body).unwrap();
     ser_rdp_body
 }
 
 fn insert_http_raw_event(store: &RawEventStore<HttpConn>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, timestamp);
+    let key = gen_network_event_key(source, None, timestamp);
     let ser_http_body = gen_http_raw_event();
     store.append(&key, &ser_http_body).unwrap();
     ser_http_body
 }
 
+fn insert_stmp_raw_event(store: &RawEventStore<SmtpConn>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_stmp_body = gen_smtp_raw_event();
+    store.append(&key, &ser_stmp_body).unwrap();
+    ser_stmp_body
+}
+
+fn insert_log_raw_event(
+    store: &RawEventStore<Log>,
+    source: &str,
+    kind: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(source, Some(kind), timestamp);
+    let ser_log_body = gen_log_raw_event();
+    store.append(&key, &ser_log_body).unwrap();
+    ser_log_body
+}
+
+fn insert_periodic_time_series_raw_event(
+    store: &RawEventStore<PeriodicTimeSeries>,
+    source: &str,
+    kind: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(source, Some(kind), timestamp);
+    let ser_periodic_time_series_body = gen_periodic_time_series_raw_event();
+    store.append(&key, &ser_periodic_time_series_body).unwrap();
+    ser_periodic_time_series_body
+}
+
 #[tokio::test]
-async fn request_publish_log() {
+async fn request_publish_protocol() {
+    use crate::publish::PubMessage;
+
     const PUBLISH_LOG_MESSAGE_CODE: u32 = 0x00;
+    const SOURCE: &str = "einsis";
+    const CONN_KIND: &str = "conn";
+    const DNS_KIND: &str = "dns";
+    const HTTP_KIND: &str = "http";
+    const RDP_KIND: &str = "rdp";
+    const SMTP_KIND: &str = "smtp";
 
     #[derive(Serialize)]
     struct Message {
@@ -333,11 +411,387 @@ async fn request_publish_log() {
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    tokio::spawn(server().run(db.clone()));
+    let publish = TestClient::new().await;
 
+    // conn protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let conn_store = db.conn_store().unwrap();
+        let send_conn_time = Utc::now().timestamp_nanos();
+        let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
+            &conn_store,
+            SOURCE,
+            send_conn_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(CONN_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(Conn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            conn_data.message(send_conn_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // dns protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let dns_store = db.dns_store().unwrap();
+        let send_dns_time = Utc::now().timestamp_nanos();
+        let dns_data = bincode::deserialize::<DnsConn>(&insert_dns_raw_event(
+            &dns_store,
+            SOURCE,
+            send_dns_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(DNS_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(DnsConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            dns_data.message(send_dns_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // http protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let http_store = db.http_store().unwrap();
+        let send_http_time = Utc::now().timestamp_nanos();
+        let http_data = bincode::deserialize::<HttpConn>(&insert_http_raw_event(
+            &http_store,
+            SOURCE,
+            send_http_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(HTTP_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(HttpConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            http_data.message(send_http_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // rdp protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let rdp_store = db.rdp_store().unwrap();
+        let send_rdp_time = Utc::now().timestamp_nanos();
+        let rdp_data = bincode::deserialize::<RdpConn>(&insert_rdp_raw_event(
+            &rdp_store,
+            SOURCE,
+            send_rdp_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(RDP_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(RdpConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            rdp_data.message(send_rdp_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // smtp protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let smtp_store = db.smtp_store().unwrap();
+        let send_smtp_time = Utc::now().timestamp_nanos();
+        let smtp_data = bincode::deserialize::<SmtpConn>(&insert_stmp_raw_event(
+            &smtp_store,
+            SOURCE,
+            send_smtp_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(SMTP_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(SmtpConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            smtp_data.message(send_smtp_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    publish.conn.close(0u32.into(), b"publish_protocol_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn request_publish_log() {
+    use crate::publish::PubMessage;
+
+    const PUBLISH_LOG_MESSAGE_CODE: u32 = 0x00;
+    const SOURCE: &str = "einsis";
+    const KIND: &str = "Hello";
+
+    #[derive(Serialize)]
+    struct Message {
+        source: String,
+        kind: String,
+        start: i64,
+        end: i64,
+        count: usize,
+    }
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path()).unwrap();
+    tokio::spawn(server().run(db.clone()));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
+
+    let log_store = db.log_store().unwrap();
+    let send_log_time = Utc::now().timestamp_nanos();
+    let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
+        &log_store,
+        SOURCE,
+        KIND,
+        send_log_time,
+    ))
+    .unwrap();
 
     let start = DateTime::<Utc>::from_utc(
         NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -354,8 +808,8 @@ async fn request_publish_log() {
         Utc,
     );
     let message = Message {
-        source: String::from("einsis"),
-        kind: String::from("Hello"),
+        source: String::from(SOURCE),
+        kind: String::from(KIND),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
@@ -372,6 +826,7 @@ async fn request_publish_log() {
         .await
         .expect("failed to send request");
 
+    let mut result_data: Vec<Vec<u8>> = Vec::new();
     loop {
         let mut len_buf = [0; std::mem::size_of::<u32>()];
         recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
@@ -380,18 +835,28 @@ async fn request_publish_log() {
         let mut resp_data = vec![0; len.try_into().unwrap()];
         recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
         let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+        result_data.push(resp_data);
         if resp.is_none() {
             break;
         }
     }
+    assert_eq!(Log::done().unwrap(), result_data.pop().unwrap());
+    assert_eq!(
+        log_data.message(send_log_time, SOURCE).unwrap(),
+        result_data.pop().unwrap()
+    );
 
-    publish.conn.close(0u32.into(), b"publish_done");
+    publish.conn.close(0u32.into(), b"publish_log_done");
     publish.endpoint.wait_idle().await;
 }
 
 #[tokio::test]
 async fn request_publish_period_time_series() {
+    use crate::publish::PubMessage;
+
     const PUBLISH_PERIOD_TIME_SERIES_MESSAGE_CODE: u32 = 0x01;
+    const SOURCE: &str = "einsis";
+    const MODLE_ID: &str = "model_one";
 
     #[derive(Serialize)]
     struct Message {
@@ -405,11 +870,21 @@ async fn request_publish_period_time_series() {
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
-
+    tokio::spawn(server().run(db.clone()));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
+
+    let time_series_store = db.periodic_time_series_store().unwrap();
+    let send_time_series_time = Utc::now().timestamp_nanos();
+    let time_series_data =
+        bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
+            &time_series_store,
+            SOURCE,
+            MODLE_ID,
+            send_time_series_time,
+        ))
+        .unwrap();
 
     let start = DateTime::<Utc>::from_utc(
         NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -426,8 +901,8 @@ async fn request_publish_period_time_series() {
         Utc,
     );
     let mesaage = Message {
-        source: String::from("einsis"),
-        kind: String::from("Hello"),
+        source: String::from(SOURCE),
+        kind: String::from(MODLE_ID),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
@@ -447,8 +922,8 @@ async fn request_publish_period_time_series() {
         .write_all(&request_buf)
         .await
         .expect("failed to send request");
-    println!("send test:{:?}", send_pub_req);
 
+    let mut result_data: Vec<Vec<u8>> = Vec::new();
     loop {
         let mut len_buf = [0; std::mem::size_of::<u32>()];
         recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
@@ -457,10 +932,22 @@ async fn request_publish_period_time_series() {
         let mut resp_data = vec![0; len.try_into().unwrap()];
         recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
         let resp = bincode::deserialize::<Option<(i64, Vec<f64>)>>(&resp_data).unwrap();
+        result_data.push(resp_data);
         if resp.is_none() {
             break;
         }
     }
+
+    assert_eq!(
+        PeriodicTimeSeries::done().unwrap(),
+        result_data.pop().unwrap()
+    );
+    assert_eq!(
+        time_series_data
+            .message(send_time_series_time, SOURCE)
+            .unwrap(),
+        result_data.pop().unwrap()
+    );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
     publish.endpoint.wait_idle().await;

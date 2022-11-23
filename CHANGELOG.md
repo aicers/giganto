@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Publish support protocol record data request/response through QUIC.
+
 ### Changed
 
 - The key in timeseries data includes timestamp.
