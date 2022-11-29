@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Publish support protocol record data request/response through QUIC.
+- Add periodic time series to GraphQL API
 
 ### Changed
 

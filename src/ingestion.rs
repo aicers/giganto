@@ -307,6 +307,21 @@ pub struct PeriodicTimeSeries {
     pub data: Vec<f64>,
 }
 
+impl EventFilter for PeriodicTimeSeries {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+}
+
 impl PubMessage for PeriodicTimeSeries {
     fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.data)))?)
@@ -639,7 +654,7 @@ async fn handle_data<T>(
 
     loop {
         match handle_body(&mut recv).await {
-            Ok((mut raw_event, timestamp)) => {
+            Ok((raw_event, timestamp)) => {
                 let mut key: Vec<u8> = Vec::new();
                 key.extend_from_slice(source.as_bytes());
                 key.push(0);
@@ -668,7 +683,6 @@ async fn handle_data<T>(
                         key.extend_from_slice(periodic_time_series.id.as_bytes());
                         key.push(0);
                         key.extend_from_slice(&timestamp.to_be_bytes());
-                        raw_event = bincode::serialize(&periodic_time_series.data)?;
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
