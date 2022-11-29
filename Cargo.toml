@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-async-graphql = { version = "4.0", features = ["chrono"] }
-async-graphql-warp = "4.0"
+async-graphql = { version = "5.0", features = ["chrono"] }
+async-graphql-warp = "5.0"
 base64 = "0.13"
 bincode = "1.3"
 config = { version = "0.13", features = ["toml"], default-features = false }
