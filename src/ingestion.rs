@@ -307,6 +307,21 @@ pub struct PeriodicTimeSeries {
     pub data: Vec<f64>,
 }
 
+impl EventFilter for PeriodicTimeSeries {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+}
+
 impl PubMessage for PeriodicTimeSeries {
     fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.data)))?)

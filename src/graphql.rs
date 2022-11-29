@@ -1,6 +1,7 @@
 mod log;
 pub mod network;
 mod packet;
+mod timeseries;
 
 use crate::{
     ingestion::EventFilter,
@@ -23,7 +24,12 @@ use self::network::NetworkFilter;
 pub const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
-pub struct Query(log::LogQuery, network::NetworkQuery, packet::PacketQuery);
+pub struct Query(
+    log::LogQuery,
+    network::NetworkQuery,
+    packet::PacketQuery,
+    timeseries::TimeSeriesQuery,
+);
 
 #[derive(InputObject, Serialize)]
 pub struct TimeRange {
