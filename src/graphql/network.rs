@@ -1,7 +1,7 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion::{Conn, Dns, Http, Rdp, SmtpConn},
+    ingestion::{Conn, Dns, Http, Rdp, Smtp},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -247,35 +247,9 @@ from_key_value!(
 );
 from_key_value!(RdpRawEvent, Rdp, cookie);
 
-impl FromKeyValue<Dns> for DnsRawEvent {
-    fn from_key_value(key: &[u8], val: Dns) -> Result<Self> {
-        let timestamp = get_timestamp(key)?;
-        Ok(Self {
-            timestamp,
-            orig_addr: val.orig_addr.to_string(),
-            resp_addr: val.resp_addr.to_string(),
-            orig_port: val.orig_port,
-            resp_port: val.resp_port,
-            proto: val.proto,
-            query: val.query,
-            answer: val
-                .answer
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-        })
-    }
-}
-from_key_value!(
-    SmtpRawEvent,
-    SmtpConn,
-    mailfrom,
-    date,
-    from,
-    to,
-    subject,
-    agent
-);
+from_key_value!(DnsRawEvent, Dns, proto, query, answer);
+
+from_key_value!(SmtpRawEvent, Smtp, mailfrom, date, from, to, subject, agent);
 
 #[Object]
 impl NetworkQuery {

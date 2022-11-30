@@ -118,7 +118,7 @@ impl Database {
     }
 
     /// Returns the raw event store for smtp.
-    pub fn smtp_store(&self) -> Result<RawEventStore<ingestion::SmtpConn>> {
+    pub fn smtp_store(&self) -> Result<RawEventStore<ingestion::Smtp>> {
         let cf = self
             .db
             .cf_handle("smtp")
@@ -185,7 +185,7 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
             direction,
         )
     }
-    pub fn iter(&self, from: &[u8]) -> Iter<'db> {
+    pub fn _iter(&self, from: &[u8]) -> Iter<'db> {
         Iter::new(self.db.iterator_cf(
             self.cf,
             rocksdb::IteratorMode::From(from, Direction::Forward),
@@ -361,6 +361,7 @@ pub struct Iter<'d> {
 }
 
 impl<'d> Iter<'d> {
+    #[allow(dead_code)]
     pub fn new(inner: DBIteratorWithThreadMode<'d, DB>) -> Self {
         Self { inner }
     }
