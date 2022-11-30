@@ -2,7 +2,7 @@
 mod tests;
 
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::ingestion::EventFilter;
+use crate::ingestion::{EventFilter, NetworkKey};
 use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
@@ -65,6 +65,7 @@ enum StreamMessageCode {
     Dns = 1,
     Rdp = 2,
     Http = 3,
+    Log = 4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -530,12 +531,12 @@ async fn handle_stream_request(
 }
 
 pub async fn send_direct_network_stream(
-    network_key: &str,
+    network_key: &NetworkKey,
     raw_event: &Vec<u8>,
     timestamp: i64,
 ) -> Result<()> {
-    for (key, sender) in HOG_DIRECT_CHANNEL.read().await.iter() {
-        if key.contains(network_key) {
+    for (req_key, sender) in HOG_DIRECT_CHANNEL.read().await.iter() {
+        if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
@@ -570,25 +571,7 @@ where
     let mut last_ts = 0_i64;
 
     match node_type {
-        NodeType::Hog => {
-            let iter = store.iter(&lower_closed_bound_key(
-                &db_key_prefix,
-                Some(Utc.timestamp_nanos(msg.start_time())),
-            ));
-            for item in iter {
-                let (key, val) = item.context("Failed to read Database")?;
-                let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                let stream_data = val.to_vec();
-                let stream_len = u32::try_from(stream_data.len())?.to_le_bytes();
-
-                let mut send_buf: Vec<u8> = Vec::new();
-                send_buf.extend_from_slice(&timestamp.to_le_bytes());
-                send_buf.extend_from_slice(&stream_len);
-                send_buf.extend_from_slice(&stream_data);
-                sender.write_all(&send_buf).await?;
-                last_ts = timestamp;
-            }
-        }
+        NodeType::Hog => {}
         NodeType::Crusher => {
             let iter = store.boundary_iter(
                 &lower_closed_bound_key(
@@ -698,6 +681,17 @@ where
                 }
             } else {
                 error!("Failed to open http store");
+            }
+        }
+        StreamMessageCode::Log => {
+            if let Ok(store) = db.log_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "log", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open conn store");
             }
         }
     };

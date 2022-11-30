@@ -328,7 +328,7 @@ impl PubMessage for PeriodicTimeSeries {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SmtpConn {
+pub struct Smtp {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
     pub orig_port: u16,
@@ -341,7 +341,7 @@ pub struct SmtpConn {
     pub agent: String,
 }
 
-impl EventFilter for SmtpConn {
+impl EventFilter for Smtp {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -356,11 +356,11 @@ impl EventFilter for SmtpConn {
     }
 }
 
-impl PubMessage for SmtpConn {
+impl PubMessage for Smtp {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
         let smtp_csv = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            SmtpConn::convert_time_format(timestamp),
+            Smtp::convert_time_format(timestamp),
             source,
             self.orig_addr,
             self.orig_port,
@@ -605,7 +605,7 @@ async fn handle_data<T>(
     send: SendStream,
     mut recv: RecvStream,
     record_type: RecordType,
-    network_key: Option<String>,
+    network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
 ) -> Result<()> {
@@ -651,21 +651,21 @@ async fn handle_data<T>(
     loop {
         match handle_body(&mut recv).await {
             Ok((raw_event, timestamp)) => {
+                if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
+                    && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
+                {
+                    sender_rotation
+                        .lock()
+                        .await
+                        .write_all(&timestamp.to_be_bytes())
+                        .await?;
+                    continue;
+                }
                 let mut key: Vec<u8> = Vec::new();
                 key.extend_from_slice(source.as_bytes());
                 key.push(0);
                 match record_type {
                     RecordType::Log => {
-                        if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
-                            && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
-                        {
-                            sender_rotation
-                                .lock()
-                                .await
-                                .write_all(&timestamp.to_be_bytes())
-                                .await?;
-                            continue;
-                        }
                         key.extend_from_slice(
                             bincode::deserialize::<Log>(&raw_event)?.kind.as_bytes(),
                         );
@@ -683,8 +683,8 @@ async fn handle_data<T>(
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
                 store.append(&key, &raw_event)?;
-                if let Some(key) = network_key.as_ref() {
-                    send_direct_network_stream(key, &raw_event, timestamp).await?;
+                if let Some(network_key) = network_key.as_ref() {
+                    send_direct_network_stream(network_key, &raw_event, timestamp).await?;
                 }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
@@ -795,10 +795,17 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<Sources>) -> R
     }
 }
 
-pub fn gen_network_key(source: &str, record: &str) -> String {
-    let mut network_key = String::new();
-    network_key.push_str(source);
-    network_key.push('\0');
-    network_key.push_str(record);
-    network_key
+pub struct NetworkKey {
+    pub(crate) source_key: String,
+    pub(crate) all_key: String,
+}
+
+pub fn gen_network_key(source: &str, protocol: &str) -> NetworkKey {
+    let source_key = format!("{}\0{}", source, protocol);
+    let all_key = format!("all\0{}", protocol);
+
+    NetworkKey {
+        source_key,
+        all_key,
+    }
 }
