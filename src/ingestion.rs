@@ -32,7 +32,7 @@ use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
 const ACK_ROTATION_CNT: u8 = 128;
-const ACK_INTERVAL_TIME: u64 = 60 * 60;
+const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
@@ -639,7 +639,7 @@ async fn handle_data<T>(
 
     loop {
         match handle_body(&mut recv).await {
-            Ok((mut raw_event, timestamp)) => {
+            Ok((raw_event, timestamp)) => {
                 let mut key: Vec<u8> = Vec::new();
                 key.extend_from_slice(source.as_bytes());
                 key.push(0);
@@ -668,7 +668,6 @@ async fn handle_data<T>(
                         key.extend_from_slice(periodic_time_series.id.as_bytes());
                         key.push(0);
                         key.extend_from_slice(&timestamp.to_be_bytes());
-                        raw_event = bincode::serialize(&periodic_time_series.data)?;
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }

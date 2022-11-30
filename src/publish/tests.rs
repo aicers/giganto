@@ -320,8 +320,8 @@ fn gen_log_raw_event() -> Vec<u8> {
 }
 
 fn gen_periodic_time_series_raw_event() -> Vec<u8> {
-    let periodic_time_series_body = PeriodicTimeSeries {
-        id: String::from("model_one"),
+    let periodic_time_series_body: PeriodicTimeSeries = PeriodicTimeSeries {
+        id: String::from("policy_one"),
         data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
     };
     let ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
@@ -378,10 +378,9 @@ fn insert_log_raw_event(
 fn insert_periodic_time_series_raw_event(
     store: &RawEventStore<PeriodicTimeSeries>,
     source: &str,
-    kind: &str,
     timestamp: i64,
 ) -> Vec<u8> {
-    let key = gen_network_event_key(source, Some(kind), timestamp);
+    let key = gen_network_event_key(source, None, timestamp);
     let ser_periodic_time_series_body = gen_periodic_time_series_raw_event();
     store.append(&key, &ser_periodic_time_series_body).unwrap();
     ser_periodic_time_series_body
@@ -855,13 +854,11 @@ async fn request_publish_period_time_series() {
     use crate::publish::PubMessage;
 
     const PUBLISH_PERIOD_TIME_SERIES_MESSAGE_CODE: u32 = 0x01;
-    const SOURCE: &str = "einsis";
-    const MODLE_ID: &str = "model_one";
+    const SAMPLING_POLICY_ID: &str = "policy_one";
 
     #[derive(Serialize)]
     struct Message {
         source: String,
-        kind: String,
         start: i64,
         end: i64,
         count: usize,
@@ -880,8 +877,7 @@ async fn request_publish_period_time_series() {
     let time_series_data =
         bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
             &time_series_store,
-            SOURCE,
-            MODLE_ID,
+            SAMPLING_POLICY_ID,
             send_time_series_time,
         ))
         .unwrap();
@@ -901,8 +897,7 @@ async fn request_publish_period_time_series() {
         Utc,
     );
     let mesaage = Message {
-        source: String::from(SOURCE),
-        kind: String::from(MODLE_ID),
+        source: String::from(SAMPLING_POLICY_ID),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
@@ -944,7 +939,7 @@ async fn request_publish_period_time_series() {
     );
     assert_eq!(
         time_series_data
-            .message(send_time_series_time, SOURCE)
+            .message(send_time_series_time, SAMPLING_POLICY_ID)
             .unwrap(),
         result_data.pop().unwrap()
     );
