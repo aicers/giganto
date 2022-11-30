@@ -207,13 +207,65 @@ pub struct Server {
     server_address: SocketAddr,
 }
 
+pub trait RequestMessage {
+    fn source(&self) -> &str;
+    fn kind(&self) -> &str;
+    fn start(&self) -> i64;
+    fn end(&self) -> i64;
+    fn count(&self) -> usize;
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Message {
-    source: String,
+    source: String, //certification name
     kind: String,
     start: i64,
     end: i64,
     count: usize,
+}
+
+impl RequestMessage for Message {
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+    fn start(&self) -> i64 {
+        self.start
+    }
+    fn end(&self) -> i64 {
+        self.end
+    }
+    fn count(&self) -> usize {
+        self.count
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TimeSeiresMessage {
+    source: String, //sampling policy id
+    start: i64,
+    end: i64,
+    count: usize,
+}
+
+impl RequestMessage for TimeSeiresMessage {
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn kind(&self) -> &str {
+        ""
+    }
+    fn start(&self) -> i64 {
+        self.start
+    }
+    fn end(&self) -> i64 {
+        self.end
+    }
+    fn count(&self) -> usize {
+        self.count
+    }
 }
 
 impl Server {
@@ -298,71 +350,77 @@ async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
 ) -> Result<()> {
-    let (msg_type, msg) = handle_request_message(&mut recv).await?;
+    let (msg_type, msg_buf) = handle_request_message(&mut recv).await?;
     match msg_type {
-        MessageCode::Log => match REconvergeKindType::convert_type(&msg.kind) {
-            REconvergeKindType::Conn => {
-                process_response_message(
-                    &mut send,
-                    db.conn_store().context("Failed to open conn store")?,
-                    msg,
-                    false,
-                )
-                .await?;
+        MessageCode::Log => {
+            let msg = bincode::deserialize::<Message>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+            match REconvergeKindType::convert_type(&msg.kind) {
+                REconvergeKindType::Conn => {
+                    process_response_message(
+                        &mut send,
+                        db.conn_store().context("Failed to open conn store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Dns => {
+                    process_response_message(
+                        &mut send,
+                        db.dns_store().context("Failed to open dns store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Rdp => {
+                    process_response_message(
+                        &mut send,
+                        db.rdp_store().context("Failed to open rdp store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Http => {
+                    process_response_message(
+                        &mut send,
+                        db.http_store().context("Failed to open http store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Smtp => {
+                    process_response_message(
+                        &mut send,
+                        db.smtp_store().context("Failed to open smtp store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Log => {
+                    process_response_message(
+                        &mut send,
+                        db.log_store().context("Failed to open log store")?,
+                        msg,
+                        true,
+                    )
+                    .await?;
+                }
             }
-            REconvergeKindType::Dns => {
-                process_response_message(
-                    &mut send,
-                    db.dns_store().context("Failed to open dns store")?,
-                    msg,
-                    false,
-                )
-                .await?;
-            }
-            REconvergeKindType::Rdp => {
-                process_response_message(
-                    &mut send,
-                    db.rdp_store().context("Failed to open rdp store")?,
-                    msg,
-                    false,
-                )
-                .await?;
-            }
-            REconvergeKindType::Http => {
-                process_response_message(
-                    &mut send,
-                    db.http_store().context("Failed to open http store")?,
-                    msg,
-                    false,
-                )
-                .await?;
-            }
-            REconvergeKindType::Smtp => {
-                process_response_message(
-                    &mut send,
-                    db.smtp_store().context("Failed to open smtp store")?,
-                    msg,
-                    false,
-                )
-                .await?;
-            }
-            REconvergeKindType::Log => {
-                process_response_message(
-                    &mut send,
-                    db.log_store().context("Failed to open log store")?,
-                    msg,
-                    true,
-                )
-                .await?;
-            }
-        },
+        }
         MessageCode::PeriodicTimeSeries => {
+            let msg = bincode::deserialize::<TimeSeiresMessage>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deseralize timeseries message: {}", e))?;
             process_response_message(
                 &mut send,
                 db.periodic_time_series_store()
                     .context("Failed to open periodic time series storage")?,
                 msg,
-                true,
+                false,
             )
             .await?;
         }
@@ -370,7 +428,7 @@ async fn handle_request(
     Ok(())
 }
 
-async fn handle_request_message(recv: &mut RecvStream) -> Result<(MessageCode, Message)> {
+async fn handle_request_message(recv: &mut RecvStream) -> Result<(MessageCode, Vec<u8>)> {
     let mut buf = [0; mem::size_of::<u32>()];
     recv.read_exact(&mut buf)
         .await
@@ -389,9 +447,7 @@ async fn handle_request_message(recv: &mut RecvStream) -> Result<(MessageCode, M
         .await
         .map_err(|e| anyhow!("Failed to read rest of request: {}", e))?;
 
-    let msg = bincode::deserialize::<Message>(&rest_buf)
-        .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
-    Ok((msg_type, msg))
+    Ok((msg_type, rest_buf))
 }
 
 async fn handle_response_message(send: &mut SendStream, record: Vec<u8>) -> Result<()> {
@@ -405,34 +461,34 @@ async fn handle_response_message(send: &mut SendStream, record: Vec<u8>) -> Resu
     Ok(())
 }
 
-async fn process_response_message<'c, T>(
+async fn process_response_message<'c, T, K>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
-    msg: Message,
+    msg: K,
     availd_kind: bool,
 ) -> Result<()>
 where
     T: DeserializeOwned + PubMessage,
+    K: RequestMessage,
 {
     let mut key_prefix = Vec::new();
-    key_prefix.extend_from_slice(msg.source.as_bytes());
+    key_prefix.extend_from_slice(msg.source().as_bytes());
     key_prefix.push(0);
     if availd_kind {
-        key_prefix.extend_from_slice(msg.kind.as_bytes());
+        key_prefix.extend_from_slice(msg.kind().as_bytes());
         key_prefix.push(0);
     }
-
     let mut iter = store.boundary_iter(
-        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
-        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
+        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start()))),
+        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end()))),
         Direction::Forward,
     );
 
-    let mut size = msg.count;
+    let mut size = msg.count();
     for item in &mut iter {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        handle_response_message(send, val.message(timestamp, &msg.source)?).await?;
+        handle_response_message(send, val.message(timestamp, msg.source())?).await?;
         size -= 1;
         if size == 0 {
             break;
