@@ -1,7 +1,7 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion::{Conn, DnsConn, HttpConn, RdpConn, SmtpConn},
+    ingestion::{Conn, Dns, Http, Rdp, SmtpConn},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -237,7 +237,7 @@ from_key_value!(
 );
 from_key_value!(
     HttpRawEvent,
-    HttpConn,
+    Http,
     method,
     host,
     uri,
@@ -245,10 +245,10 @@ from_key_value!(
     user_agent,
     status_code
 );
-from_key_value!(RdpRawEvent, RdpConn, cookie);
+from_key_value!(RdpRawEvent, Rdp, cookie);
 
-impl FromKeyValue<DnsConn> for DnsRawEvent {
-    fn from_key_value(key: &[u8], val: DnsConn) -> Result<Self> {
+impl FromKeyValue<Dns> for DnsRawEvent {
+    fn from_key_value(key: &[u8], val: Dns) -> Result<Self> {
         let timestamp = get_timestamp(key)?;
         Ok(Self {
             timestamp,
@@ -507,9 +507,9 @@ impl NetworkQuery {
 
 fn network_connection(
     mut conn_iter: Peekable<FilteredIter<Conn>>,
-    mut dns_iter: Peekable<FilteredIter<DnsConn>>,
-    mut http_iter: Peekable<FilteredIter<HttpConn>>,
-    mut rdp_iter: Peekable<FilteredIter<RdpConn>>,
+    mut dns_iter: Peekable<FilteredIter<Dns>>,
+    mut http_iter: Peekable<FilteredIter<Http>>,
+    mut rdp_iter: Peekable<FilteredIter<Rdp>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -629,7 +629,7 @@ fn key_prefix(source: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
-    use crate::ingestion::{Conn, DnsConn, HttpConn, RdpConn};
+    use crate::ingestion::{Conn, Dns, Http, Rdp};
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use std::mem;
@@ -796,13 +796,13 @@ mod tests {
         );
     }
 
-    fn insert_dns_raw_event(store: &RawEventStore<DnsConn>, source: &str, timestamp: i64) {
+    fn insert_dns_raw_event(store: &RawEventStore<Dns>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
         key.push(0);
         key.extend(timestamp.to_be_bytes());
 
-        let dns_body = DnsConn {
+        let dns_body = Dns {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -880,13 +880,13 @@ mod tests {
         );
     }
 
-    fn insert_http_raw_event(store: &RawEventStore<HttpConn>, source: &str, timestamp: i64) {
+    fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
         key.push(0);
         key.extend(timestamp.to_be_bytes());
 
-        let http_body = HttpConn {
+        let http_body = Http {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -967,13 +967,13 @@ mod tests {
         );
     }
 
-    fn insert_rdp_raw_event(store: &RawEventStore<RdpConn>, source: &str, timestamp: i64) {
+    fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
         key.push(0);
         key.extend(timestamp.to_be_bytes());
 
-        let rdp_body = RdpConn {
+        let rdp_body = Rdp {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,

@@ -71,7 +71,7 @@ impl Database {
     }
 
     /// Returns the raw event store for dns.
-    pub fn dns_store(&self) -> Result<RawEventStore<ingestion::DnsConn>> {
+    pub fn dns_store(&self) -> Result<RawEventStore<ingestion::Dns>> {
         let cf = self
             .db
             .cf_handle("dns")
@@ -89,7 +89,7 @@ impl Database {
     }
 
     /// Returns the raw event store for http.
-    pub fn http_store(&self) -> Result<RawEventStore<ingestion::HttpConn>> {
+    pub fn http_store(&self) -> Result<RawEventStore<ingestion::Http>> {
         let cf = self
             .db
             .cf_handle("http")
@@ -98,7 +98,7 @@ impl Database {
     }
 
     /// Returns the raw event store for rdp.
-    pub fn rdp_store(&self) -> Result<RawEventStore<ingestion::RdpConn>> {
+    pub fn rdp_store(&self) -> Result<RawEventStore<ingestion::Rdp>> {
         let cf = self
             .db
             .cf_handle("rdp")

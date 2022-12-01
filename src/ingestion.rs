@@ -109,7 +109,7 @@ impl PubMessage for Conn {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DnsConn {
+pub struct Dns {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
     pub orig_port: u16,
@@ -119,7 +119,7 @@ pub struct DnsConn {
     pub answer: Vec<IpAddr>,
 }
 
-impl EventFilter for DnsConn {
+impl EventFilter for Dns {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -134,7 +134,7 @@ impl EventFilter for DnsConn {
     }
 }
 
-impl PubMessage for DnsConn {
+impl PubMessage for Dns {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
         let answer = if self.answer.is_empty() {
             "-".to_string()
@@ -148,7 +148,7 @@ impl PubMessage for DnsConn {
 
         let dns_csv = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            DnsConn::convert_time_format(timestamp),
+            Dns::convert_time_format(timestamp),
             source,
             self.orig_addr,
             self.orig_port,
@@ -164,7 +164,7 @@ impl PubMessage for DnsConn {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct HttpConn {
+pub struct Http {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
     pub orig_port: u16,
@@ -177,7 +177,7 @@ pub struct HttpConn {
     pub status_code: u16,
 }
 
-impl EventFilter for HttpConn {
+impl EventFilter for Http {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -192,11 +192,11 @@ impl EventFilter for HttpConn {
     }
 }
 
-impl PubMessage for HttpConn {
+impl PubMessage for Http {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
         let http_csv = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            HttpConn::convert_time_format(timestamp),
+            Http::convert_time_format(timestamp),
             source,
             self.orig_addr,
             self.orig_port,
@@ -234,7 +234,7 @@ impl PubMessage for HttpConn {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RdpConn {
+pub struct Rdp {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
     pub orig_port: u16,
@@ -242,7 +242,7 @@ pub struct RdpConn {
     pub cookie: String,
 }
 
-impl EventFilter for RdpConn {
+impl EventFilter for Rdp {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -257,11 +257,11 @@ impl EventFilter for RdpConn {
     }
 }
 
-impl PubMessage for RdpConn {
+impl PubMessage for Rdp {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
         let rdp_csv = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            RdpConn::convert_time_format(timestamp),
+            Rdp::convert_time_format(timestamp),
             source,
             self.orig_addr,
             self.orig_port,
