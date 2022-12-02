@@ -234,7 +234,7 @@ async fn dns() {
     const RECORD_TYPE_DNS: u32 = 0x01;
 
     #[derive(Serialize)]
-    struct DNSConn {
+    struct Dns {
         orig_addr: IpAddr,
         resp_addr: IpAddr,
         orig_port: u16,
@@ -252,7 +252,7 @@ async fn dns() {
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let mut dns_data: Vec<u8> = Vec::new();
-    let dns_body = DNSConn {
+    let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -321,7 +321,7 @@ async fn http() {
     const RECORD_TYPE_HTTP: u32 = 0x03;
 
     #[derive(Serialize)]
-    struct HttpConn {
+    struct Http {
         orig_addr: IpAddr,
         resp_addr: IpAddr,
         orig_port: u16,
@@ -343,7 +343,7 @@ async fn http() {
     let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let mut http_data: Vec<u8> = Vec::new();
-    let http_body = HttpConn {
+    let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -378,7 +378,7 @@ async fn rdp() {
     const RECORD_TYPE_RDP: u32 = 0x04;
 
     #[derive(Serialize)]
-    struct RdpConn {
+    struct Rdp {
         orig_addr: IpAddr,
         resp_addr: IpAddr,
         orig_port: u16,
@@ -395,7 +395,7 @@ async fn rdp() {
     let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let mut rdp_data: Vec<u8> = Vec::new();
-    let rdp_body = RdpConn {
+    let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,

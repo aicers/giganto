@@ -1,5 +1,5 @@
 use super::Server;
-use crate::ingestion::{Conn, DnsConn, HttpConn, Log, PeriodicTimeSeries, RdpConn, SmtpConn};
+use crate::ingestion::{Conn, Dns, Http, Log, PeriodicTimeSeries, Rdp, SmtpConn};
 use crate::{
     storage::{Database, RawEventStore},
     to_cert_chain, to_private_key,
@@ -246,7 +246,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
 }
 
 fn gen_dns_raw_event() -> Vec<u8> {
-    let dns_body = DnsConn {
+    let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -265,7 +265,7 @@ fn gen_dns_raw_event() -> Vec<u8> {
 }
 
 fn gen_rdp_raw_event() -> Vec<u8> {
-    let rdp_body = RdpConn {
+    let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -277,7 +277,7 @@ fn gen_rdp_raw_event() -> Vec<u8> {
 }
 
 fn gen_http_raw_event() -> Vec<u8> {
-    let http_body = HttpConn {
+    let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -335,21 +335,21 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i
     ser_conn_body
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<DnsConn>, source: &str, timestamp: i64) -> Vec<u8> {
+fn insert_dns_raw_event(store: &RawEventStore<Dns>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_dns_body = gen_dns_raw_event();
     store.append(&key, &ser_dns_body).unwrap();
     ser_dns_body
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<RdpConn>, source: &str, timestamp: i64) -> Vec<u8> {
+fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_rdp_body = gen_rdp_raw_event();
     store.append(&key, &ser_rdp_body).unwrap();
     ser_rdp_body
 }
 
-fn insert_http_raw_event(store: &RawEventStore<HttpConn>, source: &str, timestamp: i64) -> Vec<u8> {
+fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_http_body = gen_http_raw_event();
     store.append(&key, &ser_http_body).unwrap();
@@ -487,12 +487,9 @@ async fn request_publish_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let dns_store = db.dns_store().unwrap();
         let send_dns_time = Utc::now().timestamp_nanos();
-        let dns_data = bincode::deserialize::<DnsConn>(&insert_dns_raw_event(
-            &dns_store,
-            SOURCE,
-            send_dns_time,
-        ))
-        .unwrap();
+        let dns_data =
+            bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SOURCE, send_dns_time))
+                .unwrap();
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -542,7 +539,7 @@ async fn request_publish_protocol() {
             }
         }
 
-        assert_eq!(DnsConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(Dns::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
             dns_data.message(send_dns_time, SOURCE).unwrap(),
             result_data.pop().unwrap()
@@ -555,7 +552,7 @@ async fn request_publish_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let http_store = db.http_store().unwrap();
         let send_http_time = Utc::now().timestamp_nanos();
-        let http_data = bincode::deserialize::<HttpConn>(&insert_http_raw_event(
+        let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
             &http_store,
             SOURCE,
             send_http_time,
@@ -610,7 +607,7 @@ async fn request_publish_protocol() {
             }
         }
 
-        assert_eq!(HttpConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(Http::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
             http_data.message(send_http_time, SOURCE).unwrap(),
             result_data.pop().unwrap()
@@ -623,12 +620,9 @@ async fn request_publish_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let rdp_store = db.rdp_store().unwrap();
         let send_rdp_time = Utc::now().timestamp_nanos();
-        let rdp_data = bincode::deserialize::<RdpConn>(&insert_rdp_raw_event(
-            &rdp_store,
-            SOURCE,
-            send_rdp_time,
-        ))
-        .unwrap();
+        let rdp_data =
+            bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time))
+                .unwrap();
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -678,7 +672,7 @@ async fn request_publish_protocol() {
             }
         }
 
-        assert_eq!(RdpConn::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(Rdp::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
             rdp_data.message(send_rdp_time, SOURCE).unwrap(),
             result_data.pop().unwrap()
