@@ -15,6 +15,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The key in timeseries data includes timestamp.
+- Change DNS answer field to `Vec<String>`.
 
 ### Fixed
 

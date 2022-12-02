@@ -116,7 +116,7 @@ pub struct Dns {
     pub resp_port: u16,
     pub proto: u8,
     pub query: String,
-    pub answer: Vec<IpAddr>,
+    pub answer: Vec<String>,
 }
 
 impl EventFilter for Dns {
@@ -139,11 +139,7 @@ impl PubMessage for Dns {
         let answer = if self.answer.is_empty() {
             "-".to_string()
         } else {
-            self.answer
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
+            self.answer.join(",")
         };
 
         let dns_csv = format!(
