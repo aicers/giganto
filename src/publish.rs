@@ -43,6 +43,10 @@ enum REconvergeKindType {
     Http,
     Log,
     Smtp,
+    Ntlm,
+    Kerberos,
+    Ssh,
+    DceRpc,
 }
 
 impl REconvergeKindType {
@@ -53,6 +57,10 @@ impl REconvergeKindType {
             "rdp" => REconvergeKindType::Rdp,
             "http" => REconvergeKindType::Http,
             "smtp" => REconvergeKindType::Smtp,
+            "ntlm" => REconvergeKindType::Ntlm,
+            "kerberos" => REconvergeKindType::Kerberos,
+            "ssh" => REconvergeKindType::Ssh,
+            "dce rpc" => REconvergeKindType::DceRpc,
             _ => REconvergeKindType::Log,
         }
     }
@@ -66,6 +74,11 @@ enum StreamMessageCode {
     Rdp = 2,
     Http = 3,
     Log = 4,
+    Smtp = 5,
+    Ntlm = 6,
+    Kerberos = 7,
+    Ssh = 8,
+    DceRpc = 9,
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -244,14 +257,14 @@ impl RequestMessage for Message {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TimeSeiresMessage {
+struct TimeSeriesMessage {
     source: String, //sampling policy id
     start: i64,
     end: i64,
     count: usize,
 }
 
-impl RequestMessage for TimeSeiresMessage {
+impl RequestMessage for TimeSeriesMessage {
     fn source(&self) -> &str {
         &self.source
     }
@@ -347,6 +360,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
@@ -411,10 +425,47 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Ntlm => {
+                    process_response_message(
+                        &mut send,
+                        db.ntlm_store().context("Failed to open ntlm store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Kerberos => {
+                    process_response_message(
+                        &mut send,
+                        db.kerberos_store()
+                            .context("Failed to open kerberos store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Ssh => {
+                    process_response_message(
+                        &mut send,
+                        db.ssh_store().context("Failed to open ssh store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::DceRpc => {
+                    process_response_message(
+                        &mut send,
+                        db.dce_rpc_store().context("Failed to open dce rpc store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::PeriodicTimeSeries => {
-            let msg = bincode::deserialize::<TimeSeiresMessage>(&msg_buf)
+            let msg = bincode::deserialize::<TimeSeriesMessage>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deseralize timeseries message: {}", e))?;
             process_response_message(
                 &mut send,
@@ -627,6 +678,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn process_network_stream<T>(
     db: Database,
     conn: Connection,
@@ -691,7 +743,62 @@ where
                     error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!("Failed to open conn store");
+                error!("Failed to open log store");
+            }
+        }
+        StreamMessageCode::Smtp => {
+            if let Ok(store) = db.smtp_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "smtp", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open smtp store");
+            }
+        }
+        StreamMessageCode::Ntlm => {
+            if let Ok(store) = db.ntlm_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "ntlm", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open ntlm store");
+            }
+        }
+        StreamMessageCode::Kerberos => {
+            if let Ok(store) = db.kerberos_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "kerberos", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open kerberos store");
+            }
+        }
+        StreamMessageCode::Ssh => {
+            if let Ok(store) = db.ssh_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "ssh", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open ssh store");
+            }
+        }
+        StreamMessageCode::DceRpc => {
+            if let Ok(store) = db.dce_rpc_store() {
+                if let Err(e) =
+                    send_network_stream(store, conn, "dce rpc", msg, source, node_type).await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open dce rpc store");
             }
         }
     };

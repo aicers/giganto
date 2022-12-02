@@ -1,7 +1,7 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion::{Conn, Dns, Http, Rdp, Smtp},
+    ingestion::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -196,6 +196,77 @@ struct SmtpRawEvent {
     agent: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct NtlmRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    username: String,
+    hostname: String,
+    domainname: String,
+    server_nb_computer_name: String,
+    server_dns_computer_name: String,
+    server_tree_name: String,
+    success: String,
+}
+
+#[derive(SimpleObject, Debug)]
+struct KerberosRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    request_type: String,
+    client: String,
+    service: String,
+    success: String,
+    error_msg: String,
+    from: i64,
+    till: i64,
+    cipher: String,
+    forwardable: String,
+    renewable: String,
+    client_cert_subject: String,
+    server_cert_subject: String,
+}
+
+#[derive(SimpleObject, Debug)]
+struct SshRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    version: i64,
+    auth_success: String,
+    auth_attempts: i64,
+    direction: String,
+    client: String,
+    server: String,
+    cipher_alg: String,
+    mac_alg: String,
+    compression_alg: String,
+    kex_alg: String,
+    host_key_alg: String,
+    host_key: String,
+}
+
+#[derive(SimpleObject, Debug)]
+struct DceRpcRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    resp_addr: String,
+    orig_port: u16,
+    resp_port: u16,
+    rtt: i64,
+    named_pipe: String,
+    endpoint: String,
+    operation: String,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum NetworkRawEvents {
@@ -203,6 +274,10 @@ enum NetworkRawEvents {
     DnsRawEvent(DnsRawEvent),
     HttpRawEvent(HttpRawEvent),
     RdpRawEvent(RdpRawEvent),
+    NtlmRawEvent(NtlmRawEvent),
+    KerberosRawEvent(KerberosRawEvent),
+    SshRawEvent(SshRawEvent),
+    DceRpcRawEvent(DceRpcRawEvent),
 }
 
 macro_rules! from_key_value {
@@ -250,6 +325,54 @@ from_key_value!(RdpRawEvent, Rdp, cookie);
 from_key_value!(DnsRawEvent, Dns, proto, query, answer);
 
 from_key_value!(SmtpRawEvent, Smtp, mailfrom, date, from, to, subject, agent);
+
+from_key_value!(
+    NtlmRawEvent,
+    Ntlm,
+    username,
+    hostname,
+    domainname,
+    server_nb_computer_name,
+    server_dns_computer_name,
+    server_tree_name,
+    success
+);
+
+from_key_value!(
+    KerberosRawEvent,
+    Kerberos,
+    request_type,
+    client,
+    service,
+    success,
+    error_msg,
+    from,
+    till,
+    cipher,
+    forwardable,
+    renewable,
+    client_cert_subject,
+    server_cert_subject
+);
+
+from_key_value!(
+    SshRawEvent,
+    Ssh,
+    version,
+    auth_success,
+    auth_attempts,
+    direction,
+    client,
+    server,
+    cipher_alg,
+    mac_alg,
+    compression_alg,
+    kex_alg,
+    host_key_alg,
+    host_key
+);
+
+from_key_value!(DceRpcRawEvent, DceRpc, rtt, named_pipe, endpoint, operation);
 
 #[Object]
 impl NetworkQuery {
@@ -364,6 +487,106 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SmtpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.smtp_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
+    async fn ntlm_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, NtlmRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ntlm_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
+    async fn kerberos_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, KerberosRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.kerberos_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
+    async fn ssh_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, SshRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ssh_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
+    async fn dce_rpc_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, DceRpcRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.dce_rpc_store()?;
         let key_prefix = key_prefix(&filter.source);
 
         query(

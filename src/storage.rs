@@ -12,7 +12,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 7] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 11] = [
     "conn",
     "dns",
     "log",
@@ -20,6 +20,10 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 7] = [
     "rdp",
     "periodic time series",
     "smtp",
+    "ntlm",
+    "kerberos",
+    "ssh",
+    "dce rpc",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -123,6 +127,42 @@ impl Database {
             .db
             .cf_handle("smtp")
             .context("cannot access smtp column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for ntlm.
+    pub fn ntlm_store(&self) -> Result<RawEventStore<ingestion::Ntlm>> {
+        let cf = self
+            .db
+            .cf_handle("ntlm")
+            .context("cannot access ntlm column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for kerberos.
+    pub fn kerberos_store(&self) -> Result<RawEventStore<ingestion::Kerberos>> {
+        let cf = self
+            .db
+            .cf_handle("kerberos")
+            .context("cannot access kerberos column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for ssh.
+    pub fn ssh_store(&self) -> Result<RawEventStore<ingestion::Ssh>> {
+        let cf = self
+            .db
+            .cf_handle("ssh")
+            .context("cannot access ssh column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for dce rpc.
+    pub fn dce_rpc_store(&self) -> Result<RawEventStore<ingestion::DceRpc>> {
+        let cf = self
+            .db
+            .cf_handle("dce rpc")
+            .context("cannot access dce rpc column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
