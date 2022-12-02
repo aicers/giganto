@@ -809,7 +809,7 @@ mod tests {
             resp_port: 80,
             proto: 17,
             query: "Hello Server Hello Server Hello Server".to_string(),
-            answer: vec!["1.1.1.1".parse::<IpAddr>().unwrap()],
+            answer: vec!["1.1.1.1".to_string()],
         };
         let ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
