@@ -1,6 +1,8 @@
+mod network;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
 use crate::graphql::network::NetworkFilter;
 use crate::publish::{send_direct_network_stream, PubMessage};
 use crate::server::{certificate_info, config_server, server_handshake};
@@ -52,222 +54,6 @@ pub trait EventFilter {
     fn resp_addr(&self) -> Option<IpAddr>;
     fn orig_port(&self) -> Option<u16>;
     fn resp_port(&self) -> Option<u16>;
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-pub struct Conn {
-    pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub duration: i64,
-    pub orig_bytes: u64,
-    pub resp_bytes: u64,
-    pub orig_pkts: u64,
-    pub resp_pkts: u64,
-}
-
-impl EventFilter for Conn {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-}
-
-impl PubMessage for Conn {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let conn_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Conn::convert_time_format(timestamp),
-            source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            self.proto,
-            Conn::convert_time_format(self.duration),
-            self.orig_bytes,
-            self.resp_bytes,
-            self.orig_pkts,
-            self.resp_pkts
-        );
-
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &conn_csv.as_bytes(),
-        )))?)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Dns {
-    pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub query: String,
-    pub answer: Vec<String>,
-}
-
-impl EventFilter for Dns {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-}
-
-impl PubMessage for Dns {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let answer = if self.answer.is_empty() {
-            "-".to_string()
-        } else {
-            self.answer.join(",")
-        };
-
-        let dns_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Dns::convert_time_format(timestamp),
-            source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            self.proto,
-            self.query,
-            answer,
-        );
-
-        Ok(bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))?)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Http {
-    pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub method: String,
-    pub host: String,
-    pub uri: String,
-    pub referrer: String,
-    pub user_agent: String,
-    pub status_code: u16,
-}
-
-impl EventFilter for Http {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-}
-
-impl PubMessage for Http {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let http_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Http::convert_time_format(timestamp),
-            source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            if self.method.is_empty() {
-                "-"
-            } else {
-                &self.method
-            },
-            if self.host.is_empty() {
-                "-"
-            } else {
-                &self.host
-            },
-            if self.uri.is_empty() { "-" } else { &self.uri },
-            if self.referrer.is_empty() {
-                "-"
-            } else {
-                &self.referrer
-            },
-            if self.user_agent.is_empty() {
-                "-"
-            } else {
-                &self.user_agent
-            },
-            self.status_code
-        );
-
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &http_csv.as_bytes(),
-        )))?)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Rdp {
-    pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub cookie: String,
-}
-
-impl EventFilter for Rdp {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-}
-
-impl PubMessage for Rdp {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let rdp_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Rdp::convert_time_format(timestamp),
-            source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            self.cookie
-        );
-
-        Ok(bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))?)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -327,80 +113,6 @@ impl PubMessage for PeriodicTimeSeries {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Smtp {
-    pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_port: u16,
-    pub mailfrom: String,
-    pub date: String,
-    pub from: String,
-    pub to: String,
-    pub subject: String,
-    pub agent: String,
-}
-
-impl EventFilter for Smtp {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-}
-
-impl PubMessage for Smtp {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let smtp_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Smtp::convert_time_format(timestamp),
-            source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            if self.mailfrom.is_empty() {
-                "-"
-            } else {
-                &self.mailfrom
-            },
-            if self.date.is_empty() {
-                "-"
-            } else {
-                &self.date
-            },
-            if self.from.is_empty() {
-                "-"
-            } else {
-                &self.from
-            },
-            if self.to.is_empty() { "-" } else { &self.to },
-            if self.subject.is_empty() {
-                "-"
-            } else {
-                &self.subject
-            },
-            if self.agent.is_empty() {
-                "-"
-            } else {
-                &self.agent
-            },
-        );
-
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &smtp_csv.as_bytes(),
-        )))?)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
 enum RecordType {
@@ -411,6 +123,10 @@ enum RecordType {
     Rdp = 4,
     PeriodicTimeSeries = 5,
     Smtp = 6,
+    Ntlm = 7,
+    Kerberos = 8,
+    Ssh = 9,
+    DceRpc = 10,
 }
 
 pub struct Server {
@@ -517,6 +233,7 @@ async fn handle_connection(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_request(
     source: String,
     (send, mut recv): (SendStream, RecvStream),
@@ -550,7 +267,15 @@ async fn handle_request(
             .await?;
         }
         RecordType::Log => {
-            handle_data(send, recv, RecordType::Log, None, source, db.log_store()?).await?;
+            handle_data(
+                send,
+                recv,
+                RecordType::Log,
+                Some(gen_network_key(&source, "log")),
+                source,
+                db.log_store()?,
+            )
+            .await?;
         }
         RecordType::Http => {
             handle_data(
@@ -593,6 +318,50 @@ async fn handle_request(
                 Some(gen_network_key(&source, "smtp")),
                 source,
                 db.smtp_store()?,
+            )
+            .await?;
+        }
+        RecordType::Ntlm => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Ntlm,
+                Some(gen_network_key(&source, "ntlm")),
+                source,
+                db.ntlm_store()?,
+            )
+            .await?;
+        }
+        RecordType::Kerberos => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Kerberos,
+                Some(gen_network_key(&source, "kerberos")),
+                source,
+                db.kerberos_store()?,
+            )
+            .await?;
+        }
+        RecordType::Ssh => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Ssh,
+                Some(gen_network_key(&source, "ssh")),
+                source,
+                db.ssh_store()?,
+            )
+            .await?;
+        }
+        RecordType::DceRpc => {
+            handle_data(
+                send,
+                recv,
+                RecordType::DceRpc,
+                Some(gen_network_key(&source, "dce rpc")),
+                source,
+                db.dce_rpc_store()?,
             )
             .await?;
         }
