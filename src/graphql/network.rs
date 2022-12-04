@@ -826,7 +826,7 @@ fn key_prefix(source: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
-    use crate::ingestion::{Conn, Dns, Http, Rdp};
+    use crate::ingestion::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use std::mem;
@@ -1180,6 +1180,282 @@ mod tests {
         let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
 
         store.append(&key, &ser_rdp_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn smtp_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.smtp_store().unwrap();
+
+        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            smtpRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let smtp_body = Smtp {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            mailfrom: "mailfrom".to_string(),
+            date: "date".to_string(),
+            from: "from".to_string(),
+            to: "to".to_string(),
+            subject: "subject".to_string(),
+            agent: "agent".to_string(),
+        };
+        let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
+
+        store.append(&key, &ser_smtp_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ntlm_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ntlm_store().unwrap();
+
+        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            ntlmRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let ntlm_body = Ntlm {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            username: "bly".to_string(),
+            hostname: "host".to_string(),
+            domainname: "domain".to_string(),
+            server_nb_computer_name: "NB".to_string(),
+            server_dns_computer_name: "dns".to_string(),
+            server_tree_name: "tree".to_string(),
+            success: "tf".to_string(),
+        };
+        let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
+
+        store.append(&key, &ser_ntlm_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn kerberos_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.kerberos_store().unwrap();
+
+        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            kerberosRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let kerberos_body = Kerberos {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            request_type: "req_type".to_string(),
+            client: "client".to_string(),
+            service: "service".to_string(),
+            success: "tf".to_string(),
+            error_msg: "err_msg".to_string(),
+            from: 5454,
+            till: 2345,
+            cipher: "cipher".to_string(),
+            forwardable: "forwardable".to_string(),
+            renewable: "renewable".to_string(),
+            client_cert_subject: "client_cert".to_string(),
+            server_cert_subject: "server_cert".to_string(),
+        };
+        let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
+
+        store.append(&key, &ser_kerberos_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ssh_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ssh_store().unwrap();
+
+        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            sshRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let ssh_body = Ssh {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            version: 01,
+            auth_success: "auth_success".to_string(),
+            auth_attempts: 3,
+            direction: "direction".to_string(),
+            client: "client".to_string(),
+            server: "server".to_string(),
+            cipher_alg: "cipher_alg".to_string(),
+            mac_alg: "mac_alg".to_string(),
+            compression_alg: "compression_alg".to_string(),
+            kex_alg: "kex_alg".to_string(),
+            host_key_alg: "host_key_alg".to_string(),
+            host_key: "host_key".to_string(),
+        };
+        let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
+
+        store.append(&key, &ser_ssh_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dce_rpc_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.dce_rpc_store().unwrap();
+
+        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            dceRpcRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let dce_rpc_body = DceRpc {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_port: 80,
+            rtt: 3,
+            named_pipe: "named_pipe".to_string(),
+            endpoint: "endpoint".to_string(),
+            operation: "operation".to_string(),
+        };
+        let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
+
+        store.append(&key, &ser_dce_rpc_body).unwrap();
     }
 
     #[tokio::test]

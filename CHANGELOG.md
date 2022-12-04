@@ -11,11 +11,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Publish support protocol record data request/response through QUIC.
 - Add periodic time series to GraphQL API
+- Add send `all` source network stream to hog
+- Add more network data types (`Ntlm`, `Kerberos`, `Ssh`, `DceRpc`)
 
 ### Changed
 
 - The key in timeseries data includes timestamp.
 - Change DNS answer field to `Vec<String>`.
+
+### Removed
+
+- Remove send network stream to hog from database
 
 ### Fixed
 

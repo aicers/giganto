@@ -1,5 +1,7 @@
 use super::Server;
-use crate::ingestion::{Conn, Dns, Http, Log, PeriodicTimeSeries, Rdp, Smtp};
+use crate::ingestion::{
+    Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, PeriodicTimeSeries, Rdp, Smtp, Ssh,
+};
 use crate::{
     storage::{Database, RawEventStore},
     to_cert_chain, to_private_key,
@@ -307,6 +309,85 @@ fn gen_smtp_raw_event() -> Vec<u8> {
     ser_smtp_body
 }
 
+fn gen_ntlm_raw_event() -> Vec<u8> {
+    let ntlm_body = Ntlm {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_port: 80,
+        username: "bly".to_string(),
+        hostname: "host".to_string(),
+        domainname: "domain".to_string(),
+        server_nb_computer_name: "NB".to_string(),
+        server_dns_computer_name: "dns".to_string(),
+        server_tree_name: "tree".to_string(),
+        success: "tf".to_string(),
+    };
+    let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
+    ser_ntlm_body
+}
+
+fn gen_kerberos_raw_event() -> Vec<u8> {
+    let kerberos_body = Kerberos {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_port: 80,
+        request_type: "req_type".to_string(),
+        client: "client".to_string(),
+        service: "service".to_string(),
+        success: "tf".to_string(),
+        error_msg: "err_msg".to_string(),
+        from: 5454,
+        till: 2345,
+        cipher: "cipher".to_string(),
+        forwardable: "forwardable".to_string(),
+        renewable: "renewable".to_string(),
+        client_cert_subject: "client_cert".to_string(),
+        server_cert_subject: "server_cert".to_string(),
+    };
+    let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
+    ser_kerberos_body
+}
+
+fn gen_ssh_raw_event() -> Vec<u8> {
+    let ssh_body = Ssh {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_port: 80,
+        version: 01,
+        auth_success: "auth_success".to_string(),
+        auth_attempts: 3,
+        direction: "direction".to_string(),
+        client: "client".to_string(),
+        server: "server".to_string(),
+        cipher_alg: "cipher_alg".to_string(),
+        mac_alg: "mac_alg".to_string(),
+        compression_alg: "compression_alg".to_string(),
+        kex_alg: "kex_alg".to_string(),
+        host_key_alg: "host_key_alg".to_string(),
+        host_key: "host_key".to_string(),
+    };
+    let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
+    ser_ssh_body
+}
+
+fn gen_dce_rpc_raw_event() -> Vec<u8> {
+    let dce_rpc_body = DceRpc {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_port: 80,
+        rtt: 3,
+        named_pipe: "named_pipe".to_string(),
+        endpoint: "endpoint".to_string(),
+        operation: "operation".to_string(),
+    };
+    let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
+    ser_dce_rpc_body
+}
+
 fn gen_log_raw_event() -> Vec<u8> {
     let log_body = Log {
         kind: String::from("Hello"),
@@ -353,11 +434,47 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i
     ser_http_body
 }
 
-fn insert_stmp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) -> Vec<u8> {
+fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
-    let ser_stmp_body = gen_smtp_raw_event();
-    store.append(&key, &ser_stmp_body).unwrap();
-    ser_stmp_body
+    let ser_smtp_body = gen_smtp_raw_event();
+    store.append(&key, &ser_smtp_body).unwrap();
+    ser_smtp_body
+}
+
+fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_ntlm_body = gen_ntlm_raw_event();
+    store.append(&key, &ser_ntlm_body).unwrap();
+    ser_ntlm_body
+}
+
+fn insert_kerberos_raw_event(
+    store: &RawEventStore<Kerberos>,
+    source: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_kerberos_body = gen_kerberos_raw_event();
+    store.append(&key, &ser_kerberos_body).unwrap();
+    ser_kerberos_body
+}
+
+fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_ssh_body = gen_ssh_raw_event();
+    store.append(&key, &ser_ssh_body).unwrap();
+    ser_ssh_body
+}
+
+fn insert_dce_rpc_raw_event(
+    store: &RawEventStore<DceRpc>,
+    source: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_dce_rpc_body = gen_dce_rpc_raw_event();
+    store.append(&key, &ser_dce_rpc_body).unwrap();
+    ser_dce_rpc_body
 }
 
 fn insert_log_raw_event(
@@ -394,6 +511,10 @@ async fn request_publish_protocol() {
     const HTTP_KIND: &str = "http";
     const RDP_KIND: &str = "rdp";
     const SMTP_KIND: &str = "smtp";
+    const NTLM_KIND: &str = "ntlm";
+    const KERBEROS_KIND: &str = "kerberos";
+    const SSH_KIND: &str = "ssh";
+    const DCE_RPC_KIND: &str = "dce rpc";
 
     #[derive(Serialize)]
     struct Message {
@@ -682,7 +803,7 @@ async fn request_publish_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let smtp_store = db.smtp_store().unwrap();
         let send_smtp_time = Utc::now().timestamp_nanos();
-        let smtp_data = bincode::deserialize::<Smtp>(&insert_stmp_raw_event(
+        let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
             &smtp_store,
             SOURCE,
             send_smtp_time,
@@ -740,6 +861,275 @@ async fn request_publish_protocol() {
         assert_eq!(Smtp::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
             smtp_data.message(send_smtp_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // ntlm protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let ntlm_store = db.ntlm_store().unwrap();
+        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
+            &ntlm_store,
+            SOURCE,
+            send_ntlm_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(NTLM_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(Ntlm::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            ntlm_data.message(send_ntlm_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // kerberos protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let kerberos_store = db.kerberos_store().unwrap();
+        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
+            &kerberos_store,
+            SOURCE,
+            send_kerberos_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(KERBEROS_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(Kerberos::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            kerberos_data.message(send_kerberos_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // ssh protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let ssh_store = db.ssh_store().unwrap();
+        let send_ssh_time = Utc::now().timestamp_nanos();
+        let ssh_data =
+            bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SOURCE, send_ssh_time))
+                .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(SSH_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(Ssh::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            ssh_data.message(send_ssh_time, SOURCE).unwrap(),
+            result_data.pop().unwrap()
+        );
+    }
+
+    // dce_rpc protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let dce_rpc_store = db.dce_rpc_store().unwrap();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
+            &dce_rpc_store,
+            SOURCE,
+            send_dce_rpc_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = Message {
+            source: String::from(SOURCE),
+            kind: String::from(DCE_RPC_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+        let mut message_buf = bincode::serialize(&message).unwrap();
+
+        let mut request_buf: Vec<u8> = Vec::new();
+        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
+        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
+        request_buf.append(&mut message_buf);
+
+        send_pub_req
+            .write_all(&request_buf)
+            .await
+            .expect("failed to send request");
+
+        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let mut len_buf = [0; std::mem::size_of::<u32>()];
+            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
+            let len = u32::from_le_bytes(len_buf);
+
+            let mut resp_data = vec![0; len.try_into().unwrap()];
+            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
+            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
+            result_data.push(resp_data);
+            if resp.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(DceRpc::done().unwrap(), result_data.pop().unwrap());
+        assert_eq!(
+            dce_rpc_data.message(send_dce_rpc_time, SOURCE).unwrap(),
             result_data.pop().unwrap()
         );
     }
