@@ -10,7 +10,7 @@ use crate::storage::{
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use lazy_static::lazy_static;
-use num_enum::TryFromPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -66,7 +66,7 @@ impl REconvergeKindType {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq)]
 #[repr(u32)]
 enum StreamMessageCode {
     Conn = 0,
@@ -79,6 +79,24 @@ enum StreamMessageCode {
     Kerberos = 7,
     Ssh = 8,
     DceRpc = 9,
+}
+
+impl StreamMessageCode {
+    fn convert_type(input: &str) -> Result<StreamMessageCode> {
+        match input {
+            "conn" => Ok(StreamMessageCode::Conn),
+            "dns" => Ok(StreamMessageCode::Dns),
+            "rdp" => Ok(StreamMessageCode::Rdp),
+            "http" => Ok(StreamMessageCode::Http),
+            "log" => Ok(StreamMessageCode::Log),
+            "smtp" => Ok(StreamMessageCode::Smtp),
+            "ntlm" => Ok(StreamMessageCode::Ntlm),
+            "kerberos" => Ok(StreamMessageCode::Kerberos),
+            "ssh" => Ok(StreamMessageCode::Ssh),
+            "dce rpc" => Ok(StreamMessageCode::DceRpc),
+            _ => Err(anyhow!("Faied to convert stream message code")),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
@@ -620,6 +638,10 @@ where
 
     HOG_DIRECT_CHANNEL.write().await.insert(channel_key, send);
     let mut last_ts = 0_i64;
+
+    let proto: u32 = StreamMessageCode::convert_type(msg_type)?.into();
+    sender.write_all(&proto.to_le_bytes()).await?;
+    info!("start {:?}'s publish Stream : {:?}", node_type, msg_type);
 
     match node_type {
         NodeType::Hog => {}
