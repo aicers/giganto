@@ -40,7 +40,7 @@ const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGESTION_VERSION_REQ: &str = "0.5";
+const INGESTION_VERSION_REQ: &str = "0.6";
 
 type SourceInfo = (String, DateTime<Utc>, bool);
 
