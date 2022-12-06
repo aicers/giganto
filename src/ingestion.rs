@@ -42,7 +42,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGESTION_VERSION_REQ: &str = "0.5";
 
-type Sources = (String, DateTime<Utc>, bool);
+type SourceInfo = (String, DateTime<Utc>, bool);
 
 lazy_static! {
     pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
@@ -156,7 +156,7 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
-        let (tx, rx): (Sender<Sources>, Receiver<Sources>) = channel(100);
+        let (tx, rx): (Sender<SourceInfo>, Receiver<SourceInfo>) = channel(100);
         let source_db = db.clone();
         task::spawn(check_sources_conn(source_db, rx));
 
@@ -175,7 +175,7 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
-    sender: Sender<Sources>,
+    sender: Sender<SourceInfo>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -524,7 +524,7 @@ pub async fn request_packets(
     Ok(packets)
 }
 
-async fn check_sources_conn(source_db: Database, mut rx: Receiver<Sources>) -> Result<()> {
+async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -> Result<()> {
     let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
     itv.reset();
     let source_store = source_db
