@@ -28,7 +28,7 @@ use std::{
 use tokio::{
     select,
     sync::mpsc::{channel, Receiver, Sender},
-    sync::Mutex,
+    sync::{Mutex, RwLock},
     task, time,
 };
 use tracing::{error, info};
@@ -46,8 +46,9 @@ const INGESTION_VERSION_REQ: &str = "0.5";
 type SourceInfo = (String, DateTime<Utc>, bool);
 
 lazy_static! {
-    pub static ref SOURCES: Mutex<HashMap<String, DateTime<Utc>>> = Mutex::new(HashMap::new());
-    pub static ref PACKET_SOURCES: Mutex<HashMap<String, Connection>> = Mutex::new(HashMap::new());
+    pub static ref SOURCES: RwLock<HashMap<String, DateTime<Utc>>> = RwLock::new(HashMap::new());
+    pub static ref PACKET_SOURCES: RwLock<HashMap<String, Connection>> =
+        RwLock::new(HashMap::new());
 }
 
 pub trait EventFilter {
@@ -205,7 +206,7 @@ async fn handle_connection(
     let source = certificate_info(&connection)?;
 
     PACKET_SOURCES
-        .lock()
+        .write()
         .await
         .insert(source.clone(), connection.clone());
 
@@ -546,7 +547,7 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -
     loop {
         select! {
             _ = itv.tick() => {
-                let mut sources = SOURCES.lock().await;
+                let mut sources = SOURCES.write().await;
                 let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for source_key in keys {
@@ -559,14 +560,14 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -
             }
 
             Some((source_key,timestamp_val,is_close)) = rx.recv() => {
-                if is_close{
+                if is_close {
                     if source_store.insert(&source_key, timestamp_val).is_err(){
                         error!("Failed to append Source store");
                     }
-                    SOURCES.lock().await.remove(&source_key);
-                    PACKET_SOURCES.lock().await.remove(&source_key);
-                }else{
-                    SOURCES.lock().await.insert(source_key.to_string(), timestamp_val);
+                    SOURCES.write().await.remove(&source_key);
+                    PACKET_SOURCES.write().await.remove(&source_key);
+                } else {
+                    SOURCES.write().await.insert(source_key.to_string(), timestamp_val);
                     if source_store.insert(&source_key, timestamp_val).is_err(){
                         error!("Failed to append Source store");
                     }
