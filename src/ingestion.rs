@@ -14,6 +14,7 @@ use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -77,6 +78,12 @@ impl EventFilter for Log {
     }
 }
 
+impl Display for Log {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.kind, self.log)
+    }
+}
+
 impl PubMessage for Log {
     fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
         Ok(bincode::serialize(&Some((timestamp, &self.log)))?)
@@ -101,6 +108,12 @@ impl EventFilter for PeriodicTimeSeries {
     }
     fn resp_port(&self) -> Option<u16> {
         None
+    }
+}
+
+impl Display for PeriodicTimeSeries {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.id, self.data)
     }
 }
 
