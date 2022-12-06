@@ -2,7 +2,10 @@ use crate::ingestion::EventFilter;
 use crate::publish::PubMessage;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
+use std::{
+    fmt::{Display, Formatter},
+    net::IpAddr,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Conn {
@@ -33,12 +36,11 @@ impl EventFilter for Conn {
     }
 }
 
-impl PubMessage for Conn {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let conn_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Conn::convert_time_format(timestamp),
-            source,
+impl Display for Conn {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -49,6 +51,17 @@ impl PubMessage for Conn {
             self.resp_bytes,
             self.orig_pkts,
             self.resp_pkts
+        )
+    }
+}
+
+impl PubMessage for Conn {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let conn_csv = format!(
+            "{}\t{}\t{}",
+            Conn::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
@@ -84,8 +97,8 @@ impl EventFilter for Dns {
     }
 }
 
-impl PubMessage for Dns {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl Display for Dns {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let answer = if self.answer.is_empty() {
             "-".to_string()
         } else {
@@ -96,10 +109,9 @@ impl PubMessage for Dns {
                 .join(",")
         };
 
-        let dns_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Dns::convert_time_format(timestamp),
-            source,
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -107,6 +119,17 @@ impl PubMessage for Dns {
             self.proto,
             self.query,
             answer,
+        )
+    }
+}
+
+impl PubMessage for Dns {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let dns_csv = format!(
+            "{}\t{}\t{}",
+            Dns::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))?)
@@ -142,12 +165,11 @@ impl EventFilter for Http {
     }
 }
 
-impl PubMessage for Http {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let http_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Http::convert_time_format(timestamp),
-            source,
+impl Display for Http {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -174,6 +196,17 @@ impl PubMessage for Http {
                 &self.user_agent
             },
             self.status_code
+        )
+    }
+}
+
+impl PubMessage for Http {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let http_csv = format!(
+            "{}\t{}\t{}",
+            Http::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
@@ -207,17 +240,23 @@ impl EventFilter for Rdp {
     }
 }
 
+impl Display for Rdp {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}",
+            self.orig_addr, self.orig_port, self.resp_addr, self.resp_port, self.cookie
+        )
+    }
+}
+
 impl PubMessage for Rdp {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
         let rdp_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}",
             Rdp::convert_time_format(timestamp),
             source,
-            self.orig_addr,
-            self.orig_port,
-            self.resp_addr,
-            self.resp_port,
-            self.cookie
+            self
         );
 
         Ok(bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))?)
@@ -253,12 +292,11 @@ impl EventFilter for Smtp {
     }
 }
 
-impl PubMessage for Smtp {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let smtp_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Smtp::convert_time_format(timestamp),
-            source,
+impl Display for Smtp {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -289,6 +327,17 @@ impl PubMessage for Smtp {
             } else {
                 &self.agent
             },
+        )
+    }
+}
+
+impl PubMessage for Smtp {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let smtp_csv = format!(
+            "{}\t{}\t{}",
+            Smtp::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
@@ -328,12 +377,11 @@ impl EventFilter for Ntlm {
     }
 }
 
-impl PubMessage for Ntlm {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let ntlm_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Ntlm::convert_time_format(timestamp),
-            source,
+impl Display for Ntlm {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -373,6 +421,17 @@ impl PubMessage for Ntlm {
             } else {
                 &self.success
             },
+        )
+    }
+}
+
+impl PubMessage for Ntlm {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let ntlm_csv = format!(
+            "{}\t{}\t{}",
+            Ntlm::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
@@ -417,12 +476,11 @@ impl EventFilter for Kerberos {
     }
 }
 
-impl PubMessage for Kerberos {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let kerberos_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Kerberos::convert_time_format(timestamp),
-            source,
+impl Display for Kerberos {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -479,6 +537,17 @@ impl PubMessage for Kerberos {
             } else {
                 &self.server_cert_subject
             },
+        )
+    }
+}
+
+impl PubMessage for Kerberos {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let kerberos_csv = format!(
+            "{}\t{}\t{}",
+            Kerberos::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
@@ -523,12 +592,11 @@ impl EventFilter for Ssh {
     }
 }
 
-impl PubMessage for Ssh {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let ssh_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            Ssh::convert_time_format(timestamp),
-            source,
+impl Display for Ssh {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -585,6 +653,17 @@ impl PubMessage for Ssh {
             } else {
                 &self.host_key
             },
+        )
+    }
+}
+
+impl PubMessage for Ssh {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let ssh_csv = format!(
+            "{}\t{}\t{}",
+            Ssh::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((timestamp, &ssh_csv.as_bytes())))?)
@@ -618,12 +697,11 @@ impl EventFilter for DceRpc {
     }
 }
 
-impl PubMessage for DceRpc {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let dce_rpc_csv = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            DceRpc::convert_time_format(timestamp),
-            source,
+impl Display for DceRpc {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -644,6 +722,17 @@ impl PubMessage for DceRpc {
             } else {
                 &self.operation
             },
+        )
+    }
+}
+
+impl PubMessage for DceRpc {
+    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+        let dce_rpc_csv = format!(
+            "{}\t{}\t{}",
+            DceRpc::convert_time_format(timestamp),
+            source,
+            self
         );
 
         Ok(bincode::serialize(&Some((
