@@ -108,7 +108,7 @@ where
         }
         let (mut records, has_previous) = collect_records(iter, last, filter)?;
         records.reverse();
-        (records, has_previous, false)
+        (records, has_previous, true)
     } else if let Some(after) = after {
         if before.is_some() {
             return Err("cannot use both `after` and `before`".into());
@@ -137,7 +137,7 @@ where
             }
         }
         let (records, has_next) = collect_records(iter, first, filter)?;
-        (records, false, has_next)
+        (records, true, has_next)
     } else if let Some(last) = last {
         if first.is_some() {
             return Err("first and last cannot be used together".into());
