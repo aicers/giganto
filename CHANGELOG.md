@@ -9,6 +9,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Send stream start message to connected daemon when stream opened.
 - Publish support protocol record data request/response through QUIC.
 - Add periodic time series to GraphQL API
 - Add send `all` source network stream to hog

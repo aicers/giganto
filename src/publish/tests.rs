@@ -1334,6 +1334,7 @@ async fn request_network_event_stream() {
     use crate::ingestion::gen_network_key;
     use crate::publish::send_direct_network_stream;
 
+    const HOG_TYPE: u8 = 0x00;
     const CRUSHER_TYPE: u8 = 0x01;
     const NETWORK_STREAM_CONN: u32 = 0x00;
     const NETWORK_STREAM_DNS: u32 = 0x01;
@@ -1361,6 +1362,12 @@ async fn request_network_event_stream() {
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
 
+    let hog_msg = TestHogStreamMsg {
+        start: 0,
+        source: Some(String::from(SOURCE_ONE)),
+    };
+    let hog_stream_msg = bincode::serialize(&hog_msg).unwrap();
+
     let crusher_msg = TestCrusherStreamMsg {
         start: 0,
         id: String::from("model_one"),
@@ -1376,6 +1383,37 @@ async fn request_network_event_stream() {
     {
         let conn_store = db.conn_store().unwrap();
 
+        // direct conn network event for hog
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_CONN,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
+
+        let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_conn_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let conn_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
+
+        let send_conn_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_ONE, "conn");
+        let conn_data = gen_conn_raw_event();
+
+        send_direct_network_stream(&key, &conn_data, send_conn_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream).await;
+        assert_eq!(send_conn_time, recv_timestamp);
+        assert_eq!(conn_data, recv_data);
+
         // database conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos();
         let conn_data = insert_conn_raw_event(&conn_store, SOURCE_TWO, send_conn_time);
@@ -1389,8 +1427,16 @@ async fn request_network_event_stream() {
         .await;
 
         let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_conn_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let conn_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
+        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
@@ -1411,6 +1457,37 @@ async fn request_network_event_stream() {
     {
         let dns_store = db.dns_store().unwrap();
 
+        // direct dns network event for hog
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_DNS,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
+
+        let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_dns_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let dns_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
+
+        let send_dns_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_ONE, "dns");
+        let dns_data = gen_conn_raw_event();
+
+        send_direct_network_stream(&key, &dns_data, send_dns_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream).await;
+        assert_eq!(send_dns_time, recv_timestamp);
+        assert_eq!(dns_data, recv_data);
+
         // database dns network event for crusher
         let send_dns_time = Utc::now().timestamp_nanos();
         let dns_data = insert_dns_raw_event(&dns_store, SOURCE_TWO, send_dns_time);
@@ -1424,8 +1501,16 @@ async fn request_network_event_stream() {
         .await;
 
         let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_dns_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let dns_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
+        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
@@ -1446,6 +1531,37 @@ async fn request_network_event_stream() {
     {
         let rdp_store = db.rdp_store().unwrap();
 
+        // direct rdp network event for hog
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_RDP,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
+
+        let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_rdp_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let rdp_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
+
+        let send_rdp_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_ONE, "rdp");
+        let rdp_data = gen_conn_raw_event();
+
+        send_direct_network_stream(&key, &rdp_data, send_rdp_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream).await;
+        assert_eq!(send_rdp_time, recv_timestamp);
+        assert_eq!(rdp_data, recv_data);
+
         // database rdp network event for crusher
         let send_rdp_time = Utc::now().timestamp_nanos();
         let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_TWO, send_rdp_time);
@@ -1459,8 +1575,16 @@ async fn request_network_event_stream() {
         .await;
 
         let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_rdp_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let rdp_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
+        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
@@ -1480,6 +1604,37 @@ async fn request_network_event_stream() {
     {
         let http_store = db.http_store().unwrap();
 
+        // direct http network event for hog
+        send_request_network_stream(
+            &mut publish.send,
+            NETWORK_STREAM_HTTP,
+            HOG_TYPE,
+            hog_stream_msg.clone(),
+        )
+        .await;
+
+        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_http_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let http_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
+
+        let send_http_time = Utc::now().timestamp_nanos();
+        let key = gen_network_key(SOURCE_ONE, "http");
+        let http_data = gen_conn_raw_event();
+
+        send_direct_network_stream(&key, &http_data, send_http_time)
+            .await
+            .unwrap();
+
+        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream).await;
+        assert_eq!(send_http_time, recv_timestamp);
+        assert_eq!(http_data, recv_data);
+
         // database http network event for crusher
         let send_http_time = Utc::now().timestamp_nanos();
         let http_data = insert_http_raw_event(&http_store, SOURCE_TWO, send_http_time);
@@ -1493,8 +1648,16 @@ async fn request_network_event_stream() {
         .await;
 
         let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
+        let mut start_buf = [0; mem::size_of::<u32>()];
+        send_http_stream
+            .borrow_mut()
+            .read_exact(&mut start_buf)
+            .await
+            .unwrap();
+        let http_start_msg = u32::from_le_bytes(start_buf);
+        assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
+        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
