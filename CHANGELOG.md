@@ -5,11 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Send stream start message to connected daemon when stream opened.
+
 ## [0.6.0] - 2022-12-06
 
 ### Added
 
-- Send stream start message to connected daemon when stream opened.
 - Publish support protocol record data request/response through QUIC.
 - Add periodic time series to GraphQL API
 - Add send `all` source network stream to hog

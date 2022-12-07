@@ -28,7 +28,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.4.0";
+const PROTOCOL_VERSION: &str = "0.6.0";
 
 struct TestClient {
     send: SendStream,
