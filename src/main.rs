@@ -9,8 +9,8 @@ mod web;
 use anyhow::{anyhow, Context, Result};
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
-use std::{env, fs, process::exit};
-use tokio::{task, time};
+use std::{collections::HashMap, env, fs, process::exit, sync::Arc};
+use tokio::{sync::RwLock, task, time};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -60,7 +60,10 @@ async fn main() -> Result<()> {
         files.push(file);
     }
 
-    let schema = graphql::schema(database.clone());
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    let sources = Arc::new(RwLock::new(HashMap::new()));
+
+    let schema = graphql::schema(database.clone(), packet_sources.clone());
     task::spawn(web::serve(
         schema,
         settings.graphql_address,
@@ -83,7 +86,9 @@ async fn main() -> Result<()> {
     task::spawn(publish_server.run(database.clone()));
 
     let ingestion_server = ingestion::Server::new(settings.ingestion_address, cert, key, files);
-    ingestion_server.run(database).await;
+    ingestion_server
+        .run(database, packet_sources, sources)
+        .await;
 
     Ok(())
 }
