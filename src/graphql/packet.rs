@@ -10,7 +10,7 @@ impl PacketQuery {
     async fn packets(&self, filter: NetworkFilter) -> Result<Vec<String>> {
         let source = &filter.source;
         let mut resp_data = Vec::new();
-        if let Some(connection) = PACKET_SOURCES.lock().await.get(source) {
+        if let Some(connection) = PACKET_SOURCES.read().await.get(source) {
             for packet in request_packets(connection, filter).await? {
                 resp_data.push(base64::encode(packet));
             }
