@@ -4,7 +4,7 @@ mod packet;
 mod timeseries;
 
 use crate::{
-    ingestion::EventFilter,
+    ingestion::{EventFilter, PacketSources},
     storage::{
         lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
         FilteredIter, KeyValue, RawEventStore,
@@ -56,9 +56,10 @@ pub trait FromKeyValue<T>: Sized {
 pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
-pub fn schema(database: Database) -> Schema {
+pub fn schema(database: Database, packet_sources: PacketSources) -> Schema {
     Schema::build(Query::default(), EmptyMutation, EmptySubscription)
         .data(database)
+        .data(packet_sources)
         .finish()
 }
 
@@ -328,9 +329,13 @@ struct TestSchema {
 #[cfg(test)]
 impl TestSchema {
     fn new() -> Self {
+        use std::{collections::HashMap, sync::Arc};
+        use tokio::sync::RwLock;
+
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path()).unwrap();
-        let schema = schema(db.clone());
+        let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+        let schema = schema(db.clone(), packet_sources);
         Self {
             _dir: db_dir,
             db,

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
@@ -9,7 +10,11 @@ use chrono::{Duration, Utc};
 use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint};
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tempfile::TempDir;
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+};
 
 use crate::{storage::Database, to_cert_chain, to_private_key};
 
@@ -191,8 +196,7 @@ async fn conn() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -245,8 +249,7 @@ async fn dns() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -288,8 +291,7 @@ async fn log() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_log, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -336,8 +338,7 @@ async fn http() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -388,8 +389,7 @@ async fn rdp() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -431,8 +431,7 @@ async fn periodic_time_series() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_periodic_time_series, _) =
@@ -487,8 +486,7 @@ async fn smtp() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_smtp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -545,8 +543,7 @@ async fn ntlm() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ntlm, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -609,8 +606,7 @@ async fn kerberos() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_kerberos, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -681,8 +677,7 @@ async fn ssh() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ssh, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -742,8 +737,7 @@ async fn dce_rpc() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dce_rpc, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -788,8 +782,7 @@ async fn ack_info() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db));
+    run_server(db_dir);
 
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
@@ -833,4 +826,11 @@ async fn ack_info() {
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
     assert_eq!(last_timestamp, recv_timestamp);
+}
+
+fn run_server(db_dir: TempDir) -> JoinHandle<()> {
+    let db = Database::open(db_dir.path()).unwrap();
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    let sources = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db, packet_sources, sources))
 }

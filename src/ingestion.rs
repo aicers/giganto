@@ -9,7 +9,6 @@ use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
@@ -44,12 +43,8 @@ const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGESTION_VERSION_REQ: &str = "0.6";
 
 type SourceInfo = (String, DateTime<Utc>, bool);
-
-lazy_static! {
-    pub static ref SOURCES: RwLock<HashMap<String, DateTime<Utc>>> = RwLock::new(HashMap::new());
-    pub static ref PACKET_SOURCES: RwLock<HashMap<String, Connection>> =
-        RwLock::new(HashMap::new());
-}
+pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
+pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 
 pub trait EventFilter {
     fn orig_addr(&self) -> Option<IpAddr>;
@@ -163,7 +158,7 @@ impl Server {
         }
     }
 
-    pub async fn run(self, db: Database) {
+    pub async fn run(self, db: Database, packet_sources: PacketSources, sources: Sources) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
@@ -172,13 +167,19 @@ impl Server {
 
         let (tx, rx): (Sender<SourceInfo>, Receiver<SourceInfo>) = channel(100);
         let source_db = db.clone();
-        task::spawn(check_sources_conn(source_db, rx));
+        task::spawn(check_sources_conn(
+            source_db,
+            packet_sources.clone(),
+            sources,
+            rx,
+        ));
 
         while let Some(conn) = endpoint.accept().await {
             let sender = tx.clone();
             let db = db.clone();
+            let packet_sources = packet_sources.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db, sender).await {
+                if let Err(e) = handle_connection(conn, db, packet_sources, sender).await {
                     error!("connection failed: {}", e);
                 }
             });
@@ -189,6 +190,7 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
+    packet_sources: PacketSources,
     sender: Sender<SourceInfo>,
 ) -> Result<()> {
     let connection = conn.await?;
@@ -205,7 +207,7 @@ async fn handle_connection(
 
     let source = certificate_info(&connection)?;
 
-    PACKET_SOURCES
+    packet_sources
         .write()
         .await
         .insert(source.clone(), connection.clone());
@@ -538,7 +540,12 @@ pub async fn request_packets(
     Ok(packets)
 }
 
-async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -> Result<()> {
+async fn check_sources_conn(
+    source_db: Database,
+    packet_sources: PacketSources,
+    sources: Sources,
+    mut rx: Receiver<SourceInfo>,
+) -> Result<()> {
     let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
     itv.reset();
     let source_store = source_db
@@ -547,7 +554,7 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -
     loop {
         select! {
             _ = itv.tick() => {
-                let mut sources = SOURCES.write().await;
+                let mut sources = sources.write().await;
                 let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for source_key in keys {
@@ -564,10 +571,10 @@ async fn check_sources_conn(source_db: Database, mut rx: Receiver<SourceInfo>) -
                     if source_store.insert(&source_key, timestamp_val).is_err(){
                         error!("Failed to append Source store");
                     }
-                    SOURCES.write().await.remove(&source_key);
-                    PACKET_SOURCES.write().await.remove(&source_key);
+                    sources.write().await.remove(&source_key);
+                    packet_sources.write().await.remove(&source_key);
                 } else {
-                    SOURCES.write().await.insert(source_key.to_string(), timestamp_val);
+                    sources.write().await.insert(source_key.to_string(), timestamp_val);
                     if source_store.insert(&source_key, timestamp_val).is_err(){
                         error!("Failed to append Source store");
                     }

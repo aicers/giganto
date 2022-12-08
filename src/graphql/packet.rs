@@ -1,16 +1,17 @@
 use super::network::NetworkFilter;
-use crate::ingestion::{request_packets, PACKET_SOURCES};
-use async_graphql::{Object, Result};
+use crate::ingestion::{request_packets, PacketSources};
+use async_graphql::{Context, Object, Result};
 
 #[derive(Default)]
 pub(super) struct PacketQuery;
 
 #[Object]
 impl PacketQuery {
-    async fn packets(&self, filter: NetworkFilter) -> Result<Vec<String>> {
+    async fn packets(&self, ctx: &Context<'_>, filter: NetworkFilter) -> Result<Vec<String>> {
+        let packet_sources = ctx.data::<PacketSources>()?;
         let source = &filter.source;
         let mut resp_data = Vec::new();
-        if let Some(connection) = PACKET_SOURCES.read().await.get(source) {
+        if let Some(connection) = packet_sources.read().await.get(source) {
             for packet in request_packets(connection, filter).await? {
                 resp_data.push(base64::encode(packet));
             }
