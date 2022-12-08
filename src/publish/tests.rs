@@ -28,7 +28,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.6.0";
+const PROTOCOL_VERSION: &str = "0.7.0-alpha.1";
 
 struct TestClient {
     send: SendStream,
@@ -498,6 +498,22 @@ fn insert_periodic_time_series_raw_event(
     let ser_periodic_time_series_body = gen_periodic_time_series_raw_event();
     store.append(&key, &ser_periodic_time_series_body).unwrap();
     ser_periodic_time_series_body
+}
+
+#[test]
+fn protocol_version() {
+    use semver::{Version, VersionReq};
+
+    let compat_versions = ["0.7.0-alpha.1"];
+    let incompat_versions = ["0.6.0", "0.8.0"];
+
+    let req = VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
+    for version in &compat_versions {
+        assert!(req.matches(&Version::parse(version).unwrap()));
+    }
+    for version in &incompat_versions {
+        assert!(!req.matches(&Version::parse(version).unwrap()));
+    }
 }
 
 #[tokio::test]
