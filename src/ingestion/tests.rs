@@ -721,7 +721,7 @@ async fn ssh() {
 
 #[tokio::test]
 async fn dce_rpc() {
-    const RECORD_TYPE_DCE_RPC: u32 = 0x10;
+    const RECORD_TYPE_DCE_RPC: u32 = 0x0A;
 
     #[derive(Serialize)]
     struct DceRpc {
@@ -826,6 +826,41 @@ async fn ack_info() {
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
     assert_eq!(last_timestamp, recv_timestamp);
+}
+
+#[tokio::test]
+async fn one_short_reproduce_channel_close() {
+    const RECORD_TYPE_LOG: u32 = 0x02;
+    const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
+    const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let mut log_data: Vec<u8> = Vec::new();
+
+    log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());
+    log_data.append(&mut CHANNEL_CLOSE_TIMESTAMP.to_le_bytes().to_vec());
+    log_data.append(&mut (CHANNEL_CLOSE_MESSAGE.len() as u32).to_le_bytes().to_vec());
+    log_data.append(&mut CHANNEL_CLOSE_MESSAGE.to_vec());
+
+    send_log
+        .write_all(&log_data)
+        .await
+        .expect("failed to send request");
+
+    let mut ts_buf = [0; std::mem::size_of::<u64>()];
+    recv_log.read_exact(&mut ts_buf).await.unwrap();
+    let recv_timestamp = i64::from_be_bytes(ts_buf);
+
+    send_log.finish().await.expect("failed to shutdown stream");
+    client.conn.close(0u32.into(), b"log_done");
+    client.endpoint.wait_idle().await;
+    assert_eq!(CHANNEL_CLOSE_TIMESTAMP, recv_timestamp);
 }
 
 fn run_server(db_dir: TempDir) -> JoinHandle<()> {

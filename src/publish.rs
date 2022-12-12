@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::{error, info};
 
-const PUBLISH_VERSION_REQ: &str = "=0.7.0-alpha.1";
+const PUBLISH_VERSION_REQ: &str = ">=0.7.0-alpha.1 , <=0.7.0-alpha.2";
 
 lazy_static! {
     pub static ref HOG_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
@@ -131,6 +131,7 @@ trait StreamMessage {
     fn channel_key(&self, source: Option<String>, msg_type: &str) -> Result<String>;
     fn start_time(&self) -> i64;
     fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool;
+    fn source_id(&self) -> Option<String>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,6 +170,10 @@ impl StreamMessage for HogStreamMessage {
 
     fn filter_ip(&self, _orig_addr: IpAddr, _resp_addr: IpAddr) -> bool {
         true
+    }
+
+    fn source_id(&self) -> Option<String> {
+        self.source.clone()
     }
 }
 
@@ -231,6 +236,10 @@ impl StreamMessage for CrusherStreamMessage {
             }
         }
         false
+    }
+
+    fn source_id(&self) -> Option<String> {
+        Some(self.id.clone())
     }
 }
 
@@ -639,13 +648,30 @@ where
     HOG_DIRECT_CHANNEL.write().await.insert(channel_key, send);
     let mut last_ts = 0_i64;
 
-    let proto: u32 = StreamMessageCode::convert_type(msg_type)?.into();
-    sender.write_all(&proto.to_le_bytes()).await?;
-    info!("start {:?}'s publish Stream : {:?}", node_type, msg_type);
-
     match node_type {
-        NodeType::Hog => {}
+        NodeType::Hog => {
+            let proto: u32 = StreamMessageCode::convert_type(msg_type)?.into();
+            sender
+                .write_all(&proto.to_le_bytes())
+                .await
+                .map_err(|e| anyhow!("Failed to write hog start mesaage: {}", e))?;
+            info!("start hog's publish Stream : {:?}", msg_type);
+        }
         NodeType::Crusher => {
+            // crusher's policy Id always exists.
+            let id = msg.source_id().unwrap();
+            let id = id.as_bytes();
+            let id_len = u32::try_from(id.len())?.to_le_bytes();
+            let mut send_buf = Vec::with_capacity(id_len.len() + id.len());
+            send_buf.extend_from_slice(&id_len);
+            send_buf.extend_from_slice(id);
+
+            sender
+                .write_all(&send_buf)
+                .await
+                .map_err(|e| anyhow!("Failed to write crusher start mesaage: {}", e))?;
+            info!("start cruhser's publish Stream : {:?}", msg_type);
+
             let iter = store.boundary_iter(
                 &lower_closed_bound_key(
                     &db_key_prefix,
