@@ -7,16 +7,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Send stream start message to connected daemon when stream opened.
+- Send different stream start message depending on the daemon.
 
 ## [0.6.0] - 2022-12-06
 
 ### Added
 
 - Publish support protocol record data request/response through QUIC.
-- Add periodic time series to GraphQL API
-- Add send `all` source network stream to hog
-- Add more network data types (`Ntlm`, `Kerberos`, `Ssh`, `DceRpc`)
+- Add periodic time series to GraphQL API.
+- Add send `all` source network stream to hog.
+- Add more network data types. (`Ntlm`, `Kerberos`, `Ssh`, `DceRpc`)
 
 ### Changed
 
@@ -25,7 +25,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- Remove send network stream to hog from database
+- Remove send network stream to hog from database.
 
 ### Fixed
 
@@ -37,7 +37,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Adds `smtp` to receive and save SMTP event.
-- Adds SMTP to GraphQL API
+- Adds SMTP to GraphQL API.
 
 ### Changed
 
@@ -48,7 +48,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Publish support network event(conn, dns, rdp, http) stream data through QUIC.
-- GraphQL API returns all network raw events
+- GraphQL API returns all network raw events.
 
 ### Changed
 
