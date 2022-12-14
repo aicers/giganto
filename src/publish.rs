@@ -557,21 +557,16 @@ where
         key_prefix.extend_from_slice(msg.kind().as_bytes());
         key_prefix.push(0);
     }
-    let mut iter = store.boundary_iter(
+    let iter = store.boundary_iter(
         &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start()))),
         &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end()))),
         Direction::Forward,
     );
 
-    let mut size = msg.count();
-    for item in &mut iter {
+    for item in iter.take(msg.count()) {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         handle_response_message(send, val.message(timestamp, msg.source())?).await?;
-        size -= 1;
-        if size == 0 {
-            break;
-        }
     }
     handle_response_message(send, T::done()?).await?;
     send.finish().await?;
