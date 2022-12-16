@@ -348,7 +348,7 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
 
     let (mut send, mut recv) = stream?;
     if let Err(e) = server_handshake(&mut send, &mut recv, PUBLISH_VERSION_REQ).await {
-        let err = format!("Handshake fail: {}", e);
+        let err = format!("Handshake fail: {e}");
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
         bail!(err);

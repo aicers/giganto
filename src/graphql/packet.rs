@@ -40,7 +40,7 @@ mod tests {
                 }
             )
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{packets: []}");
     }
 }

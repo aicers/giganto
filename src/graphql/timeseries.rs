@@ -107,7 +107,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{periodicTimeSeries: {edges: []}}");
     }
 
@@ -133,7 +133,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{periodicTimeSeries: {edges: [{node: {id: \"src 1\",data: [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]}}],pageInfo: {hasPreviousPage: false}}}"

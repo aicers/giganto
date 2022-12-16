@@ -75,7 +75,7 @@ fn server() -> Server {
 
 fn init_client() -> Endpoint {
     let (cert, key) = match fs::read(CERT_PATH)
-        .and_then(|x| Ok((x, fs::read(KEY_PATH).expect("Failed to Read key file"))))
+        .map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
     {
         Ok(x) => x,
         Err(_) => {
@@ -243,8 +243,8 @@ fn gen_conn_raw_event() -> Vec<u8> {
         orig_pkts: 397,
         resp_pkts: 511,
     };
-    let ser_conn_body = bincode::serialize(&conn_body).unwrap();
-    ser_conn_body
+
+    bincode::serialize(&conn_body).unwrap()
 }
 
 fn gen_dns_raw_event() -> Vec<u8> {
@@ -259,8 +259,8 @@ fn gen_dns_raw_event() -> Vec<u8> {
                 .to_string(),
         answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
     };
-    let ser_dns_body = bincode::serialize(&dns_body).unwrap();
-    ser_dns_body
+
+    bincode::serialize(&dns_body).unwrap()
 }
 
 fn gen_rdp_raw_event() -> Vec<u8> {
@@ -271,8 +271,8 @@ fn gen_rdp_raw_event() -> Vec<u8> {
         resp_port: 80,
         cookie: "rdp_test".to_string(),
     };
-    let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
-    ser_rdp_body
+
+    bincode::serialize(&rdp_body).unwrap()
 }
 
 fn gen_http_raw_event() -> Vec<u8> {
@@ -288,8 +288,8 @@ fn gen_http_raw_event() -> Vec<u8> {
         user_agent: "giganto".to_string(),
         status_code: 200,
     };
-    let ser_http_body = bincode::serialize(&http_body).unwrap();
-    ser_http_body
+
+    bincode::serialize(&http_body).unwrap()
 }
 
 fn gen_smtp_raw_event() -> Vec<u8> {
@@ -305,8 +305,8 @@ fn gen_smtp_raw_event() -> Vec<u8> {
         subject: "hello giganto".to_string(),
         agent: "giganto".to_string(),
     };
-    let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
-    ser_smtp_body
+
+    bincode::serialize(&smtp_body).unwrap()
 }
 
 fn gen_ntlm_raw_event() -> Vec<u8> {
@@ -323,8 +323,8 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
         server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
     };
-    let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
-    ser_ntlm_body
+
+    bincode::serialize(&ntlm_body).unwrap()
 }
 
 fn gen_kerberos_raw_event() -> Vec<u8> {
@@ -346,8 +346,8 @@ fn gen_kerberos_raw_event() -> Vec<u8> {
         client_cert_subject: "client_cert".to_string(),
         server_cert_subject: "server_cert".to_string(),
     };
-    let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
-    ser_kerberos_body
+
+    bincode::serialize(&kerberos_body).unwrap()
 }
 
 fn gen_ssh_raw_event() -> Vec<u8> {
@@ -369,8 +369,8 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         host_key_alg: "host_key_alg".to_string(),
         host_key: "host_key".to_string(),
     };
-    let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
-    ser_ssh_body
+
+    bincode::serialize(&ssh_body).unwrap()
 }
 
 fn gen_dce_rpc_raw_event() -> Vec<u8> {
@@ -384,8 +384,8 @@ fn gen_dce_rpc_raw_event() -> Vec<u8> {
         endpoint: "endpoint".to_string(),
         operation: "operation".to_string(),
     };
-    let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
-    ser_dce_rpc_body
+
+    bincode::serialize(&dce_rpc_body).unwrap()
 }
 
 fn gen_log_raw_event() -> Vec<u8> {
@@ -393,8 +393,8 @@ fn gen_log_raw_event() -> Vec<u8> {
         kind: String::from("Hello"),
         log: base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
-    let ser_log_body = bincode::serialize(&log_body).unwrap();
-    ser_log_body
+
+    bincode::serialize(&log_body).unwrap()
 }
 
 fn gen_periodic_time_series_raw_event() -> Vec<u8> {
@@ -402,8 +402,8 @@ fn gen_periodic_time_series_raw_event() -> Vec<u8> {
         id: String::from("policy_one"),
         data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
     };
-    let ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
-    ser_periodic_time_series_body
+
+    bincode::serialize(&periodic_time_series_body).unwrap()
 }
 
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {

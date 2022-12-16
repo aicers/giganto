@@ -71,7 +71,7 @@ fn server() -> Server {
 
 fn init_client() -> Endpoint {
     let (cert, key) = match fs::read(CERT_PATH)
-        .and_then(|x| Ok((x, fs::read(KEY_PATH).expect("Failed to Read key file"))))
+        .map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
     {
         Ok(x) => x,
         Err(_) => {

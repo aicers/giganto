@@ -198,7 +198,7 @@ async fn handle_connection(
     let stream = connection.accept_bi().await;
     let (mut send, mut recv) = stream?;
     if let Err(e) = server_handshake(&mut send, &mut recv, INGESTION_VERSION_REQ).await {
-        let err = format!("Handshake fail: {}", e);
+        let err = format!("Handshake fail: {e}");
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
         bail!(err);
@@ -591,8 +591,8 @@ pub struct NetworkKey {
 }
 
 pub fn gen_network_key(source: &str, protocol: &str) -> NetworkKey {
-    let source_key = format!("{}\0{}", source, protocol);
-    let all_key = format!("all\0{}", protocol);
+    let source_key = format!("{source}\0{protocol}");
+    let all_key = format!("all\0{protocol}");
 
     NetworkKey {
         source_key,

@@ -857,7 +857,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{connRawEvents: {edges: []}}");
     }
 
@@ -891,7 +891,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
@@ -950,7 +950,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{dnsRawEvents: {edges: [],pageInfo: {hasPreviousPage: false}}}"
@@ -986,7 +986,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"31.3.245.133\",origPort: 46378}}]}}"
@@ -1037,7 +1037,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{httpRawEvents: {edges: []}}");
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
@@ -1124,7 +1124,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{rdpRawEvents: {edges: []}}");
     }
 
@@ -1157,7 +1157,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
@@ -1205,7 +1205,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
@@ -1258,7 +1258,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
@@ -1312,7 +1312,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
@@ -1371,7 +1371,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
@@ -1430,7 +1430,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
@@ -1487,7 +1487,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378,respPort: 80}}]}}"
@@ -1559,7 +1559,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}}]}}");
     }
 }

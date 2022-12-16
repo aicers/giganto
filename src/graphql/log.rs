@@ -570,7 +570,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{logRawEvents: {edges: []}}");
     }
 
@@ -595,7 +595,7 @@ mod tests {
                 }
             }
         }"#;
-        let res = schema.execute(&query).await;
+        let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
             format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}],pageInfo: {{hasPreviousPage: false}}}}}}", base64::encode("log 1"))
