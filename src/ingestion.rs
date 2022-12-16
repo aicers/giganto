@@ -122,7 +122,22 @@ impl PubMessage for PeriodicTimeSeries {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq)]
+#[derive(Debug, Deserialize)]
+pub struct Statistics {
+    period: u16,
+    stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, paket size
+}
+
+impl Display for Statistics {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        for stat in &self.stats {
+            writeln!(f, "{:?}\t{}\t{}\t{}", stat.0, stat.1, stat.2, self.period)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq, Deserialize)]
 #[repr(u32)]
 enum RecordType {
     Conn = 0,
@@ -136,6 +151,7 @@ enum RecordType {
     Kerberos = 8,
     Ssh = 9,
     DceRpc = 10,
+    Statistics = 11,
 }
 
 pub struct Server {
@@ -198,7 +214,7 @@ async fn handle_connection(
     let stream = connection.accept_bi().await;
     let (mut send, mut recv) = stream?;
     if let Err(e) = server_handshake(&mut send, &mut recv, INGESTION_VERSION_REQ).await {
-        let err = format!("Handshake fail: {}", e);
+        let err = format!("Handshake fail: {e}");
         send.finish().await?;
         connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
         bail!(err);
@@ -378,6 +394,17 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
+            )
+            .await?;
+        }
+        RecordType::Statistics => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Statistics,
+                Some(gen_network_key(&source, "statistics")),
+                source,
+                db.statistics_store()?,
             )
             .await?;
         }
@@ -591,8 +618,8 @@ pub struct NetworkKey {
 }
 
 pub fn gen_network_key(source: &str, protocol: &str) -> NetworkKey {
-    let source_key = format!("{}\0{}", source, protocol);
-    let all_key = format!("all\0{}", protocol);
+    let source_key = format!("{source}\0{protocol}");
+    let all_key = format!("all\0{protocol}");
 
     NetworkKey {
         source_key,

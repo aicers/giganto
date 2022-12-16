@@ -210,7 +210,7 @@ where
     let mut records = Vec::with_capacity(size);
     let mut has_more = false;
     while let Some(item) = iter.next() {
-        let item = item.map_err(|e| format!("failed to read database: {}", e))?;
+        let item = item.map_err(|e| format!("failed to read database: {e}"))?;
         match filter.check(
             item.1.orig_addr(),
             item.1.resp_addr(),

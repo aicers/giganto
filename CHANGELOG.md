@@ -7,6 +7,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `Statistics` column family. Receive and save traffic statistics from Piglet.
+
+### Changed
+
 - Send different stream start message depending on the daemon.
 
 ## [0.6.0] - 2022-12-06
