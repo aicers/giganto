@@ -22,6 +22,7 @@ pub struct Settings {
     pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_address: SocketAddr, // IP address & port to graphql
+    pub log_dir: PathBuf,    //giganto's syslog path
 }
 
 impl Settings {
@@ -60,7 +61,10 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
     let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
     let db_dir =
         directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
+    let log_dir = directories::ProjectDirs::from_path(PathBuf::from("logs/apps"))
+        .expect("unreachable logs dir");
     let db_path = db_dir.data_dir().to_str().expect("unreachable db path");
+    let log_path = log_dir.data_dir().to_str().expect("unreachable log path");
     let config_dir = dirs.config_dir();
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
@@ -80,6 +84,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("data dir")
         .set_default("retention", "100d")
         .expect("retention")
+        .set_default("log_path", log_path)
+        .expect("log dir")
 }
 
 /// Deserializes a socket address.

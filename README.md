@@ -23,6 +23,7 @@ roots = ["ca1.pem", "ca2.pem", "ca3.pem"]  # paths to CA certificate files
 ingestion_address = "0.0.0.0:38370"        # address to listen for QUIC connections
 data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
+log_dir = "tests/logs/apps"                # path to giganto's syslog file
 ```
 
 By default, giganto reads the config file from the following directories:

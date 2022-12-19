@@ -9,8 +9,13 @@ mod web;
 use anyhow::{anyhow, Context, Result};
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
-use std::{collections::HashMap, env, fs, process::exit, sync::Arc};
+use std::{collections::HashMap, env, fs, path::Path, process::exit, sync::Arc};
 use tokio::{sync::RwLock, task, time};
+use tracing::metadata::LevelFilter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{
+    fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -52,7 +57,7 @@ async fn main() -> Result<()> {
     let db_path = settings.data_dir.join("db");
     let database = storage::Database::open(&db_path)?;
 
-    tracing_subscriber::fmt::init();
+    let _guard = init_tracing(&settings.log_dir);
 
     let mut files: Vec<Vec<u8>> = Vec::new();
     for root in &settings.roots {
@@ -144,4 +149,29 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
         }
         _ => Err(anyhow!("unknown private key format")),
     }
+}
+
+fn init_tracing(path: &Path) -> WorkerGuard {
+    let file_name = format!("{}.log", env!("CARGO_PKG_NAME"));
+    let file_appender = tracing_appender::rolling::never(path, file_name);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let mut layer_file = fmt::Layer::default()
+        .with_writer(file_writer)
+        .with_target(false);
+    layer_file.set_ansi(false);
+    let layer_file = layer_file.with_filter(
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy(),
+    );
+    let layer_stdout = fmt::Layer::default().with_filter(
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy(),
+    );
+    tracing_subscriber::registry()
+        .with(layer_file)
+        .with(layer_stdout)
+        .init();
+    guard
 }

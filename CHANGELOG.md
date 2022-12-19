@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add `Statistics` column family. Receive and save traffic statistics from Piglet.
+- Save Giganto's `syslog` to a path written to `log_dir` in configuration file.
 
 ### Changed
 
