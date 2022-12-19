@@ -338,20 +338,17 @@ where
     type Item = KeyValue<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(Ok(elem)) = self.inner.next() {
-                if let Ok(true) = self.filter.check(
-                    elem.1.orig_addr(),
-                    elem.1.resp_addr(),
-                    elem.1.orig_port(),
-                    elem.1.resp_port(),
-                ) {
-                    return Some(elem);
-                }
-            } else {
-                return None;
+        while let Some(Ok(elem)) = self.inner.next() {
+            if let Ok(true) = self.filter.check(
+                elem.1.orig_addr(),
+                elem.1.resp_addr(),
+                elem.1.orig_port(),
+                elem.1.resp_port(),
+            ) {
+                return Some(elem);
             }
         }
+        None
     }
 }
 
