@@ -5,3 +5,4 @@
  publish_address = "0.0.0.0:38371"
  data_dir = "tests/data"
  retention = "100d"
+ log_dir = "tests/logs/apps"
