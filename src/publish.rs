@@ -118,12 +118,6 @@ pub trait PubMessage {
     fn done() -> Result<Vec<u8>> {
         Ok(bincode::serialize::<Option<(i64, Vec<u8>)>>(&None)?)
     }
-    fn convert_time_format(timestamp: i64) -> String {
-        const A_BILLION: i64 = 1_000_000_000;
-        let nsecs = u32::try_from(timestamp % A_BILLION).unwrap_or_default();
-        NaiveDateTime::from_timestamp_opt(timestamp / A_BILLION, nsecs)
-            .map_or("-".to_string(), |s| s.format("%s%.6f").to_string())
-    }
 }
 
 trait StreamMessage {
@@ -909,4 +903,11 @@ async fn request_network_stream(
         }
     }
     Ok(())
+}
+
+pub fn convert_time_format(timestamp: i64) -> String {
+    const A_BILLION: i64 = 1_000_000_000;
+    let nsecs = u32::try_from(timestamp % A_BILLION).unwrap_or_default();
+    NaiveDateTime::from_timestamp_opt(timestamp / A_BILLION, nsecs)
+        .map_or("-".to_string(), |s| s.format("%s%.6f").to_string())
 }

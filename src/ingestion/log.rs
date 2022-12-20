@@ -36,7 +36,7 @@ impl EventFilter for Log {
 
 impl Display for Log {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}: {:?}", self.kind, self.log)
+        write!(f, "{}\t{}", self.kind, String::from_utf8_lossy(&self.log))
     }
 }
 

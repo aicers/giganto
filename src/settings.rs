@@ -23,6 +23,7 @@ pub struct Settings {
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_address: SocketAddr, // IP address & port to graphql
     pub log_dir: PathBuf,    //giganto's syslog path
+    pub export_dir: PathBuf, //giganto's export file path
 }
 
 impl Settings {
@@ -63,8 +64,14 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
     let log_dir = directories::ProjectDirs::from_path(PathBuf::from("logs/apps"))
         .expect("unreachable logs dir");
+    let export_dir = directories::ProjectDirs::from_path(PathBuf::from("export"))
+        .expect("unreachable export dir");
     let db_path = db_dir.data_dir().to_str().expect("unreachable db path");
     let log_path = log_dir.data_dir().to_str().expect("unreachable log path");
+    let export_path = export_dir
+        .data_dir()
+        .to_str()
+        .expect("unreachable export path");
     let config_dir = dirs.config_dir();
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
@@ -86,6 +93,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("retention")
         .set_default("log_path", log_path)
         .expect("log dir")
+        .set_default("export_path", export_path)
+        .expect("export_dir")
 }
 
 /// Deserializes a socket address.

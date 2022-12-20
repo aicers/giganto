@@ -1,5 +1,5 @@
-use crate::ingestion::EventFilter;
 use crate::publish::PubMessage;
+use crate::{ingestion::EventFilter, publish::convert_time_format};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -52,7 +52,7 @@ impl Display for Conn {
             self.resp_addr,
             self.resp_port,
             self.proto,
-            Conn::convert_time_format(self.duration),
+            convert_time_format(self.duration),
             self.orig_bytes,
             self.resp_bytes,
             self.orig_pkts,
@@ -63,12 +63,7 @@ impl Display for Conn {
 
 impl PubMessage for Conn {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let conn_csv = format!(
-            "{}\t{}\t{}",
-            Conn::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let conn_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,
@@ -137,12 +132,7 @@ impl Display for Dns {
 
 impl PubMessage for Dns {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let dns_csv = format!(
-            "{}\t{}\t{}",
-            Dns::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let dns_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))?)
     }
@@ -220,12 +210,7 @@ impl Display for Http {
 
 impl PubMessage for Http {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let http_csv = format!(
-            "{}\t{}\t{}",
-            Http::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let http_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,
@@ -276,12 +261,7 @@ impl Display for Rdp {
 
 impl PubMessage for Rdp {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let rdp_csv = format!(
-            "{}\t{}\t{}",
-            Rdp::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let rdp_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))?)
     }
@@ -363,12 +343,7 @@ impl Display for Smtp {
 
 impl PubMessage for Smtp {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let smtp_csv = format!(
-            "{}\t{}\t{}",
-            Smtp::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let smtp_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,
@@ -463,12 +438,7 @@ impl Display for Ntlm {
 
 impl PubMessage for Ntlm {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let ntlm_csv = format!(
-            "{}\t{}\t{}",
-            Ntlm::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let ntlm_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,
@@ -585,12 +555,7 @@ impl Display for Kerberos {
 
 impl PubMessage for Kerberos {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let kerberos_csv = format!(
-            "{}\t{}\t{}",
-            Kerberos::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let kerberos_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,
@@ -707,12 +672,7 @@ impl Display for Ssh {
 
 impl PubMessage for Ssh {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let ssh_csv = format!(
-            "{}\t{}\t{}",
-            Ssh::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let ssh_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((timestamp, &ssh_csv.as_bytes())))?)
     }
@@ -782,12 +742,7 @@ impl Display for DceRpc {
 
 impl PubMessage for DceRpc {
     fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
-        let dce_rpc_csv = format!(
-            "{}\t{}\t{}",
-            DceRpc::convert_time_format(timestamp),
-            source,
-            self
-        );
+        let dce_rpc_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
         Ok(bincode::serialize(&Some((
             timestamp,

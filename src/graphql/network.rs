@@ -31,14 +31,14 @@ pub struct NetworkFilter {
 
 #[derive(InputObject, Serialize)]
 pub struct IpRange {
-    start: Option<String>,
-    end: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
 }
 
 #[derive(InputObject, Serialize)]
 pub struct PortRange {
-    start: Option<u16>,
-    end: Option<u16>,
+    pub start: Option<u16>,
+    pub end: Option<u16>,
 }
 
 impl RawEventFilter for NetworkFilter {

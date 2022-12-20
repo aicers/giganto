@@ -6,3 +6,4 @@
  data_dir = "tests/data"
  retention = "100d"
  log_dir = "tests/logs/apps"
+ export_dir = "tests/export"
