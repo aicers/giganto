@@ -437,8 +437,7 @@ pub async fn retain_periodically(
         Utc,
     )
     .timestamp_nanos()
-    .to_be_bytes()
-    .to_vec();
+    .to_be_bytes();
     loop {
         itv.tick().await;
         let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
