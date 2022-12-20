@@ -86,7 +86,7 @@ impl EventFilter for PeriodicTimeSeries {
 
 impl Display for PeriodicTimeSeries {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}: {:?}", self.id, self.data)
+        write!(f, "{:?}", self.data)
     }
 }
 

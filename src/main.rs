@@ -68,7 +68,11 @@ async fn main() -> Result<()> {
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
 
-    let schema = graphql::schema(database.clone(), packet_sources.clone());
+    let schema = graphql::schema(
+        database.clone(),
+        packet_sources.clone(),
+        settings.export_dir.clone(),
+    );
     task::spawn(web::serve(
         schema,
         settings.graphql_address,

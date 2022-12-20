@@ -1,3 +1,4 @@
+mod export;
 mod log;
 pub mod network;
 mod packet;
@@ -17,7 +18,7 @@ use async_graphql::{
 };
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{de::DeserializeOwned, Serialize};
-use std::net::IpAddr;
+use std::{net::IpAddr, path::PathBuf};
 
 use self::network::NetworkFilter;
 
@@ -27,6 +28,7 @@ pub const TIMESTAMP_SIZE: usize = 8;
 pub struct Query(
     log::LogQuery,
     network::NetworkQuery,
+    export::ExportQuery,
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
 );
@@ -58,10 +60,11 @@ pub trait FromKeyValue<T>: Sized {
 pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
-pub fn schema(database: Database, packet_sources: PacketSources) -> Schema {
+pub fn schema(database: Database, packet_sources: PacketSources, export_path: PathBuf) -> Schema {
     Schema::build(Query::default(), EmptyMutation, EmptySubscription)
         .data(database)
         .data(packet_sources)
+        .data(export_path)
         .finish()
 }
 
@@ -339,7 +342,8 @@ impl TestSchema {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path()).unwrap();
         let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-        let schema = schema(db.clone(), packet_sources);
+        let export_dir = tempfile::tempdir().unwrap();
+        let schema = schema(db.clone(), packet_sources, export_dir.path().to_path_buf());
         Self {
             _dir: db_dir,
             db,

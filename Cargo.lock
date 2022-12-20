@@ -718,6 +718,7 @@ dependencies = [
  "rustls-pemfile 1.0.1",
  "semver",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
