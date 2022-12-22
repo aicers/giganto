@@ -17,6 +17,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Send different stream start message depending on the daemon.
+- Check the write permission on `/data/logs/apps` directory.
 
 ## [0.6.0] - 2022-12-06
 
