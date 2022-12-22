@@ -260,15 +260,11 @@ impl<'db> SourceStore<'db> {
 
     /// Returns the names of all sources.
     fn names(&self) -> Vec<Vec<u8>> {
-        let mut names = Vec::new();
-        let iter = self
-            .db
+        self.db
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
-            .flatten();
-        for (key, _val) in iter {
-            names.push(key.to_vec());
-        }
-        names
+            .flatten()
+            .map(|(key, _value)| key.to_vec())
+            .collect()
     }
 }
 
