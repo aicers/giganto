@@ -775,6 +775,50 @@ async fn dce_rpc() {
 }
 
 #[tokio::test]
+async fn oplog() {
+    const RECORD_TYPE_OPLOG: u32 = 0x12;
+
+    #[derive(Serialize)]
+    struct OpLog {
+        agent_name: String,
+        log_level: super::log::OpLogLevel,
+        contents: String,
+    }
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_oplog, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let mut oplog_data: Vec<u8> = Vec::new();
+    let oplog_body = OpLog {
+        agent_name: "giganto".to_string(),
+        log_level: super::log::OpLogLevel::Info,
+        contents: "oplog".to_string(),
+    };
+    let mut ser_oplog_body = bincode::serialize(&oplog_body).unwrap();
+
+    oplog_data.append(&mut RECORD_TYPE_OPLOG.to_le_bytes().to_vec());
+    oplog_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
+    oplog_data.append(&mut (ser_oplog_body.len() as u32).to_le_bytes().to_vec());
+    oplog_data.append(&mut ser_oplog_body);
+
+    send_oplog
+        .write_all(&oplog_data)
+        .await
+        .expect("failed to send request");
+    send_oplog
+        .finish()
+        .await
+        .expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"oplog_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
 async fn ack_info() {
     const RECORD_TYPE_LOG: u32 = 0x02;
 

@@ -12,7 +12,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 12] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 13] = [
     "conn",
     "dns",
     "log",
@@ -25,6 +25,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 12] = [
     "ssh",
     "dce rpc",
     "statistics",
+    "oplog",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -172,7 +173,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle("statistics")
-            .context("cannot access sources column family")?;
+            .context("cannot access statistics column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
@@ -183,6 +184,15 @@ impl Database {
             .cf_handle("sources")
             .context("cannot access sources column family")?;
         Ok(SourceStore { db: &self.db, cf })
+    }
+
+    /// Returns the store for oplog
+    pub fn oplog_store(&self) -> Result<RawEventStore<ingestion::Oplog>> {
+        let cf = self
+            .db
+            .cf_handle("oplog")
+            .context("cannot access operation log column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
     }
 }
 
@@ -340,6 +350,8 @@ where
                 elem.1.resp_addr(),
                 elem.1.orig_port(),
                 elem.1.resp_port(),
+                elem.1.log_level(),
+                elem.1.log_contents(),
             ) {
                 return Some(elem);
             }

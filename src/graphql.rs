@@ -46,6 +46,8 @@ pub trait RawEventFilter {
         resp_addr: Option<IpAddr>,
         orig_port: Option<u16>,
         resp_port: Option<u16>,
+        log_level: Option<String>,
+        log_contents: Option<String>,
     ) -> Result<bool>;
 }
 
@@ -216,6 +218,8 @@ where
             item.1.resp_addr(),
             item.1.orig_port(),
             item.1.resp_port(),
+            item.1.log_level(),
+            item.1.log_contents(),
         ) {
             Ok(true) => records.push(item),
             Ok(false) | Err(_) => {}
