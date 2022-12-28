@@ -1,7 +1,9 @@
+pub(crate) mod log;
 mod network;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::log::{Log, Oplog};
 pub(crate) use self::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
 use crate::graphql::network::NetworkFilter;
 use crate::publish::{send_direct_network_stream, PubMessage};
@@ -51,39 +53,8 @@ pub trait EventFilter {
     fn resp_addr(&self) -> Option<IpAddr>;
     fn orig_port(&self) -> Option<u16>;
     fn resp_port(&self) -> Option<u16>;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Log {
-    pub kind: String,
-    pub log: Vec<u8>,
-}
-
-impl EventFilter for Log {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        None
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        None
-    }
-    fn orig_port(&self) -> Option<u16> {
-        None
-    }
-    fn resp_port(&self) -> Option<u16> {
-        None
-    }
-}
-
-impl Display for Log {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}: {:?}", self.kind, self.log)
-    }
-}
-
-impl PubMessage for Log {
-    fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(&Some((timestamp, &self.log)))?)
-    }
+    fn log_level(&self) -> Option<String>;
+    fn log_contents(&self) -> Option<String>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +74,12 @@ impl EventFilter for PeriodicTimeSeries {
         None
     }
     fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
         None
     }
 }
@@ -152,6 +129,7 @@ enum RecordType {
     Ssh = 9,
     DceRpc = 10,
     Statistics = 11,
+    Oplog = 12,
 }
 
 pub struct Server {
@@ -408,6 +386,17 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Oplog => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Oplog,
+                Some(gen_network_key(&source, "oplog")),
+                source,
+                db.oplog_store()?,
+            )
+            .await?;
+        }
     };
     Ok(())
 }
@@ -489,6 +478,14 @@ async fn handle_data<T>(
                             bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
                         key.clear();
                         key.extend_from_slice(periodic_time_series.id.as_bytes());
+                        key.push(0);
+                        key.extend_from_slice(&timestamp.to_be_bytes());
+                    }
+                    RecordType::Oplog => {
+                        let oplog = bincode::deserialize::<Oplog>(&raw_event)?;
+                        let agent_id = format!("{}@{source}", oplog.agent_name);
+                        key.clear();
+                        key.extend_from_slice(agent_id.as_bytes());
                         key.push(0);
                         key.extend_from_slice(&timestamp.to_be_bytes());
                     }

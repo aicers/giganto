@@ -36,6 +36,8 @@ impl RawEventFilter for TimeSeriesFilter {
         _resp_addr: Option<IpAddr>,
         _orig_port: Option<u16>,
         _resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }

@@ -25,6 +25,8 @@ pub struct NetworkFilter {
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
     resp_port: Option<PortRange>,
+    log_level: Option<String>,
+    log_contents: Option<String>,
 }
 
 #[derive(InputObject, Serialize)]
@@ -54,6 +56,8 @@ impl RawEventFilter for NetworkFilter {
         resp_addr: Option<IpAddr>,
         orig_port: Option<u16>,
         resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
     ) -> Result<bool> {
         if let Some(ip_range) = &self.orig_addr {
             if let Some(orig_addr) = orig_addr {
@@ -816,7 +820,7 @@ fn network_connection(
     Ok(connection)
 }
 
-fn key_prefix(source: &str) -> Vec<u8> {
+pub(crate) fn key_prefix(source: &str) -> Vec<u8> {
     let mut prefix = Vec::with_capacity(source.len() + 1);
     prefix.extend_from_slice(source.as_bytes());
     prefix.push(0);

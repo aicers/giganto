@@ -34,6 +34,12 @@ impl EventFilter for Conn {
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
     }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Display for Conn {
@@ -94,6 +100,12 @@ impl EventFilter for Dns {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 
@@ -162,6 +174,12 @@ impl EventFilter for Http {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 
@@ -238,6 +256,12 @@ impl EventFilter for Rdp {
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
     }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Display for Rdp {
@@ -289,6 +313,12 @@ impl EventFilter for Smtp {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 
@@ -374,6 +404,12 @@ impl EventFilter for Ntlm {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 
@@ -473,6 +509,12 @@ impl EventFilter for Kerberos {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 
@@ -590,6 +632,12 @@ impl EventFilter for Ssh {
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
     }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Display for Ssh {
@@ -694,6 +742,12 @@ impl EventFilter for DceRpc {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
     }
 }
 

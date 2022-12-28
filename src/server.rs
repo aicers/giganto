@@ -20,14 +20,17 @@ pub fn config_server(
             .map(rustls::Certificate)
             .collect();
         if let Some(cert) = root_cert.get(0) {
-            client_auth_roots.add(cert)?;
+            client_auth_roots
+                .add(cert)
+                .context("failed to add client auth root cert")?;
         }
     }
     let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots);
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_auth)
-        .with_single_cert(certs, key)?;
+        .with_single_cert(certs, key)
+        .context("server config error")?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
 
