@@ -1,6 +1,6 @@
 //! Raw event storage based on RocksDB.
 use crate::{
-    graphql::{network::NetworkFilter, RawEventFilter},
+    graphql::RawEventFilter,
     ingestion::{self, EventFilter},
 };
 use anyhow::{Context, Result};
@@ -12,7 +12,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 13] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 14] = [
     "conn",
     "dns",
     "log",
@@ -24,7 +24,8 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 13] = [
     "kerberos",
     "ssh",
     "dce rpc",
-    "statistics",
+    "collector statistics",
+    "analyzer statistics",
     "oplog",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
@@ -168,12 +169,25 @@ impl Database {
         Ok(RawEventStore::new(&self.db, cf))
     }
 
-    /// Returns the store for statistics
-    pub fn statistics_store(&self) -> Result<RawEventStore<ingestion::Statistics>> {
+    /// Returns the store for collector statistics
+    pub fn collector_statistics_store(
+        &self,
+    ) -> Result<RawEventStore<ingestion::CollectorStatistics>> {
         let cf = self
             .db
-            .cf_handle("statistics")
-            .context("cannot access statistics column family")?;
+            .cf_handle("collector statistics")
+            .context("cannot access collector statistics column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for analyzer statistics
+    pub fn analyzer_statistics_store(
+        &self,
+    ) -> Result<RawEventStore<ingestion::AnalyzerStatistics>> {
+        let cf = self
+            .db
+            .cf_handle("analyzer statistics")
+            .context("cannot access analyzer statistics column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
@@ -229,6 +243,15 @@ impl<'db, T> RawEventStore<'db, T> {
         self.db.flush_wal(true)?;
         Ok(())
     }
+
+    pub fn last_item_value(&self) -> Result<Option<Box<[u8]>>> {
+        let mut iter_data = self.db.iterator_cf(self.cf, rocksdb::IteratorMode::End);
+        if let Some(entry) = iter_data.next() {
+            let (_, value) = entry.context("Failed to read database")?;
+            return Ok(Some(value));
+        }
+        Ok(None)
+    }
 }
 
 impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
@@ -283,9 +306,14 @@ impl<'db> SourceStore<'db> {
 unsafe impl<'db> Send for SourceStore<'db> {}
 
 /// Creates a key corresponding to the given `prefix` and `time`.
-pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
-    bound.extend(prefix);
+pub fn lower_closed_bound_key(prefix: Option<&[u8]>, time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = if let Some(prefix) = prefix {
+        let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
+        bound.extend(prefix);
+        bound
+    } else {
+        Vec::with_capacity(mem::size_of::<i64>())
+    };
     if let Some(time) = time {
         bound.extend(time.timestamp_nanos().to_be_bytes());
     }
@@ -293,9 +321,14 @@ pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec
 }
 
 /// Creates a key corresponding to the given `prefix` and `time`.
-pub fn upper_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
-    bound.extend(prefix);
+pub fn upper_closed_bound_key(prefix: Option<&[u8]>, time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = if let Some(prefix) = prefix {
+        let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
+        bound.extend(prefix);
+        bound
+    } else {
+        Vec::with_capacity(mem::size_of::<i64>())
+    };
     if let Some(time) = time {
         bound.extend(time.timestamp_nanos().to_be_bytes());
     } else {
@@ -306,9 +339,14 @@ pub fn upper_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec
 
 /// Creates a key that follows the key calculated from the given `prefix` and
 /// `time`.
-pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>() + 1);
-    bound.extend(prefix);
+pub fn upper_open_bound_key(prefix: Option<&[u8]>, time: Option<DateTime<Utc>>) -> Vec<u8> {
+    let mut bound = if let Some(prefix) = prefix {
+        let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
+        bound.extend(prefix);
+        bound
+    } else {
+        Vec::with_capacity(mem::size_of::<i64>())
+    };
     if let Some(time) = time {
         let ns = time.timestamp_nanos();
         if let Some(ns) = ns.checked_sub(1) {
@@ -328,11 +366,11 @@ pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
 pub struct FilteredIter<'d, T> {
     inner: BoundaryIter<'d, T>,
-    filter: &'d NetworkFilter,
+    filter: &'d dyn RawEventFilter,
 }
 
 impl<'d, T> FilteredIter<'d, T> {
-    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d NetworkFilter) -> Self {
+    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d dyn RawEventFilter) -> Self {
         Self { inner, filter }
     }
 }

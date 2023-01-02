@@ -624,7 +624,7 @@ impl NetworkQuery {
             |after, before, first, last| async move {
                 let (conn_iter, cursor, size) = get_filtered_iter(
                     &db.conn_store()?,
-                    &key_prefix,
+                    Some(&key_prefix),
                     &filter,
                     &after,
                     &before,
@@ -642,7 +642,7 @@ impl NetworkQuery {
 
                 let (dns_iter, cursor, _) = get_filtered_iter(
                     &db.dns_store()?,
-                    &key_prefix,
+                    Some(&key_prefix),
                     &filter,
                     &after,
                     &before,
@@ -660,7 +660,7 @@ impl NetworkQuery {
 
                 let (http_iter, cursor, _) = get_filtered_iter(
                     &db.http_store()?,
-                    &key_prefix,
+                    Some(&key_prefix),
                     &filter,
                     &after,
                     &before,
@@ -678,7 +678,7 @@ impl NetworkQuery {
 
                 let (rdp_iter, cursor, _) = get_filtered_iter(
                     &db.rdp_store()?,
-                    &key_prefix,
+                    Some(&key_prefix),
                     &filter,
                     &after,
                     &before,

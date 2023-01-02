@@ -552,8 +552,8 @@ where
         key_prefix.push(0);
     }
     let iter = store.boundary_iter(
-        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start()))),
-        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end()))),
+        &lower_closed_bound_key(Some(&key_prefix), Some(Utc.timestamp_nanos(msg.start()))),
+        &upper_open_bound_key(Some(&key_prefix), Some(Utc.timestamp_nanos(msg.end()))),
         Direction::Forward,
     );
 
@@ -663,10 +663,10 @@ where
 
             let iter = store.boundary_iter(
                 &lower_closed_bound_key(
-                    &db_key_prefix,
+                    Some(&db_key_prefix),
                     Some(Utc.timestamp_nanos(msg.start_time())),
                 ),
-                &upper_open_bound_key(&db_key_prefix, None),
+                &upper_open_bound_key(Some(&db_key_prefix), None),
                 Direction::Forward,
             );
 
