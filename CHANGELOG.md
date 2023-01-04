@@ -5,14 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2023-01-04
 
 ### Added
 
 - Add export file to GraphQL API. (`csv`, `json` format support)
 - Add `Statistics` column family. Receive and save traffic statistics from Piglet.
 - Save Giganto's `syslog` to a path written to `log_dir` in configuration file.
-- Add `Operationlog`
+- Add `Oplog` (Operation log)
 
 ### Changed
 
@@ -105,6 +105,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[0.7.0]: https://github.com/aicers/giganto/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/aicers/giganto/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aicers/giganto/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/aicers/giganto/compare/0.3.0...0.4.0

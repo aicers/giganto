@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::{error, info};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.7.0-alpha.1 , <=0.7.0-alpha.2";
+const PUBLISH_VERSION_REQ: &str = "0.7";
 
 lazy_static! {
     pub static ref HOG_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
