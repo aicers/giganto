@@ -764,7 +764,7 @@ mod tests {
                         Utc,
                     )),
                 }),
-                agent_id: "giganto@src1".to_string(),
+                agent_id: "giganto@src 1".to_string(),
                 log_level: Some("Info".to_string()),
                 contents: Some("oplog".to_string()),
             },

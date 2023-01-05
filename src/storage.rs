@@ -177,15 +177,6 @@ impl Database {
         Ok(RawEventStore::new(&self.db, cf))
     }
 
-    /// Returns the store for connection sources
-    pub fn sources_store(&self) -> Result<SourceStore> {
-        let cf = self
-            .db
-            .cf_handle("sources")
-            .context("cannot access sources column family")?;
-        Ok(SourceStore { db: &self.db, cf })
-    }
-
     /// Returns the store for oplog
     pub fn oplog_store(&self) -> Result<RawEventStore<ingestion::Oplog>> {
         let cf = self
@@ -193,6 +184,15 @@ impl Database {
             .cf_handle("oplog")
             .context("cannot access operation log column family")?;
         Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for connection sources
+    pub fn sources_store(&self) -> Result<SourceStore> {
+        let cf = self
+            .db
+            .cf_handle("sources")
+            .context("cannot access sources column family")?;
+        Ok(SourceStore { db: &self.db, cf })
     }
 }
 
