@@ -12,8 +12,8 @@ use super::{
 };
 use crate::{
     ingestion::{
-        Conn, DceRpc, Dns, EventFilter, Http, Kerberos, Log, Ntlm, PeriodicTimeSeries, Rdp, Smtp,
-        Ssh,
+        Conn, DceRpc, Dns, EventFilter, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries, Rdp,
+        Smtp, Ssh,
     },
     publish::convert_time_format,
     storage::{lower_closed_bound_key, upper_open_bound_key, Database, RawEventStore},
@@ -191,6 +191,14 @@ struct TimeSeriesJsonOutput {
     data: Vec<f64>,
 }
 
+#[derive(Serialize, Debug)]
+struct OpLogJsonOutput {
+    timestamp: String,
+    agent_id: String,
+    level: String,
+    contents: String,
+}
+
 pub trait JsonOutput<T>: Sized {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<T>;
 }
@@ -332,6 +340,17 @@ impl JsonOutput<TimeSeriesJsonOutput> for PeriodicTimeSeries {
     }
 }
 
+impl JsonOutput<OpLogJsonOutput> for Oplog {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<OpLogJsonOutput> {
+        Ok(OpLogJsonOutput {
+            timestamp,
+            agent_id: source,
+            level: self.log_level().unwrap_or_else(|| "-".to_string()),
+            contents: self.contents.clone(),
+        })
+    }
+}
+
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
 pub struct ExportFilter {
@@ -446,7 +465,10 @@ impl ExportQuery {
         export_type: String,
         filter: ExportFilter,
     ) -> Result<String> {
-        if filter.protocol == "log" || filter.protocol == "periodic time series" {
+        if filter.protocol == "log"
+            || filter.protocol == "periodic time series"
+            || filter.protocol == "oplog"
+        {
             // check log/time_series protocol filter format
             if filter.orig_addr.is_some()
                 || filter.resp_addr.is_some()
@@ -652,6 +674,20 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "oplog" => tokio::spawn(async move {
+            if let Ok(store) = db.oplog_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -764,7 +800,8 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
 mod tests {
     use crate::graphql::TestSchema;
     use crate::ingestion::{
-        Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, PeriodicTimeSeries, Rdp, Smtp, Ssh,
+        log::OpLogLevel, Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries,
+        Rdp, Smtp, Ssh,
     };
     use crate::storage::RawEventStore;
     use chrono::{Duration, Utc};
@@ -832,33 +869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_conn_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.conn_store().unwrap();
-
-        insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_conn_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "conn",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("conn"));
-    }
-
-    #[tokio::test]
-    async fn export_conn_with_data() {
+    async fn export_conn() {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
 
@@ -927,33 +938,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_dns_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.dns_store().unwrap();
-
-        insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_dns_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "dns",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("dns"));
-    }
-
-    #[tokio::test]
-    async fn export_dns_with_data() {
+    async fn export_dns() {
         let schema = TestSchema::new();
         let store = schema.db.dns_store().unwrap();
 
@@ -1018,32 +1003,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_http_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.http_store().unwrap();
-
-        insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_http_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "http",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 0, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("http"));
-    }
-
-    #[tokio::test]
-    async fn export_http_with_data() {
+    async fn export_http() {
         let schema = TestSchema::new();
         let store = schema.db.http_store().unwrap();
 
@@ -1111,33 +1071,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_rdp_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.rdp_store().unwrap();
-
-        insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_rdp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "rdp",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 0, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("rdp"));
-    }
-
-    #[tokio::test]
-    async fn export_rdp_with_data() {
+    async fn export_rdp() {
         let schema = TestSchema::new();
         let store = schema.db.rdp_store().unwrap();
 
@@ -1200,33 +1134,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_smtp_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.smtp_store().unwrap();
-
-        insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_smtp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "smtp",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
-                    respAddr: { start: "192.168.4.70", end: "192.168.4.78" }
-                    origPort: { start: 46377, end: 46380 }
-                    respPort: { start: 0, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("smtp"));
-    }
-
-    #[tokio::test]
-    async fn export_smtp_with_data() {
+    async fn export_smtp() {
         let schema = TestSchema::new();
         let store = schema.db.smtp_store().unwrap();
 
@@ -1294,33 +1202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_ntlm_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.ntlm_store().unwrap();
-
-        insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "ntlm",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("ntlm"));
-    }
-
-    #[tokio::test]
-    async fn export_ntlm_with_data() {
+    async fn export_ntlm() {
         let schema = TestSchema::new();
         let store = schema.db.ntlm_store().unwrap();
 
@@ -1363,6 +1245,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert!(res.data.to_string().contains("ntlm"));
     }
+
     fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
@@ -1388,33 +1271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_kerberos_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.kerberos_store().unwrap();
-
-        insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "kerberos",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("kerberos"));
-    }
-
-    #[tokio::test]
-    async fn export_kerberos_with_data() {
+    async fn export_kerberos() {
         let schema = TestSchema::new();
         let store = schema.db.kerberos_store().unwrap();
 
@@ -1457,6 +1314,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert!(res.data.to_string().contains("kerberos"));
     }
+
     fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, source: &str, timestamp: i64) {
         let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());
@@ -1487,33 +1345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_ssh_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.ssh_store().unwrap();
-
-        insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ssh_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "ssh",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("ssh"));
-    }
-
-    #[tokio::test]
-    async fn export_ssh_with_data() {
+    async fn export_ssh() {
         let schema = TestSchema::new();
         let store = schema.db.ssh_store().unwrap();
 
@@ -1586,33 +1418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_dce_rpc_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.dce_rpc_store().unwrap();
-
-        insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src2", Utc::now().timestamp_nanos());
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "dce rpc",
-                    sourceId: "src3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
-                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
-                    origPort: { start: 46378, end: 46379 }
-                    respPort: { start: 50, end: 200 }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("dcerpc"));
-    }
-
-    #[tokio::test]
-    async fn export_dce_rpc_with_data() {
+    async fn export_dce_rpc() {
         let schema = TestSchema::new();
         let store = schema.db.dce_rpc_store().unwrap();
 
@@ -1677,42 +1483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_log_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.log_store().unwrap();
-
-        insert_log_raw_event(
-            &store,
-            "src1",
-            Utc::now().timestamp_nanos(),
-            "kind1",
-            b"log1",
-        );
-        insert_log_raw_event(
-            &store,
-            "src1",
-            Utc::now().timestamp_nanos(),
-            "kind2",
-            b"log2",
-        );
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "log",
-                    sourceId: "src3",
-                    kind: "kind2",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                }
-                ,exportType:"json")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("log"));
-    }
-
-    #[tokio::test]
-    async fn export_log_with_data() {
+    async fn export_log() {
         let schema = TestSchema::new();
         let store = schema.db.log_store().unwrap();
 
@@ -1784,29 +1555,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_time_series_empty() {
-        let schema = TestSchema::new();
-        let store = schema.db.periodic_time_series_store().unwrap();
-
-        insert_time_series(&store, "1", Utc::now().timestamp_nanos(), vec![0.0; 12]);
-        insert_time_series(&store, "2", Utc::now().timestamp_nanos(), vec![0.0; 12]);
-
-        let query = r#"
-        {
-            export(
-                filter:{
-                    protocol: "periodic time series",
-                    sourceId: "3",
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
-                }
-                ,exportType:"csv")
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("periodictimeseries"));
-    }
-
-    #[tokio::test]
-    async fn export_time_series_with_data() {
+    async fn export_time_series() {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store().unwrap();
 
@@ -1857,6 +1606,59 @@ mod tests {
             data,
         };
         let value = bincode::serialize(&time_series_data).unwrap();
+        store.append(&key, &value).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_oplog() {
+        let schema = TestSchema::new();
+        let store = schema.db.oplog_store().unwrap();
+
+        insert_oplog_raw_event(&store, "agent1", 1);
+        insert_oplog_raw_event(&store, "agent2", 1);
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "oplog",
+                    sourceId: "agent1@src 1",
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("oplog"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "oplog",
+                    sourceId: "agent2@src 1",
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("oplog"));
+    }
+
+    fn insert_oplog_raw_event(store: &RawEventStore<Oplog>, agent_name: &str, timestamp: i64) {
+        let mut key: Vec<u8> = Vec::new();
+        let agent_id = format!("{agent_name}@src 1");
+        key.extend_from_slice(agent_id.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&timestamp.to_be_bytes());
+
+        let oplog_body = Oplog {
+            agent_name: agent_id.to_string(),
+            log_level: OpLogLevel::Info,
+            contents: "oplog".to_string(),
+        };
+
+        let value = bincode::serialize(&oplog_body).unwrap();
+
         store.append(&key, &value).unwrap();
     }
 }

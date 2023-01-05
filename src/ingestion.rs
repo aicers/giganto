@@ -102,7 +102,7 @@ impl PubMessage for PeriodicTimeSeries {
 #[derive(Debug, Deserialize)]
 pub struct Statistics {
     period: u16,
-    stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, paket size
+    stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, packet size
 }
 
 impl Display for Statistics {
