@@ -1,3 +1,4 @@
+mod delete;
 mod export;
 mod log;
 pub mod network;
@@ -52,6 +53,7 @@ pub struct Query(
     timeseries::TimeSeriesQuery,
     status::GigantoStatusQuery,
     source::SourceQuery,
+    delete::DeleteQuery,
 );
 
 #[derive(Default, MergedObject)]

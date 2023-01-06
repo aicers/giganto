@@ -7,6 +7,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Delete DB by protocol name(column family) to graphQL API
+  (without protocol will remove all data)
+
 ### Changed
 
 - Replaced `lazy_static` with the new `std::sync::OnceLock`.

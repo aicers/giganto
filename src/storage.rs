@@ -10,7 +10,7 @@ use crate::{
     },
     ingest::implement::EventFilter,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
@@ -29,7 +29,7 @@ use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Op
 use serde::de::DeserializeOwned;
 use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
-use tracing::error;
+use tracing::{error, info};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
     "conn",
@@ -55,6 +55,8 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
+const KEY_MIN: &[u8] = &[0];
+const KEY_MAX: &[u8] = &[255];
 
 #[cfg(debug_assertions)]
 pub struct CfProperties {
@@ -354,6 +356,68 @@ impl Database {
             .cf_handle("nfs")
             .context("cannot access nfs column family")?;
         Ok(RawEventStore::new(&self.db, cf))
+    }
+    /// Delete all data in given column family names.
+    pub fn delete_all(&self, cfs: Option<Vec<String>>) -> Result<()> {
+        if let Some(names) = cfs {
+            for name in names.clone() {
+                let str = name.as_str();
+                if !(RAW_DATA_COLUMN_FAMILY_NAMES.contains(&str)
+                    || META_DATA_COLUMN_FAMILY_NAMES.contains(&str))
+                {
+                    bail!("invalid column family name {name}");
+                }
+            }
+
+            for store in names {
+                let cf = self
+                    .db
+                    .cf_handle(store.as_str())
+                    .context("cannot access column family {store}")?;
+
+                match self.db.delete_range_cf(cf, KEY_MIN, KEY_MAX) {
+                    Ok(_) => {
+                        info!("{store} db deleted");
+                        self.db.delete_file_in_range_cf(cf, KEY_MIN, KEY_MAX)?;
+                    }
+                    Err(e) => {
+                        error!("delete all error: {e}");
+                    }
+                }
+            }
+        } else {
+            for store in RAW_DATA_COLUMN_FAMILY_NAMES {
+                let cf = self
+                    .db
+                    .cf_handle(store)
+                    .context("cannot access column family")?;
+                match self.db.delete_range_cf(cf, KEY_MIN, KEY_MAX) {
+                    Ok(_) => {
+                        info!("{store} db deleted");
+                        self.db.delete_file_in_range_cf(cf, KEY_MIN, KEY_MAX)?;
+                    }
+                    Err(e) => {
+                        error!("delete all error: {e}");
+                    }
+                }
+            }
+            for store in META_DATA_COLUMN_FAMILY_NAMES {
+                let cf = self
+                    .db
+                    .cf_handle(store)
+                    .context("cannot access column family")?;
+                match self.db.delete_range_cf(cf, KEY_MIN, KEY_MAX) {
+                    Ok(_) => {
+                        info!("{store} db deleted");
+                        self.db.delete_file_in_range_cf(cf, KEY_MIN, KEY_MAX)?;
+                    }
+                    Err(e) => {
+                        error!("delete all error: {e}");
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
