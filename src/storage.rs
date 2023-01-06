@@ -47,6 +47,7 @@ impl Database {
 
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
+        opts.set_max_open_files(8000);
         let db = DB::open_cf(&opts, path, cfs).context("cannot open database")?;
 
         Ok(Database { db: Arc::new(db) })
