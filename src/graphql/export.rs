@@ -11,7 +11,7 @@ use super::{
     RawEventFilter, TimeRange,
 };
 use crate::{
-    ingestion::{
+    ingest::{
         Conn, DceRpc, Dns, EventFilter, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries, Rdp,
         Smtp, Ssh,
     },
@@ -799,7 +799,7 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
-    use crate::ingestion::{
+    use crate::ingest::{
         log::OpLogLevel, Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries,
         Rdp, Smtp, Ssh,
     };

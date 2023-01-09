@@ -1,5 +1,5 @@
 use super::network::NetworkFilter;
-use crate::ingestion::{request_packets, PacketSources};
+use crate::ingest::{request_packets, PacketSources};
 use async_graphql::{Context, Object, Result};
 
 #[derive(Default)]

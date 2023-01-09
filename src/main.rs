@@ -1,5 +1,5 @@
 mod graphql;
-mod ingestion;
+mod ingest;
 mod publish;
 mod server;
 mod settings;
@@ -94,10 +94,8 @@ async fn main() -> Result<()> {
     );
     task::spawn(publish_server.run(database.clone()));
 
-    let ingestion_server = ingestion::Server::new(settings.ingestion_address, cert, key, files);
-    ingestion_server
-        .run(database, packet_sources, sources)
-        .await;
+    let ingest_server = ingest::Server::new(settings.ingest_address, cert, key, files);
+    ingest_server.run(database, packet_sources, sources).await;
 
     Ok(())
 }

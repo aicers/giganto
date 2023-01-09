@@ -3,7 +3,7 @@ use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
-const DEFAULT_INGESTION_ADDRESS: &str = "[::]:38370";
+const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 
@@ -14,7 +14,7 @@ pub struct Settings {
     pub key: PathBuf,        // Path to the private key file
     pub roots: Vec<PathBuf>, // Path to the rootCA file
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub ingestion_address: SocketAddr, // IP address & port to ingest data
+    pub ingest_address: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub publish_address: SocketAddr, // IP address & port to publish data
     pub data_dir: PathBuf,   // DB storage path
@@ -81,7 +81,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default cert dir")
         .set_default("key", key_path.to_str().expect("path to string"))
         .expect("default key dir")
-        .set_default("ingestion_address", DEFAULT_INGESTION_ADDRESS)
+        .set_default("ingest_address", DEFAULT_INGEST_ADDRESS)
         .expect("valid address")
         .set_default("publish_address", DEFAULT_PUBLISH_ADDRESS)
         .expect("valid address")

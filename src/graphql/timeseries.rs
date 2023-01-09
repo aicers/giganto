@@ -1,7 +1,7 @@
 use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion,
+    ingest,
     storage::Database,
 };
 use async_graphql::{
@@ -50,8 +50,8 @@ struct TimeSeries {
     data: Vec<f64>,
 }
 
-impl FromKeyValue<ingestion::PeriodicTimeSeries> for TimeSeries {
-    fn from_key_value(key: &[u8], p: ingestion::PeriodicTimeSeries) -> Result<Self> {
+impl FromKeyValue<ingest::PeriodicTimeSeries> for TimeSeries {
+    fn from_key_value(key: &[u8], p: ingest::PeriodicTimeSeries) -> Result<Self> {
         Ok(TimeSeries {
             start: get_timestamp(key)?,
             id: p.id,
@@ -93,7 +93,7 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::ingestion::PeriodicTimeSeries;
+    use crate::ingest::PeriodicTimeSeries;
     use crate::{graphql::TestSchema, storage::RawEventStore};
 
     #[tokio::test]

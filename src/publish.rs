@@ -2,7 +2,7 @@
 mod tests;
 
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::ingestion::{EventFilter, NetworkKey};
+use crate::ingest::{EventFilter, NetworkKey};
 use crate::server::{certificate_info, config_server, server_handshake};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
