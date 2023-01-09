@@ -1,4 +1,4 @@
-use crate::ingestion::EventFilter;
+use crate::ingest::EventFilter;
 use crate::publish::PubMessage;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

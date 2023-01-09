@@ -1,5 +1,5 @@
 use super::Server;
-use crate::ingestion::{
+use crate::ingest::{
     Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, PeriodicTimeSeries, Rdp, Smtp, Ssh,
 };
 use crate::{
@@ -1347,7 +1347,7 @@ async fn request_publish_period_time_series() {
 
 #[tokio::test]
 async fn request_network_event_stream() {
-    use crate::ingestion::gen_network_key;
+    use crate::ingest::gen_network_key;
     use crate::publish::send_direct_network_stream;
 
     const HOG_TYPE: u8 = 0x00;

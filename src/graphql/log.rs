@@ -1,7 +1,7 @@
 use super::{get_timestamp, load_connection, network::key_prefix, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion,
+    ingest,
     storage::Database,
 };
 use async_graphql::{
@@ -100,8 +100,8 @@ struct LogRawEvent {
     log: String,
 }
 
-impl FromKeyValue<ingestion::Log> for LogRawEvent {
-    fn from_key_value(key: &[u8], l: ingestion::Log) -> Result<Self> {
+impl FromKeyValue<ingest::Log> for LogRawEvent {
+    fn from_key_value(key: &[u8], l: ingest::Log) -> Result<Self> {
         Ok(LogRawEvent {
             timestamp: get_timestamp(key)?,
             log: base64::encode(l.log),
@@ -116,8 +116,8 @@ struct OpLogRawEvent {
     contents: String,
 }
 
-impl FromKeyValue<ingestion::Oplog> for OpLogRawEvent {
-    fn from_key_value(key: &[u8], l: ingestion::Oplog) -> Result<Self> {
+impl FromKeyValue<ingest::Oplog> for OpLogRawEvent {
+    fn from_key_value(key: &[u8], l: ingest::Oplog) -> Result<Self> {
         Ok(OpLogRawEvent {
             timestamp: get_timestamp(key)?,
             level: format!("{:?}", l.log_level),
@@ -192,7 +192,7 @@ impl LogQuery {
 #[cfg(test)]
 mod tests {
     use super::{LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
-    use crate::ingestion::{log::OpLogLevel, Log, Oplog};
+    use crate::ingest::{log::OpLogLevel, Log, Oplog};
     use crate::{
         graphql::{TestSchema, TimeRange},
         storage::RawEventStore,

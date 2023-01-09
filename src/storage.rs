@@ -1,7 +1,7 @@
 //! Raw event storage based on RocksDB.
 use crate::{
     graphql::{network::NetworkFilter, RawEventFilter},
-    ingestion::{self, EventFilter},
+    ingest::{self, EventFilter},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -68,7 +68,7 @@ impl Database {
     }
 
     /// Returns the raw event store for connections.
-    pub fn conn_store(&self) -> Result<RawEventStore<ingestion::Conn>> {
+    pub fn conn_store(&self) -> Result<RawEventStore<ingest::Conn>> {
         let cf = self
             .db
             .cf_handle("conn")
@@ -77,7 +77,7 @@ impl Database {
     }
 
     /// Returns the raw event store for dns.
-    pub fn dns_store(&self) -> Result<RawEventStore<ingestion::Dns>> {
+    pub fn dns_store(&self) -> Result<RawEventStore<ingest::Dns>> {
         let cf = self
             .db
             .cf_handle("dns")
@@ -86,7 +86,7 @@ impl Database {
     }
 
     /// Returns the raw event store for log.
-    pub fn log_store(&self) -> Result<RawEventStore<ingestion::Log>> {
+    pub fn log_store(&self) -> Result<RawEventStore<ingest::Log>> {
         let cf = self
             .db
             .cf_handle("log")
@@ -95,7 +95,7 @@ impl Database {
     }
 
     /// Returns the raw event store for http.
-    pub fn http_store(&self) -> Result<RawEventStore<ingestion::Http>> {
+    pub fn http_store(&self) -> Result<RawEventStore<ingest::Http>> {
         let cf = self
             .db
             .cf_handle("http")
@@ -104,7 +104,7 @@ impl Database {
     }
 
     /// Returns the raw event store for rdp.
-    pub fn rdp_store(&self) -> Result<RawEventStore<ingestion::Rdp>> {
+    pub fn rdp_store(&self) -> Result<RawEventStore<ingest::Rdp>> {
         let cf = self
             .db
             .cf_handle("rdp")
@@ -113,9 +113,7 @@ impl Database {
     }
 
     /// Returns the raw event store for periodic time series.
-    pub fn periodic_time_series_store(
-        &self,
-    ) -> Result<RawEventStore<ingestion::PeriodicTimeSeries>> {
+    pub fn periodic_time_series_store(&self) -> Result<RawEventStore<ingest::PeriodicTimeSeries>> {
         let cf = self
             .db
             .cf_handle("periodic time series")
@@ -124,7 +122,7 @@ impl Database {
     }
 
     /// Returns the raw event store for smtp.
-    pub fn smtp_store(&self) -> Result<RawEventStore<ingestion::Smtp>> {
+    pub fn smtp_store(&self) -> Result<RawEventStore<ingest::Smtp>> {
         let cf = self
             .db
             .cf_handle("smtp")
@@ -133,7 +131,7 @@ impl Database {
     }
 
     /// Returns the raw event store for ntlm.
-    pub fn ntlm_store(&self) -> Result<RawEventStore<ingestion::Ntlm>> {
+    pub fn ntlm_store(&self) -> Result<RawEventStore<ingest::Ntlm>> {
         let cf = self
             .db
             .cf_handle("ntlm")
@@ -142,7 +140,7 @@ impl Database {
     }
 
     /// Returns the raw event store for kerberos.
-    pub fn kerberos_store(&self) -> Result<RawEventStore<ingestion::Kerberos>> {
+    pub fn kerberos_store(&self) -> Result<RawEventStore<ingest::Kerberos>> {
         let cf = self
             .db
             .cf_handle("kerberos")
@@ -151,7 +149,7 @@ impl Database {
     }
 
     /// Returns the raw event store for ssh.
-    pub fn ssh_store(&self) -> Result<RawEventStore<ingestion::Ssh>> {
+    pub fn ssh_store(&self) -> Result<RawEventStore<ingest::Ssh>> {
         let cf = self
             .db
             .cf_handle("ssh")
@@ -160,7 +158,7 @@ impl Database {
     }
 
     /// Returns the raw event store for dce rpc.
-    pub fn dce_rpc_store(&self) -> Result<RawEventStore<ingestion::DceRpc>> {
+    pub fn dce_rpc_store(&self) -> Result<RawEventStore<ingest::DceRpc>> {
         let cf = self
             .db
             .cf_handle("dce rpc")
@@ -169,7 +167,7 @@ impl Database {
     }
 
     /// Returns the store for statistics
-    pub fn statistics_store(&self) -> Result<RawEventStore<ingestion::Statistics>> {
+    pub fn statistics_store(&self) -> Result<RawEventStore<ingest::Statistics>> {
         let cf = self
             .db
             .cf_handle("statistics")
@@ -178,7 +176,7 @@ impl Database {
     }
 
     /// Returns the store for oplog
-    pub fn oplog_store(&self) -> Result<RawEventStore<ingestion::Oplog>> {
+    pub fn oplog_store(&self) -> Result<RawEventStore<ingest::Oplog>> {
         let cf = self
             .db
             .cf_handle("oplog")

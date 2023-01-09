@@ -1,7 +1,7 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingestion::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+    ingest::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -830,7 +830,7 @@ pub(crate) fn key_prefix(source: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
-    use crate::ingestion::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+    use crate::ingest::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use std::mem;
