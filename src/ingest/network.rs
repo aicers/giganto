@@ -8,13 +8,14 @@ use std::{
     net::IpAddr,
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Conn {
     pub orig_addr: IpAddr,
     pub resp_addr: IpAddr,
     pub orig_port: u16,
     pub resp_port: u16,
     pub proto: u8,
+    pub service: String,
     pub duration: i64,
     pub orig_bytes: u64,
     pub resp_bytes: u64,
@@ -47,12 +48,13 @@ impl Display for Conn {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
             self.proto,
+            self.service,
             convert_time_format(self.duration),
             self.orig_bytes,
             self.resp_bytes,

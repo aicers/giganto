@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add more fields to `dns`
+- Add `service` field to `conn`
 
 ### Changed
 
@@ -115,6 +116,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.7.0...main
 [0.7.0]: https://github.com/aicers/giganto/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/aicers/giganto/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aicers/giganto/compare/0.4.0...0.5.0

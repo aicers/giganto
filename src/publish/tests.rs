@@ -237,6 +237,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
         orig_port: 46378,
         resp_port: 80,
         proto: 6,
+        service: "-".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         orig_bytes: 77,
         resp_bytes: 295,
