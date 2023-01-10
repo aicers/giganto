@@ -1,6 +1,7 @@
 use crate::publish::PubMessage;
 use crate::{ingest::EventFilter, publish::convert_time_format};
 use anyhow::Result;
+use num_enum::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Display, Formatter},
@@ -72,6 +73,7 @@ impl PubMessage for Conn {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Dns {
     pub orig_addr: IpAddr,
@@ -81,6 +83,115 @@ pub struct Dns {
     pub proto: u8,
     pub query: String,
     pub answer: Vec<String>,
+    pub trans_id: u16,
+    pub rtt: i64,
+    pub qclass: u16,
+    pub qtype: u16,
+    pub rcode: u16,
+    pub aa_flag: bool,
+    pub tc_flag: bool,
+    pub rd_flag: bool,
+    pub ra_flag: bool,
+    pub ttl: Vec<i32>,
+}
+
+#[derive(Debug, FromPrimitive)]
+#[repr(u16)]
+pub(crate) enum Qclass {
+    CInternet = 1,
+    #[num_enum(default)]
+    Unknown,
+}
+
+impl Display for Qclass {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CInternet => write!(f, "C_INTERNET"),
+            Self::Unknown => write!(f, "{self:?}"),
+        }
+    }
+}
+
+#[derive(Debug, FromPrimitive)]
+#[repr(u16)]
+pub(crate) enum Qtype {
+    A = 1,
+    Ns,
+    Md,
+    Mf,
+    Cname,
+    Soa,
+    Mb,
+    Mg,
+    Mr,
+    Null,
+    Wks,
+    Ptr,
+    Hinfo,
+    Minfo,
+    Mx,
+    Txt,
+    Rp,
+    Afsdb,
+    X25,
+    Isdn,
+    Rt,
+    Nsap,
+    NsapPtr,
+    Sig,
+    Key,
+    Px,
+    Gpos,
+    Aaaa,
+    Loc,
+    Nxt,
+    Eid,
+    Nimloc,
+    Srv,
+    Atma,
+    Naptr,
+    Kx,
+    Cert,
+    A6,
+    Dname,
+    Sink,
+    Opt,
+    Apl,
+    Ds,
+    Sshfp,
+    Ipseckey,
+    Rrsig,
+    Nsec,
+    Dnskey,
+    Dhcid,
+    Nsec3,
+    Nsec3param,
+    Tlsa,
+    Smimea,
+    Hip = 55,
+    Ninfo,
+    Rkey,
+    Talink,
+    Cds,
+    Cdnskey,
+    Openpgpkey,
+    Csync,
+    Zonemd,
+    Svcb,
+    Https,
+    Spf = 99,
+    #[num_enum(default)]
+    Unknown,
+}
+
+impl Display for Qtype {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let upper = match self {
+            Self::NsapPtr => "NSAP-PTR".to_string(),
+            _ => format!("{self:?}").to_uppercase(),
+        };
+        write!(f, "{upper}")
+    }
 }
 
 impl EventFilter for Dns {
@@ -115,10 +226,22 @@ impl Display for Dns {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let ttl = if self.ttl.is_empty() {
+            "-".to_string()
+        } else {
+            self.ttl
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+
+        let qclass = Qclass::from(self.qclass).to_string();
+        let qtype = Qtype::from(self.qtype).to_string();
 
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -126,6 +249,16 @@ impl Display for Dns {
             self.proto,
             self.query,
             answer,
+            self.trans_id,
+            self.rtt,
+            qclass,
+            qtype,
+            self.rcode,
+            self.aa_flag,
+            self.tc_flag,
+            self.rd_flag,
+            self.ra_flag,
+            ttl,
         )
     }
 }

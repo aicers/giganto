@@ -4,7 +4,9 @@ mod network;
 mod tests;
 
 pub(crate) use self::log::{Log, Oplog};
-pub(crate) use self::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+pub(crate) use self::network::{
+    Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh,
+};
 use crate::graphql::network::NetworkFilter;
 use crate::publish::{send_direct_network_stream, PubMessage};
 use crate::server::{certificate_info, config_server, server_handshake};
@@ -42,7 +44,7 @@ const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = "0.7";
+const INGEST_VERSION_REQ: &str = "0.8.0-alpha.1";
 
 type SourceInfo = (String, DateTime<Utc>, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;

@@ -254,10 +254,18 @@ fn gen_dns_raw_event() -> Vec<u8> {
         orig_port: 46378,
         resp_port: 80,
         proto: 17,
-        query:
-            "Hello ServerHello ServerHello ServerHello ServerHello ServerHello ServerHello Server"
-                .to_string(),
+        query: "Hello Server".to_string(),
         answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
+        trans_id: 1,
+        rtt: 1,
+        qclass: 0,
+        qtype: 0,
+        rcode: 0,
+        aa_flag: false,
+        tc_flag: false,
+        rd_flag: false,
+        ra_flag: false,
+        ttl: vec![1; 5],
     };
 
     bincode::serialize(&dns_body).unwrap()
@@ -498,22 +506,6 @@ fn insert_periodic_time_series_raw_event(
     let ser_periodic_time_series_body = gen_periodic_time_series_raw_event();
     store.append(&key, &ser_periodic_time_series_body).unwrap();
     ser_periodic_time_series_body
-}
-
-#[test]
-fn protocol_version() {
-    use semver::{Version, VersionReq};
-
-    let compat_versions = ["0.7.0"];
-    let incompat_versions = ["0.6.0", "0.8.0"];
-
-    let req = VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
-    for version in &compat_versions {
-        assert!(req.matches(&Version::parse(version).unwrap()));
-    }
-    for version in &incompat_versions {
-        assert!(!req.matches(&Version::parse(version).unwrap()));
-    }
 }
 
 #[tokio::test]
@@ -2128,4 +2120,20 @@ async fn request_network_event_stream() {
 
     publish.conn.close(0u32.into(), b"publish_time_done");
     publish.endpoint.wait_idle().await;
+}
+
+#[test]
+fn protocol_version() {
+    use semver::{Version, VersionReq};
+
+    let compat_versions = ["0.7.0"];
+    let incompat_versions = ["0.6.0", "0.8.0"];
+
+    let req = VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
+    for version in &compat_versions {
+        assert!(req.matches(&Version::parse(version).unwrap()));
+    }
+    for version in &incompat_versions {
+        assert!(!req.matches(&Version::parse(version).unwrap()));
+    }
 }

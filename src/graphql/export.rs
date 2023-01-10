@@ -12,8 +12,8 @@ use super::{
 };
 use crate::{
     ingest::{
-        Conn, DceRpc, Dns, EventFilter, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries, Rdp,
-        Smtp, Ssh,
+        Conn, DceRpc, Dns, EventFilter, Http, Kerberos, Log, Ntlm, Oplog, PeriodicTimeSeries,
+        Qclass, Qtype, Rdp, Smtp, Ssh,
     },
     publish::convert_time_format,
     storage::{lower_closed_bound_key, upper_open_bound_key, Database, RawEventStore},
@@ -45,6 +45,7 @@ struct ConnJsonOutput {
     resp_pkts: u64,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize, Debug)]
 struct DnsJsonOutput {
     timestamp: String,
@@ -56,6 +57,16 @@ struct DnsJsonOutput {
     proto: u8,
     query: String,
     answer: Vec<String>,
+    trans_id: u16,
+    rtt: i64,
+    qclass: String,
+    qtype: String,
+    rcode: u16,
+    aa_flag: bool,
+    tc_flag: bool,
+    rd_flag: bool,
+    ra_flag: bool,
+    ttl: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -247,8 +258,6 @@ convert_json_output!(
 
 convert_json_output!(RdpJsonOutput, Rdp, cookie);
 
-convert_json_output!(DnsJsonOutput, Dns, proto, query, answer);
-
 convert_json_output!(
     SmtpJsonOutput,
     Smtp,
@@ -314,6 +323,38 @@ convert_json_output!(
     endpoint,
     operation
 );
+
+impl JsonOutput<DnsJsonOutput> for Dns {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsJsonOutput> {
+        let ttl = if self.ttl.is_empty() {
+            vec!["-".to_string()]
+        } else {
+            self.ttl.iter().map(ToString::to_string).collect::<Vec<_>>()
+        };
+
+        Ok(DnsJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            resp_addr: self.resp_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_port: self.resp_port,
+            proto: self.proto,
+            query: self.query.clone(),
+            answer: self.answer.clone(),
+            trans_id: self.trans_id,
+            rtt: self.rtt,
+            qclass: Qclass::from(self.qclass).to_string(),
+            qtype: Qtype::from(self.qtype).to_string(),
+            rcode: self.rcode,
+            aa_flag: self.aa_flag,
+            tc_flag: self.tc_flag,
+            rd_flag: self.rd_flag,
+            ra_flag: self.ra_flag,
+            ttl,
+        })
+    }
+}
 
 impl JsonOutput<LogJsonOutput> for Log {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<LogJsonOutput> {
@@ -996,6 +1037,16 @@ mod tests {
             proto: 17,
             query: "Hello Server Hello Server Hello Server".to_string(),
             answer: vec!["1.1.1.1".to_string()],
+            trans_id: 1,
+            rtt: 1,
+            qclass: 0,
+            qtype: 0,
+            rcode: 0,
+            aa_flag: false,
+            tc_flag: false,
+            rd_flag: false,
+            ra_flag: false,
+            ttl: vec![1; 5],
         };
         let ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
