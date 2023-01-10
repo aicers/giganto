@@ -2,6 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
+mod statistics;
 mod timeseries;
 
 use crate::{
@@ -20,8 +21,6 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{net::IpAddr, path::PathBuf};
 
-use self::network::NetworkFilter;
-
 pub const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
@@ -31,6 +30,7 @@ pub struct Query(
     export::ExportQuery,
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
+    statistics::StatisticsQuery,
 );
 
 #[derive(InputObject, Serialize)]
@@ -96,14 +96,14 @@ where
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(before)?;
-        let time = upper_closed_bound_key(key_prefix, end);
+        let time = upper_closed_bound_key(Some(key_prefix), end);
         if cursor.cmp(&time) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
         }
         let mut iter = store
             .boundary_iter(
                 &cursor,
-                &lower_closed_bound_key(key_prefix, start),
+                &lower_closed_bound_key(Some(key_prefix), start),
                 Direction::Reverse,
             )
             .peekable();
@@ -126,14 +126,14 @@ where
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64::decode(after)?;
-        let time = lower_closed_bound_key(key_prefix, start);
+        let time = lower_closed_bound_key(Some(key_prefix), start);
         if cursor.cmp(&time) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
         }
         let mut iter = store
             .boundary_iter(
                 &cursor,
-                &upper_open_bound_key(key_prefix, end),
+                &upper_open_bound_key(Some(key_prefix), end),
                 Direction::Forward,
             )
             .peekable();
@@ -152,8 +152,8 @@ where
 
         let last = last.min(MAXIMUM_PAGE_SIZE);
         let iter = store.boundary_iter(
-            &upper_open_bound_key(key_prefix, end),
-            &lower_closed_bound_key(key_prefix, start),
+            &upper_open_bound_key(Some(key_prefix), end),
+            &lower_closed_bound_key(Some(key_prefix), start),
             Direction::Reverse,
         );
         let (mut records, has_previous) = collect_records(iter, last, filter)?;
@@ -164,8 +164,8 @@ where
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let iter = store.boundary_iter(
-            &lower_closed_bound_key(key_prefix, start),
-            &upper_open_bound_key(key_prefix, end),
+            &lower_closed_bound_key(Some(key_prefix), start),
+            &upper_open_bound_key(Some(key_prefix), end),
             Direction::Forward,
         );
         let (records, has_next) = collect_records(iter, first, filter)?;
@@ -245,8 +245,8 @@ fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
 
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
-    key_prefix: &[u8],
-    filter: &'c NetworkFilter,
+    key_prefix: Option<&[u8]>,
+    filter: &'c impl RawEventFilter,
     after: &Option<String>,
     before: &Option<String>,
     first: Option<usize>,

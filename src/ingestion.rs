@@ -1,10 +1,13 @@
 pub(crate) mod log;
 mod network;
+mod statistics;
+
 #[cfg(test)]
 mod tests;
 
 pub(crate) use self::log::{Log, Oplog};
 pub(crate) use self::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+pub(crate) use self::statistics::{AnalyzerStatistics, CollectorStatistics, RealTimeStatistics};
 use crate::graphql::network::NetworkFilter;
 use crate::publish::{send_direct_network_stream, PubMessage};
 use crate::server::{certificate_info, config_server, server_handshake};
@@ -16,6 +19,7 @@ use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use std::time::Duration;
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -44,6 +48,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGESTION_VERSION_REQ: &str = "0.7";
 
+type StatisticsSendChannel = (String, Option<String>, RecordType, usize);
 type SourceInfo = (String, DateTime<Utc>, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
@@ -99,24 +104,11 @@ impl PubMessage for PeriodicTimeSeries {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Statistics {
-    period: u16,
-    stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, packet size
-}
+pub const STATISTICS_VALIAD_RECORD_COUNT: u32 = 13;
 
-impl Display for Statistics {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        for stat in &self.stats {
-            writeln!(f, "{:?}\t{}\t{}\t{}", stat.0, stat.1, stat.2, self.period)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq, Serialize, Deserialize)]
 #[repr(u32)]
-enum RecordType {
+pub enum RecordType {
     Conn = 0,
     Dns = 1,
     Log = 2,
@@ -128,8 +120,28 @@ enum RecordType {
     Kerberos = 8,
     Ssh = 9,
     DceRpc = 10,
-    Statistics = 11,
+    CollectStatistics = 11,
     Oplog = 12,
+}
+
+impl RecordType {
+    pub fn convert_to_str(&self) -> &str {
+        match self {
+            RecordType::Conn => "conn",
+            RecordType::Dns => "dns",
+            RecordType::Log => "log",
+            RecordType::Http => "http",
+            RecordType::Rdp => "rdp",
+            RecordType::PeriodicTimeSeries => "periodic time series",
+            RecordType::Smtp => "smtp",
+            RecordType::Ntlm => "ntlm",
+            RecordType::Kerberos => "kerberos",
+            RecordType::Ssh => "ssh",
+            RecordType::DceRpc => "dce rpc",
+            RecordType::CollectStatistics => "collect statistics",
+            RecordType::Oplog => "oplog",
+        }
+    }
 }
 
 pub struct Server {
@@ -152,7 +164,13 @@ impl Server {
         }
     }
 
-    pub async fn run(self, db: Database, packet_sources: PacketSources, sources: Sources) {
+    pub async fn run(
+        self,
+        db: Database,
+        packet_sources: PacketSources,
+        sources: Sources,
+        statistics_period: Duration,
+    ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
@@ -168,12 +186,27 @@ impl Server {
             rx,
         ));
 
+        let (stats_tx, stats_rx) = channel(100);
+        let (stats_init_tx, stats_init_rx) = channel(30);
+        let statistics_db = db.clone();
+        task::spawn(process_analyzer_statistics(
+            statistics_db,
+            statistics_period,
+            stats_rx,
+            stats_init_rx,
+        ));
+
         while let Some(conn) = endpoint.accept().await {
             let sender = tx.clone();
             let db = db.clone();
             let packet_sources = packet_sources.clone();
+            let stats = stats_tx.clone();
+            let stats_source_tx = stats_init_tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db, packet_sources, sender).await {
+                if let Err(e) =
+                    handle_connection(conn, db, packet_sources, sender, stats, stats_source_tx)
+                        .await
+                {
                     error!("connection failed: {}", e);
                 }
             });
@@ -186,6 +219,8 @@ async fn handle_connection(
     db: Database,
     packet_sources: PacketSources,
     sender: Sender<SourceInfo>,
+    stats_tx: Sender<StatisticsSendChannel>,
+    stats_source_tx: Sender<String>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -210,6 +245,10 @@ async fn handle_connection(
         error!("Faild to send channel data : {}", error);
     }
 
+    if let Err(error) = stats_source_tx.send(source.clone()).await {
+        error!("Faild to send analyzer statistics source data : {}", error);
+    }
+
     async {
         loop {
             let stream = connection.accept_bi().await;
@@ -232,8 +271,9 @@ async fn handle_connection(
 
             let source = source.clone();
             let db = db.clone();
+            let stats = stats_tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_request(source, stream, db).await {
+                if let Err(e) = handle_request(source, stream, db, stats).await {
                     error!("failed: {}", e);
                 }
             });
@@ -248,6 +288,7 @@ async fn handle_request(
     source: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
+    stats: Sender<StatisticsSendChannel>,
 ) -> Result<()> {
     let mut buf = [0; 4];
     recv.read_exact(&mut buf)
@@ -262,6 +303,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "conn")),
                 source,
                 db.conn_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -273,6 +315,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dns")),
                 source,
                 db.dns_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -284,6 +327,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "log")),
                 source,
                 db.log_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -295,6 +339,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "http")),
                 source,
                 db.http_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -306,6 +351,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "rdp")),
                 source,
                 db.rdp_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -317,6 +363,7 @@ async fn handle_request(
                 None,
                 source,
                 db.periodic_time_series_store()?,
+                None,
             )
             .await?;
         }
@@ -328,6 +375,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "smtp")),
                 source,
                 db.smtp_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -339,6 +387,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -350,6 +399,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -361,6 +411,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ssh")),
                 source,
                 db.ssh_store()?,
+                Some(stats),
             )
             .await?;
         }
@@ -372,17 +423,19 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
+                Some(stats),
             )
             .await?;
         }
-        RecordType::Statistics => {
+        RecordType::CollectStatistics => {
             handle_data(
                 send,
                 recv,
-                RecordType::Statistics,
-                Some(gen_network_key(&source, "statistics")),
+                RecordType::CollectStatistics,
+                Some(gen_network_key(&source, "collector statistics")),
                 source,
-                db.statistics_store()?,
+                db.collector_statistics_store()?,
+                None,
             )
             .await?;
         }
@@ -394,6 +447,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "oplog")),
                 source,
                 db.oplog_store()?,
+                None,
             )
             .await?;
         }
@@ -409,6 +463,7 @@ async fn handle_data<T>(
     network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
+    stats: Option<Sender<StatisticsSendChannel>>,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -448,7 +503,6 @@ async fn handle_data<T>(
             }
         }
     });
-
     loop {
         match handle_body(&mut recv).await {
             Ok((raw_event, timestamp)) => {
@@ -462,14 +516,15 @@ async fn handle_data<T>(
                         .await?;
                     continue;
                 }
+                let mut stats_kind = None;
                 let mut key: Vec<u8> = Vec::new();
                 key.extend_from_slice(source.as_bytes());
                 key.push(0);
                 match record_type {
                     RecordType::Log => {
-                        key.extend_from_slice(
-                            bincode::deserialize::<Log>(&raw_event)?.kind.as_bytes(),
-                        );
+                        let kind = bincode::deserialize::<Log>(&raw_event)?.kind;
+                        stats_kind = Some(kind.clone());
+                        key.extend_from_slice(kind.as_bytes());
                         key.push(0);
                         key.extend_from_slice(&timestamp.to_be_bytes());
                     }
@@ -494,6 +549,16 @@ async fn handle_data<T>(
                 store.append(&key, &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
                     send_direct_network_stream(network_key, &raw_event, timestamp).await?;
+                }
+                if let Some(send_stats) = stats.as_ref() {
+                    send_stats
+                        .send((
+                            source.clone(),
+                            stats_kind,
+                            record_type,
+                            key.len() + raw_event.len(),
+                        ))
+                        .await?;
                 }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
@@ -604,6 +669,45 @@ async fn check_sources_conn(
                     }
                 }
 
+            }
+        }
+    }
+}
+
+async fn process_analyzer_statistics(
+    db: Database,
+    statistics_period: Duration,
+    mut stats_rx: Receiver<(String, Option<String>, RecordType, usize)>,
+    mut source_rx: Receiver<String>,
+) -> Result<()> {
+    let statistics_store = db
+        .analyzer_statistics_store()
+        .context("Failed to open analyzer statistics store")?;
+    let mut stats = RealTimeStatistics::new(
+        &statistics_store,
+        u16::try_from(statistics_period.as_secs())?,
+    )?;
+    let mut period = time::interval(statistics_period);
+    period.tick().await;
+
+    loop {
+        select! {
+            Some(source) = source_rx.recv() =>{
+                if stats.init_source(source).is_err(){
+                    error!("Failed to init source's statistics hashmap");
+                }
+            },
+            Some((source, kind, record_type, size)) = stats_rx.recv() => {
+                stats.append(source,kind,record_type, size);
+            }
+            _ = period.tick() => {
+                let stats_result = stats.clear()?;
+                if !stats_result.stats.is_empty(){
+                    let timestamp_key = Utc::now().timestamp_nanos().to_be_bytes();
+                    if statistics_store.append(&timestamp_key, &bincode::serialize(&stats_result)?).is_err() {
+                        error!("Failed to append analyzer statistics store");
+                    }
+                }
             }
         }
     }

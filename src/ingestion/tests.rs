@@ -911,5 +911,6 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db, packet_sources, sources))
+    let statistics_period = std::time::Duration::from_secs(1000);
+    tokio::spawn(server().run(db, packet_sources, sources, statistics_period))
 }

@@ -37,7 +37,6 @@ async fn main() -> Result<()> {
     } else {
         Settings::new()?
     };
-
     let cert_pem = fs::read(&settings.cert).with_context(|| {
         format!(
             "failed to read certificate file: {}",
@@ -96,7 +95,12 @@ async fn main() -> Result<()> {
 
     let ingestion_server = ingestion::Server::new(settings.ingestion_address, cert, key, files);
     ingestion_server
-        .run(database, packet_sources, sources)
+        .run(
+            database,
+            packet_sources,
+            sources,
+            settings.statistics_period,
+        )
         .await;
 
     Ok(())

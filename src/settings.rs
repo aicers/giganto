@@ -24,6 +24,8 @@ pub struct Settings {
     pub graphql_address: SocketAddr, // IP address & port to graphql
     pub log_dir: PathBuf,    //giganto's syslog path
     pub export_dir: PathBuf, //giganto's export file path
+    #[serde(with = "humantime_serde")]
+    pub statistics_period: Duration, // statistics generate period
 }
 
 impl Settings {
@@ -95,6 +97,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("log dir")
         .set_default("export_path", export_path)
         .expect("export_dir")
+        .set_default("statistics_period", "10m")
+        .expect("statistics period")
 }
 
 /// Deserializes a socket address.

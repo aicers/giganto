@@ -26,6 +26,7 @@ data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
 log_dir = "tests/logs/apps"                # path to giganto's syslog file
 export_dir = "tests/export"                # path to giganto's export file
+statistics_period = "10m"                  # statistics generate period
 ```
 
 By default, giganto reads the config file from the following directories:
