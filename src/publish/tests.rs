@@ -1,18 +1,30 @@
 use super::Server;
-use crate::ingest::{
-    Conn, DceRpc, Dns, Http, Kerberos, Log, Ntlm, PeriodicTimeSeries, Rdp, Smtp, Ssh,
-};
 use crate::{
     storage::{Database, RawEventStore},
     to_cert_chain, to_private_key,
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use giganto_client::{
+    connection::client_handshake,
+    ingest::{
+        log::Log,
+        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        receive_record_data,
+        timeseries::PeriodicTimeSeries,
+    },
+    publish::{
+        range::{MessageCode, RequestRange, RequestTimeSeriesRange, ResponseRangeData},
+        receive_crusher_stream_start_message, receive_hog_stream_start_message, receive_range_data,
+        send_range_data_request, send_stream_request,
+        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+    },
+};
 use lazy_static::lazy_static;
-use quinn::{Connection, Endpoint, RecvStream, SendStream};
+use quinn::{Connection, Endpoint, SendStream};
 use serde::Serialize;
 use std::{
     cell::RefCell,
-    fs, mem,
+    fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::Arc,
@@ -28,7 +40,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.7.0";
+const PROTOCOL_VERSION: &str = "0.8.0-alpha.1";
 
 struct TestClient {
     send: SendStream,
@@ -49,7 +61,7 @@ impl TestClient {
             )
             .await
             .expect("Failed to connect server's endpoint, Please make sure the Server is alive");
-        let send = connection_handshake(&conn).await;
+        let (send, _) = client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
         Self {
             send,
             conn,
@@ -147,74 +159,6 @@ fn init_client() -> Endpoint {
             .expect("Failed to create endpoint");
     endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
     endpoint
-}
-
-async fn connection_handshake(conn: &Connection) -> SendStream {
-    let (mut send, mut recv) = conn
-        .open_bi()
-        .await
-        .expect("Failed to open bidirection channel");
-    let version_len = u64::try_from(PROTOCOL_VERSION.len())
-        .expect("less than u64::MAX")
-        .to_le_bytes();
-
-    let mut handshake_buf = Vec::with_capacity(version_len.len() + PROTOCOL_VERSION.len());
-    handshake_buf.extend(version_len);
-    handshake_buf.extend(PROTOCOL_VERSION.as_bytes());
-    send.write_all(&handshake_buf)
-        .await
-        .expect("Failed to send handshake data");
-
-    let mut resp_len_buf = [0; std::mem::size_of::<u64>()];
-    recv.read_exact(&mut resp_len_buf)
-        .await
-        .expect("Failed to receive handshake data");
-    let len = u64::from_le_bytes(resp_len_buf);
-
-    let mut resp_buf = Vec::new();
-    resp_buf.resize(len.try_into().expect("Failed to convert data type"), 0);
-    recv.read_exact(resp_buf.as_mut_slice()).await.unwrap();
-
-    bincode::deserialize::<Option<&str>>(&resp_buf)
-        .expect("Failed to deserialize recv data")
-        .expect("Incompatible version");
-    send
-}
-
-async fn send_request_network_stream(
-    send: &mut SendStream,
-    msg_code: u32,
-    node_type: u8,
-    mut msg: Vec<u8>,
-) {
-    let mut req_data: Vec<u8> = Vec::new();
-    req_data.append(&mut node_type.to_le_bytes().to_vec());
-    req_data.append(&mut msg_code.to_le_bytes().to_vec());
-    req_data.append(&mut (msg.len() as u32).to_le_bytes().to_vec());
-    req_data.append(&mut msg);
-
-    send.write_all(&req_data)
-        .await
-        .expect("failed to send network stream");
-}
-
-async fn recv_network_stream(recv: Arc<RefCell<RecvStream>>) -> (i64, Vec<u8>) {
-    let mut ts_buf = [0; mem::size_of::<u64>()];
-    let mut len_buf = [0; mem::size_of::<u32>()];
-    let mut body_buf = Vec::new();
-
-    recv.borrow_mut().read_exact(&mut ts_buf).await.unwrap();
-    let timestamp = i64::from_le_bytes(ts_buf);
-
-    recv.borrow_mut().read_exact(&mut len_buf).await.unwrap();
-    let len = u32::from_le_bytes(len_buf) as usize;
-
-    body_buf.resize(len, 0);
-    recv.borrow_mut()
-        .read_exact(body_buf.as_mut_slice())
-        .await
-        .unwrap();
-    (timestamp, body_buf)
 }
 
 fn gen_network_event_key(source: &str, kind: Option<&str>, timestamp: i64) -> Vec<u8> {
@@ -520,10 +464,8 @@ fn insert_periodic_time_series_raw_event(
 }
 
 #[tokio::test]
-async fn request_publish_protocol() {
-    use crate::publish::PubMessage;
-
-    const PUBLISH_LOG_MESSAGE_CODE: u32 = 0x00;
+async fn request_range_data_with_protocol() {
+    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::Log;
     const SOURCE: &str = "einsis";
     const CONN_KIND: &str = "conn";
     const DNS_KIND: &str = "dns";
@@ -534,15 +476,6 @@ async fn request_publish_protocol() {
     const KERBEROS_KIND: &str = "kerberos";
     const SSH_KIND: &str = "ssh";
     const DCE_RPC_KIND: &str = "dce rpc";
-
-    #[derive(Serialize)]
-    struct Message {
-        source: String,
-        kind: String,
-        start: i64,
-        end: i64,
-        count: usize,
-    }
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -577,44 +510,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(CONN_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Conn::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            conn_data.message(send_conn_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Conn::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            conn_data.response_data(send_conn_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -642,44 +568,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(DNS_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Dns::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            dns_data.message(send_dns_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Dns::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            dns_data.response_data(send_dns_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -710,44 +629,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(HTTP_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Http::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            http_data.message(send_http_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Http::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            http_data.response_data(send_http_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -775,44 +687,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(RDP_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Rdp::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            rdp_data.message(send_rdp_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Rdp::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            rdp_data.response_data(send_rdp_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -843,44 +748,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(SMTP_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Smtp::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            smtp_data.message(send_smtp_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Conn::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            smtp_data.response_data(send_smtp_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -911,44 +809,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(NTLM_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Ntlm::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            ntlm_data.message(send_ntlm_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Ntlm::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            ntlm_data.response_data(send_ntlm_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -979,44 +870,38 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(KERBEROS_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
-
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Kerberos::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            kerberos_data.message(send_kerberos_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Kerberos::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            kerberos_data
+                .response_data(send_kerberos_time, SOURCE)
+                .unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1044,44 +929,37 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(SSH_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(Ssh::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            ssh_data.message(send_ssh_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            Ssh::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            ssh_data.response_data(send_ssh_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1112,44 +990,39 @@ async fn request_publish_protocol() {
                 .expect("valid time"),
             Utc,
         );
-        let message = Message {
+        let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(DCE_RPC_KIND),
             start: start.timestamp_nanos(),
             end: end.timestamp_nanos(),
             count: 5,
         };
-        let mut message_buf = bincode::serialize(&message).unwrap();
 
-        let mut request_buf: Vec<u8> = Vec::new();
-        request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-        request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-        request_buf.append(&mut message_buf);
-
-        send_pub_req
-            .write_all(&request_buf)
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
             .await
-            .expect("failed to send request");
+            .unwrap();
 
-        let mut result_data: Vec<Vec<u8>> = Vec::new();
+        let mut result_data = Vec::new();
         loop {
-            let mut len_buf = [0; std::mem::size_of::<u32>()];
-            recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-            let len = u32::from_le_bytes(len_buf);
+            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
 
-            let mut resp_data = vec![0; len.try_into().unwrap()];
-            recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-            let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-            result_data.push(resp_data);
-            if resp.is_none() {
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
                 break;
             }
         }
 
-        assert_eq!(DceRpc::done().unwrap(), result_data.pop().unwrap());
         assert_eq!(
-            dce_rpc_data.message(send_dce_rpc_time, SOURCE).unwrap(),
-            result_data.pop().unwrap()
+            DceRpc::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            dce_rpc_data
+                .response_data(send_dce_rpc_time, SOURCE)
+                .unwrap(),
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1158,15 +1031,13 @@ async fn request_publish_protocol() {
 }
 
 #[tokio::test]
-async fn request_publish_log() {
-    use crate::publish::PubMessage;
-
-    const PUBLISH_LOG_MESSAGE_CODE: u32 = 0x00;
+async fn request_range_data_with_log() {
+    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::Log;
     const SOURCE: &str = "einsis";
     const KIND: &str = "Hello";
 
     #[derive(Serialize)]
-    struct Message {
+    struct RequestRangeMessage {
         source: String,
         kind: String,
         start: i64,
@@ -1206,43 +1077,37 @@ async fn request_publish_log() {
             .expect("valid time"),
         Utc,
     );
-    let message = Message {
+    let message = RequestRange {
         source: String::from(SOURCE),
         kind: String::from(KIND),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
     };
-    let mut message_buf = bincode::serialize(&message).unwrap();
 
-    let mut request_buf: Vec<u8> = Vec::new();
-    request_buf.append(&mut PUBLISH_LOG_MESSAGE_CODE.to_le_bytes().to_vec());
-    request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-    request_buf.append(&mut message_buf);
-
-    send_pub_req
-        .write_all(&request_buf)
+    send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
         .await
-        .expect("failed to send request");
+        .unwrap();
 
-    let mut result_data: Vec<Vec<u8>> = Vec::new();
+    let mut result_data = Vec::new();
     loop {
-        let mut len_buf = [0; std::mem::size_of::<u32>()];
-        recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-        let len = u32::from_le_bytes(len_buf);
+        let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
 
-        let mut resp_data = vec![0; len.try_into().unwrap()];
-        recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-        let resp = bincode::deserialize::<Option<(i64, Vec<u8>)>>(&resp_data).unwrap();
-        result_data.push(resp_data);
-        if resp.is_none() {
+        result_data.push(resp_data.clone());
+        if resp_data.is_none() {
             break;
         }
     }
-    assert_eq!(Log::done().unwrap(), result_data.pop().unwrap());
+
     assert_eq!(
-        log_data.message(send_log_time, SOURCE).unwrap(),
-        result_data.pop().unwrap()
+        Conn::response_done().unwrap(),
+        bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+    assert_eq!(
+        log_data.response_data(send_log_time, SOURCE).unwrap(),
+        bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -1250,19 +1115,9 @@ async fn request_publish_log() {
 }
 
 #[tokio::test]
-async fn request_publish_period_time_series() {
-    use crate::publish::PubMessage;
-
-    const PUBLISH_PERIOD_TIME_SERIES_MESSAGE_CODE: u32 = 0x01;
+async fn request_range_data_with_period_time_series() {
+    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::PeriodicTimeSeries;
     const SAMPLING_POLICY_ID: &str = "policy_one";
-
-    #[derive(Serialize)]
-    struct Message {
-        source: String,
-        start: i64,
-        end: i64,
-        count: usize,
-    }
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1296,52 +1151,38 @@ async fn request_publish_period_time_series() {
             .expect("valid time"),
         Utc,
     );
-    let mesaage = Message {
+    let message = RequestTimeSeriesRange {
         source: String::from(SAMPLING_POLICY_ID),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
     };
-    let mut message_buf = bincode::serialize(&mesaage).unwrap();
 
-    let mut request_buf: Vec<u8> = Vec::new();
-    request_buf.append(
-        &mut PUBLISH_PERIOD_TIME_SERIES_MESSAGE_CODE
-            .to_le_bytes()
-            .to_vec(),
-    );
-    request_buf.append(&mut (message_buf.len() as u32).to_le_bytes().to_vec());
-    request_buf.append(&mut message_buf);
-
-    send_pub_req
-        .write_all(&request_buf)
+    send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
         .await
-        .expect("failed to send request");
+        .unwrap();
 
-    let mut result_data: Vec<Vec<u8>> = Vec::new();
+    let mut result_data = Vec::new();
     loop {
-        let mut len_buf = [0; std::mem::size_of::<u32>()];
-        recv_pub_resp.read_exact(&mut len_buf).await.unwrap();
-        let len = u32::from_le_bytes(len_buf);
+        let resp_data = receive_range_data::<Option<(i64, Vec<f64>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
 
-        let mut resp_data = vec![0; len.try_into().unwrap()];
-        recv_pub_resp.read_exact(&mut resp_data).await.unwrap();
-        let resp = bincode::deserialize::<Option<(i64, Vec<f64>)>>(&resp_data).unwrap();
-        result_data.push(resp_data);
-        if resp.is_none() {
+        result_data.push(resp_data.clone());
+        if resp_data.is_none() {
             break;
         }
     }
 
     assert_eq!(
-        PeriodicTimeSeries::done().unwrap(),
-        result_data.pop().unwrap()
+        PeriodicTimeSeries::response_done().unwrap(),
+        bincode::serialize::<Option<(i64, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         time_series_data
-            .message(send_time_series_time, SAMPLING_POLICY_ID)
+            .response_data(send_time_series_time, SAMPLING_POLICY_ID)
             .unwrap(),
-        result_data.pop().unwrap()
+        bincode::serialize::<Option<(i64, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -1351,58 +1192,39 @@ async fn request_publish_period_time_series() {
 #[tokio::test]
 async fn request_network_event_stream() {
     use crate::ingest::gen_network_key;
-    use crate::publish::send_direct_network_stream;
+    use crate::publish::send_direct_stream;
 
-    const HOG_TYPE: u8 = 0x00;
-    const CRUSHER_TYPE: u8 = 0x01;
-    const NETWORK_STREAM_CONN: u32 = 0x00;
-    const NETWORK_STREAM_DNS: u32 = 0x01;
-    const NETWORK_STREAM_RDP: u32 = 0x02;
-    const NETWORK_STREAM_HTTP: u32 = 0x03;
-    const NETWORK_STREAM_SMTP: u32 = 0x05;
-    const NETWORK_STREAM_NTLM: u32 = 0x06;
-    const NETWORK_STREAM_KERBEROS: u32 = 0x07;
-    const NETWORK_STREAM_SSH: u32 = 0x08;
-    const NETWORK_STREAM_DCE_RPC: u32 = 0x09;
+    const HOG_TYPE: NodeType = NodeType::Hog;
+    const CRUSHER_TYPE: NodeType = NodeType::Crusher;
+    const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
+    const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
+    const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;
+    const NETWORK_STREAM_HTTP: RequestStreamRecord = RequestStreamRecord::Http;
+    const NETWORK_STREAM_SMTP: RequestStreamRecord = RequestStreamRecord::Smtp;
+    const NETWORK_STREAM_NTLM: RequestStreamRecord = RequestStreamRecord::Ntlm;
+    const NETWORK_STREAM_KERBEROS: RequestStreamRecord = RequestStreamRecord::Kerberos;
+    const NETWORK_STREAM_SSH: RequestStreamRecord = RequestStreamRecord::Ssh;
+    const NETWORK_STREAM_DCE_RPC: RequestStreamRecord = RequestStreamRecord::DceRpc;
 
     const SOURCE_ONE: &str = "src1";
     const SOURCE_TWO: &str = "src2";
-    const POLICY_ID: &str = "model_one";
-
-    #[derive(Serialize, Clone)]
-    struct TestHogStreamMsg {
-        start: i64,
-        source: Option<String>,
-    }
-
-    #[derive(Serialize)]
-    struct TestCrusherStreamMsg {
-        start: i64,
-        id: String,
-        src_ip: Option<IpAddr>,
-        des_ip: Option<IpAddr>,
-        source: Option<String>,
-    }
+    const POLICY_ID: u32 = 1;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
 
-    let hog_msg = TestHogStreamMsg {
+    let hog_msg = RequestHogStream {
         start: 0,
         source: Some(String::from(SOURCE_ONE)),
     };
-    let hog_stream_msg = bincode::serialize(&hog_msg).unwrap();
-
-    let crusher_msg = TestCrusherStreamMsg {
+    let crusher_msg = RequestCrusherStream {
         start: 0,
-        id: String::from(POLICY_ID),
+        id: POLICY_ID.to_string(),
         src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
         des_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
         source: Some(String::from(SOURCE_TWO)),
     };
-    let crusher_stream_msg = bincode::serialize(&crusher_msg).unwrap();
-
     tokio::spawn(server().run(db.clone()));
     let mut publish = TestClient::new().await;
 
@@ -1410,66 +1232,61 @@ async fn request_network_event_stream() {
         let conn_store = db.conn_store().unwrap();
 
         // direct conn network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_CONN,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_conn_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
-            .await
-            .unwrap();
-        let conn_start_msg = u32::from_le_bytes(start_buf);
+
+        let conn_start_msg =
+            receive_hog_stream_start_message(&mut (*send_conn_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
         let send_conn_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "conn");
         let conn_data = gen_conn_raw_event();
-
-        send_direct_network_stream(&key, &conn_data, send_conn_time)
+        send_direct_stream(&key, &conn_data, send_conn_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
         // database conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos();
         let conn_data = insert_conn_raw_event(&conn_store, SOURCE_TWO, send_conn_time);
-
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_CONN,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_conn_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_conn_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream.clone()).await;
+        let conn_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_conn_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(conn_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
@@ -1478,11 +1295,14 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "conn");
         let conn_data = gen_conn_raw_event();
 
-        send_direct_network_stream(&key, &conn_data, send_conn_time)
+        send_direct_stream(&key, &conn_data, send_conn_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_conn_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
     }
@@ -1491,33 +1311,32 @@ async fn request_network_event_stream() {
         let dns_store = db.dns_store().unwrap();
 
         // direct dns network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DNS,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_dns_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
+
+        let dns_start_msg = receive_hog_stream_start_message(&mut (*send_dns_stream.borrow_mut()))
             .await
             .unwrap();
-        let dns_start_msg = u32::from_le_bytes(start_buf);
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
         let send_dns_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "dns");
         let dns_data = gen_conn_raw_event();
-
-        send_direct_network_stream(&key, &dns_data, send_dns_time)
+        send_direct_stream(&key, &dns_data, send_dns_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
@@ -1525,32 +1344,26 @@ async fn request_network_event_stream() {
         let send_dns_time = Utc::now().timestamp_nanos();
         let dns_data = insert_dns_raw_event(&dns_store, SOURCE_TWO, send_dns_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DNS,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_dns_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_dns_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream.clone()).await;
+        let dns_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_dns_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(dns_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
@@ -1559,11 +1372,13 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "dns");
         let dns_data = gen_dns_raw_event();
 
-        send_direct_network_stream(&key, &dns_data, send_dns_time)
+        send_direct_stream(&key, &dns_data, send_dns_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dns_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
     }
@@ -1572,33 +1387,32 @@ async fn request_network_event_stream() {
         let rdp_store = db.rdp_store().unwrap();
 
         // direct rdp network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_RDP,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_rdp_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
+
+        let rdp_start_msg = receive_hog_stream_start_message(&mut (*send_rdp_stream.borrow_mut()))
             .await
             .unwrap();
-        let rdp_start_msg = u32::from_le_bytes(start_buf);
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
-
-        send_direct_network_stream(&key, &rdp_data, send_rdp_time)
+        send_direct_stream(&key, &rdp_data, send_rdp_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
@@ -1606,32 +1420,26 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_TWO, send_rdp_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_RDP,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_rdp_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_rdp_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream.clone()).await;
+        let rdp_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_rdp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(rdp_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
@@ -1639,11 +1447,13 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "rdp");
         let rdp_data = gen_rdp_raw_event();
-        send_direct_network_stream(&key, &rdp_data, send_rdp_time)
+        send_direct_stream(&key, &rdp_data, send_rdp_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_rdp_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
     }
@@ -1652,33 +1462,35 @@ async fn request_network_event_stream() {
         let http_store = db.http_store().unwrap();
 
         // direct http network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_HTTP,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_http_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
-            .await
-            .unwrap();
-        let http_start_msg = u32::from_le_bytes(start_buf);
+
+        let http_start_msg =
+            receive_hog_stream_start_message(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
         let send_http_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "http");
         let http_data = gen_conn_raw_event();
 
-        send_direct_network_stream(&key, &http_data, send_http_time)
+        send_direct_stream(&key, &http_data, send_http_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
@@ -1686,32 +1498,27 @@ async fn request_network_event_stream() {
         let send_http_time = Utc::now().timestamp_nanos();
         let http_data = insert_http_raw_event(&http_store, SOURCE_TWO, send_http_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_HTTP,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_http_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_http_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream.clone()).await;
+        let http_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(http_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
@@ -1719,11 +1526,14 @@ async fn request_network_event_stream() {
         let send_http_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "http");
         let http_data = gen_http_raw_event();
-        send_direct_network_stream(&key, &http_data, send_http_time)
+        send_direct_stream(&key, &http_data, send_http_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_http_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
     }
@@ -1732,33 +1542,35 @@ async fn request_network_event_stream() {
         let smtp_store = db.smtp_store().unwrap();
 
         // direct smtp network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMTP,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_smtp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_smtp_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
-            .await
-            .unwrap();
-        let smtp_start_msg = u32::from_le_bytes(start_buf);
+
+        let smtp_start_msg =
+            receive_hog_stream_start_message(&mut (*send_smtp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
         let send_smtp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
-        send_direct_network_stream(&key, &smtp_data, send_smtp_time)
+        send_direct_stream(&key, &smtp_data, send_smtp_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_smtp_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
 
@@ -1766,32 +1578,27 @@ async fn request_network_event_stream() {
         let send_smtp_time = Utc::now().timestamp_nanos();
         let smtp_data = insert_smtp_raw_event(&smtp_store, SOURCE_TWO, send_smtp_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMTP,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_smtp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_smtp_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_smtp_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_smtp_stream.clone()).await;
+        let smtp_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_smtp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(smtp_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
 
@@ -1799,11 +1606,14 @@ async fn request_network_event_stream() {
         let send_smtp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
-        send_direct_network_stream(&key, &smtp_data, send_smtp_time)
+        send_direct_stream(&key, &smtp_data, send_smtp_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_smtp_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
     }
@@ -1812,33 +1622,35 @@ async fn request_network_event_stream() {
         let ntlm_store = db.ntlm_store().unwrap();
 
         // direct ntlm network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NTLM,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_ntlm_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_ntlm_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
-            .await
-            .unwrap();
-        let ntlm_start_msg = u32::from_le_bytes(start_buf);
+
+        let ntlm_start_msg =
+            receive_hog_stream_start_message(&mut (*send_ntlm_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
         let send_ntlm_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
-        send_direct_network_stream(&key, &ntlm_data, send_ntlm_time)
+        send_direct_stream(&key, &ntlm_data, send_ntlm_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ntlm_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
 
@@ -1846,32 +1658,27 @@ async fn request_network_event_stream() {
         let send_ntlm_time = Utc::now().timestamp_nanos();
         let ntlm_data = insert_ntlm_raw_event(&ntlm_store, SOURCE_TWO, send_ntlm_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NTLM,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_ntlm_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_ntlm_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_ntlm_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ntlm_stream.clone()).await;
+        let ntlm_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_ntlm_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(ntlm_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
 
@@ -1879,11 +1686,14 @@ async fn request_network_event_stream() {
         let send_ntlm_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
-        send_direct_network_stream(&key, &ntlm_data, send_ntlm_time)
+        send_direct_stream(&key, &ntlm_data, send_ntlm_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ntlm_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
     }
@@ -1892,33 +1702,34 @@ async fn request_network_event_stream() {
         let kerberos_store = db.kerberos_store().unwrap();
 
         // direct kerberos network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_KERBEROS,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_kerberos_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_kerberos_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
-            .await
-            .unwrap();
-        let kerberos_start_msg = u32::from_le_bytes(start_buf);
+        let kerberos_start_msg =
+            receive_hog_stream_start_message(&mut (*send_kerberos_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
         let send_kerberos_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
-        send_direct_network_stream(&key, &kerberos_data, send_kerberos_time)
+        send_direct_stream(&key, &kerberos_data, send_kerberos_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_kerberos_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
 
@@ -1927,32 +1738,27 @@ async fn request_network_event_stream() {
         let kerberos_data =
             insert_kerberos_raw_event(&kerberos_store, SOURCE_TWO, send_kerberos_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_KERBEROS,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_kerberos_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_kerberos_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_kerberos_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_kerberos_stream.clone()).await;
+        let kerberos_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_kerberos_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(kerberos_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
 
@@ -1960,11 +1766,14 @@ async fn request_network_event_stream() {
         let send_kerberos_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
-        send_direct_network_stream(&key, &kerberos_data, send_kerberos_time)
+        send_direct_stream(&key, &kerberos_data, send_kerberos_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_kerberos_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
     }
@@ -1973,33 +1782,33 @@ async fn request_network_event_stream() {
         let ssh_store = db.ssh_store().unwrap();
 
         // direct ssh network event for hog
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SSH,
             HOG_TYPE,
-            hog_stream_msg.clone(),
+            hog_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_ssh_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_ssh_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
+
+        let ssh_start_msg = receive_hog_stream_start_message(&mut (*send_ssh_stream.borrow_mut()))
             .await
             .unwrap();
-        let ssh_start_msg = u32::from_le_bytes(start_buf);
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
         let send_ssh_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
-        send_direct_network_stream(&key, &ssh_data, send_ssh_time)
+        send_direct_stream(&key, &ssh_data, send_ssh_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ssh_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
 
@@ -2007,32 +1816,26 @@ async fn request_network_event_stream() {
         let send_ssh_time = Utc::now().timestamp_nanos();
         let ssh_data = insert_ssh_raw_event(&ssh_store, SOURCE_TWO, send_ssh_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SSH,
             CRUSHER_TYPE,
-            crusher_stream_msg.clone(),
+            crusher_msg.clone(),
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_ssh_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_ssh_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_ssh_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ssh_stream.clone()).await;
+        let ssh_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_ssh_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(ssh_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
 
@@ -2040,11 +1843,13 @@ async fn request_network_event_stream() {
         let send_ssh_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
-        send_direct_network_stream(&key, &ssh_data, send_ssh_time)
+        send_direct_stream(&key, &ssh_data, send_ssh_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_ssh_stream).await;
+        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
+            .await
+            .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
     }
@@ -2053,33 +1858,30 @@ async fn request_network_event_stream() {
         let dce_rpc_store = db.dce_rpc_store().unwrap();
 
         // direct dce_rpc network event for hog
-        send_request_network_stream(
-            &mut publish.send,
-            NETWORK_STREAM_DCE_RPC,
-            HOG_TYPE,
-            hog_stream_msg,
-        )
-        .await;
-
-        let send_dce_rpc_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut start_buf = [0; mem::size_of::<u32>()];
-        send_dce_rpc_stream
-            .borrow_mut()
-            .read_exact(&mut start_buf)
+        send_stream_request(&mut publish.send, NETWORK_STREAM_DCE_RPC, HOG_TYPE, hog_msg)
             .await
             .unwrap();
-        let dce_rpc_start_msg = u32::from_le_bytes(start_buf);
+
+        let send_dce_rpc_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let dce_rpc_start_msg =
+            receive_hog_stream_start_message(&mut (*send_dce_rpc_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
-        send_direct_network_stream(&key, &dce_rpc_data, send_dce_rpc_time)
+        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dce_rpc_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
 
@@ -2087,32 +1889,27 @@ async fn request_network_event_stream() {
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
         let dce_rpc_data = insert_dce_rpc_raw_event(&dce_rpc_store, SOURCE_TWO, send_dce_rpc_time);
 
-        send_request_network_stream(
+        send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DCE_RPC,
             CRUSHER_TYPE,
-            crusher_stream_msg,
+            crusher_msg,
         )
-        .await;
+        .await
+        .unwrap();
 
         let send_dce_rpc_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let mut id_len_buf = [0_u8; mem::size_of::<u32>()];
-        send_dce_rpc_stream
-            .borrow_mut()
-            .read_exact(&mut id_len_buf)
-            .await
-            .unwrap();
-        let len = usize::try_from(u32::from_le_bytes(id_len_buf)).unwrap();
-        let mut id_buf = vec![0; len];
-        send_dce_rpc_stream
-            .borrow_mut()
-            .read_exact(&mut id_buf)
-            .await
-            .unwrap();
-        let id = String::from_utf8(id_buf).unwrap();
-        assert_eq!(id, POLICY_ID);
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dce_rpc_stream.clone()).await;
+        let dce_rpc_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_dce_rpc_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(dce_rpc_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
 
@@ -2120,31 +1917,18 @@ async fn request_network_event_stream() {
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
-        send_direct_network_stream(&key, &dce_rpc_data, send_dce_rpc_time)
+        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time)
             .await
             .unwrap();
 
-        let (recv_timestamp, recv_data) = recv_network_stream(send_dce_rpc_stream).await;
+        let (recv_data, recv_timestamp) =
+            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");
     publish.endpoint.wait_idle().await;
-}
-
-#[test]
-fn protocol_version() {
-    use semver::{Version, VersionReq};
-
-    let compat_versions = ["0.7.0"];
-    let incompat_versions = ["0.6.0", "0.8.0"];
-
-    let req = VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
-    for version in &compat_versions {
-        assert!(req.matches(&Version::parse(version).unwrap()));
-    }
-    for version in &incompat_versions {
-        assert!(!req.matches(&Version::parse(version).unwrap()));
-    }
 }

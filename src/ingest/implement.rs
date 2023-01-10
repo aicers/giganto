@@ -1,0 +1,271 @@
+use giganto_client::ingest::{
+    log::{Log, OpLogLevel, Oplog},
+    network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+    timeseries::PeriodicTimeSeries,
+};
+use std::net::IpAddr;
+
+pub trait EventFilter {
+    fn orig_addr(&self) -> Option<IpAddr>;
+    fn resp_addr(&self) -> Option<IpAddr>;
+    fn orig_port(&self) -> Option<u16>;
+    fn resp_port(&self) -> Option<u16>;
+    fn log_level(&self) -> Option<String>;
+    fn log_contents(&self) -> Option<String>;
+}
+
+impl EventFilter for Conn {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Dns {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Http {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Rdp {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Smtp {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Ntlm {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Kerberos {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Ssh {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for DceRpc {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Log {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Oplog {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        match self.log_level {
+            OpLogLevel::Info => Some("Info".to_string()),
+            OpLogLevel::Warn => Some("Warn".to_string()),
+            OpLogLevel::Error => Some("Error".to_string()),
+        }
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.contents.clone())
+    }
+}
+
+impl EventFilter for PeriodicTimeSeries {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}

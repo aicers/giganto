@@ -1,3 +1,17 @@
+use chrono::{Duration, Utc};
+use giganto_client::{
+    connection::client_handshake,
+    frame::recv_bytes,
+    ingest::{
+        log::{Log, OpLogLevel, Oplog},
+        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        receive_ack_timestamp, send_record_data, send_record_header,
+        timeseries::PeriodicTimeSeries,
+        RecordType,
+    },
+};
+use lazy_static::lazy_static;
+use quinn::{Connection, Endpoint};
 use std::{
     collections::HashMap,
     fs,
@@ -5,11 +19,6 @@ use std::{
     path::Path,
     sync::Arc,
 };
-
-use chrono::{Duration, Utc};
-use lazy_static::lazy_static;
-use quinn::{Connection, Endpoint};
-use serde::Serialize;
 use tempfile::TempDir;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -49,7 +58,7 @@ impl TestClient {
             )
             .await
             .expect("Failed to connect server's endpoint, Please make sure the Server is alive");
-        connection_handshake(&conn).await;
+        client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
         Self { conn, endpoint }
     }
 }
@@ -145,54 +154,9 @@ fn init_client() -> Endpoint {
     endpoint
 }
 
-async fn connection_handshake(conn: &Connection) {
-    let (mut send, mut recv) = conn
-        .open_bi()
-        .await
-        .expect("Failed to open bidirection channel");
-    let version_len = u64::try_from(PROTOCOL_VERSION.len())
-        .expect("less than u64::MAX")
-        .to_le_bytes();
-
-    let mut handshake_buf = Vec::with_capacity(version_len.len() + PROTOCOL_VERSION.len());
-    handshake_buf.extend(version_len);
-    handshake_buf.extend(PROTOCOL_VERSION.as_bytes());
-    send.write_all(&handshake_buf)
-        .await
-        .expect("Failed to send handshake data");
-
-    let mut resp_len_buf = [0; std::mem::size_of::<u64>()];
-    recv.read_exact(&mut resp_len_buf)
-        .await
-        .expect("Failed to receive handshake data");
-    let len = u64::from_le_bytes(resp_len_buf);
-
-    let mut resp_buf = Vec::new();
-    resp_buf.resize(len.try_into().expect("Failed to convert data type"), 0);
-    recv.read_exact(resp_buf.as_mut_slice()).await.unwrap();
-
-    bincode::deserialize::<Option<&str>>(&resp_buf)
-        .expect("Failed to deserialize recv data")
-        .expect("Incompatible version");
-}
-
 #[tokio::test]
 async fn conn() {
-    const RECORD_TYPE_CONN: u32 = 0x00;
-
-    #[derive(Serialize)]
-    struct Conn {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        proto: u8,
-        duration: i64,
-        orig_bytes: u64,
-        resp_bytes: u64,
-        orig_pkts: u64,
-        resp_pkts: u64,
-    }
+    const RECORD_TYPE_CONN: RecordType = RecordType::Conn;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -201,7 +165,6 @@ async fn conn() {
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut conn_data: Vec<u8> = Vec::new();
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -209,23 +172,20 @@ async fn conn() {
         orig_port: 46378,
         resp_port: 80,
         proto: 6,
+        service: "-".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         orig_bytes: 77,
         resp_bytes: 295,
         orig_pkts: 397,
         resp_pkts: 511,
     };
-    let mut ser_conn_body = bincode::serialize(&conn_body).unwrap();
 
-    conn_data.append(&mut RECORD_TYPE_CONN.to_le_bytes().to_vec());
-    conn_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    conn_data.append(&mut (ser_conn_body.len() as u32).to_le_bytes().to_vec());
-    conn_data.append(&mut ser_conn_body);
-
-    send_conn
-        .write_all(&conn_data)
+    send_record_header(&mut send_conn, RECORD_TYPE_CONN)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_conn, Utc::now().timestamp_nanos(), conn_body)
+        .await
+        .unwrap();
 
     send_conn.finish().await.expect("failed to shutdown stream");
 
@@ -235,28 +195,7 @@ async fn conn() {
 
 #[tokio::test]
 async fn dns() {
-    const RECORD_TYPE_DNS: u32 = 0x01;
-
-    #[derive(Serialize)]
-    struct Dns {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        proto: u8,
-        query: String,
-        answer: Vec<String>,
-        trans_id: u16,
-        rtt: i64,
-        qclass: u16,
-        qtype: u16,
-        rcode: u16,
-        aa_flag: bool,
-        tc_flag: bool,
-        rd_flag: bool,
-        ra_flag: bool,
-        ttl: Vec<i32>,
-    }
+    const RECORD_TYPE_DNS: RecordType = RecordType::Dns;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -265,7 +204,6 @@ async fn dns() {
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut dns_data: Vec<u8> = Vec::new();
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
@@ -285,17 +223,13 @@ async fn dns() {
         ra_flag: false,
         ttl: vec![1; 5],
     };
-    let mut ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
-    dns_data.append(&mut RECORD_TYPE_DNS.to_le_bytes().to_vec());
-    dns_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    dns_data.append(&mut (ser_dns_body.len() as u32).to_le_bytes().to_vec());
-    dns_data.append(&mut ser_dns_body);
-
-    send_dns
-        .write_all(&dns_data)
+    send_record_header(&mut send_dns, RECORD_TYPE_DNS)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_dns, Utc::now().timestamp_nanos(), dns_body)
+        .await
+        .unwrap();
 
     send_dns.finish().await.expect("failed to shutdown stream");
 
@@ -305,9 +239,7 @@ async fn dns() {
 
 #[tokio::test]
 async fn log() {
-    const RECORD_TYPE_LOG: u32 = 0x02;
-
-    type Log = (String, Vec<u8>);
+    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -316,22 +248,18 @@ async fn log() {
     let client = TestClient::new().await;
     let (mut send_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut log_data: Vec<u8> = Vec::new();
-    let log_body: Log = (
-        String::from("Hello"),
-        base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
-    );
-    let mut ser_log_body = bincode::serialize(&log_body).unwrap();
+    let log_body = Log {
+        kind: String::from("Hello"),
+        log: base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+    };
 
-    log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());
-    log_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    log_data.append(&mut (ser_log_body.len() as u32).to_le_bytes().to_vec());
-    log_data.append(&mut ser_log_body);
-
-    send_log
-        .write_all(&log_data)
+    send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_log, Utc::now().timestamp_nanos(), log_body)
+        .await
+        .unwrap();
+
     send_log.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"log_done");
@@ -340,22 +268,7 @@ async fn log() {
 
 #[tokio::test]
 async fn http() {
-    const RECORD_TYPE_HTTP: u32 = 0x03;
-
-    #[derive(Serialize)]
-    struct Http {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        method: String,
-        host: String,
-        uri: String,
-        referrer: String,
-        user_agent: String,
-        status_code: u16,
-    }
-
+    const RECORD_TYPE_HTTP: RecordType = RecordType::Http;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -363,7 +276,6 @@ async fn http() {
     let client = TestClient::new().await;
     let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut http_data: Vec<u8> = Vec::new();
     let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -373,20 +285,26 @@ async fn http() {
         host: "einsis".to_string(),
         uri: "/einsis.gif".to_string(),
         referrer: "einsis.com".to_string(),
+        version: String::new(),
         user_agent: "giganto".to_string(),
+        request_len: 0,
+        response_len: 0,
         status_code: 200,
+        status_msg: String::new(),
+        username: String::new(),
+        password: String::new(),
+        cookie: String::new(),
+        content_encoding: String::new(),
+        content_type: String::new(),
+        cache_control: String::new(),
     };
-    let mut ser_http_body = bincode::serialize(&http_body).unwrap();
 
-    http_data.append(&mut RECORD_TYPE_HTTP.to_le_bytes().to_vec());
-    http_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    http_data.append(&mut (ser_http_body.len() as u32).to_le_bytes().to_vec());
-    http_data.append(&mut ser_http_body);
-
-    send_http
-        .write_all(&http_data)
+    send_record_header(&mut send_http, RECORD_TYPE_HTTP)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_http, Utc::now().timestamp_nanos(), http_body)
+        .await
+        .unwrap();
 
     send_http.finish().await.expect("failed to shutdown stream");
 
@@ -396,17 +314,7 @@ async fn http() {
 
 #[tokio::test]
 async fn rdp() {
-    const RECORD_TYPE_RDP: u32 = 0x04;
-
-    #[derive(Serialize)]
-    struct Rdp {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        cookie: String,
-    }
-
+    const RECORD_TYPE_RDP: RecordType = RecordType::Rdp;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -414,7 +322,6 @@ async fn rdp() {
     let client = TestClient::new().await;
     let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut rdp_data: Vec<u8> = Vec::new();
     let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -422,17 +329,14 @@ async fn rdp() {
         resp_port: 80,
         cookie: "rdp_test".to_string(),
     };
-    let mut ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
 
-    rdp_data.append(&mut RECORD_TYPE_RDP.to_le_bytes().to_vec());
-    rdp_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    rdp_data.append(&mut (ser_rdp_body.len() as u32).to_le_bytes().to_vec());
-    rdp_data.append(&mut ser_rdp_body);
-
-    send_rdp
-        .write_all(&rdp_data)
+    send_record_header(&mut send_rdp, RECORD_TYPE_RDP)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_rdp, Utc::now().timestamp_nanos(), rdp_body)
+        .await
+        .unwrap();
+
     send_rdp.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"log_done");
@@ -441,14 +345,7 @@ async fn rdp() {
 
 #[tokio::test]
 async fn periodic_time_series() {
-    const RECORD_TYPE_PERIOD_TIME_SERIES: u32 = 0x05;
-
-    #[derive(Serialize)]
-    struct PeriodicTimeSeries {
-        id: String,
-        data: Vec<f64>,
-    }
-
+    const RECORD_TYPE_PERIOD_TIME_SERIES: RecordType = RecordType::PeriodicTimeSeries;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -457,26 +354,25 @@ async fn periodic_time_series() {
     let (mut send_periodic_time_series, _) =
         client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut periodic_time_series_data: Vec<u8> = Vec::new();
     let periodic_time_series_body = PeriodicTimeSeries {
         id: String::from("model_one"),
         data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
     };
-    let mut ser_periodic_time_series_body = bincode::serialize(&periodic_time_series_body).unwrap();
 
-    periodic_time_series_data.append(&mut RECORD_TYPE_PERIOD_TIME_SERIES.to_le_bytes().to_vec());
-    periodic_time_series_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    periodic_time_series_data.append(
-        &mut (ser_periodic_time_series_body.len() as u32)
-            .to_le_bytes()
-            .to_vec(),
-    );
-    periodic_time_series_data.append(&mut ser_periodic_time_series_body);
+    send_record_header(
+        &mut send_periodic_time_series,
+        RECORD_TYPE_PERIOD_TIME_SERIES,
+    )
+    .await
+    .unwrap();
+    send_record_data(
+        &mut send_periodic_time_series,
+        Utc::now().timestamp_nanos(),
+        periodic_time_series_body,
+    )
+    .await
+    .unwrap();
 
-    send_periodic_time_series
-        .write_all(&periodic_time_series_data)
-        .await
-        .expect("failed to send request");
     send_periodic_time_series
         .finish()
         .await
@@ -488,22 +384,7 @@ async fn periodic_time_series() {
 
 #[tokio::test]
 async fn smtp() {
-    const RECORD_TYPE_SMTP: u32 = 0x06;
-
-    #[derive(Serialize)]
-    struct Smtp {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        mailfrom: String,
-        date: String,
-        from: String,
-        to: String,
-        subject: String,
-        agent: String,
-    }
-
+    const RECORD_TYPE_SMTP: RecordType = RecordType::Smtp;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -511,7 +392,6 @@ async fn smtp() {
     let client = TestClient::new().await;
     let (mut send_smtp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut smtp_data: Vec<u8> = Vec::new();
     let smtp_body = Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -524,17 +404,13 @@ async fn smtp() {
         subject: "subject".to_string(),
         agent: "agent".to_string(),
     };
-    let mut ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
 
-    smtp_data.append(&mut RECORD_TYPE_SMTP.to_le_bytes().to_vec());
-    smtp_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    smtp_data.append(&mut (ser_smtp_body.len() as u32).to_le_bytes().to_vec());
-    smtp_data.append(&mut ser_smtp_body);
-
-    send_smtp
-        .write_all(&smtp_data)
+    send_record_header(&mut send_smtp, RECORD_TYPE_SMTP)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_smtp, Utc::now().timestamp_nanos(), smtp_body)
+        .await
+        .unwrap();
 
     send_smtp.finish().await.expect("failed to shutdown stream");
 
@@ -544,23 +420,7 @@ async fn smtp() {
 
 #[tokio::test]
 async fn ntlm() {
-    const RECORD_TYPE_NTLM: u32 = 0x07;
-
-    #[derive(Serialize)]
-    struct Ntlm {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        username: String,
-        hostname: String,
-        domainname: String,
-        server_nb_computer_name: String,
-        server_dns_computer_name: String,
-        server_tree_name: String,
-        success: String,
-    }
-
+    const RECORD_TYPE_NTLM: RecordType = RecordType::Ntlm;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -568,7 +428,6 @@ async fn ntlm() {
     let client = TestClient::new().await;
     let (mut send_ntlm, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut ntlm_data: Vec<u8> = Vec::new();
     let ntlm_body = Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -582,17 +441,13 @@ async fn ntlm() {
         server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
     };
-    let mut ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
 
-    ntlm_data.append(&mut RECORD_TYPE_NTLM.to_le_bytes().to_vec());
-    ntlm_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    ntlm_data.append(&mut (ser_ntlm_body.len() as u32).to_le_bytes().to_vec());
-    ntlm_data.append(&mut ser_ntlm_body);
-
-    send_ntlm
-        .write_all(&ntlm_data)
+    send_record_header(&mut send_ntlm, RECORD_TYPE_NTLM)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_ntlm, Utc::now().timestamp_nanos(), ntlm_body)
+        .await
+        .unwrap();
 
     send_ntlm.finish().await.expect("failed to shutdown stream");
 
@@ -602,28 +457,7 @@ async fn ntlm() {
 
 #[tokio::test]
 async fn kerberos() {
-    const RECORD_TYPE_KERBEROS: u32 = 0x08;
-
-    #[derive(Serialize)]
-    struct Kerberos {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        request_type: String,
-        client: String,
-        service: String,
-        success: String,
-        error_msg: String,
-        from: i64,
-        till: i64,
-        cipher: String,
-        forwardable: String,
-        renewable: String,
-        client_cert_subject: String,
-        server_cert_subject: String,
-    }
-
+    const RECORD_TYPE_KERBEROS: RecordType = RecordType::Kerberos;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -631,7 +465,6 @@ async fn kerberos() {
     let client = TestClient::new().await;
     let (mut send_kerberos, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut kerberos_data: Vec<u8> = Vec::new();
     let kerberos_body = Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -650,17 +483,17 @@ async fn kerberos() {
         client_cert_subject: "client_cert".to_string(),
         server_cert_subject: "server_cert".to_string(),
     };
-    let mut ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
-    kerberos_data.append(&mut RECORD_TYPE_KERBEROS.to_le_bytes().to_vec());
-    kerberos_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    kerberos_data.append(&mut (ser_kerberos_body.len() as u32).to_le_bytes().to_vec());
-    kerberos_data.append(&mut ser_kerberos_body);
-
-    send_kerberos
-        .write_all(&kerberos_data)
+    send_record_header(&mut send_kerberos, RECORD_TYPE_KERBEROS)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(
+        &mut send_kerberos,
+        Utc::now().timestamp_nanos(),
+        kerberos_body,
+    )
+    .await
+    .unwrap();
 
     send_kerberos
         .finish()
@@ -673,28 +506,7 @@ async fn kerberos() {
 
 #[tokio::test]
 async fn ssh() {
-    const RECORD_TYPE_SSH: u32 = 0x09;
-
-    #[derive(Serialize)]
-    struct Ssh {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        version: i64,
-        auth_success: String,
-        auth_attempts: i64,
-        direction: String,
-        client: String,
-        server: String,
-        cipher_alg: String,
-        mac_alg: String,
-        compression_alg: String,
-        kex_alg: String,
-        host_key_alg: String,
-        host_key: String,
-    }
-
+    const RECORD_TYPE_SSH: RecordType = RecordType::Ssh;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -702,7 +514,6 @@ async fn ssh() {
     let client = TestClient::new().await;
     let (mut send_ssh, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut ssh_data: Vec<u8> = Vec::new();
     let ssh_body = Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -721,17 +532,13 @@ async fn ssh() {
         host_key_alg: "host_key_alg".to_string(),
         host_key: "host_key".to_string(),
     };
-    let mut ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
 
-    ssh_data.append(&mut RECORD_TYPE_SSH.to_le_bytes().to_vec());
-    ssh_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    ssh_data.append(&mut (ser_ssh_body.len() as u32).to_le_bytes().to_vec());
-    ssh_data.append(&mut ser_ssh_body);
-
-    send_ssh
-        .write_all(&ssh_data)
+    send_record_header(&mut send_ssh, RECORD_TYPE_SSH)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_ssh, Utc::now().timestamp_nanos(), ssh_body)
+        .await
+        .unwrap();
 
     send_ssh.finish().await.expect("failed to shutdown stream");
 
@@ -741,20 +548,7 @@ async fn ssh() {
 
 #[tokio::test]
 async fn dce_rpc() {
-    const RECORD_TYPE_DCE_RPC: u32 = 0x0A;
-
-    #[derive(Serialize)]
-    struct DceRpc {
-        orig_addr: IpAddr,
-        resp_addr: IpAddr,
-        orig_port: u16,
-        resp_port: u16,
-        rtt: i64,
-        named_pipe: String,
-        endpoint: String,
-        operation: String,
-    }
-
+    const RECORD_TYPE_DCE_RPC: RecordType = RecordType::DceRpc;
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -762,7 +556,6 @@ async fn dce_rpc() {
     let client = TestClient::new().await;
     let (mut send_dce_rpc, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut dce_rpc_data: Vec<u8> = Vec::new();
     let dce_rpc_body = DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -773,17 +566,17 @@ async fn dce_rpc() {
         endpoint: "endpoint".to_string(),
         operation: "operation".to_string(),
     };
-    let mut ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
 
-    dce_rpc_data.append(&mut RECORD_TYPE_DCE_RPC.to_le_bytes().to_vec());
-    dce_rpc_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    dce_rpc_data.append(&mut (ser_dce_rpc_body.len() as u32).to_le_bytes().to_vec());
-    dce_rpc_data.append(&mut ser_dce_rpc_body);
-
-    send_dce_rpc
-        .write_all(&dce_rpc_data)
+    send_record_header(&mut send_dce_rpc, RECORD_TYPE_DCE_RPC)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(
+        &mut send_dce_rpc,
+        Utc::now().timestamp_nanos(),
+        dce_rpc_body,
+    )
+    .await
+    .unwrap();
 
     send_dce_rpc
         .finish()
@@ -796,14 +589,7 @@ async fn dce_rpc() {
 
 #[tokio::test]
 async fn oplog() {
-    const RECORD_TYPE_OPLOG: u32 = 0x12;
-
-    #[derive(Serialize)]
-    struct OpLog {
-        agent_name: String,
-        log_level: super::log::OpLogLevel,
-        contents: String,
-    }
+    const RECORD_TYPE_OPLOG: RecordType = RecordType::Oplog;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -812,23 +598,19 @@ async fn oplog() {
     let client = TestClient::new().await;
     let (mut send_oplog, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut oplog_data: Vec<u8> = Vec::new();
-    let oplog_body = OpLog {
+    let oplog_body = Oplog {
         agent_name: "giganto".to_string(),
-        log_level: super::log::OpLogLevel::Info,
+        log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };
-    let mut ser_oplog_body = bincode::serialize(&oplog_body).unwrap();
 
-    oplog_data.append(&mut RECORD_TYPE_OPLOG.to_le_bytes().to_vec());
-    oplog_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    oplog_data.append(&mut (ser_oplog_body.len() as u32).to_le_bytes().to_vec());
-    oplog_data.append(&mut ser_oplog_body);
-
-    send_oplog
-        .write_all(&oplog_data)
+    send_record_header(&mut send_oplog, RECORD_TYPE_OPLOG)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_oplog, Utc::now().timestamp_nanos(), oplog_body)
+        .await
+        .unwrap();
+
     send_oplog
         .finish()
         .await
@@ -840,9 +622,7 @@ async fn oplog() {
 
 #[tokio::test]
 async fn ack_info() {
-    const RECORD_TYPE_LOG: u32 = 0x02;
-
-    type Log = (String, Vec<u8>);
+    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -851,40 +631,32 @@ async fn ack_info() {
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut log_data: Vec<u8> = Vec::new();
-    let log_body: Log = (String::from("Hello Server I am Log"), vec![0; 10]);
-    let mut ser_log_body = bincode::serialize(&log_body).unwrap();
+    let log_body = Log {
+        kind: String::from("Hello Server I am Log"),
+        log: vec![0; 10],
+    };
 
-    log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());
-    log_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-    log_data.append(&mut (ser_log_body.len() as u32).to_le_bytes().to_vec());
-    log_data.append(&mut ser_log_body);
-
-    send_log
-        .write_all(&log_data)
+    send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(&mut send_log, Utc::now().timestamp_nanos(), log_body)
+        .await
+        .unwrap();
 
     let mut last_timestamp: i64 = 0;
     for _ in 0..127 {
-        let mut log_data: Vec<u8> = Vec::new();
-        let log_body: Log = (String::from("Hello Server I am Log"), vec![0; 10]);
-        let mut ser_log_body = bincode::serialize(&log_body).unwrap();
+        let log_body: Log = Log {
+            kind: String::from("Hello Server I am Log"),
+            log: vec![0; 10],
+        };
+
         last_timestamp = Utc::now().timestamp_nanos();
-
-        log_data.append(&mut last_timestamp.to_le_bytes().to_vec());
-        log_data.append(&mut (ser_log_body.len() as u32).to_le_bytes().to_vec());
-        log_data.append(&mut ser_log_body);
-
-        send_log
-            .write_all(&log_data)
+        send_record_data(&mut send_log, last_timestamp, log_body)
             .await
-            .expect("failed to send request");
+            .unwrap();
     }
 
-    let mut ts_buf = [0; std::mem::size_of::<u64>()];
-    recv_log.read_exact(&mut ts_buf).await.unwrap();
-    let recv_timestamp = i64::from_be_bytes(ts_buf);
+    let recv_timestamp = receive_ack_timestamp(&mut recv_log).await.unwrap();
 
     send_log.finish().await.expect("failed to shutdown stream");
     client.conn.close(0u32.into(), b"log_done");
@@ -894,7 +666,7 @@ async fn ack_info() {
 
 #[tokio::test]
 async fn one_short_reproduce_channel_close() {
-    const RECORD_TYPE_LOG: u32 = 0x02;
+    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
     const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
     const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 
@@ -905,20 +677,19 @@ async fn one_short_reproduce_channel_close() {
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let mut log_data: Vec<u8> = Vec::new();
-
-    log_data.append(&mut RECORD_TYPE_LOG.to_le_bytes().to_vec());
-    log_data.append(&mut CHANNEL_CLOSE_TIMESTAMP.to_le_bytes().to_vec());
-    log_data.append(&mut (CHANNEL_CLOSE_MESSAGE.len() as u32).to_le_bytes().to_vec());
-    log_data.append(&mut CHANNEL_CLOSE_MESSAGE.to_vec());
-
-    send_log
-        .write_all(&log_data)
+    send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
-        .expect("failed to send request");
+        .unwrap();
+    send_record_data(
+        &mut send_log,
+        CHANNEL_CLOSE_TIMESTAMP,
+        CHANNEL_CLOSE_MESSAGE,
+    )
+    .await
+    .unwrap();
 
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
-    recv_log.read_exact(&mut ts_buf).await.unwrap();
+    recv_bytes(&mut recv_log, &mut ts_buf).await.unwrap();
     let recv_timestamp = i64::from_be_bytes(ts_buf);
 
     send_log.finish().await.expect("failed to shutdown stream");

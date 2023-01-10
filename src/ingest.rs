@@ -1,28 +1,25 @@
-pub(crate) mod log;
-mod network;
+pub mod implement;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::log::{Log, Oplog};
-pub(crate) use self::network::{
-    Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh,
-};
 use crate::graphql::network::NetworkFilter;
-use crate::publish::{send_direct_network_stream, PubMessage};
-use crate::server::{certificate_info, config_server, server_handshake};
+use crate::publish::send_direct_stream;
+use crate::server::{certificate_info, config_server};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use num_enum::TryFromPrimitive;
+use giganto_client::connection::server_handshake;
+use giganto_client::frame;
+use giganto_client::ingest::log::{Log, Oplog};
+use giganto_client::ingest::timeseries::PeriodicTimeSeries;
+use giganto_client::ingest::{
+    receive_record_data, receive_record_header, send_ack_timestamp, RecordType,
+};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
-use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
 use std::{
     collections::HashMap,
-    fmt::Debug,
-    mem,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicU8, Ordering},
         Arc,
@@ -49,90 +46,6 @@ const INGEST_VERSION_REQ: &str = "0.8.0-alpha.1";
 type SourceInfo = (String, DateTime<Utc>, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
-
-pub trait EventFilter {
-    fn orig_addr(&self) -> Option<IpAddr>;
-    fn resp_addr(&self) -> Option<IpAddr>;
-    fn orig_port(&self) -> Option<u16>;
-    fn resp_port(&self) -> Option<u16>;
-    fn log_level(&self) -> Option<String>;
-    fn log_contents(&self) -> Option<String>;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PeriodicTimeSeries {
-    pub id: String,
-    pub data: Vec<f64>,
-}
-
-impl EventFilter for PeriodicTimeSeries {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        None
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        None
-    }
-    fn orig_port(&self) -> Option<u16> {
-        None
-    }
-    fn resp_port(&self) -> Option<u16> {
-        None
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
-}
-
-impl Display for PeriodicTimeSeries {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self.data)
-    }
-}
-
-impl PubMessage for PeriodicTimeSeries {
-    fn message(&self, timestamp: i64, _source: &str) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(&Some((timestamp, &self.data)))?)
-    }
-    fn done() -> Result<Vec<u8>> {
-        Ok(bincode::serialize::<Option<(i64, Vec<f64>)>>(&None)?)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Statistics {
-    period: u16,
-    stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, packet size
-}
-
-impl Display for Statistics {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        for stat in &self.stats {
-            writeln!(f, "{:?}\t{}\t{}\t{}", stat.0, stat.1, stat.2, self.period)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, PartialEq, Deserialize)]
-#[repr(u32)]
-enum RecordType {
-    Conn = 0,
-    Dns = 1,
-    Log = 2,
-    Http = 3,
-    Rdp = 4,
-    PeriodicTimeSeries = 5,
-    Smtp = 6,
-    Ntlm = 7,
-    Kerberos = 8,
-    Ssh = 9,
-    DceRpc = 10,
-    Statistics = 11,
-    Oplog = 12,
-}
 
 pub struct Server {
     server_config: ServerConfig,
@@ -190,16 +103,17 @@ async fn handle_connection(
     sender: Sender<SourceInfo>,
 ) -> Result<()> {
     let connection = conn.await?;
-
-    let stream = connection.accept_bi().await;
-    let (mut send, mut recv) = stream?;
-    if let Err(e) = server_handshake(&mut send, &mut recv, INGEST_VERSION_REQ).await {
-        let err = format!("Handshake fail: {e}");
-        send.finish().await?;
-        connection.close(quinn::VarInt::from_u32(0), err.as_bytes());
-        bail!(err);
-    }
-    send.finish().await?;
+    match server_handshake(&connection, INGEST_VERSION_REQ).await {
+        Ok((mut send, _)) => {
+            info!("Compatible version");
+            send.finish().await?;
+        }
+        Err(e) => {
+            info!("Incompatible version");
+            connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
+            bail!("{e}")
+        }
+    };
 
     let source = certificate_info(&connection)?;
 
@@ -252,7 +166,7 @@ async fn handle_request(
     db: Database,
 ) -> Result<()> {
     let mut buf = [0; 4];
-    recv.read_exact(&mut buf)
+    receive_record_header(&mut recv, &mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
     match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
@@ -431,15 +345,11 @@ async fn handle_data<T>(
                 _ = itv.tick() => {
                     let last_timestamp = ack_time_interval.load(Ordering::SeqCst);
                     if last_timestamp !=  NO_TIMESTAMP {
-                        if sender_interval
-                            .lock()
-                            .await
-                            .write_all(&last_timestamp.to_be_bytes())
-                            .await
-                            .is_err()
+                        if send_ack_timestamp(&mut (*sender_interval.lock().await),last_timestamp).await.is_err()
                         {
                             break;
                         }
+
                         ack_cnt_interval.store(0, Ordering::SeqCst);
                     }
                 }
@@ -450,18 +360,13 @@ async fn handle_data<T>(
             }
         }
     });
-
     loop {
-        match handle_body(&mut recv).await {
+        match receive_record_data(&mut recv).await {
             Ok((raw_event, timestamp)) => {
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                 {
-                    sender_rotation
-                        .lock()
-                        .await
-                        .write_all(&timestamp.to_be_bytes())
-                        .await?;
+                    send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                     continue;
                 }
                 let mut key: Vec<u8> = Vec::new();
@@ -495,17 +400,13 @@ async fn handle_data<T>(
                 }
                 store.append(&key, &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
-                    send_direct_network_stream(network_key, &raw_event, timestamp).await?;
+                    send_direct_stream(network_key, &raw_event, timestamp).await?;
                 }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                     ack_time_rotation.store(timestamp, Ordering::SeqCst);
                     if ACK_ROTATION_CNT <= ack_cnt_rotation.load(Ordering::SeqCst) {
-                        sender_rotation
-                            .lock()
-                            .await
-                            .write_all(&timestamp.to_be_bytes())
-                            .await?;
+                        send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                         ack_cnt_rotation.store(0, Ordering::SeqCst);
                         tx.send(ITV_RESET).await?;
                     }
@@ -525,44 +426,15 @@ async fn handle_data<T>(
     Ok(())
 }
 
-async fn handle_body(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
-    let mut ts_buf = [0; mem::size_of::<u64>()];
-    let mut len_buf = [0; mem::size_of::<u32>()];
-    let mut body_buf = Vec::new();
-
-    recv.read_exact(&mut ts_buf).await?;
-    let timestamp = i64::from_le_bytes(ts_buf);
-
-    recv.read_exact(&mut len_buf).await?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-
-    body_buf.resize(len, 0);
-    recv.read_exact(body_buf.as_mut_slice()).await?;
-
-    Ok((body_buf, timestamp))
-}
-
 pub async fn request_packets(
     connection: &quinn::Connection,
     filter: NetworkFilter,
 ) -> Result<Vec<String>> {
     let (mut send, mut recv) = connection.open_bi().await?;
-    let record = bincode::serialize(&filter)?;
-    let record_len = u64::try_from(record.len())?.to_le_bytes();
-    let mut send_buf = Vec::with_capacity(record_len.len() + record.len());
-    send_buf.extend_from_slice(&record_len);
-    send_buf.extend_from_slice(&record);
-    send.write_all(&send_buf)
-        .await
-        .map_err(|e| anyhow!("Failed to write record: {}", e))?;
-    let mut req_len = [0; std::mem::size_of::<u64>()];
-    let mut req_buf = Vec::new();
-    recv.read_exact(&mut req_len).await?;
-    let len = u64::from_le_bytes(req_len);
 
-    req_buf.resize(len.try_into()?, 0);
-    recv.read_exact(&mut req_buf).await?;
-    let packets = bincode::deserialize::<Vec<String>>(&req_buf)?;
+    let mut buf = Vec::new();
+    frame::send(&mut send, &mut buf, &filter).await?;
+    let packets = frame::recv::<Vec<String>>(&mut recv, &mut buf).await?;
     Ok(packets)
 }
 

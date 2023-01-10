@@ -5,7 +5,7 @@ mod packet;
 mod timeseries;
 
 use crate::{
-    ingest::{EventFilter, PacketSources},
+    ingest::{implement::EventFilter, PacketSources},
     storage::{
         lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
         FilteredIter, KeyValue, RawEventStore,

@@ -1,7 +1,6 @@
 use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingest::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     storage::{Database, FilteredIter},
 };
 use async_graphql::{
@@ -9,6 +8,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
 use serde::Serialize;
 use std::{fmt::Debug, iter::Peekable, net::IpAddr};
 
@@ -879,9 +879,11 @@ pub(crate) fn key_prefix(source: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
-    use crate::ingest::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
+    use giganto_client::ingest::network::{
+        Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
+    };
     use std::mem;
     use std::net::IpAddr;
 

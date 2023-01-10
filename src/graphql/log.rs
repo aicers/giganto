@@ -1,7 +1,6 @@
 use super::{get_timestamp, load_connection, network::key_prefix, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingest,
     storage::Database,
 };
 use async_graphql::{
@@ -9,6 +8,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::log::{Log, Oplog};
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
@@ -100,8 +100,8 @@ struct LogRawEvent {
     log: String,
 }
 
-impl FromKeyValue<ingest::Log> for LogRawEvent {
-    fn from_key_value(key: &[u8], l: ingest::Log) -> Result<Self> {
+impl FromKeyValue<Log> for LogRawEvent {
+    fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
             timestamp: get_timestamp(key)?,
             log: base64::encode(l.log),
@@ -116,8 +116,8 @@ struct OpLogRawEvent {
     contents: String,
 }
 
-impl FromKeyValue<ingest::Oplog> for OpLogRawEvent {
-    fn from_key_value(key: &[u8], l: ingest::Oplog) -> Result<Self> {
+impl FromKeyValue<Oplog> for OpLogRawEvent {
+    fn from_key_value(key: &[u8], l: Oplog) -> Result<Self> {
         Ok(OpLogRawEvent {
             timestamp: get_timestamp(key)?,
             level: format!("{:?}", l.log_level),
@@ -192,12 +192,12 @@ impl LogQuery {
 #[cfg(test)]
 mod tests {
     use super::{LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
-    use crate::ingest::{log::OpLogLevel, Log, Oplog};
     use crate::{
         graphql::{TestSchema, TimeRange},
         storage::RawEventStore,
     };
     use chrono::{DateTime, NaiveDateTime, Utc};
+    use giganto_client::ingest::log::{Log, OpLogLevel, Oplog};
 
     #[test]
     fn load_time_range() {
