@@ -24,7 +24,7 @@ ingest_address = "0.0.0.0:38370"        # address to listen for ingest QUIC
 publish_address = "0.0.0.0:38371"          # address to listen for publish QUIC
 data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
-log_dir = "tests/logs/apps"                # path to giganto's syslog file
+log_dir = "/data/logs/apps"                # path to giganto's syslog file
 export_dir = "tests/export"                # path to giganto's export file
 ```
 
