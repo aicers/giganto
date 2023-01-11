@@ -148,6 +148,7 @@ struct ConnRawEvent {
     resp_pkts: u64,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug)]
 struct DnsRawEvent {
     timestamp: DateTime<Utc>,
@@ -158,6 +159,16 @@ struct DnsRawEvent {
     proto: u8,
     query: String,
     answer: Vec<String>,
+    trans_id: u16,
+    rtt: i64,
+    qclass: u16,
+    qtype: u16,
+    rcode: u16,
+    aa_flag: bool,
+    tc_flag: bool,
+    rd_flag: bool,
+    ra_flag: bool,
+    ttl: Vec<i32>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -326,7 +337,23 @@ from_key_value!(
 );
 from_key_value!(RdpRawEvent, Rdp, cookie);
 
-from_key_value!(DnsRawEvent, Dns, proto, query, answer);
+from_key_value!(
+    DnsRawEvent,
+    Dns,
+    proto,
+    query,
+    answer,
+    trans_id,
+    rtt,
+    qclass,
+    qtype,
+    rcode,
+    aa_flag,
+    tc_flag,
+    rd_flag,
+    ra_flag,
+    ttl
+);
 
 from_key_value!(SmtpRawEvent, Smtp, mailfrom, date, from, to, subject, agent);
 
@@ -1011,6 +1038,16 @@ mod tests {
             proto: 17,
             query: "Hello Server Hello Server Hello Server".to_string(),
             answer: vec!["1.1.1.1".to_string()],
+            trans_id: 1,
+            rtt: 1,
+            qclass: 0,
+            qtype: 0,
+            rcode: 0,
+            aa_flag: false,
+            tc_flag: false,
+            rd_flag: false,
+            ra_flag: false,
+            ttl: vec![1; 5],
         };
         let ser_dns_body = bincode::serialize(&dns_body).unwrap();
 

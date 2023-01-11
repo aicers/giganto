@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add more fields to `dns`
+
 ### Changed
 
 - Modify module name `ingestion` to `ingest`.

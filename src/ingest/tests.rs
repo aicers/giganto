@@ -29,7 +29,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.7.0";
+const PROTOCOL_VERSION: &str = "0.8.0-alpha.1";
 
 struct TestClient {
     conn: Connection,
@@ -245,6 +245,17 @@ async fn dns() {
         resp_port: u16,
         proto: u8,
         query: String,
+        answer: Vec<String>,
+        trans_id: u16,
+        rtt: i64,
+        qclass: u16,
+        qtype: u16,
+        rcode: u16,
+        aa_flag: bool,
+        tc_flag: bool,
+        rd_flag: bool,
+        ra_flag: bool,
+        ttl: Vec<i32>,
     }
 
     let _lock = TOKEN.lock().await;
@@ -261,9 +272,18 @@ async fn dns() {
         orig_port: 46378,
         resp_port: 80,
         proto: 17,
-        query:
-            "Hello ServerHello ServerHello ServerHello ServerHello ServerHello ServerHello Server"
-                .to_string(),
+        query: "Hello Server".to_string(),
+        answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
+        trans_id: 1,
+        rtt: 1,
+        qclass: 0,
+        qtype: 0,
+        rcode: 0,
+        aa_flag: false,
+        tc_flag: false,
+        rd_flag: false,
+        ra_flag: false,
+        ttl: vec![1; 5],
     };
     let mut ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
