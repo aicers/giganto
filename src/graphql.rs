@@ -1,3 +1,4 @@
+mod delete;
 mod export;
 mod log;
 pub mod network;
@@ -31,6 +32,7 @@ pub struct Query(
     export::ExportQuery,
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
+    delete::DeleteQuery,
 );
 
 #[derive(InputObject, Serialize)]
