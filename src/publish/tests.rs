@@ -294,8 +294,18 @@ fn gen_http_raw_event() -> Vec<u8> {
         host: "einsis".to_string(),
         uri: "/einsis.gif".to_string(),
         referrer: "einsis.com".to_string(),
+        version: String::new(),
         user_agent: "giganto".to_string(),
+        request_len: 0,
+        response_len: 0,
         status_code: 200,
+        status_msg: String::new(),
+        username: String::new(),
+        password: String::new(),
+        cookie: String::new(),
+        content_encoding: String::new(),
+        content_type: String::new(),
+        cache_control: String::new(),
     };
 
     bincode::serialize(&http_body).unwrap()

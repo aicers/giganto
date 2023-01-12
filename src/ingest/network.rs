@@ -283,8 +283,18 @@ pub struct Http {
     pub host: String,
     pub uri: String,
     pub referrer: String,
+    pub version: String,
     pub user_agent: String,
+    pub request_len: usize,
+    pub response_len: usize,
     pub status_code: u16,
+    pub status_msg: String,
+    pub username: String,
+    pub password: String,
+    pub cookie: String,
+    pub content_encoding: String,
+    pub content_type: String,
+    pub cache_control: String,
 }
 
 impl EventFilter for Http {
@@ -312,7 +322,7 @@ impl Display for Http {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
@@ -333,12 +343,54 @@ impl Display for Http {
             } else {
                 &self.referrer
             },
+            if self.version.is_empty() {
+                "-"
+            } else {
+                &self.version
+            },
             if self.user_agent.is_empty() {
                 "-"
             } else {
                 &self.user_agent
             },
-            self.status_code
+            self.request_len,
+            self.response_len,
+            self.status_code,
+            if self.status_msg.is_empty() {
+                "-"
+            } else {
+                &self.status_msg
+            },
+            if self.username.is_empty() {
+                "-"
+            } else {
+                &self.username
+            },
+            if self.password.is_empty() {
+                "-"
+            } else {
+                &self.password
+            },
+            if self.cookie.is_empty() {
+                "-"
+            } else {
+                &self.cookie
+            },
+            if self.content_encoding.is_empty() {
+                "-"
+            } else {
+                &self.content_encoding
+            },
+            if self.content_type.is_empty() {
+                "-"
+            } else {
+                &self.content_type
+            },
+            if self.cache_control.is_empty() {
+                "-"
+            } else {
+                &self.cache_control
+            },
         )
     }
 }

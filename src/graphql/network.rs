@@ -183,8 +183,18 @@ struct HttpRawEvent {
     host: String,
     uri: String,
     referrer: String,
+    version: String,
     user_agent: String,
+    request_len: usize,
+    response_len: usize,
     status_code: u16,
+    status_msg: String,
+    username: String,
+    password: String,
+    cookie: String,
+    content_encoding: String,
+    content_type: String,
+    cache_control: String,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -334,8 +344,18 @@ from_key_value!(
     host,
     uri,
     referrer,
+    version,
     user_agent,
-    status_code
+    request_len,
+    response_len,
+    status_code,
+    status_msg,
+    username,
+    password,
+    cookie,
+    content_encoding,
+    content_type,
+    cache_control
 );
 from_key_value!(RdpRawEvent, Rdp, cookie);
 
@@ -1136,8 +1156,18 @@ mod tests {
             host: "einsis".to_string(),
             uri: "/einsis.gif".to_string(),
             referrer: "einsis.com".to_string(),
+            version: String::new(),
             user_agent: "giganto".to_string(),
+            request_len: 0,
+            response_len: 0,
             status_code: 200,
+            status_msg: String::new(),
+            username: String::new(),
+            password: String::new(),
+            cookie: String::new(),
+            content_encoding: String::new(),
+            content_type: String::new(),
+            cache_control: String::new(),
         };
         let ser_http_body = bincode::serialize(&http_body).unwrap();
 

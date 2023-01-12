@@ -9,8 +9,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add more fields to `dns`
-- Add `service` field to `conn`
+- Add more fields to `dns`, `conn`, `http`
 
 ### Changed
 
