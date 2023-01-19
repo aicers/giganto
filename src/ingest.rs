@@ -13,7 +13,7 @@ use giganto_client::frame;
 use giganto_client::ingest::log::{Log, Oplog};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use giganto_client::ingest::{
-    receive_record_data, receive_record_header, send_ack_timestamp, RecordType,
+    receive_event, receive_record_header, send_ack_timestamp, RecordType,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
@@ -361,7 +361,7 @@ async fn handle_data<T>(
         }
     });
     loop {
-        match receive_record_data(&mut recv).await {
+        match receive_event(&mut recv).await {
             Ok((raw_event, timestamp)) => {
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
@@ -400,7 +400,7 @@ async fn handle_data<T>(
                 }
                 store.append(&key, &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
-                    send_direct_stream(network_key, &raw_event, timestamp).await?;
+                    send_direct_stream(network_key, &raw_event, timestamp, &source).await?;
                 }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);

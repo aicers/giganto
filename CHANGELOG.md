@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add more fields to `dns`, `conn`, `http`
+- Add common fields to network events.
 
 ### Changed
 

@@ -137,12 +137,12 @@ impl RawEventFilter for NetworkFilter {
 struct ConnRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
     proto: u8,
-    service: String,
     duration: i64,
+    service: String,
     orig_bytes: u64,
     resp_bytes: u64,
     orig_pkts: u64,
@@ -154,10 +154,11 @@ struct ConnRawEvent {
 struct DnsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
     proto: u8,
+    duration: i64,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
@@ -176,9 +177,11 @@ struct DnsRawEvent {
 struct HttpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     method: String,
     host: String,
     uri: String,
@@ -201,9 +204,11 @@ struct HttpRawEvent {
 struct RdpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     cookie: String,
 }
 
@@ -211,9 +216,11 @@ struct RdpRawEvent {
 struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     mailfrom: String,
     date: String,
     from: String,
@@ -226,9 +233,11 @@ struct SmtpRawEvent {
 struct NtlmRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     username: String,
     hostname: String,
     domainname: String,
@@ -242,9 +251,11 @@ struct NtlmRawEvent {
 struct KerberosRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     request_type: String,
     client: String,
     service: String,
@@ -263,9 +274,11 @@ struct KerberosRawEvent {
 struct SshRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     version: i64,
     auth_success: String,
     auth_attempts: i64,
@@ -284,9 +297,11 @@ struct SshRawEvent {
 struct DceRpcRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
-    resp_addr: String,
     orig_port: u16,
+    resp_addr: String,
     resp_port: u16,
+    proto: u8,
+    duration: i64,
     rtt: i64,
     named_pipe: String,
     endpoint: String,
@@ -317,6 +332,8 @@ macro_rules! from_key_value {
                     resp_addr: val.resp_addr.to_string(),
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
+                    proto: val.proto,
+                    duration: val.duration,
                     $(
                         $fields: val.$fields,
                     )*
@@ -329,9 +346,7 @@ macro_rules! from_key_value {
 from_key_value!(
     ConnRawEvent,
     Conn,
-    proto,
     service,
-    duration,
     orig_bytes,
     resp_bytes,
     orig_pkts,
@@ -362,7 +377,6 @@ from_key_value!(RdpRawEvent, Rdp, cookie);
 from_key_value!(
     DnsRawEvent,
     Dns,
-    proto,
     query,
     answer,
     trans_id,
@@ -962,12 +976,12 @@ mod tests {
         let tmp_dur = Duration::nanoseconds(12345);
         let conn_body = Conn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            service: "-".to_string(),
             duration: tmp_dur.num_nanoseconds().unwrap(),
+            service: "-".to_string(),
             orig_bytes: 77,
             resp_bytes: 295,
             orig_pkts: 397,
@@ -1057,10 +1071,11 @@ mod tests {
 
         let dns_body = Dns {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            duration: 1,
             query: "Hello Server Hello Server Hello Server".to_string(),
             answer: vec!["1.1.1.1".to_string()],
             trans_id: 1,
@@ -1151,9 +1166,11 @@ mod tests {
 
         let http_body = Http {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             method: "POST".to_string(),
             host: "einsis".to_string(),
             uri: "/einsis.gif".to_string(),
@@ -1248,9 +1265,11 @@ mod tests {
 
         let rdp_body = Rdp {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             cookie: "rdp_test".to_string(),
         };
         let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
@@ -1296,9 +1315,11 @@ mod tests {
 
         let smtp_body = Smtp {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             mailfrom: "mailfrom".to_string(),
             date: "date".to_string(),
             from: "from".to_string(),
@@ -1349,9 +1370,11 @@ mod tests {
 
         let ntlm_body = Ntlm {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             username: "bly".to_string(),
             hostname: "host".to_string(),
             domainname: "domain".to_string(),
@@ -1403,9 +1426,11 @@ mod tests {
 
         let kerberos_body = Kerberos {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             request_type: "req_type".to_string(),
             client: "client".to_string(),
             service: "service".to_string(),
@@ -1462,9 +1487,11 @@ mod tests {
 
         let ssh_body = Ssh {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             version: 01,
             auth_success: "auth_success".to_string(),
             auth_attempts: 3,
@@ -1521,9 +1548,11 @@ mod tests {
 
         let dce_rpc_body = DceRpc {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
+            proto: 17,
+            duration: 1,
             rtt: 3,
             named_pipe: "named_pipe".to_string(),
             endpoint: "endpoint".to_string(),
