@@ -25,6 +25,7 @@ pub enum RequestStreamRecord {
     Kerberos = 7,
     Ssh = 8,
     DceRpc = 9,
+    Pcap = 10,
 }
 
 impl RequestStreamRecord {
@@ -41,6 +42,7 @@ impl RequestStreamRecord {
             RequestStreamRecord::Kerberos => "kerberos",
             RequestStreamRecord::Ssh => "ssh",
             RequestStreamRecord::DceRpc => "dce rpc",
+            RequestStreamRecord::Pcap => "pcap",
         }
     }
 
@@ -59,6 +61,7 @@ impl RequestStreamRecord {
             "kerberos" => Ok(RequestStreamRecord::Kerberos),
             "ssh" => Ok(RequestStreamRecord::Ssh),
             "dce rpc" => Ok(RequestStreamRecord::DceRpc),
+            "pcap" => Ok(RequestStreamRecord::Pcap),
             _ => Err(anyhow!("invalid protocol type")),
         }
     }

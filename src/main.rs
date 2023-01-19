@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
         key.clone(),
         files.clone(),
     );
-    task::spawn(publish_server.run(database.clone()));
+    task::spawn(publish_server.run(database.clone(), packet_sources.clone()));
 
     let ingest_server = ingest::Server::new(settings.ingest_address, cert, key, files);
     ingest_server.run(database, packet_sources, sources).await;

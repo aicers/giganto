@@ -21,6 +21,7 @@ pub trait ResponseRangeData {
 pub enum MessageCode {
     Log = 0,
     PeriodicTimeSeries = 1,
+    Pcap = 2,
 }
 
 pub enum REconvergeKindType {

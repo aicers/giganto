@@ -7,9 +7,21 @@ use self::{
 };
 use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, SendError};
 use anyhow::{anyhow, Context, Result};
-use quinn::{RecvStream, SendStream};
-use serde::{de::DeserializeOwned, Serialize};
-use std::mem;
+use quinn::{Connection, RecvStream, SendStream};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{mem, net::IpAddr};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Pcapfilter {
+    timestamp: i64,
+    pub source: String,
+    src_addr: IpAddr,
+    src_port: u16,
+    dst_addr: IpAddr,
+    dst_port: u16,
+    proto: u8,
+    duration: i64,
+}
 
 /// Sends the stream request to giganto's publish module.
 ///
@@ -266,4 +278,31 @@ where
 {
     let mut buf = Vec::new();
     Ok(frame::recv::<T>(recv, &mut buf).await?)
+}
+
+/// relay pcap extract request & request acknowledge.
+///
+/// # Errors
+///
+/// * `SendError::WriteError` if the message could not be written
+/// * `quinn::ReadExactError`: if the message could not be read
+/// * `RecvError::DeserializationFailure`: if the message could not be
+pub async fn relay_pcap_extract_request(
+    conn: &Connection,
+    filter: &[u8],
+    resp_send: &mut SendStream,
+) -> Result<()> {
+    //open target(piglet) source's channel
+    let (mut send, mut recv) = conn.open_bi().await?;
+
+    // send pacp extract request to piglet
+    send_raw(&mut send, filter).await?;
+
+    // receive pcap extract acknowledge from piglet
+    let mut ack_buf = Vec::new();
+    recv_raw(&mut recv, &mut ack_buf).await?;
+
+    // response pcap extract ack to hog/reconverge
+    send_raw(resp_send, &ack_buf).await?;
+    Ok(())
 }
