@@ -10,12 +10,12 @@ use std::{
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Conn {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
     pub proto: u8,
-    pub service: String,
     pub duration: i64,
+    pub service: String,
     pub orig_bytes: u64,
     pub resp_bytes: u64,
     pub orig_pkts: u64,
@@ -32,8 +32,8 @@ impl Display for Conn {
             self.resp_addr,
             self.resp_port,
             self.proto,
-            self.service,
             convert_time_format(self.duration),
+            self.service,
             self.orig_bytes,
             self.resp_bytes,
             self.orig_pkts,
@@ -54,10 +54,11 @@ impl ResponseRangeData for Conn {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Dns {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
     pub proto: u8,
+    pub duration: i64,
     pub query: String,
     pub answer: Vec<String>,
     pub trans_id: u16,
@@ -197,12 +198,13 @@ impl Display for Dns {
 
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
             self.proto,
+            convert_time_format(self.duration),
             self.query,
             answer,
             self.trans_id,
@@ -230,9 +232,11 @@ impl ResponseRangeData for Dns {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Http {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub method: String,
     pub host: String,
     pub uri: String,
@@ -255,11 +259,13 @@ impl Display for Http {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             if self.method.is_empty() {
                 "-"
             } else {
@@ -339,9 +345,11 @@ impl ResponseRangeData for Http {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Rdp {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub cookie: String,
 }
 
@@ -349,8 +357,14 @@ impl Display for Rdp {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}",
-            self.orig_addr, self.orig_port, self.resp_addr, self.resp_port, self.cookie
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
+            self.cookie
         )
     }
 }
@@ -366,9 +380,11 @@ impl ResponseRangeData for Rdp {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Smtp {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub mailfrom: String,
     pub date: String,
     pub from: String,
@@ -381,11 +397,13 @@ impl Display for Smtp {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             if self.mailfrom.is_empty() {
                 "-"
             } else {
@@ -427,9 +445,11 @@ impl ResponseRangeData for Smtp {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ntlm {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub username: String,
     pub hostname: String,
     pub domainname: String,
@@ -443,11 +463,13 @@ impl Display for Ntlm {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             if self.username.is_empty() {
                 "-"
             } else {
@@ -498,9 +520,11 @@ impl ResponseRangeData for Ntlm {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Kerberos {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub request_type: String,
     pub client: String,
     pub service: String,
@@ -519,11 +543,13 @@ impl Display for Kerberos {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             if self.request_type.is_empty() {
                 "-"
             } else {
@@ -591,9 +617,11 @@ impl ResponseRangeData for Kerberos {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ssh {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub version: i64,
     pub auth_success: String,
     pub auth_attempts: i64,
@@ -612,11 +640,13 @@ impl Display for Ssh {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             self.version,
             if self.auth_success.is_empty() {
                 "-"
@@ -684,9 +714,11 @@ impl ResponseRangeData for Ssh {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DceRpc {
     pub orig_addr: IpAddr,
-    pub resp_addr: IpAddr,
     pub orig_port: u16,
+    pub resp_addr: IpAddr,
     pub resp_port: u16,
+    pub proto: u8,
+    pub duration: i64,
     pub rtt: i64,
     pub named_pipe: String,
     pub endpoint: String,
@@ -697,11 +729,13 @@ impl Display for DceRpc {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.orig_addr,
             self.orig_port,
             self.resp_addr,
             self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
             self.rtt,
             if self.named_pipe.is_empty() {
                 "-"

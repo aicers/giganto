@@ -44,7 +44,7 @@ pub async fn send_record_header(
 /// # Errors
 ///
 /// * `SendError::WriteError` if the message could not be written
-pub async fn send_record_data<T>(
+pub async fn send_event<T>(
     send: &mut SendStream,
     timestamp: i64,
     record_data: T,
@@ -86,9 +86,7 @@ pub async fn receive_record_header(
 /// # Errors
 ///
 /// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_record_data(
-    recv: &mut RecvStream,
-) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
+pub async fn receive_event(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
     let timestamp = i64::from_le_bytes(ts_buf);

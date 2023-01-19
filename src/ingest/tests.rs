@@ -5,7 +5,7 @@ use giganto_client::{
     ingest::{
         log::{Log, OpLogLevel, Oplog},
         network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
-        receive_ack_timestamp, send_record_data, send_record_header,
+        receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         RecordType,
     },
@@ -168,12 +168,12 @@ async fn conn() {
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        service: "-".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
+        service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,
         orig_pkts: 397,
@@ -183,7 +183,7 @@ async fn conn() {
     send_record_header(&mut send_conn, RECORD_TYPE_CONN)
         .await
         .unwrap();
-    send_record_data(&mut send_conn, Utc::now().timestamp_nanos(), conn_body)
+    send_event(&mut send_conn, Utc::now().timestamp_nanos(), conn_body)
         .await
         .unwrap();
 
@@ -206,10 +206,11 @@ async fn dns() {
 
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
+        duration: 1,
         query: "Hello Server".to_string(),
         answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
         trans_id: 1,
@@ -227,7 +228,7 @@ async fn dns() {
     send_record_header(&mut send_dns, RECORD_TYPE_DNS)
         .await
         .unwrap();
-    send_record_data(&mut send_dns, Utc::now().timestamp_nanos(), dns_body)
+    send_event(&mut send_dns, Utc::now().timestamp_nanos(), dns_body)
         .await
         .unwrap();
 
@@ -256,7 +257,7 @@ async fn log() {
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
         .unwrap();
-    send_record_data(&mut send_log, Utc::now().timestamp_nanos(), log_body)
+    send_event(&mut send_log, Utc::now().timestamp_nanos(), log_body)
         .await
         .unwrap();
 
@@ -278,9 +279,11 @@ async fn http() {
 
     let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         method: "POST".to_string(),
         host: "einsis".to_string(),
         uri: "/einsis.gif".to_string(),
@@ -302,7 +305,7 @@ async fn http() {
     send_record_header(&mut send_http, RECORD_TYPE_HTTP)
         .await
         .unwrap();
-    send_record_data(&mut send_http, Utc::now().timestamp_nanos(), http_body)
+    send_event(&mut send_http, Utc::now().timestamp_nanos(), http_body)
         .await
         .unwrap();
 
@@ -324,16 +327,18 @@ async fn rdp() {
 
     let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         cookie: "rdp_test".to_string(),
     };
 
     send_record_header(&mut send_rdp, RECORD_TYPE_RDP)
         .await
         .unwrap();
-    send_record_data(&mut send_rdp, Utc::now().timestamp_nanos(), rdp_body)
+    send_event(&mut send_rdp, Utc::now().timestamp_nanos(), rdp_body)
         .await
         .unwrap();
 
@@ -365,7 +370,7 @@ async fn periodic_time_series() {
     )
     .await
     .unwrap();
-    send_record_data(
+    send_event(
         &mut send_periodic_time_series,
         Utc::now().timestamp_nanos(),
         periodic_time_series_body,
@@ -394,9 +399,11 @@ async fn smtp() {
 
     let smtp_body = Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         mailfrom: "mailfrom".to_string(),
         date: "date".to_string(),
         from: "from".to_string(),
@@ -408,7 +415,7 @@ async fn smtp() {
     send_record_header(&mut send_smtp, RECORD_TYPE_SMTP)
         .await
         .unwrap();
-    send_record_data(&mut send_smtp, Utc::now().timestamp_nanos(), smtp_body)
+    send_event(&mut send_smtp, Utc::now().timestamp_nanos(), smtp_body)
         .await
         .unwrap();
 
@@ -430,9 +437,11 @@ async fn ntlm() {
 
     let ntlm_body = Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
@@ -445,7 +454,7 @@ async fn ntlm() {
     send_record_header(&mut send_ntlm, RECORD_TYPE_NTLM)
         .await
         .unwrap();
-    send_record_data(&mut send_ntlm, Utc::now().timestamp_nanos(), ntlm_body)
+    send_event(&mut send_ntlm, Utc::now().timestamp_nanos(), ntlm_body)
         .await
         .unwrap();
 
@@ -467,9 +476,11 @@ async fn kerberos() {
 
     let kerberos_body = Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         request_type: "req_type".to_string(),
         client: "client".to_string(),
         service: "service".to_string(),
@@ -487,7 +498,7 @@ async fn kerberos() {
     send_record_header(&mut send_kerberos, RECORD_TYPE_KERBEROS)
         .await
         .unwrap();
-    send_record_data(
+    send_event(
         &mut send_kerberos,
         Utc::now().timestamp_nanos(),
         kerberos_body,
@@ -516,9 +527,11 @@ async fn ssh() {
 
     let ssh_body = Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         version: 01,
         auth_success: "auth_success".to_string(),
         auth_attempts: 3,
@@ -536,7 +549,7 @@ async fn ssh() {
     send_record_header(&mut send_ssh, RECORD_TYPE_SSH)
         .await
         .unwrap();
-    send_record_data(&mut send_ssh, Utc::now().timestamp_nanos(), ssh_body)
+    send_event(&mut send_ssh, Utc::now().timestamp_nanos(), ssh_body)
         .await
         .unwrap();
 
@@ -558,9 +571,11 @@ async fn dce_rpc() {
 
     let dce_rpc_body = DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         rtt: 3,
         named_pipe: "named_pipe".to_string(),
         endpoint: "endpoint".to_string(),
@@ -570,7 +585,7 @@ async fn dce_rpc() {
     send_record_header(&mut send_dce_rpc, RECORD_TYPE_DCE_RPC)
         .await
         .unwrap();
-    send_record_data(
+    send_event(
         &mut send_dce_rpc,
         Utc::now().timestamp_nanos(),
         dce_rpc_body,
@@ -607,7 +622,7 @@ async fn oplog() {
     send_record_header(&mut send_oplog, RECORD_TYPE_OPLOG)
         .await
         .unwrap();
-    send_record_data(&mut send_oplog, Utc::now().timestamp_nanos(), oplog_body)
+    send_event(&mut send_oplog, Utc::now().timestamp_nanos(), oplog_body)
         .await
         .unwrap();
 
@@ -639,7 +654,7 @@ async fn ack_info() {
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
         .unwrap();
-    send_record_data(&mut send_log, Utc::now().timestamp_nanos(), log_body)
+    send_event(&mut send_log, Utc::now().timestamp_nanos(), log_body)
         .await
         .unwrap();
 
@@ -651,7 +666,7 @@ async fn ack_info() {
         };
 
         last_timestamp = Utc::now().timestamp_nanos();
-        send_record_data(&mut send_log, last_timestamp, log_body)
+        send_event(&mut send_log, last_timestamp, log_body)
             .await
             .unwrap();
     }
@@ -680,7 +695,7 @@ async fn one_short_reproduce_channel_close() {
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
         .unwrap();
-    send_record_data(
+    send_event(
         &mut send_log,
         CHANNEL_CLOSE_TIMESTAMP,
         CHANNEL_CLOSE_MESSAGE,

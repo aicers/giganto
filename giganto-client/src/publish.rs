@@ -66,6 +66,27 @@ pub async fn send_crusher_stream_start_message(
     Ok(())
 }
 
+/// Sends the record data. (timestamp / source / record structure)
+///
+/// # Errors
+///
+/// * `SendError::WriteError` if the message could not be written
+pub async fn send_record_data<T>(
+    send: &mut SendStream,
+    timestamp: i64,
+    source: String,
+    record_data: T,
+) -> Result<(), SendError>
+where
+    T: Serialize,
+{
+    frame::send_bytes(send, &timestamp.to_le_bytes()).await?;
+    frame::send_raw(send, source.as_bytes()).await?;
+    let mut buf = Vec::new();
+    frame::send(send, &mut buf, record_data).await?;
+    Ok(())
+}
+
 /// Sends the range data request to giganto's publish module.
 ///
 /// # Errors
@@ -167,8 +188,30 @@ pub async fn receive_crusher_stream_start_message(recv: &mut RecvStream) -> Resu
     Ok(start_msg)
 }
 
+/// Receives the record data. (timestamp / source / record structure)
+///
+/// # Errors
+///
+/// * `quinn::ReadExactError`: if the message could not be read
+pub async fn receive_record_data(
+    recv: &mut RecvStream,
+) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
+    let mut ts_buf = [0; std::mem::size_of::<u64>()];
+    frame::recv_bytes(recv, &mut ts_buf).await?;
+    let timestamp = i64::from_le_bytes(ts_buf);
+
+    let mut source_buf = Vec::new();
+    frame::recv_raw(recv, &mut source_buf).await?;
+    let _source = String::from_utf8_lossy(&source_buf).to_string();
+
+    let mut record_buf = Vec::new();
+    frame::recv_raw(recv, &mut record_buf).await?;
+    Ok((record_buf, timestamp))
+}
+
 /// Receives the timestamp/record data from giganto's publish module.
-/// If you want to receive record data and timestamp separately, use `ingest::receive_record_data`
+/// If you want to receive record data, source  and timestamp separately,
+/// use `publish::receive_record_data`
 ///
 /// # Errors
 ///
@@ -177,11 +220,15 @@ pub async fn receive_stream_data(recv: &mut RecvStream) -> Result<Vec<u8>, quinn
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
 
+    let mut source_buf = Vec::new();
+    frame::recv_raw(recv, &mut source_buf).await?;
+
     let mut record_buf = Vec::new();
     frame::recv_raw(recv, &mut record_buf).await?;
 
     let mut result_buf: Vec<u8> = Vec::new();
     result_buf.extend_from_slice(&ts_buf);
+    result_buf.extend_from_slice(&source_buf);
     result_buf.extend_from_slice(&record_buf);
 
     Ok(result_buf)

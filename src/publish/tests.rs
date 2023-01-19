@@ -9,13 +9,12 @@ use giganto_client::{
     ingest::{
         log::Log,
         network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
-        receive_record_data,
         timeseries::PeriodicTimeSeries,
     },
     publish::{
         range::{MessageCode, RequestRange, RequestTimeSeriesRange, ResponseRangeData},
         receive_crusher_stream_start_message, receive_hog_stream_start_message, receive_range_data,
-        send_range_data_request, send_stream_request,
+        receive_record_data, send_range_data_request, send_stream_request,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
     },
 };
@@ -177,12 +176,12 @@ fn gen_conn_raw_event() -> Vec<u8> {
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        service: "-".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
+        service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,
         orig_pkts: 397,
@@ -195,10 +194,11 @@ fn gen_conn_raw_event() -> Vec<u8> {
 fn gen_dns_raw_event() -> Vec<u8> {
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
+        duration: 1,
         query: "Hello Server".to_string(),
         answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
         trans_id: 1,
@@ -219,9 +219,11 @@ fn gen_dns_raw_event() -> Vec<u8> {
 fn gen_rdp_raw_event() -> Vec<u8> {
     let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         cookie: "rdp_test".to_string(),
     };
 
@@ -231,9 +233,11 @@ fn gen_rdp_raw_event() -> Vec<u8> {
 fn gen_http_raw_event() -> Vec<u8> {
     let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         method: "POST".to_string(),
         host: "einsis".to_string(),
         uri: "/einsis.gif".to_string(),
@@ -258,9 +262,11 @@ fn gen_http_raw_event() -> Vec<u8> {
 fn gen_smtp_raw_event() -> Vec<u8> {
     let smtp_body = Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         mailfrom: "google".to_string(),
         date: "2022-11-28".to_string(),
         from: "safe2@einsis.com".to_string(),
@@ -275,9 +281,11 @@ fn gen_smtp_raw_event() -> Vec<u8> {
 fn gen_ntlm_raw_event() -> Vec<u8> {
     let ntlm_body = Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
@@ -293,9 +301,11 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
 fn gen_kerberos_raw_event() -> Vec<u8> {
     let kerberos_body = Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         request_type: "req_type".to_string(),
         client: "client".to_string(),
         service: "service".to_string(),
@@ -316,9 +326,11 @@ fn gen_kerberos_raw_event() -> Vec<u8> {
 fn gen_ssh_raw_event() -> Vec<u8> {
     let ssh_body = Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         version: 01,
         auth_success: "auth_success".to_string(),
         auth_attempts: 3,
@@ -339,9 +351,11 @@ fn gen_ssh_raw_event() -> Vec<u8> {
 fn gen_dce_rpc_raw_event() -> Vec<u8> {
     let dce_rpc_body = DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
+        proto: 17,
+        duration: 1,
         rtt: 3,
         named_pipe: "named_pipe".to_string(),
         endpoint: "endpoint".to_string(),
@@ -1252,7 +1266,7 @@ async fn request_network_event_stream() {
         let send_conn_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "conn");
         let conn_data = gen_conn_raw_event();
-        send_direct_stream(&key, &conn_data, send_conn_time)
+        send_direct_stream(&key, &conn_data, send_conn_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1295,7 +1309,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "conn");
         let conn_data = gen_conn_raw_event();
 
-        send_direct_stream(&key, &conn_data, send_conn_time)
+        send_direct_stream(&key, &conn_data, send_conn_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1330,7 +1344,7 @@ async fn request_network_event_stream() {
         let send_dns_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "dns");
         let dns_data = gen_conn_raw_event();
-        send_direct_stream(&key, &dns_data, send_dns_time)
+        send_direct_stream(&key, &dns_data, send_dns_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1372,7 +1386,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "dns");
         let dns_data = gen_dns_raw_event();
 
-        send_direct_stream(&key, &dns_data, send_dns_time)
+        send_direct_stream(&key, &dns_data, send_dns_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1406,7 +1420,7 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
-        send_direct_stream(&key, &rdp_data, send_rdp_time)
+        send_direct_stream(&key, &rdp_data, send_rdp_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1447,7 +1461,7 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "rdp");
         let rdp_data = gen_rdp_raw_event();
-        send_direct_stream(&key, &rdp_data, send_rdp_time)
+        send_direct_stream(&key, &rdp_data, send_rdp_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1483,7 +1497,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "http");
         let http_data = gen_conn_raw_event();
 
-        send_direct_stream(&key, &http_data, send_http_time)
+        send_direct_stream(&key, &http_data, send_http_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1526,7 +1540,7 @@ async fn request_network_event_stream() {
         let send_http_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "http");
         let http_data = gen_http_raw_event();
-        send_direct_stream(&key, &http_data, send_http_time)
+        send_direct_stream(&key, &http_data, send_http_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1563,7 +1577,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
-        send_direct_stream(&key, &smtp_data, send_smtp_time)
+        send_direct_stream(&key, &smtp_data, send_smtp_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1606,7 +1620,7 @@ async fn request_network_event_stream() {
         let send_smtp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
-        send_direct_stream(&key, &smtp_data, send_smtp_time)
+        send_direct_stream(&key, &smtp_data, send_smtp_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1643,7 +1657,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
-        send_direct_stream(&key, &ntlm_data, send_ntlm_time)
+        send_direct_stream(&key, &ntlm_data, send_ntlm_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1686,7 +1700,7 @@ async fn request_network_event_stream() {
         let send_ntlm_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
-        send_direct_stream(&key, &ntlm_data, send_ntlm_time)
+        send_direct_stream(&key, &ntlm_data, send_ntlm_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1722,7 +1736,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
-        send_direct_stream(&key, &kerberos_data, send_kerberos_time)
+        send_direct_stream(&key, &kerberos_data, send_kerberos_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1766,7 +1780,7 @@ async fn request_network_event_stream() {
         let send_kerberos_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
-        send_direct_stream(&key, &kerberos_data, send_kerberos_time)
+        send_direct_stream(&key, &kerberos_data, send_kerberos_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1802,7 +1816,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
-        send_direct_stream(&key, &ssh_data, send_ssh_time)
+        send_direct_stream(&key, &ssh_data, send_ssh_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1843,7 +1857,7 @@ async fn request_network_event_stream() {
         let send_ssh_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
-        send_direct_stream(&key, &ssh_data, send_ssh_time)
+        send_direct_stream(&key, &ssh_data, send_ssh_time, SOURCE_TWO)
             .await
             .unwrap();
 
@@ -1874,7 +1888,7 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
-        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time)
+        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time, SOURCE_ONE)
             .await
             .unwrap();
 
@@ -1917,7 +1931,7 @@ async fn request_network_event_stream() {
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
-        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time)
+        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time, SOURCE_TWO)
             .await
             .unwrap();
 
