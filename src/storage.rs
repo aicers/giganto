@@ -10,6 +10,7 @@ use giganto_client::ingest::{
     network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     statistics::Statistics,
     timeseries::PeriodicTimeSeries,
+    Packet,
 };
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, DBIteratorWithThreadMode, Options, DB};
@@ -18,7 +19,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 13] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 14] = [
     "conn",
     "dns",
     "log",
@@ -32,6 +33,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 13] = [
     "dce rpc",
     "statistics",
     "oplog",
+    "packet",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -188,6 +190,15 @@ impl Database {
             .db
             .cf_handle("oplog")
             .context("cannot access operation log column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for packet
+    pub fn packet_store(&self) -> Result<RawEventStore<Packet>> {
+        let cf = self
+            .db
+            .cf_handle("packet")
+            .context("cannot access packet column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
