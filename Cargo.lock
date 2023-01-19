@@ -709,6 +709,7 @@ dependencies = [
  "config",
  "directories",
  "futures-util",
+ "giganto-client",
  "humantime",
  "humantime-serde",
  "lazy_static",
@@ -717,7 +718,6 @@ dependencies = [
  "rocksdb",
  "rustls",
  "rustls-pemfile 1.0.1",
- "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -728,6 +728,21 @@ dependencies = [
  "url",
  "warp",
  "x509-parser",
+]
+
+[[package]]
+name = "giganto-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "num_enum",
+ "quinn",
+ "semver",
+ "serde",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

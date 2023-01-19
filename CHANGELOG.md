@@ -14,6 +14,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Modify module name `ingestion` to `ingest`.
+- Create giganto's communication part as a separate crate.
 
 ## [0.7.0] - 2023-01-04
 

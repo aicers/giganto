@@ -1,5 +1,4 @@
-use crate::publish::PubMessage;
-use crate::{ingest::EventFilter, publish::convert_time_format};
+use crate::{convert_time_format, publish::range::ResponseRangeData};
 use anyhow::Result;
 use num_enum::FromPrimitive;
 use serde::{Deserialize, Serialize};
@@ -23,27 +22,6 @@ pub struct Conn {
     pub resp_pkts: u64,
 }
 
-impl EventFilter for Conn {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
-}
-
 impl Display for Conn {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
@@ -64,14 +42,11 @@ impl Display for Conn {
     }
 }
 
-impl PubMessage for Conn {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Conn {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let conn_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &conn_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &conn_csv.as_bytes())))
     }
 }
 
@@ -99,7 +74,7 @@ pub struct Dns {
 
 #[derive(Debug, FromPrimitive)]
 #[repr(u16)]
-pub(crate) enum Qclass {
+pub enum Qclass {
     CInternet = 1,
     #[num_enum(default)]
     Unknown,
@@ -116,7 +91,7 @@ impl Display for Qclass {
 
 #[derive(Debug, FromPrimitive)]
 #[repr(u16)]
-pub(crate) enum Qtype {
+pub enum Qtype {
     A = 1,
     Ns,
     Md,
@@ -196,27 +171,6 @@ impl Display for Qtype {
     }
 }
 
-impl EventFilter for Dns {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
-}
-
 impl Display for Dns {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let answer = if self.answer.is_empty() {
@@ -265,11 +219,11 @@ impl Display for Dns {
     }
 }
 
-impl PubMessage for Dns {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Dns {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let dns_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))?)
+        bincode::serialize(&Some((timestamp, &dns_csv.as_bytes())))
     }
 }
 
@@ -295,27 +249,6 @@ pub struct Http {
     pub content_encoding: String,
     pub content_type: String,
     pub cache_control: String,
-}
-
-impl EventFilter for Http {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for Http {
@@ -395,14 +328,11 @@ impl Display for Http {
     }
 }
 
-impl PubMessage for Http {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Http {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let http_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &http_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &http_csv.as_bytes())))
     }
 }
 
@@ -415,27 +345,6 @@ pub struct Rdp {
     pub cookie: String,
 }
 
-impl EventFilter for Rdp {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
-}
-
 impl Display for Rdp {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
@@ -446,11 +355,11 @@ impl Display for Rdp {
     }
 }
 
-impl PubMessage for Rdp {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Rdp {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let rdp_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))?)
+        bincode::serialize(&Some((timestamp, &rdp_csv.as_bytes())))
     }
 }
 
@@ -466,27 +375,6 @@ pub struct Smtp {
     pub to: String,
     pub subject: String,
     pub agent: String,
-}
-
-impl EventFilter for Smtp {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for Smtp {
@@ -528,14 +416,11 @@ impl Display for Smtp {
     }
 }
 
-impl PubMessage for Smtp {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Smtp {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let smtp_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &smtp_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &smtp_csv.as_bytes())))
     }
 }
 
@@ -552,27 +437,6 @@ pub struct Ntlm {
     pub server_dns_computer_name: String,
     pub server_tree_name: String,
     pub success: String,
-}
-
-impl EventFilter for Ntlm {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for Ntlm {
@@ -623,14 +487,11 @@ impl Display for Ntlm {
     }
 }
 
-impl PubMessage for Ntlm {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Ntlm {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let ntlm_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &ntlm_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &ntlm_csv.as_bytes())))
     }
 }
 
@@ -652,27 +513,6 @@ pub struct Kerberos {
     pub renewable: String,
     pub client_cert_subject: String,
     pub server_cert_subject: String,
-}
-
-impl EventFilter for Kerberos {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for Kerberos {
@@ -740,14 +580,11 @@ impl Display for Kerberos {
     }
 }
 
-impl PubMessage for Kerberos {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Kerberos {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let kerberos_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &kerberos_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &kerberos_csv.as_bytes())))
     }
 }
 
@@ -769,27 +606,6 @@ pub struct Ssh {
     pub kex_alg: String,
     pub host_key_alg: String,
     pub host_key: String,
-}
-
-impl EventFilter for Ssh {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for Ssh {
@@ -857,11 +673,11 @@ impl Display for Ssh {
     }
 }
 
-impl PubMessage for Ssh {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for Ssh {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let ssh_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((timestamp, &ssh_csv.as_bytes())))?)
+        bincode::serialize(&Some((timestamp, &ssh_csv.as_bytes())))
     }
 }
 
@@ -875,27 +691,6 @@ pub struct DceRpc {
     pub named_pipe: String,
     pub endpoint: String,
     pub operation: String,
-}
-
-impl EventFilter for DceRpc {
-    fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.orig_addr)
-    }
-    fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.resp_addr)
-    }
-    fn orig_port(&self) -> Option<u16> {
-        Some(self.orig_port)
-    }
-    fn resp_port(&self) -> Option<u16> {
-        Some(self.resp_port)
-    }
-    fn log_level(&self) -> Option<String> {
-        None
-    }
-    fn log_contents(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Display for DceRpc {
@@ -927,13 +722,10 @@ impl Display for DceRpc {
     }
 }
 
-impl PubMessage for DceRpc {
-    fn message(&self, timestamp: i64, source: &str) -> Result<Vec<u8>> {
+impl ResponseRangeData for DceRpc {
+    fn response_data(&self, timestamp: i64, source: &str) -> Result<Vec<u8>, bincode::Error> {
         let dce_rpc_csv = format!("{}\t{source}\t{self}", convert_time_format(timestamp));
 
-        Ok(bincode::serialize(&Some((
-            timestamp,
-            &dce_rpc_csv.as_bytes(),
-        )))?)
+        bincode::serialize(&Some((timestamp, &dce_rpc_csv.as_bytes())))
     }
 }

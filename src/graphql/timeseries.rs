@@ -1,7 +1,6 @@
 use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    ingest,
     storage::Database,
 };
 use async_graphql::{
@@ -9,6 +8,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
@@ -50,8 +50,8 @@ struct TimeSeries {
     data: Vec<f64>,
 }
 
-impl FromKeyValue<ingest::PeriodicTimeSeries> for TimeSeries {
-    fn from_key_value(key: &[u8], p: ingest::PeriodicTimeSeries) -> Result<Self> {
+impl FromKeyValue<PeriodicTimeSeries> for TimeSeries {
+    fn from_key_value(key: &[u8], p: PeriodicTimeSeries) -> Result<Self> {
         Ok(TimeSeries {
             start: get_timestamp(key)?,
             id: p.id,
@@ -93,8 +93,8 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::ingest::PeriodicTimeSeries;
     use crate::{graphql::TestSchema, storage::RawEventStore};
+    use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
     #[tokio::test]
     async fn time_series_empty() {

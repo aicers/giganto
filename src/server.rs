@@ -1,8 +1,7 @@
 use anyhow::{bail, Context, Result};
-use quinn::{Connection, RecvStream, SendStream, ServerConfig};
+use quinn::{Connection, ServerConfig};
 use rustls::{Certificate, PrivateKey};
-use semver::{Version, VersionReq};
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 use tracing::info;
 use x509_parser::nom::Parser;
 
@@ -64,45 +63,4 @@ pub fn certificate_info(connection: &Connection) -> Result<String> {
         .context("the subject of the certificate is not valid")?;
     info!("Connected Client Name : {}", subject);
     Ok(String::from(subject))
-}
-
-#[allow(clippy::module_name_repetitions)]
-pub async fn server_handshake(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
-    std_version: &str,
-) -> Result<()> {
-    let mut version_len = [0; mem::size_of::<u64>()];
-    recv.read_exact(&mut version_len).await?;
-    let len = u64::from_le_bytes(version_len);
-
-    let mut version_buf = Vec::new();
-    version_buf.resize(len.try_into()?, 0);
-    recv.read_exact(version_buf.as_mut_slice()).await?;
-
-    let version =
-        Version::parse(&String::from_utf8(version_buf).context("invalid byte conversion")?)?;
-    let req_version = VersionReq::parse(std_version)?;
-
-    if req_version.matches(&version) {
-        send.write_all(&handshake_buffer(Some(env!("CARGO_PKG_VERSION")))?)
-            .await?;
-        info!("Compatible Version");
-    } else {
-        send.write_all(&handshake_buffer(None)?).await?;
-        bail!("Incompatible version")
-    }
-
-    Ok(())
-}
-
-fn handshake_buffer(resp: Option<&str>) -> Result<Vec<u8>> {
-    let resp_data = bincode::serialize::<Option<&str>>(&resp)?;
-    let resp_data_len = u64::try_from(resp_data.len())
-        .context("less than u64::MAX")?
-        .to_le_bytes();
-    let mut resp_buf = Vec::with_capacity(resp_data_len.len() + resp_data.len());
-    resp_buf.extend(resp_data_len);
-    resp_buf.extend(resp_data);
-    Ok(resp_buf)
 }
