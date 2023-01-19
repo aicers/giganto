@@ -23,12 +23,13 @@ use quinn::{Connection, Endpoint, SendStream};
 use serde::Serialize;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 lazy_static! {
     pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
@@ -494,7 +495,8 @@ async fn request_range_data_with_protocol() {
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db.clone()));
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources));
     let publish = TestClient::new().await;
 
     // conn protocol
@@ -1062,7 +1064,8 @@ async fn request_range_data_with_log() {
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db.clone()));
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1136,7 +1139,8 @@ async fn request_range_data_with_period_time_series() {
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
-    tokio::spawn(server().run(db.clone()));
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1239,7 +1243,8 @@ async fn request_network_event_stream() {
         des_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
         source: Some(String::from(SOURCE_TWO)),
     };
-    tokio::spawn(server().run(db.clone()));
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources));
     let mut publish = TestClient::new().await;
 
     {

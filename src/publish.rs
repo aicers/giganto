@@ -5,7 +5,7 @@ mod tests;
 use self::implement::{RequestRangeMessage, RequestStreamMessage};
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingest::implement::EventFilter;
-use crate::ingest::NetworkKey;
+use crate::ingest::{NetworkKey, PacketSources};
 use crate::server::{certificate_info, config_server};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
@@ -21,8 +21,9 @@ use giganto_client::publish::stream::{
     NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord,
 };
 use giganto_client::publish::{
-    receive_range_data_request, receive_stream_request, send_crusher_stream_start_message,
-    send_hog_stream_start_message, send_range_data, send_record_data,
+    receive_range_data_request, receive_stream_request, relay_pcap_extract_request,
+    send_crusher_stream_start_message, send_hog_stream_start_message, send_range_data,
+    send_record_data, Pcapfilter,
 };
 use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -65,7 +66,7 @@ impl Server {
         }
     }
 
-    pub async fn run(self, db: Database) {
+    pub async fn run(self, db: Database, packet_sources: PacketSources) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
@@ -74,8 +75,9 @@ impl Server {
 
         while let Some(conn) = endpoint.accept().await {
             let db = db.clone();
+            let packet_sources = packet_sources.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db).await {
+                if let Err(e) = handle_connection(conn, db, packet_sources).await {
                     error!("connection failed: {}", e);
                 }
             });
@@ -83,13 +85,17 @@ impl Server {
     }
 }
 
-async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> {
+async fn handle_connection(
+    conn: quinn::Connecting,
+    db: Database,
+    packet_sources: PacketSources,
+) -> Result<()> {
     let connection = conn.await?;
 
-    let recv = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
-        Ok((_, recv)) => {
+    let (send, recv) = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
+        Ok((send, recv)) => {
             info!("Compatible version");
-            recv
+            (send, recv)
         }
         Err(e) => {
             info!("Incompatible version");
@@ -99,7 +105,14 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
     };
 
     let source = certificate_info(&connection)?;
-    tokio::spawn(request_stream(connection.clone(), db.clone(), recv, source));
+    tokio::spawn(request_stream(
+        connection.clone(),
+        db.clone(),
+        send,
+        recv,
+        source,
+        packet_sources.clone(),
+    ));
 
     async {
         loop {
@@ -115,8 +128,9 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
             };
 
             let db = db.clone();
+            let packet_sources = packet_sources.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_request(stream, db).await {
+                if let Err(e) = handle_request(stream, db, packet_sources).await {
                     error!("failed: {}", e);
                 }
             });
@@ -129,8 +143,10 @@ async fn handle_connection(conn: quinn::Connecting, db: Database) -> Result<()> 
 async fn request_stream(
     connection: Connection,
     stream_db: Database,
+    mut send: SendStream,
     mut recv: RecvStream,
     conn_source: String,
+    packet_sources: PacketSources,
 ) -> Result<()> {
     loop {
         match receive_stream_request(&mut recv).await {
@@ -138,51 +154,81 @@ async fn request_stream(
                 let db = stream_db.clone();
                 let conn = connection.clone();
                 let source = conn_source.clone();
-                tokio::spawn(async move {
-                    match node_type {
-                        NodeType::Hog => {
-                            match bincode::deserialize::<RequestHogStream>(&raw_data) {
-                                Ok(msg) => {
-                                    if let Err(e) = process_stream(
-                                        db,
-                                        conn,
-                                        Some(source),
-                                        node_type,
-                                        record_type,
-                                        msg,
-                                    )
-                                    .await
-                                    {
-                                        error!("{}", e);
+                if record_type == RequestStreamRecord::Pcap {
+                    process_pcap_extract(&raw_data, packet_sources.clone(), &mut send).await?;
+                } else {
+                    tokio::spawn(async move {
+                        match node_type {
+                            NodeType::Hog => {
+                                match bincode::deserialize::<RequestHogStream>(&raw_data) {
+                                    Ok(msg) => {
+                                        if let Err(e) = process_stream(
+                                            db,
+                                            conn,
+                                            Some(source),
+                                            node_type,
+                                            record_type,
+                                            msg,
+                                        )
+                                        .await
+                                        {
+                                            error!("{}", e);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Failed to deserialize hog message");
                                     }
                                 }
-                                Err(_) => {
-                                    error!("Failed to deserialize hog message");
+                            }
+                            NodeType::Crusher => {
+                                match bincode::deserialize::<RequestCrusherStream>(&raw_data) {
+                                    Ok(msg) => {
+                                        if let Err(e) = process_stream(
+                                            db,
+                                            conn,
+                                            None,
+                                            node_type,
+                                            record_type,
+                                            msg,
+                                        )
+                                        .await
+                                        {
+                                            error!("{}", e);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Failed to deserialize crusher message");
+                                    }
                                 }
                             }
                         }
-                        NodeType::Crusher => {
-                            match bincode::deserialize::<RequestCrusherStream>(&raw_data) {
-                                Ok(msg) => {
-                                    if let Err(e) =
-                                        process_stream(db, conn, None, node_type, record_type, msg)
-                                            .await
-                                    {
-                                        error!("{}", e);
-                                    }
-                                }
-                                Err(_) => {
-                                    error!("Failed to deserialize crusher message");
-                                }
-                            }
-                        }
-                    }
-                });
+                    });
+                }
             }
             Err(e) => {
                 error!("{}", e);
                 break;
             }
+        }
+    }
+    Ok(())
+}
+
+async fn process_pcap_extract(
+    filter_data: &[u8],
+    packet_sources: PacketSources,
+    resp_send: &mut SendStream,
+) -> Result<()> {
+    let filters = bincode::deserialize::<Vec<Pcapfilter>>(filter_data)?;
+    for filter in filters {
+        if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
+            // deserialize pcapfilter data
+            let pcap_filter = bincode::serialize::<Pcapfilter>(&filter)?;
+
+            // send/receive extract request from piglet & response acknowledge to hog/reconverge
+            relay_pcap_extract_request(source_conn, &pcap_filter, resp_send).await?;
+        } else {
+            error!("Failed to get {}'s connection", filter.source);
         }
     }
     Ok(())
@@ -311,6 +357,7 @@ where
                 error!("Failed to open dce rpc store");
             }
         }
+        RequestStreamRecord::Pcap => {}
     };
     Ok(())
 }
@@ -432,6 +479,7 @@ where
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
+    packet_sources: PacketSources,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
@@ -543,6 +591,9 @@ async fn handle_request(
                 false,
             )
             .await?;
+        }
+        MessageCode::Pcap => {
+            process_pcap_extract(&msg_buf, packet_sources.clone(), &mut send).await?;
         }
     }
     Ok(())
