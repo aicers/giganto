@@ -24,6 +24,13 @@ pub enum RecordType {
     DceRpc = 10,
     Statistics = 11,
     Oplog = 12,
+    Packet = 13,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Packet {
+    pub packet_timestamp: i64,
+    pub packet: String,
 }
 
 /// Sends the record type. (`RecordType`)

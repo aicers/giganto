@@ -13,7 +13,7 @@ use giganto_client::frame;
 use giganto_client::ingest::log::{Log, Oplog};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use giganto_client::ingest::{
-    receive_event, receive_record_header, send_ack_timestamp, RecordType,
+    receive_event, receive_record_header, send_ack_timestamp, Packet, RecordType,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
@@ -313,6 +313,17 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Packet => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Packet,
+                Some(gen_network_key(&source, "packet")),
+                source,
+                db.packet_store()?,
+            )
+            .await?;
+        }
     };
     Ok(())
 }
@@ -395,6 +406,12 @@ async fn handle_data<T>(
                         key.extend_from_slice(agent_id.as_bytes());
                         key.push(0);
                         key.extend_from_slice(&timestamp.to_be_bytes());
+                    }
+                    RecordType::Packet => {
+                        let packet = bincode::deserialize::<Packet>(&raw_event)?;
+                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        key.push(0);
+                        key.extend_from_slice(&packet.packet_timestamp.to_be_bytes());
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
