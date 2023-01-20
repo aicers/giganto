@@ -30,7 +30,7 @@ pub enum RecordType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Packet {
     pub packet_timestamp: i64,
-    pub packet: String,
+    pub packet: Vec<u8>,
 }
 
 /// Sends the record type. (`RecordType`)

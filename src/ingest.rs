@@ -2,14 +2,12 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use crate::graphql::network::NetworkFilter;
 use crate::publish::send_direct_stream;
 use crate::server::{certificate_info, config_server};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::connection::server_handshake;
-use giganto_client::frame;
 use giganto_client::ingest::log::{Log, Oplog};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use giganto_client::ingest::{
@@ -441,18 +439,6 @@ async fn handle_data<T>(
     }
 
     Ok(())
-}
-
-pub async fn request_packets(
-    connection: &quinn::Connection,
-    filter: NetworkFilter,
-) -> Result<Vec<String>> {
-    let (mut send, mut recv) = connection.open_bi().await?;
-
-    let mut buf = Vec::new();
-    frame::send(&mut send, &mut buf, &filter).await?;
-    let packets = frame::recv::<Vec<String>>(&mut recv, &mut buf).await?;
-    Ok(packets)
 }
 
 async fn check_sources_conn(

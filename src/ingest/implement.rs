@@ -2,6 +2,7 @@ use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
     network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     timeseries::PeriodicTimeSeries,
+    Packet,
 };
 use std::net::IpAddr;
 
@@ -250,6 +251,27 @@ impl EventFilter for Oplog {
 }
 
 impl EventFilter for PeriodicTimeSeries {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Packet {
     fn orig_addr(&self) -> Option<IpAddr> {
         None
     }
