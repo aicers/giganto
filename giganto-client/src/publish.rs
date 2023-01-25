@@ -5,11 +5,57 @@ use self::{
     range::{MessageCode, ResponseRangeData},
     stream::{NodeType, RequestStreamRecord},
 };
-use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, SendError};
-use anyhow::{anyhow, Context, Result};
-use quinn::{Connection, RecvStream, SendStream};
+use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, RecvError, SendError};
+use anyhow::Result;
+use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{mem, net::IpAddr};
+use thiserror::Error;
+
+/// The error type for a publish failure.
+#[allow(clippy::module_name_repetitions)]
+#[derive(Debug, Error)]
+pub enum PublishError {
+    #[error("Connection closed by peer")]
+    ConnectionClosed,
+    #[error("Connection lost")]
+    ConnectionLost(#[from] ConnectionError),
+    #[error("Cannot receive a publish message")]
+    ReadError(#[from] quinn::ReadError),
+    #[error("Cannot send a publish message")]
+    WriteError(#[from] quinn::WriteError),
+    #[error("Cannot serialize/deserialize a publish message")]
+    SerialDeserialFailure(#[from] bincode::Error),
+    #[error("Message is too large, so type casting failed")]
+    MessageTooLarge,
+    #[error("Invalid message type")]
+    InvalidMessageType,
+    #[error("Invalid message data")]
+    InvalidMessageData,
+}
+
+impl From<frame::RecvError> for PublishError {
+    fn from(e: frame::RecvError) -> Self {
+        match e {
+            RecvError::DeserializationFailure(e) => PublishError::SerialDeserialFailure(e),
+            RecvError::ReadError(e) => match e {
+                quinn::ReadExactError::FinishedEarly => PublishError::ConnectionClosed,
+                quinn::ReadExactError::ReadError(e) => PublishError::ReadError(e),
+            },
+            RecvError::MessageTooLarge(_) => PublishError::MessageTooLarge,
+        }
+    }
+}
+
+impl From<frame::SendError> for PublishError {
+    fn from(e: frame::SendError) -> Self {
+        match e {
+            SendError::SerializationFailure(e) => PublishError::SerialDeserialFailure(e),
+            SendError::MessageTooLarge(_) => PublishError::MessageTooLarge,
+            SendError::WriteError(e) => PublishError::WriteError(e),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pcapfilter {
@@ -27,13 +73,15 @@ pub struct Pcapfilter {
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::SerialDeserialFailure`: if the stream-request data could not be serialized
+/// * `PublishError::MessageTooLarge`: if the stream-request data is too large
+/// * `PublishError::WriteError`: if the stream-request data could not be written
 pub async fn send_stream_request<T>(
     send: &mut SendStream,
     record_type: RequestStreamRecord,
     node_type: NodeType,
     msg: T,
-) -> Result<(), SendError>
+) -> Result<(), PublishError>
 where
     T: Serialize,
 {
@@ -55,11 +103,11 @@ where
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::WriteError`: if the hog's stream start message could not be written
 pub async fn send_hog_stream_start_message(
     send: &mut SendStream,
     start_msg: RequestStreamRecord,
-) -> Result<(), SendError> {
+) -> Result<(), PublishError> {
     let record: u32 = start_msg.into();
     send_bytes(send, &record.to_le_bytes()).await?;
     Ok(())
@@ -69,11 +117,12 @@ pub async fn send_hog_stream_start_message(
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::MessageTooLarge`: if the crusher's stream start message is too large
+/// * `PublishError::WriteError`: if the crusher's stream start message could not be written
 pub async fn send_crusher_stream_start_message(
     send: &mut SendStream,
     start_msg: String,
-) -> Result<(), SendError> {
+) -> Result<(), PublishError> {
     send_raw(send, start_msg.as_bytes()).await?;
     Ok(())
 }
@@ -82,13 +131,15 @@ pub async fn send_crusher_stream_start_message(
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::SerialDeserialFailure`: if the stream record data could not be serialized
+/// * `PublishError::MessageTooLarge`: if the  stream record data is too large
+/// * `PublishError::WriteError`: if the stream record data could not be written
 pub async fn send_record_data<T>(
     send: &mut SendStream,
     timestamp: i64,
     source: String,
     record_data: T,
-) -> Result<(), SendError>
+) -> Result<(), PublishError>
 where
     T: Serialize,
 {
@@ -103,12 +154,14 @@ where
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::SerialDeserialFailure`: if the range-request data could not be serialized
+/// * `PublishError::MessageTooLarge`: if the range-request data is too large
+/// * `PublishError::WriteError`: if the range-request data could not be written
 pub async fn send_range_data_request<T>(
     send: &mut SendStream,
     msg: MessageCode,
     request: T,
-) -> Result<(), SendError>
+) -> Result<(), PublishError>
 where
     T: Serialize,
 {
@@ -126,18 +179,21 @@ where
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `PublishError::SerialDeserialFailure`: if the range data could not be serialized
+/// * `PublishError::MessageTooLarge`: if the range data is too large
+/// * `PublishError::WriteError`: if the range data could not be written
 pub async fn send_range_data<T>(
     send: &mut SendStream,
     data: Option<(T, i64, &str)>,
-) -> Result<(), SendError>
+) -> Result<(), PublishError>
 where
     T: ResponseRangeData,
 {
     let send_buf = if let Some((val, timestamp, source)) = data {
-        val.response_data(timestamp, source)?
+        val.response_data(timestamp, source)
+            .map_err(PublishError::SerialDeserialFailure)?
     } else {
-        T::response_done()?
+        T::response_done().map_err(PublishError::SerialDeserialFailure)?
     };
     send_raw(send, &send_buf).await?;
     Ok(())
@@ -147,30 +203,27 @@ where
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
+/// * `PublishError::ReadError`: if the stream-request data could not be read
+/// * `PublishError::InvalidMessageType`: if the stream-request data could not be converted to valid type
+/// * `PublishError::InvalidMessageData`: if the stream-request data could not be converted to valid data
 pub async fn receive_stream_request(
     recv: &mut RecvStream,
-) -> Result<(NodeType, RequestStreamRecord, Vec<u8>)> {
+) -> Result<(NodeType, RequestStreamRecord, Vec<u8>), PublishError> {
     // receive node type
     let mut node_buf = [0; mem::size_of::<u8>()];
-    recv_bytes(recv, &mut node_buf)
-        .await
-        .map_err(|e| anyhow!("Failed to read Node Type: {}", e))?;
-    let node_type = NodeType::try_from(u8::from_le_bytes(node_buf)).context("unknown Node type")?;
+    recv_bytes(recv, &mut node_buf).await?;
+    let node_type = NodeType::try_from(u8::from_le_bytes(node_buf))
+        .map_err(|_| PublishError::InvalidMessageType)?;
 
     // receive record type
     let mut record_buf = [0; mem::size_of::<u32>()];
-    recv_bytes(recv, &mut record_buf)
-        .await
-        .map_err(|e| anyhow!("Failed to read record type: {}", e))?;
+    recv_bytes(recv, &mut record_buf).await?;
     let record_type = RequestStreamRecord::try_from(u32::from_le_bytes(record_buf))
-        .context("unknown record type")?;
+        .map_err(|_| PublishError::InvalidMessageType)?;
 
     // receive request info
     let mut buf = Vec::new();
-    recv_raw(recv, &mut buf)
-        .await
-        .map_err(|e| anyhow!("Failed to read request info: {}", e))?;
+    recv_raw(recv, &mut buf).await?;
     Ok((node_type, record_type, buf))
 }
 
@@ -178,13 +231,15 @@ pub async fn receive_stream_request(
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
+/// * `PublishError::ReadError`: if the hog's stream start data could not be read
+/// * `PublishError::InvalidMessageType`: if the hog's stream start data could not be converted to valid type
 pub async fn receive_hog_stream_start_message(
     recv: &mut RecvStream,
-) -> Result<RequestStreamRecord> {
+) -> Result<RequestStreamRecord, PublishError> {
     let mut record_buf = [0; mem::size_of::<u32>()];
     recv_bytes(recv, &mut record_buf).await?;
-    let start_msg = RequestStreamRecord::try_from(u32::from_le_bytes(record_buf))?;
+    let start_msg = RequestStreamRecord::try_from(u32::from_le_bytes(record_buf))
+        .map_err(|_| PublishError::InvalidMessageType)?;
     Ok(start_msg)
 }
 
@@ -192,11 +247,17 @@ pub async fn receive_hog_stream_start_message(
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_crusher_stream_start_message(recv: &mut RecvStream) -> Result<u32> {
+/// * `PublishError::ReadError`: if the crusher's stream start data could not be read
+/// * `PublishError::InvalidMessageData`: if the crusher's stream start data could not be converted to valid data
+pub async fn receive_crusher_stream_start_message(
+    recv: &mut RecvStream,
+) -> Result<u32, PublishError> {
     let mut buf = Vec::new();
     recv_raw(recv, &mut buf).await?;
-    let start_msg = String::from_utf8(buf)?.parse::<u32>()?;
+    let start_msg = String::from_utf8(buf)
+        .map_err(|_| PublishError::InvalidMessageData)?
+        .parse::<u32>()
+        .map_err(|_| PublishError::InvalidMessageData)?;
     Ok(start_msg)
 }
 
@@ -204,10 +265,8 @@ pub async fn receive_crusher_stream_start_message(recv: &mut RecvStream) -> Resu
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_record_data(
-    recv: &mut RecvStream,
-) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
+/// * `PublishError::ReadError`: if the stream record data could not be read
+pub async fn receive_record_data(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), PublishError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
     let timestamp = i64::from_le_bytes(ts_buf);
@@ -227,8 +286,8 @@ pub async fn receive_record_data(
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_stream_data(recv: &mut RecvStream) -> Result<Vec<u8>, quinn::ReadExactError> {
+/// * `PublishError::ReadError`: if the stream record data could not be read
+pub async fn receive_stream_data(recv: &mut RecvStream) -> Result<Vec<u8>, PublishError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
 
@@ -250,20 +309,20 @@ pub async fn receive_stream_data(recv: &mut RecvStream) -> Result<Vec<u8>, quinn
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_range_data_request(recv: &mut RecvStream) -> Result<(MessageCode, Vec<u8>)> {
+/// * `PublishError::ReadError`: if the range data could not be read
+/// * `PublishError::InvalidMessageType`: if the range data could not be converted to valid type
+pub async fn receive_range_data_request(
+    recv: &mut RecvStream,
+) -> Result<(MessageCode, Vec<u8>), PublishError> {
     // receive message code
     let mut buf = [0; mem::size_of::<u32>()];
-    recv_bytes(recv, &mut buf)
-        .await
-        .map_err(|e| anyhow!("Failed to read message code: {}", e))?;
-    let msg_type = MessageCode::try_from(u32::from_le_bytes(buf)).context("unknown record type")?;
+    recv_bytes(recv, &mut buf).await?;
+    let msg_type = MessageCode::try_from(u32::from_le_bytes(buf))
+        .map_err(|_| PublishError::InvalidMessageType)?;
 
     // receive request info
     let mut buf = Vec::new();
-    recv_raw(recv, &mut buf)
-        .await
-        .map_err(|e| anyhow!("Failed to read request info: {}", e))?;
+    recv_raw(recv, &mut buf).await?;
     Ok((msg_type, buf))
 }
 
@@ -271,8 +330,10 @@ pub async fn receive_range_data_request(recv: &mut RecvStream) -> Result<(Messag
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_range_data<T>(recv: &mut RecvStream) -> Result<T>
+/// * `PublishError::SerialDeserialFailure`: if the range data could not be
+///   deserialized
+/// * `PublishError::ReadError`: if the range data could not be read
+pub async fn receive_range_data<T>(recv: &mut RecvStream) -> Result<T, PublishError>
 where
     T: DeserializeOwned,
 {
@@ -284,14 +345,15 @@ where
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
-/// * `quinn::ReadExactError`: if the message could not be read
-/// * `RecvError::DeserializationFailure`: if the message could not be
+/// * `PublishError::ConnectionLost`: if quinn connection is lost
+/// * `PublishError::MessageTooLarge`: if the extract request data is too large
+/// * `PublishError::WriteError`: if the extract request/request ack data could not be written
+/// * `PublishError::ReadError`: if the extract request data could not be read
 pub async fn relay_pcap_extract_request(
     conn: &Connection,
     filter: &[u8],
     resp_send: &mut SendStream,
-) -> Result<()> {
+) -> Result<(), PublishError> {
     //open target(piglet) source's channel
     let (mut send, mut recv) = conn.open_bi().await?;
 

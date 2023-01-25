@@ -8,6 +8,7 @@ use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::connection::server_handshake;
+use giganto_client::frame::RecvError;
 use giganto_client::ingest::log::{Log, Oplog};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use giganto_client::ingest::{
@@ -427,7 +428,7 @@ async fn handle_data<T>(
                     }
                 }
             }
-            Err(quinn::ReadExactError::FinishedEarly) => {
+            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
                 handler.abort();
                 break;
             }

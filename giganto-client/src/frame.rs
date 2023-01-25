@@ -8,22 +8,22 @@ use thiserror::Error;
 /// The error type for receiving and deserializing a frame.
 #[derive(Debug, Error)]
 pub enum RecvError {
-    #[error("failed deserializing message")]
+    #[error("Failed deserializing message")]
     DeserializationFailure(#[from] bincode::Error),
-    #[error("failed to read from a stream")]
+    #[error("Receive message is too large, so type casting failed")]
+    MessageTooLarge(#[from] TryFromIntError),
+    #[error("Failed to read from a stream")]
     ReadError(#[from] quinn::ReadExactError),
-    #[error("failed to cast from receive buffer data")]
-    CastError(#[from] TryFromIntError),
 }
 
 /// The error type for sending a message as a frame.
 #[derive(Debug, Error)]
 pub enum SendError {
-    #[error("failed serializing message")]
+    #[error("Failed serializing message")]
     SerializationFailure(#[from] bincode::Error),
-    #[error("message is too large")]
+    #[error("Send message is too large, so type casting failed")]
     MessageTooLarge(#[from] TryFromIntError),
-    #[error("failed to write to a stream")]
+    #[error("Failed to write to a stream")]
     WriteError(#[from] quinn::WriteError),
 }
 
@@ -52,11 +52,8 @@ where
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn recv_raw<'b>(
-    recv: &mut RecvStream,
-    buf: &mut Vec<u8>,
-) -> Result<(), quinn::ReadExactError> {
+/// * `RecvError::ReadError`: if the message could not be read
+pub async fn recv_raw<'b>(recv: &mut RecvStream, buf: &mut Vec<u8>) -> Result<(), RecvError> {
     let mut len_buf = [0; mem::size_of::<u32>()];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
@@ -72,7 +69,8 @@ pub async fn recv_raw<'b>(
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
+/// * `RecvError::ReadError`: if the message could not be read
+/// * `RecvError::MessageTooLarge`: if the message is too large
 pub async fn recv_handshake<'b>(recv: &mut RecvStream, buf: &mut Vec<u8>) -> Result<(), RecvError> {
     let mut len_buf = [0; mem::size_of::<u64>()];
     recv.read_exact(&mut len_buf).await?;
@@ -86,11 +84,8 @@ pub async fn recv_handshake<'b>(recv: &mut RecvStream, buf: &mut Vec<u8>) -> Res
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn recv_bytes<'b>(
-    recv: &mut RecvStream,
-    buf: &mut [u8],
-) -> Result<(), quinn::ReadExactError> {
+/// * `RecvError::ReadError`: if the message could not be read
+pub async fn recv_bytes<'b>(recv: &mut RecvStream, buf: &mut [u8]) -> Result<(), RecvError> {
     recv.read_exact(buf).await?;
     Ok(())
 }

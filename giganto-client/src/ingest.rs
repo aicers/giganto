@@ -3,7 +3,7 @@ pub mod network;
 pub mod statistics;
 pub mod timeseries;
 
-use crate::frame::{self, SendError};
+use crate::frame::{self, RecvError, SendError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub struct Packet {
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `SendError::WriteError` if the record header could not be written
 pub async fn send_record_header(
     send: &mut SendStream,
     record_type: RecordType,
@@ -50,7 +50,9 @@ pub async fn send_record_header(
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `SendError::SerializationFailure`: if the event data could not be serialized
+/// * `SendError::MessageTooLarge`: if the event data is too large
+/// * `SendError::WriteError`: if the event data could not be written
 pub async fn send_event<T>(
     send: &mut SendStream,
     timestamp: i64,
@@ -69,7 +71,7 @@ where
 ///
 /// # Errors
 ///
-/// * `SendError::WriteError` if the message could not be written
+/// * `SendError::WriteError` if the ack timestamp data could not be written
 pub async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result<(), SendError> {
     frame::send_bytes(send, &timestamp.to_be_bytes()).await?;
     Ok(())
@@ -79,11 +81,8 @@ pub async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_record_header(
-    recv: &mut RecvStream,
-    buf: &mut [u8],
-) -> Result<(), quinn::ReadExactError> {
+/// * `RecvError::ReadError`: if the record header could not be read
+pub async fn receive_record_header(recv: &mut RecvStream, buf: &mut [u8]) -> Result<(), RecvError> {
     frame::recv_bytes(recv, buf).await?;
     Ok(())
 }
@@ -92,8 +91,8 @@ pub async fn receive_record_header(
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_event(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quinn::ReadExactError> {
+/// * `RecvError::ReadError`: if the event data could not be read
+pub async fn receive_event(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), RecvError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
     let timestamp = i64::from_le_bytes(ts_buf);
@@ -107,8 +106,8 @@ pub async fn receive_event(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), quin
 ///
 /// # Errors
 ///
-/// * `quinn::ReadExactError`: if the message could not be read
-pub async fn receive_ack_timestamp(recv: &mut RecvStream) -> Result<i64, quinn::ReadExactError> {
+/// * `RecvError::ReadError`: if the ack timestamp data could not be read
+pub async fn receive_ack_timestamp(recv: &mut RecvStream) -> Result<i64, RecvError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
     let timestamp = i64::from_be_bytes(ts_buf);
