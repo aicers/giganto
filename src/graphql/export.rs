@@ -777,8 +777,8 @@ fn export_by_protocol(
     Ok(())
 }
 
-fn process_export<'c, T, N>(
-    store: &RawEventStore<'c, T>,
+fn process_export<T, N>(
+    store: &RawEventStore<'_, T>,
     key_prefix: &[u8],
     filter: &impl RawEventFilter,
     export_type: &str,

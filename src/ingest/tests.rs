@@ -14,7 +14,7 @@ use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint};
 use std::{
     collections::HashMap,
-    fs,
+    fs, mem,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::Arc,
@@ -632,6 +632,42 @@ async fn oplog() {
         .expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"oplog_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn packet() {
+    const RECORD_TYPE_PACKET: RecordType = RecordType::Packet;
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_packet, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let timestamp_nanos = Utc::now().timestamp_nanos();
+    let packet: Vec<u8> = vec![0, 1, 0, 1, 0, 1];
+
+    send_record_header(&mut send_packet, RECORD_TYPE_PACKET)
+        .await
+        .unwrap();
+
+    let mut packet_header: Vec<u8> = Vec::new();
+    packet_header.extend_from_slice(timestamp_nanos.to_le_bytes().as_ref());
+
+    let len = packet.len() + mem::size_of_val(&timestamp_nanos);
+    packet_header.extend_from_slice(len.to_le_bytes().as_ref());
+    packet_header.extend_from_slice(timestamp_nanos.to_le_bytes().as_ref());
+    send_packet.write_all(&packet_header).await.unwrap();
+    send_packet.write_all(&packet).await.unwrap();
+
+    send_packet
+        .finish()
+        .await
+        .expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"packet_done");
     client.endpoint.wait_idle().await;
 }
 

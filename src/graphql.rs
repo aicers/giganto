@@ -73,8 +73,8 @@ pub fn schema(database: Database, packet_sources: PacketSources, export_path: Pa
 /// Maximum size: 100.
 const MAXIMUM_PAGE_SIZE: usize = 100;
 
-fn get_connection<'c, T>(
-    store: &RawEventStore<'c, T>,
+fn get_connection<T>(
+    store: &RawEventStore<'_, T>,
     key_prefix: &[u8],
     filter: &impl RawEventFilter,
     after: Option<String>,
@@ -174,8 +174,8 @@ where
     Ok((records, has_previous, has_next))
 }
 
-fn load_connection<'c, N, T>(
-    store: &RawEventStore<'c, T>,
+fn load_connection<N, T>(
+    store: &RawEventStore<'_, T>,
     key_prefix: &[u8],
     filter: &impl RawEventFilter,
     after: Option<String>,
