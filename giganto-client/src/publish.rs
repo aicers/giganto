@@ -127,24 +127,22 @@ pub async fn send_crusher_stream_start_message(
     Ok(())
 }
 
-/// Sends the record data. (timestamp / source / record structure)
+/// Sends the record data. (timestamp /record structure)
 ///
 /// # Errors
 ///
 /// * `PublishError::SerialDeserialFailure`: if the stream record data could not be serialized
 /// * `PublishError::MessageTooLarge`: if the  stream record data is too large
 /// * `PublishError::WriteError`: if the stream record data could not be written
-pub async fn send_record_data<T>(
+pub async fn send_crusher_data<T>(
     send: &mut SendStream,
     timestamp: i64,
-    source: String,
     record_data: T,
 ) -> Result<(), PublishError>
 where
     T: Serialize,
 {
     frame::send_bytes(send, &timestamp.to_le_bytes()).await?;
-    frame::send_raw(send, source.as_bytes()).await?;
     let mut buf = Vec::new();
     frame::send(send, &mut buf, record_data).await?;
     Ok(())
@@ -261,33 +259,29 @@ pub async fn receive_crusher_stream_start_message(
     Ok(start_msg)
 }
 
-/// Receives the record data. (timestamp / source / record structure)
+/// Receives the record data. (timestamp / record structure)
 ///
 /// # Errors
 ///
 /// * `PublishError::ReadError`: if the stream record data could not be read
-pub async fn receive_record_data(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), PublishError> {
+pub async fn receive_crusher_data(recv: &mut RecvStream) -> Result<(Vec<u8>, i64), PublishError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
     let timestamp = i64::from_le_bytes(ts_buf);
-
-    let mut source_buf = Vec::new();
-    frame::recv_raw(recv, &mut source_buf).await?;
-    let _source = String::from_utf8_lossy(&source_buf).to_string();
 
     let mut record_buf = Vec::new();
     frame::recv_raw(recv, &mut record_buf).await?;
     Ok((record_buf, timestamp))
 }
 
-/// Receives the timestamp/record data from giganto's publish module.
+/// Receives the timestamp/source/record data from giganto's publish module.
 /// If you want to receive record data, source  and timestamp separately,
-/// use `publish::receive_record_data`
+/// use `publish::receive_crusher_data`
 ///
 /// # Errors
 ///
 /// * `PublishError::ReadError`: if the stream record data could not be read
-pub async fn receive_stream_data(recv: &mut RecvStream) -> Result<Vec<u8>, PublishError> {
+pub async fn receive_hog_data(recv: &mut RecvStream) -> Result<Vec<u8>, PublishError> {
     let mut ts_buf = [0; std::mem::size_of::<u64>()];
     frame::recv_bytes(recv, &mut ts_buf).await?;
 

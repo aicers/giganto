@@ -22,8 +22,8 @@ use giganto_client::publish::stream::{
 };
 use giganto_client::publish::{
     receive_range_data_request, receive_stream_request, relay_pcap_extract_request,
-    send_crusher_stream_start_message, send_hog_stream_start_message, send_range_data,
-    send_record_data, Pcapfilter,
+    send_crusher_data, send_crusher_stream_start_message, send_hog_stream_start_message,
+    send_range_data, Pcapfilter,
 };
 use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -371,12 +371,16 @@ pub async fn send_direct_stream(
     for (req_key, sender) in STREAM_DIRECT_CHANNEL.read().await.iter() {
         if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
-            let source_bytes = source.as_bytes();
-            let source_len = u32::try_from(source_bytes.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
-            send_buf.extend_from_slice(&source_len);
-            send_buf.extend_from_slice(source_bytes);
+
+            if req_key.contains(NodeType::Hog.convert_to_str()) {
+                let source_bytes = bincode::serialize(&source)?;
+                let source_len = u32::try_from(source_bytes.len())?.to_le_bytes();
+                send_buf.extend_from_slice(&source_len);
+                send_buf.extend_from_slice(&source_bytes);
+            }
+
             send_buf.extend_from_slice(&raw_len);
             send_buf.extend_from_slice(raw_event);
             sender.send(send_buf)?;
@@ -443,8 +447,7 @@ where
                 if msg.filter_ip(orig_addr, resp_addr) {
                     let timestamp =
                         i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                    let source = String::from_utf8_lossy(&key[..key.len() - TIMESTAMP_SIZE]);
-                    send_record_data(&mut sender, timestamp, source.to_string(), val).await?;
+                    send_crusher_data(&mut sender, timestamp, val).await?;
                     last_ts = timestamp;
                 }
             }
