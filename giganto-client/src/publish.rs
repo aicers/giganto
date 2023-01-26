@@ -6,7 +6,8 @@ use self::{
     stream::{NodeType, RequestStreamRecord},
 };
 use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, RecvError, SendError};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+pub use oinq::message::send_ok;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{mem, net::IpAddr};
@@ -349,22 +350,19 @@ where
 /// * `PublishError::MessageTooLarge`: if the extract request data is too large
 /// * `PublishError::WriteError`: if the extract request/request ack data could not be written
 /// * `PublishError::ReadError`: if the extract request data could not be read
-pub async fn relay_pcap_extract_request(
-    conn: &Connection,
-    filter: &[u8],
-    resp_send: &mut SendStream,
-) -> Result<(), PublishError> {
+pub async fn relay_pcap_extract_request(conn: &Connection, filter: &[u8]) -> Result<()> {
     //open target(piglet) source's channel
     let (mut send, mut recv) = conn.open_bi().await?;
 
     // send pacp extract request to piglet
     send_raw(&mut send, filter).await?;
+    send.finish().await?;
 
     // receive pcap extract acknowledge from piglet
     let mut ack_buf = Vec::new();
-    recv_raw(&mut recv, &mut ack_buf).await?;
+    recv_raw(&mut recv, &mut ack_buf)
+        .await
+        .map_err(|e| anyhow!("failed to receive ACK: {e}"))?;
 
-    // response pcap extract ack to hog/reconverge
-    send_raw(resp_send, &ack_buf).await?;
     Ok(())
 }
