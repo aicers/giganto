@@ -219,14 +219,23 @@ async fn process_pcap_extract(
     packet_sources: PacketSources,
     resp_send: &mut SendStream,
 ) -> Result<()> {
-    let filters = bincode::deserialize::<Vec<Pcapfilter>>(filter_data)?;
+    let filters =
+        bincode::deserialize::<Vec<Pcapfilter>>(filter_data).context("invalid pcapfilter")?;
+    let mut buf = Vec::new();
+    giganto_client::publish::send_ok(resp_send, &mut buf, ())
+        .await
+        .context("failed to send ok")?;
+
     for filter in filters {
         if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
-            // deserialize pcapfilter data
-            let pcap_filter = bincode::serialize::<Pcapfilter>(&filter)?;
+            // serialize pcapfilter data
+            let pcap_filter = bincode::serialize(&filter)?;
 
-            // send/receive extract request from piglet & response acknowledge to hog/reconverge
-            relay_pcap_extract_request(source_conn, &pcap_filter, resp_send).await?;
+            // send/receive extract request from piglet
+            match relay_pcap_extract_request(source_conn, &pcap_filter).await {
+                Ok(_) => (),
+                Err(e) => error!("failed to relay pcap request, {e}"),
+            }
         } else {
             error!("Failed to get {}'s connection", filter.source);
         }
