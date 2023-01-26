@@ -12,6 +12,16 @@ pub enum NodeType {
     Crusher = 1,
 }
 
+impl NodeType {
+    #[must_use]
+    pub fn convert_to_str(&self) -> &str {
+        match self {
+            NodeType::Hog => "hog",
+            NodeType::Crusher => "crusher",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Deserialize, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq)]
 #[repr(u32)]
 pub enum RequestStreamRecord {

@@ -13,8 +13,9 @@ use giganto_client::{
     },
     publish::{
         range::{MessageCode, RequestRange, RequestTimeSeriesRange, ResponseRangeData},
-        receive_crusher_stream_start_message, receive_hog_stream_start_message, receive_range_data,
-        receive_record_data, send_range_data_request, send_stream_request,
+        receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
+        receive_hog_stream_start_message, receive_range_data, send_range_data_request,
+        send_stream_request,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
     },
 };
@@ -1275,12 +1276,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_conn_time, recv_timestamp);
-        assert_eq!(conn_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_conn_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(conn_data, recv_data[20..]);
 
         // database conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos();
@@ -1303,7 +1302,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_conn_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
@@ -1319,7 +1318,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_conn_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_conn_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
@@ -1353,11 +1352,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
+        let recv_data = receive_hog_data(&mut (*send_dns_stream.borrow_mut()))
             .await
             .unwrap();
-        assert_eq!(send_dns_time, recv_timestamp);
-        assert_eq!(dns_data, recv_data);
+        assert_eq!(dns_data, recv_data[20..]);
 
         // database dns network event for crusher
         let send_dns_time = Utc::now().timestamp_nanos();
@@ -1380,9 +1378,10 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(dns_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_dns_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
@@ -1395,9 +1394,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_dns_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_dns_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
     }
@@ -1429,11 +1429,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
+        let recv_data = receive_hog_data(&mut (*send_rdp_stream.borrow_mut()))
             .await
             .unwrap();
-        assert_eq!(send_rdp_time, recv_timestamp);
-        assert_eq!(rdp_data, recv_data);
+        assert_eq!(rdp_data, recv_data[20..]);
 
         // database rdp network event for crusher
         let send_rdp_time = Utc::now().timestamp_nanos();
@@ -1456,9 +1455,10 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(rdp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_rdp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
@@ -1470,9 +1470,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_rdp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_rdp_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
     }
@@ -1506,12 +1507,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_http_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_http_time, recv_timestamp);
-        assert_eq!(http_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_http_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(http_data, recv_data[20..]);
 
         // database http network event for crusher
         let send_http_time = Utc::now().timestamp_nanos();
@@ -1535,7 +1534,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_http_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_http_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
@@ -1550,7 +1549,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_http_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_http_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
@@ -1586,12 +1585,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_smtp_time, recv_timestamp);
-        assert_eq!(smtp_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_smtp_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(smtp_data, recv_data[20..]);
 
         // database smtp network event for crusher
         let send_smtp_time = Utc::now().timestamp_nanos();
@@ -1615,7 +1612,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_smtp_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
@@ -1630,7 +1627,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_smtp_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_smtp_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
@@ -1666,12 +1663,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_ntlm_time, recv_timestamp);
-        assert_eq!(ntlm_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_ntlm_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(ntlm_data, recv_data[20..]);
 
         // database ntlm network event for crusher
         let send_ntlm_time = Utc::now().timestamp_nanos();
@@ -1695,7 +1690,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_ntlm_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
@@ -1710,7 +1705,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_ntlm_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_ntlm_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
@@ -1745,12 +1740,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_kerberos_time, recv_timestamp);
-        assert_eq!(kerberos_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_kerberos_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(kerberos_data, recv_data[20..]);
 
         // database kerberos network event for crusher
         let send_kerberos_time = Utc::now().timestamp_nanos();
@@ -1775,7 +1768,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_kerberos_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
@@ -1790,7 +1783,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_kerberos_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_kerberos_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
@@ -1825,11 +1818,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
+        let recv_data = receive_hog_data(&mut (*send_ssh_stream.borrow_mut()))
             .await
             .unwrap();
-        assert_eq!(send_ssh_time, recv_timestamp);
-        assert_eq!(ssh_data, recv_data);
+        assert_eq!(ssh_data, recv_data[20..]);
 
         // database ssh network event for crusher
         let send_ssh_time = Utc::now().timestamp_nanos();
@@ -1852,9 +1844,10 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(ssh_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_ssh_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
 
@@ -1866,9 +1859,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_record_data(&mut (*send_ssh_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_ssh_stream.borrow_mut()))
+                .await
+                .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
     }
@@ -1897,12 +1891,10 @@ async fn request_network_event_stream() {
             .await
             .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
-                .await
-                .unwrap();
-        assert_eq!(send_dce_rpc_time, recv_timestamp);
-        assert_eq!(dce_rpc_data, recv_data);
+        let recv_data = receive_hog_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(dce_rpc_data, recv_data[20..]);
 
         // database dce_rpc network event for crusher
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
@@ -1926,7 +1918,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_dce_rpc_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
@@ -1941,7 +1933,7 @@ async fn request_network_event_stream() {
             .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_record_data(&mut (*send_dce_rpc_stream.borrow_mut()))
+            receive_crusher_data(&mut (*send_dce_rpc_stream.borrow_mut()))
                 .await
                 .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);

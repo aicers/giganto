@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use giganto_client::publish::{
     range::{RequestRange, RequestTimeSeriesRange},
-    stream::{RequestCrusherStream, RequestHogStream},
+    stream::{NodeType, RequestCrusherStream, RequestHogStream},
 };
 use std::net::IpAddr;
 
@@ -27,6 +27,8 @@ impl RequestStreamMessage for RequestHogStream {
     fn channel_key(&self, source: Option<String>, record_type: &str) -> Result<String> {
         if let Some(ref target_source) = self.source {
             let mut hog_key = String::new();
+            hog_key.push_str(NodeType::Hog.convert_to_str());
+            hog_key.push('\0');
             hog_key.push_str(&source.unwrap());
             hog_key.push('\0');
             hog_key.push_str(target_source);
@@ -64,6 +66,8 @@ impl RequestStreamMessage for RequestCrusherStream {
     fn channel_key(&self, _source: Option<String>, record_type: &str) -> Result<String> {
         if let Some(ref target_source) = self.source {
             let mut crusher_key = String::new();
+            crusher_key.push_str(NodeType::Crusher.convert_to_str());
+            crusher_key.push('\0');
             crusher_key.push_str(&self.id);
             crusher_key.push('\0');
             crusher_key.push_str(target_source);
