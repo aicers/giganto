@@ -76,16 +76,16 @@ pub struct Dns {
 #[derive(Debug, FromPrimitive)]
 #[repr(u16)]
 pub enum Qclass {
-    CInternet = 1,
     #[num_enum(default)]
     Unknown,
+    CInternet = 1,
 }
 
 impl Display for Qclass {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CInternet => write!(f, "C_INTERNET"),
-            Self::Unknown => write!(f, "{self:?}"),
+            Self::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
@@ -93,6 +93,8 @@ impl Display for Qclass {
 #[derive(Debug, FromPrimitive)]
 #[repr(u16)]
 pub enum Qtype {
+    #[num_enum(default)]
+    Unknown,
     A = 1,
     Ns,
     Md,
@@ -158,8 +160,6 @@ pub enum Qtype {
     Svcb,
     Https,
     Spf = 99,
-    #[num_enum(default)]
-    Unknown,
 }
 
 impl Display for Qtype {

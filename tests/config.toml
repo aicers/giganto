@@ -4,6 +4,6 @@
  ingest_address = "0.0.0.0:38370"
  publish_address = "0.0.0.0:38371"
  data_dir = "tests/data"
- retention = "100d"
+ retention = "10000d"
  log_dir = "tests/logs/apps"
  export_dir = "tests/export"

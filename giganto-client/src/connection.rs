@@ -8,21 +8,21 @@ use thiserror::Error;
 /// The error type for a handshake failure.
 #[derive(Debug, Error)]
 pub enum HandshakeError {
-    #[error("connection closed by peer")]
+    #[error("Connection closed by peer")]
     ConnectionClosed,
-    #[error("connection lost")]
+    #[error("Connection lost")]
     ConnectionLost(#[from] ConnectionError),
-    #[error("cannot receive a message")]
+    #[error("Cannot receive a message")]
     ReadError(#[from] quinn::ReadError),
-    #[error("cannot send a message")]
+    #[error("Cannot send a message")]
     WriteError(#[from] quinn::WriteError),
-    #[error("cannot serialize a message")]
+    #[error("Cannot serialize a message")]
     SerializationFailure(#[from] bincode::Error),
-    #[error("arguments are too long")]
+    #[error("Message is too large, so type casting failed")]
     MessageTooLarge,
-    #[error("invalid message")]
+    #[error("Invalid message")]
     InvalidMessage,
-    #[error("protocol version {0} is not supported")]
+    #[error("Protocol version {0} is not supported")]
     IncompatibleProtocol(String),
 }
 
@@ -66,8 +66,8 @@ pub async fn client_handshake(
                 return Err(HandshakeError::ReadError(e));
             }
         },
-        Err(RecvError::CastError(_)) => {
-            return Err(HandshakeError::InvalidMessage);
+        Err(RecvError::MessageTooLarge(_)) => {
+            return Err(HandshakeError::MessageTooLarge);
         }
         Ok(_) | Err(_) => {}
     }
