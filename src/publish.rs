@@ -37,7 +37,7 @@ use tokio::{
         RwLock,
     },
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
 
@@ -234,7 +234,7 @@ async fn process_pcap_extract(
             // send/receive extract request from piglet
             match relay_pcap_extract_request(source_conn, &pcap_filter).await {
                 Ok(_) => (),
-                Err(e) => error!("failed to relay pcap request, {e}"),
+                Err(e) => debug!("failed to relay pcap request, {e}"),
             }
         } else {
             error!("Failed to get {}'s connection", filter.source);

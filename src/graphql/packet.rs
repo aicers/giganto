@@ -108,7 +108,7 @@ mod tests {
             packets(
                 filter: {
                     source: "a"
-                    requestTime: "2023-01-20T00:00:00Z"
+                    requestTime: "1992-06-05T00:00:00Z"
                     packetTime: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 }
                 first: 1
@@ -157,13 +157,15 @@ mod tests {
             ) {
                 edges {
                     node {
+                        packet
                         packetTime
+                        requestTime
                     }
                 }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packetTime: \"2023-01-20T00:00:01+00:00\"}}]}}");
+        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packet: \"AAECAw==\",packetTime: \"2023-01-20T00:00:00+00:00\",requestTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packet: \"AAECAw==\",packetTime: \"2023-01-20T00:00:01+00:00\",requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}");
 
         let query = r#"
         {
