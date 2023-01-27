@@ -11,6 +11,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add more fields to `dns`, `conn`, `http`
 - Add common fields to network events.
+- Publish support Packet request/response through QUIC.
 - Add Packet store.
 - Add GraphQL API for Packet.
 
