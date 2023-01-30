@@ -122,20 +122,44 @@ pub async fn server_handshake(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn protocol_version() {
-        use semver::{Version, VersionReq};
-        const PUBLISH_VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
+    use crate::test::{channel, TOKEN};
 
-        let compat_versions = ["0.7.0"];
-        let incompat_versions = ["0.6.0", "0.8.0"];
+    #[tokio::test]
+    async fn handshake() {
+        const VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
+        const VERSION_STD: &str = "0.7.0";
 
-        let req = VersionReq::parse(PUBLISH_VERSION_REQ).unwrap();
-        for version in &compat_versions {
-            assert!(req.matches(&Version::parse(version).unwrap()));
-        }
-        for version in &incompat_versions {
-            assert!(!req.matches(&Version::parse(version).unwrap()));
-        }
+        let _lock = TOKEN.lock().await;
+        let channel = channel().await;
+        let (mut server, client) = (channel.server, channel.client);
+
+        let handle =
+            tokio::spawn(async move { super::client_handshake(&client.conn, VERSION_STD).await });
+
+        super::server_handshake(&mut server.conn, VERSION_REQ)
+            .await
+            .unwrap();
+
+        let res = tokio::join!(handle).0.unwrap();
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn handshake_version_incompatible_err() {
+        const VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
+        const VERSION_STD: &str = "0.9.0";
+
+        let _lock = TOKEN.lock().await;
+        let channel = channel().await;
+        let (mut server, client) = (channel.server, channel.client);
+
+        let handle =
+            tokio::spawn(async move { super::client_handshake(&client.conn, VERSION_STD).await });
+
+        let res = super::server_handshake(&mut server.conn, VERSION_REQ).await;
+        assert!(res.is_err());
+
+        let res = tokio::join!(handle).0.unwrap();
+        assert!(res.is_err());
     }
 }

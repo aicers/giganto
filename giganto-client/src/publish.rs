@@ -6,7 +6,7 @@ use self::{
     stream::{NodeType, RequestStreamRecord},
 };
 use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, RecvError, SendError};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{mem, net::IpAddr};
@@ -32,6 +32,8 @@ pub enum PublishError {
     InvalidMessageType,
     #[error("Invalid message data")]
     InvalidMessageData,
+    #[error("Pcap request failed, because {0}")]
+    PcapRequestFail(String),
 }
 
 impl From<frame::RecvError> for PublishError {
@@ -57,7 +59,7 @@ impl From<frame::SendError> for PublishError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Pcapfilter {
     timestamp: i64,
     pub source: String,
@@ -335,29 +337,67 @@ where
     Ok(frame::recv::<T>(recv, &mut buf).await?)
 }
 
-/// relay pcap extract request & request acknowledge.
+/// Sends pcap extract request to piglet and  Receives request acknowledge from piglet
 ///
 /// # Errors
 ///
 /// * `PublishError::ConnectionLost`: if quinn connection is lost
 /// * `PublishError::MessageTooLarge`: if the extract request data is too large
-/// * `PublishError::WriteError`: if the extract request/request ack data could not be written
-/// * `PublishError::ReadError`: if the extract request data could not be read
-pub async fn relay_pcap_extract_request(conn: &Connection, filter: &[u8]) -> Result<()> {
+/// * `PublishError::WriteError`: if the extract request data could not be written
+/// * `PublishError::ReadError`: if the extract request ack data could not be read
+/// * `PublishError::InvalidMessageData`: if the extract request ack data could not be converted to valid type
+/// * `PublishError::RequestFail`: if the extract request ack data is Err
+pub async fn pcap_extract_request(
+    conn: &Connection,
+    pcap_filter: &Pcapfilter,
+) -> Result<(), PublishError> {
     //open target(piglet) source's channel
     let (mut send, mut recv) = conn.open_bi().await?;
 
+    // serialize pcapfilter data
+    let filter = bincode::serialize(pcap_filter)?;
+
     // send pacp extract request to piglet
-    send_raw(&mut send, filter).await?;
+    send_raw(&mut send, &filter).await?;
     send.finish().await?;
 
     // receive pcap extract acknowledge from piglet
     let mut ack_buf = Vec::new();
-    recv_raw(&mut recv, &mut ack_buf)
-        .await
-        .map_err(|e| anyhow!("failed to receive ACK: {e}"))?;
-
+    recv_raw(&mut recv, &mut ack_buf).await?;
+    bincode::deserialize::<Result<(), &str>>(&ack_buf)
+        .map_err(|_| PublishError::InvalidMessageData)?
+        .map_err(|e| PublishError::PcapRequestFail(e.to_string()))?;
     Ok(())
+}
+
+/// Receives pcap extract request from giganto and  Sends request acknowledge to giganto
+///
+/// # Errors
+///
+/// * `PublishError::ConnectionLost`: if quinn connection is lost
+/// * `PublishError::SerialDeserialFailure`: if the extract request data could not be deserialized
+/// * `PublishError::MessageTooLarge`: if the extract request data is too large
+/// * `PublishError::ReadError`: if the extract request data could not be read
+/// * `PublishError::WriteError`: if the extract ack data could not be written
+pub async fn pcap_extract_response(
+    mut send: SendStream,
+    mut recv: RecvStream,
+) -> Result<Pcapfilter, PublishError> {
+    // Recieve pcap extract request filter
+    let mut buf = Vec::new();
+    match frame::recv::<Pcapfilter>(&mut recv, &mut buf).await {
+        Ok(filter) => {
+            // Send ack response (Ok())
+            send_ok(&mut send, &mut buf, ()).await?;
+            Ok(filter)
+        }
+        Err(err) => {
+            // Send ack response (Err())
+            let err_msg = format!("{err:#}");
+            send_err(&mut send, &mut buf, err).await?;
+            Err(PublishError::PcapRequestFail(err_msg))
+        }
+    }
 }
 
 /// Sends an `Ok` response.
@@ -392,4 +432,235 @@ pub async fn send_err<E: std::fmt::Display>(
 ) -> Result<(), PublishError> {
     frame::send(send, buf, Err(format!("{e:#}")) as Result<(), String>).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        frame,
+        test::{channel, TOKEN},
+    };
+
+    #[tokio::test]
+    async fn publish_send_recv() {
+        use crate::frame::send_bytes;
+        use crate::ingest::network::Conn;
+        use crate::publish::{
+            range::ResponseRangeData,
+            stream::{RequestCrusherStream, RequestHogStream},
+            Pcapfilter,
+        };
+        use crate::test::{channel, TOKEN};
+        use std::net::IpAddr;
+
+        let _lock = TOKEN.lock().await;
+        let mut channel = channel().await;
+
+        // send/recv hog stream request
+        let hog_req = RequestHogStream {
+            start: 0,
+            source: Some("hello".to_string()),
+        };
+        super::send_stream_request(
+            &mut channel.client.send,
+            super::stream::RequestStreamRecord::Conn,
+            super::stream::NodeType::Hog,
+            hog_req.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (node_type, req_record, req_data) =
+            super::receive_stream_request(&mut channel.server.recv)
+                .await
+                .unwrap();
+        assert_eq!(node_type, super::stream::NodeType::Hog);
+        assert_eq!(req_record, super::stream::RequestStreamRecord::Conn);
+        assert_eq!(req_data, bincode::serialize(&hog_req).unwrap());
+
+        // send/recv crusher stream request
+        let crusher_req = RequestCrusherStream {
+            start: 0,
+            id: "1".to_string(),
+            src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
+            des_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
+            source: Some("world".to_string()),
+        };
+        super::send_stream_request(
+            &mut channel.client.send,
+            super::stream::RequestStreamRecord::Conn,
+            super::stream::NodeType::Crusher,
+            crusher_req.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (node_type, req_record, req_data) =
+            super::receive_stream_request(&mut channel.server.recv)
+                .await
+                .unwrap();
+        assert_eq!(node_type, super::stream::NodeType::Crusher);
+        assert_eq!(req_record, super::stream::RequestStreamRecord::Conn);
+        assert_eq!(req_data, bincode::serialize(&crusher_req).unwrap());
+
+        // send/recv hog stream start message
+        super::send_hog_stream_start_message(
+            &mut channel.server.send,
+            super::stream::RequestStreamRecord::Conn,
+        )
+        .await
+        .unwrap();
+        let req_record = super::receive_hog_stream_start_message(&mut channel.client.recv)
+            .await
+            .unwrap();
+        assert_eq!(req_record, super::stream::RequestStreamRecord::Conn);
+
+        // send/recv crusher stream start message
+        super::send_crusher_stream_start_message(&mut channel.server.send, "1".to_string())
+            .await
+            .unwrap();
+        let policy_id = super::receive_crusher_stream_start_message(&mut channel.client.recv)
+            .await
+            .unwrap();
+        assert_eq!(policy_id, "1".parse::<u32>().unwrap());
+
+        // send/recv stream data with hog (hog's stream data use send_bytes function)
+        let conn = Conn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            duration: 1000,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+        };
+        let raw_event = bincode::serialize(&conn).unwrap();
+        let source = bincode::serialize(&"hello").unwrap();
+        let raw_len = u32::try_from(raw_event.len()).unwrap().to_le_bytes();
+        let source_len = u32::try_from(source.len()).unwrap().to_le_bytes();
+        let mut send_buf: Vec<u8> = Vec::new();
+        send_buf.extend_from_slice(&6666_i64.to_le_bytes());
+        send_buf.extend_from_slice(&source_len);
+        send_buf.extend_from_slice(&source);
+        send_buf.extend_from_slice(&raw_len);
+        send_buf.extend_from_slice(&raw_event);
+        send_bytes(&mut channel.server.send, &mut send_buf)
+            .await
+            .unwrap();
+
+        let data = super::receive_hog_data(&mut channel.client.recv)
+            .await
+            .unwrap();
+        let mut result_buf: Vec<u8> = Vec::new();
+        result_buf.extend_from_slice(&6666_i64.to_le_bytes());
+        result_buf.extend_from_slice(&source);
+        result_buf.extend_from_slice(&raw_event);
+        assert_eq!(data, result_buf);
+
+        // send/recv crusher stream data with crusher
+        super::send_crusher_data(&mut channel.server.send, 7777, conn.clone())
+            .await
+            .unwrap();
+        let (data, timestamp) = super::receive_crusher_data(&mut channel.client.recv)
+            .await
+            .unwrap();
+        assert_eq!(timestamp, 7777);
+        assert_eq!(data, bincode::serialize(&conn).unwrap());
+
+        // send/recv range data request
+        let req_range = super::range::RequestRange {
+            source: String::from("world"),
+            kind: String::from("conn"),
+            start: 11111,
+            end: 22222,
+            count: 5,
+        };
+        super::send_range_data_request(
+            &mut channel.client.send,
+            super::range::MessageCode::Log,
+            req_range.clone(),
+        )
+        .await
+        .unwrap();
+        let (msg_code, data) = super::receive_range_data_request(&mut channel.server.recv)
+            .await
+            .unwrap();
+        assert_eq!(msg_code, super::range::MessageCode::Log);
+        assert_eq!(data, bincode::serialize(&req_range).unwrap());
+
+        // send/recv range data
+        super::send_range_data(
+            &mut channel.server.send,
+            Some((conn.clone(), 33333, "world")),
+        )
+        .await
+        .unwrap();
+        let data = super::receive_range_data::<Option<(i64, Vec<u8>)>>(&mut channel.client.recv)
+            .await
+            .unwrap();
+        assert_eq!(
+            bincode::serialize::<Option<(i64, Vec<u8>)>>(&data).unwrap(),
+            conn.response_data(33333, "world").unwrap()
+        );
+
+        // send/recv pcap extract request
+        let p_filter = Pcapfilter {
+            timestamp: 12345,
+            source: "hello".to_string(),
+            src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            src_port: 46378,
+            dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            dst_port: 80,
+            proto: 6,
+            duration: 1000,
+        };
+        let send_filter = p_filter.clone();
+
+        let handle = tokio::spawn(async move {
+            super::pcap_extract_request(&channel.server.conn, &send_filter).await
+        });
+
+        let (send, recv) = channel.client.conn.accept_bi().await.unwrap();
+        let data = super::pcap_extract_response(send, recv).await.unwrap();
+        assert_eq!(data, p_filter);
+
+        let res = tokio::join!(handle).0.unwrap();
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_ok() {
+        let _lock = TOKEN.lock().await;
+        let mut channel = channel().await;
+
+        let mut buf = Vec::new();
+        super::send_ok(&mut channel.server.send, &mut buf, "hello")
+            .await
+            .unwrap();
+        assert!(buf.is_empty());
+        let body: Result<&str, &str> = frame::recv(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(body, Ok("hello"));
+    }
+
+    #[tokio::test]
+    async fn send_err() {
+        let _lock = TOKEN.lock().await;
+        let mut channel = channel().await;
+
+        let mut buf = Vec::new();
+        super::send_err(&mut channel.server.send, &mut buf, "hello")
+            .await
+            .unwrap();
+        assert!(buf.is_empty());
+        let body: Result<(), &str> = frame::recv(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(body, Err("hello"));
+    }
 }
