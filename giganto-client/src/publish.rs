@@ -7,7 +7,6 @@ use self::{
 };
 use crate::frame::{self, recv_bytes, recv_raw, send_bytes, send_raw, RecvError, SendError};
 use anyhow::{anyhow, Result};
-pub use oinq::message::send_ok;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{mem, net::IpAddr};
@@ -358,5 +357,39 @@ pub async fn relay_pcap_extract_request(conn: &Connection, filter: &[u8]) -> Res
         .await
         .map_err(|e| anyhow!("failed to receive ACK: {e}"))?;
 
+    Ok(())
+}
+
+/// Sends an `Ok` response.
+///
+/// `buf` will be cleared after the response is sent.
+///
+/// # Errors
+///
+/// * `PublishError::SerialDeserialFailure`: if the response data could not be serialized
+/// * `PublishError::WriteError`: if the response data could not be written
+pub async fn send_ok<T: Serialize>(
+    send: &mut SendStream,
+    buf: &mut Vec<u8>,
+    body: T,
+) -> Result<(), PublishError> {
+    frame::send(send, buf, Ok(body) as Result<T, &str>).await?;
+    Ok(())
+}
+
+/// Sends an `Err` response.
+///
+/// `buf` will be cleared after the response is sent.
+///
+/// # Errors
+///
+/// * `PublishError::SerialDeserialFailure`: if the response data could not be serialized
+/// * `PublishError::WriteError`: if the response data could not be written
+pub async fn send_err<E: std::fmt::Display>(
+    send: &mut SendStream,
+    buf: &mut Vec<u8>,
+    e: E,
+) -> Result<(), PublishError> {
+    frame::send(send, buf, Err(format!("{e:#}")) as Result<(), String>).await?;
     Ok(())
 }
