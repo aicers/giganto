@@ -147,3 +147,58 @@ pub async fn send_handshake(send: &mut SendStream, buf: &[u8]) -> Result<(), Sen
     send.write_all(buf).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn frame_send_and_recv() {
+        use crate::test::{channel, TOKEN};
+
+        let _lock = TOKEN.lock().await;
+        let mut channel = channel().await;
+
+        let mut buf = Vec::new();
+        super::send(&mut channel.server.send, &mut buf, "hello")
+            .await
+            .unwrap();
+        assert_eq!(buf.len(), 0);
+        super::recv_raw(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf[0] as usize, "hello".len());
+        assert_eq!(&buf[8..], b"hello");
+
+        super::send_raw(&mut channel.server.send, b"world")
+            .await
+            .unwrap();
+        super::recv_raw(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, b"world");
+
+        super::send_bytes(&mut channel.server.send, b"hello")
+            .await
+            .unwrap();
+        super::recv_bytes(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, b"hello");
+
+        super::send_handshake(&mut channel.server.send, b"hello")
+            .await
+            .unwrap();
+        super::recv_handshake(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, b"hello");
+
+        super::send(&mut channel.server.send, &mut buf, "hello")
+            .await
+            .unwrap();
+        assert!(buf.is_empty());
+        let received = super::recv::<&str>(&mut channel.client.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(received, "hello");
+    }
+}

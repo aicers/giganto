@@ -55,7 +55,7 @@ impl REconvergeKindType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestRange {
     pub source: String, //certification name
@@ -65,7 +65,7 @@ pub struct RequestRange {
     pub count: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestTimeSeriesRange {
     pub source: String, //sampling policy id

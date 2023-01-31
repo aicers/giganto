@@ -21,9 +21,8 @@ use giganto_client::publish::stream::{
     NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord,
 };
 use giganto_client::publish::{
-    receive_range_data_request, receive_stream_request, relay_pcap_extract_request,
-    send_crusher_data, send_crusher_stream_start_message, send_hog_stream_start_message,
-    send_range_data, Pcapfilter,
+    pcap_extract_request, receive_range_data_request, receive_stream_request, send_crusher_data,
+    send_crusher_stream_start_message, send_hog_stream_start_message, send_range_data, Pcapfilter,
 };
 use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -228,11 +227,8 @@ async fn process_pcap_extract(
 
     for filter in filters {
         if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
-            // serialize pcapfilter data
-            let pcap_filter = bincode::serialize(&filter)?;
-
             // send/receive extract request from piglet
-            match relay_pcap_extract_request(source_conn, &pcap_filter).await {
+            match pcap_extract_request(source_conn, &filter).await {
                 Ok(_) => (),
                 Err(e) => debug!("failed to relay pcap request, {e}"),
             }

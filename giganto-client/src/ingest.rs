@@ -113,3 +113,59 @@ pub async fn receive_ack_timestamp(recv: &mut RecvStream) -> Result<i64, RecvErr
     let timestamp = i64::from_be_bytes(ts_buf);
     Ok(timestamp)
 }
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn ingest_send_recv() {
+        use crate::test::{channel, TOKEN};
+        use std::{mem, net::IpAddr};
+
+        let _lock = TOKEN.lock().await;
+        let mut channel = channel().await;
+
+        // send/recv event type
+        super::send_record_header(&mut channel.client.send, super::RecordType::Conn)
+            .await
+            .unwrap();
+
+        let mut buf = Vec::new();
+        buf.resize(mem::size_of::<u32>(), 0);
+        super::receive_record_header(&mut channel.server.recv, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, u32::from(super::RecordType::Conn).to_le_bytes());
+
+        // send/recv event data
+        let conn = super::network::Conn {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            duration: 1000,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+        };
+        super::send_event(&mut channel.client.send, 9999, conn.clone())
+            .await
+            .unwrap();
+        let (data, timestamp) = super::receive_event(&mut channel.server.recv)
+            .await
+            .unwrap();
+        assert_eq!(timestamp, 9999);
+        assert_eq!(data, bincode::serialize(&conn).unwrap());
+
+        // send/recv ack timestamp
+        super::send_ack_timestamp(&mut channel.client.send, 8888)
+            .await
+            .unwrap();
+        let timestamp = super::receive_ack_timestamp(&mut channel.server.recv)
+            .await
+            .unwrap();
+        assert_eq!(timestamp, 8888);
+    }
+}
