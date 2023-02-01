@@ -760,8 +760,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
  "url",
  "warp",
  "x509-parser",
@@ -781,6 +779,9 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
