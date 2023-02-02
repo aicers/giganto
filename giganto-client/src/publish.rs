@@ -59,7 +59,7 @@ impl From<frame::SendError> for PublishError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Pcapfilter {
     timestamp: i64,
     pub source: String,

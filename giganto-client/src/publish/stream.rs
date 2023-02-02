@@ -5,7 +5,9 @@ use std::net::IpAddr;
 
 pub const STREAM_REQUEST_ALL_SOURCE: &str = "all";
 
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
+)]
 #[repr(u8)]
 pub enum NodeType {
     Hog = 0,
@@ -22,7 +24,9 @@ impl NodeType {
     }
 }
 
-#[derive(Clone, Copy, Deserialize, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
+)]
 #[repr(u32)]
 pub enum RequestStreamRecord {
     Conn = 0,
@@ -77,14 +81,14 @@ impl RequestStreamRecord {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestHogStream {
     pub start: i64,
     pub source: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestCrusherStream {
     pub start: i64,

@@ -7,7 +7,7 @@ use std::{
     net::IpAddr,
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Conn {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -51,7 +51,7 @@ impl ResponseRangeData for Conn {
 }
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Dns {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -229,7 +229,7 @@ impl ResponseRangeData for Dns {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Http {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -342,7 +342,7 @@ impl ResponseRangeData for Http {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Rdp {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -377,7 +377,7 @@ impl ResponseRangeData for Rdp {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Smtp {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -442,7 +442,7 @@ impl ResponseRangeData for Smtp {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ntlm {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -517,7 +517,7 @@ impl ResponseRangeData for Ntlm {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Kerberos {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -614,7 +614,7 @@ impl ResponseRangeData for Kerberos {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ssh {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -711,7 +711,7 @@ impl ResponseRangeData for Ssh {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DceRpc {
     pub orig_addr: IpAddr,
     pub orig_port: u16,

@@ -16,7 +16,9 @@ pub trait ResponseRangeData {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
+)]
 #[repr(u32)]
 pub enum MessageCode {
     Log = 0,
@@ -24,6 +26,7 @@ pub enum MessageCode {
     Pcap = 2,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum REconvergeKindType {
     Conn,
     Dns,
@@ -55,7 +58,7 @@ impl REconvergeKindType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestRange {
     pub source: String, //certification name
@@ -65,7 +68,7 @@ pub struct RequestRange {
     pub count: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[allow(clippy::module_name_repetitions)]
 pub struct RequestTimeSeriesRange {
     pub source: String, //sampling policy id
