@@ -345,7 +345,7 @@ where
 /// * `PublishError::MessageTooLarge`: if the extract request data is too large
 /// * `PublishError::WriteError`: if the extract request data could not be written
 /// * `PublishError::ReadError`: if the extract request ack data could not be read
-/// * `PublishError::InvalidMessageData`: if the extract request ack data could not be converted to valid type
+/// * `PublishError::SerialDeserialFailure`: if the extract request ack data could not be deserialized
 /// * `PublishError::RequestFail`: if the extract request ack data is Err
 pub async fn pcap_extract_request(
     conn: &Connection,
@@ -362,11 +362,7 @@ pub async fn pcap_extract_request(
     send.finish().await?;
 
     // receive pcap extract acknowledge from piglet
-    let mut ack_buf = Vec::new();
-    recv_raw(&mut recv, &mut ack_buf).await?;
-    bincode::deserialize::<Result<(), &str>>(&ack_buf)
-        .map_err(|_| PublishError::InvalidMessageData)?
-        .map_err(|e| PublishError::PcapRequestFail(e.to_string()))?;
+    recv_ack_response(&mut recv).await?;
     Ok(())
 }
 
@@ -434,12 +430,25 @@ pub async fn send_err<E: std::fmt::Display>(
     Ok(())
 }
 
+/// Receive an `Ok`/`Err` response.
+///
+/// # Errors
+///
+/// * `PublishError::ReadError`: if the response data could not be read
+/// * `PublishError::MessageTooLarge`: if the response data is too large
+/// * `PublishError::SerialDeserialFailure`: if the response data could not be deserialized
+/// * `PublishError::PcapRequestFail`: if the response data could not be read
+pub async fn recv_ack_response(recv: &mut RecvStream) -> Result<(), PublishError> {
+    let mut ack_buf = Vec::new();
+    recv_raw(recv, &mut ack_buf).await?;
+    bincode::deserialize::<Result<(), &str>>(&ack_buf)?
+        .map_err(|e| PublishError::PcapRequestFail(e.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{
-        frame,
-        test::{channel, TOKEN},
-    };
+    use crate::test::{channel, TOKEN};
 
     #[tokio::test]
     async fn publish_send_recv() {
@@ -634,6 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_ok() {
+        use crate::publish::recv_ack_response;
         let _lock = TOKEN.lock().await;
         let mut channel = channel().await;
 
@@ -642,14 +652,13 @@ mod tests {
             .await
             .unwrap();
         assert!(buf.is_empty());
-        let body: Result<&str, &str> = frame::recv(&mut channel.client.recv, &mut buf)
-            .await
-            .unwrap();
-        assert_eq!(body, Ok("hello"));
+        let resp_result = recv_ack_response(&mut channel.client.recv).await.is_ok();
+        assert!(resp_result);
     }
 
     #[tokio::test]
     async fn send_err() {
+        use crate::publish::{recv_ack_response, PublishError};
         let _lock = TOKEN.lock().await;
         let mut channel = channel().await;
 
@@ -658,9 +667,12 @@ mod tests {
             .await
             .unwrap();
         assert!(buf.is_empty());
-        let body: Result<(), &str> = frame::recv(&mut channel.client.recv, &mut buf)
+        let resp = recv_ack_response(&mut channel.client.recv)
             .await
-            .unwrap();
-        assert_eq!(body, Err("hello"));
+            .unwrap_err();
+        assert_eq!(
+            resp.to_string(),
+            PublishError::PcapRequestFail("hello".to_string()).to_string()
+        );
     }
 }

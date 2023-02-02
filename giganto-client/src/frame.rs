@@ -29,9 +29,6 @@ pub enum SendError {
 
 /// Receives and deserializes a message with a little-endian 4-byte length header.
 ///
-/// `buf` will be filled with the message data excluding the 4-byte length
-/// header.
-///
 /// # Errors
 ///
 /// * `RecvError::DeserializationFailure`: if the message could not be

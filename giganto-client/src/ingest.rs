@@ -9,7 +9,7 @@ use quinn::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
+    Clone, Copy, Debug, Hash, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
 )]
 #[repr(u32)]
 pub enum RecordType {
