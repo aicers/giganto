@@ -218,12 +218,21 @@ async fn process_pcap_extract(
     packet_sources: PacketSources,
     resp_send: &mut SendStream,
 ) -> Result<()> {
-    let filters =
-        bincode::deserialize::<Vec<Pcapfilter>>(filter_data).context("invalid pcapfilter")?;
     let mut buf = Vec::new();
-    giganto_client::publish::send_ok(resp_send, &mut buf, ())
-        .await
-        .context("failed to send ok")?;
+    let filters = match bincode::deserialize::<Vec<Pcapfilter>>(filter_data) {
+        Ok(filters) => {
+            giganto_client::publish::send_ok(resp_send, &mut buf, ())
+                .await
+                .context("Failed to send ok")?;
+            filters
+        }
+        Err(e) => {
+            giganto_client::publish::send_err(resp_send, &mut buf, e)
+                .await
+                .context("Failed to send err")?;
+            bail!("Failed to deserialize Pcapfilters")
+        }
+    };
 
     for filter in filters {
         if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
