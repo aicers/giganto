@@ -1,8 +1,8 @@
 use super::RecordType;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Statistics {
     pub period: u16,
     pub stats: Vec<(RecordType, u64, u64)>, // protocol, packet count, packet size

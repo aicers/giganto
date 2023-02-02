@@ -8,7 +8,9 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, TryFromPrimitive, IntoPrimitive, PartialEq, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
+)]
 #[repr(u32)]
 pub enum RecordType {
     Conn = 0,
@@ -27,7 +29,7 @@ pub enum RecordType {
     Packet = 13,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Packet {
     pub packet_timestamp: i64,
     pub packet: Vec<u8>,

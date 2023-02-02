@@ -3,7 +3,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Log {
     pub kind: String,
     pub log: Vec<u8>,
@@ -21,7 +21,7 @@ impl ResponseRangeData for Log {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Oplog {
     pub agent_name: String,
     pub log_level: OpLogLevel,
@@ -29,7 +29,7 @@ pub struct Oplog {
     // Category, id
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OpLogLevel {
     Info,
     Warn,
