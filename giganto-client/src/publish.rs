@@ -61,14 +61,14 @@ impl From<frame::SendError> for PublishError {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Pcapfilter {
-    timestamp: i64,
+    pub timestamp: i64,
     pub source: String,
-    src_addr: IpAddr,
-    src_port: u16,
-    dst_addr: IpAddr,
-    dst_port: u16,
-    proto: u8,
-    duration: i64,
+    pub src_addr: IpAddr,
+    pub src_port: u16,
+    pub dst_addr: IpAddr,
+    pub dst_port: u16,
+    pub proto: u8,
+    pub duration: i64,
 }
 
 /// Sends the stream request to giganto's publish module.
