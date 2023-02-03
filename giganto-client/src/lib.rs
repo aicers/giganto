@@ -20,7 +20,7 @@ pub fn convert_time_format(timestamp: i64) -> String {
     const A_BILLION: i64 = 1_000_000_000;
     let nsecs = u32::try_from(timestamp % A_BILLION).unwrap_or_default();
     NaiveDateTime::from_timestamp_opt(timestamp / A_BILLION, nsecs)
-        .map_or("-".to_string(), |s| s.format("%s%.6f").to_string())
+        .map_or("-".to_string(), |s| s.format("%s%.9f").to_string())
 }
 
 /// Init operation log with tracing
