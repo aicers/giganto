@@ -1,3 +1,5 @@
+use super::Server;
+use crate::{storage::Database, to_cert_chain, to_private_key};
 use chrono::{Duration, Utc};
 use giganto_client::{
     connection::client_handshake,
@@ -24,10 +26,6 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinHandle,
 };
-
-use crate::{storage::Database, to_cert_chain, to_private_key};
-
-use super::Server;
 
 lazy_static! {
     pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
@@ -753,5 +751,6 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db, packet_sources, sources))
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db, packet_sources, sources, stream_direct_channel))
 }

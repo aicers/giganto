@@ -497,7 +497,8 @@ async fn request_range_data_with_protocol() {
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
     let publish = TestClient::new().await;
 
     // conn protocol
@@ -1066,7 +1067,8 @@ async fn request_range_data_with_log() {
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1141,7 +1143,8 @@ async fn request_range_data_with_period_time_series() {
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1245,7 +1248,8 @@ async fn request_network_event_stream() {
         source: Some(String::from(SOURCE_TWO)),
     };
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel.clone()));
     let mut publish = TestClient::new().await;
 
     {
@@ -1272,9 +1276,15 @@ async fn request_network_event_stream() {
         let send_conn_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "conn");
         let conn_data = gen_conn_raw_event();
-        send_direct_stream(&key, &conn_data, send_conn_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &conn_data,
+            send_conn_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_conn_stream.borrow_mut()))
             .await
@@ -1313,9 +1323,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "conn");
         let conn_data = gen_conn_raw_event();
 
-        send_direct_stream(&key, &conn_data, send_conn_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &conn_data,
+            send_conn_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_conn_stream.borrow_mut()))
@@ -1348,9 +1364,15 @@ async fn request_network_event_stream() {
         let send_dns_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "dns");
         let dns_data = gen_conn_raw_event();
-        send_direct_stream(&key, &dns_data, send_dns_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &dns_data,
+            send_dns_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_dns_stream.borrow_mut()))
             .await
@@ -1390,9 +1412,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_TWO, "dns");
         let dns_data = gen_dns_raw_event();
 
-        send_direct_stream(&key, &dns_data, send_dns_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &dns_data,
+            send_dns_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_dns_stream.borrow_mut()))
@@ -1425,9 +1453,15 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
-        send_direct_stream(&key, &rdp_data, send_rdp_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &rdp_data,
+            send_rdp_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_rdp_stream.borrow_mut()))
             .await
@@ -1466,9 +1500,15 @@ async fn request_network_event_stream() {
         let send_rdp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "rdp");
         let rdp_data = gen_rdp_raw_event();
-        send_direct_stream(&key, &rdp_data, send_rdp_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &rdp_data,
+            send_rdp_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_rdp_stream.borrow_mut()))
@@ -1503,9 +1543,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "http");
         let http_data = gen_conn_raw_event();
 
-        send_direct_stream(&key, &http_data, send_http_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &http_data,
+            send_http_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_http_stream.borrow_mut()))
             .await
@@ -1544,9 +1590,15 @@ async fn request_network_event_stream() {
         let send_http_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "http");
         let http_data = gen_http_raw_event();
-        send_direct_stream(&key, &http_data, send_http_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &http_data,
+            send_http_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_http_stream.borrow_mut()))
@@ -1581,9 +1633,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
-        send_direct_stream(&key, &smtp_data, send_smtp_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &smtp_data,
+            send_smtp_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_smtp_stream.borrow_mut()))
             .await
@@ -1622,9 +1680,15 @@ async fn request_network_event_stream() {
         let send_smtp_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
-        send_direct_stream(&key, &smtp_data, send_smtp_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &smtp_data,
+            send_smtp_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_smtp_stream.borrow_mut()))
@@ -1659,9 +1723,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
-        send_direct_stream(&key, &ntlm_data, send_ntlm_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &ntlm_data,
+            send_ntlm_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_ntlm_stream.borrow_mut()))
             .await
@@ -1700,9 +1770,15 @@ async fn request_network_event_stream() {
         let send_ntlm_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
-        send_direct_stream(&key, &ntlm_data, send_ntlm_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &ntlm_data,
+            send_ntlm_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_ntlm_stream.borrow_mut()))
@@ -1736,9 +1812,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
-        send_direct_stream(&key, &kerberos_data, send_kerberos_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &kerberos_data,
+            send_kerberos_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_kerberos_stream.borrow_mut()))
             .await
@@ -1778,9 +1860,15 @@ async fn request_network_event_stream() {
         let send_kerberos_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
-        send_direct_stream(&key, &kerberos_data, send_kerberos_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &kerberos_data,
+            send_kerberos_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_kerberos_stream.borrow_mut()))
@@ -1814,9 +1902,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
-        send_direct_stream(&key, &ssh_data, send_ssh_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &ssh_data,
+            send_ssh_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_ssh_stream.borrow_mut()))
             .await
@@ -1855,9 +1949,15 @@ async fn request_network_event_stream() {
         let send_ssh_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
-        send_direct_stream(&key, &ssh_data, send_ssh_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &ssh_data,
+            send_ssh_time,
+            SOURCE_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_ssh_stream.borrow_mut()))
@@ -1887,9 +1987,15 @@ async fn request_network_event_stream() {
         let key = gen_network_key(SOURCE_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
-        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time, SOURCE_ONE)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &dce_rpc_data,
+            send_dce_rpc_time,
+            SOURCE_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
 
         let recv_data = receive_hog_data(&mut (*send_dce_rpc_stream.borrow_mut()))
             .await
@@ -1928,9 +2034,15 @@ async fn request_network_event_stream() {
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
         let key = gen_network_key(SOURCE_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
-        send_direct_stream(&key, &dce_rpc_data, send_dce_rpc_time, SOURCE_TWO)
-            .await
-            .unwrap();
+        send_direct_stream(
+            &key,
+            &dce_rpc_data,
+            send_dce_rpc_time,
+            SOURCE_TWO,
+            stream_direct_channel,
+        )
+        .await
+        .unwrap();
 
         let (recv_data, recv_timestamp) =
             receive_crusher_data(&mut (*send_dce_rpc_stream.borrow_mut()))

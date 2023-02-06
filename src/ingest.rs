@@ -8,12 +8,15 @@ use crate::server::{certificate_info, config_server};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::connection::server_handshake;
-use giganto_client::frame::RecvError;
-use giganto_client::ingest::log::{Log, Oplog};
-use giganto_client::ingest::timeseries::PeriodicTimeSeries;
-use giganto_client::ingest::{
-    receive_event, receive_record_header, send_ack_timestamp, Packet, RecordType,
+use giganto_client::{
+    connection::server_handshake,
+    frame::RecvError,
+    ingest::{
+        log::{Log, Oplog},
+        receive_event, receive_record_header, send_ack_timestamp,
+        timeseries::PeriodicTimeSeries,
+        Packet, RecordType,
+    },
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
@@ -27,8 +30,10 @@ use std::{
 };
 use tokio::{
     select,
-    sync::mpsc::{channel, Receiver, Sender},
-    sync::{Mutex, RwLock},
+    sync::{
+        mpsc::{channel, Receiver, Sender, UnboundedSender},
+        Mutex, RwLock,
+    },
     task, time,
 };
 use tracing::{error, info};
@@ -46,6 +51,7 @@ const INGEST_VERSION_REQ: &str = "0.8.0-alpha.1";
 type SourceInfo = (String, DateTime<Utc>, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type StreamDirectChannel = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 pub struct Server {
     server_config: ServerConfig,
@@ -67,7 +73,13 @@ impl Server {
         }
     }
 
-    pub async fn run(self, db: Database, packet_sources: PacketSources, sources: Sources) {
+    pub async fn run(
+        self,
+        db: Database,
+        packet_sources: PacketSources,
+        sources: Sources,
+        stream_direct_channel: StreamDirectChannel,
+    ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
@@ -87,8 +99,11 @@ impl Server {
             let sender = tx.clone();
             let db = db.clone();
             let packet_sources = packet_sources.clone();
+            let stream_direct_channel = stream_direct_channel.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db, packet_sources, sender).await {
+                if let Err(e) =
+                    handle_connection(conn, db, packet_sources, sender, stream_direct_channel).await
+                {
                     error!("connection failed: {}", e);
                 }
             });
@@ -101,6 +116,7 @@ async fn handle_connection(
     db: Database,
     packet_sources: PacketSources,
     sender: Sender<SourceInfo>,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
@@ -129,27 +145,23 @@ async fn handle_connection(
     async {
         loop {
             let stream = connection.accept_bi().await;
-            let source = source.clone();
             let stream = match stream {
-                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                Err(conn_err) => {
                     if let Err(error) = sender.send((source, Utc::now(), true)).await {
                         error!("Faild to send channel data : {}", error);
                     }
-                    return Ok(());
-                }
-                Err(e) => {
-                    if let Err(error) = sender.send((source, Utc::now(), true)).await {
-                        error!("Faild to send channel data : {}", error);
+                    match conn_err {
+                        quinn::ConnectionError::ApplicationClosed(_) => return Ok(()),
+                        _ => return Err(conn_err),
                     }
-                    return Err(e);
                 }
                 Ok(s) => s,
             };
-
             let source = source.clone();
             let db = db.clone();
+            let stream_direct_channel = stream_direct_channel.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_request(source, stream, db).await {
+                if let Err(e) = handle_request(source, stream, db, stream_direct_channel).await {
                     error!("failed: {}", e);
                 }
             });
@@ -164,6 +176,7 @@ async fn handle_request(
     source: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
     let mut buf = [0; 4];
     receive_record_header(&mut recv, &mut buf)
@@ -178,6 +191,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "conn")),
                 source,
                 db.conn_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -189,6 +203,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dns")),
                 source,
                 db.dns_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -200,6 +215,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "log")),
                 source,
                 db.log_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -211,6 +227,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "http")),
                 source,
                 db.http_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -222,6 +239,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "rdp")),
                 source,
                 db.rdp_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -233,6 +251,7 @@ async fn handle_request(
                 None,
                 source,
                 db.periodic_time_series_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -244,6 +263,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "smtp")),
                 source,
                 db.smtp_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -255,6 +275,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -266,6 +287,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -277,6 +299,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "ssh")),
                 source,
                 db.ssh_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -288,6 +311,7 @@ async fn handle_request(
                 Some(gen_network_key(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -296,9 +320,10 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Statistics,
-                Some(gen_network_key(&source, "statistics")),
+                None,
                 source,
                 db.statistics_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -307,9 +332,10 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Oplog,
-                Some(gen_network_key(&source, "oplog")),
+                None,
                 source,
                 db.oplog_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -318,9 +344,10 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Packet,
-                Some(gen_network_key(&source, "packet")),
+                None,
                 source,
                 db.packet_store()?,
+                stream_direct_channel,
             )
             .await?;
         }
@@ -336,6 +363,7 @@ async fn handle_data<T>(
     network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -423,7 +451,14 @@ async fn handle_data<T>(
                 }
                 store.append(&key, &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
-                    send_direct_stream(network_key, &raw_event, timestamp, &source).await?;
+                    send_direct_stream(
+                        network_key,
+                        &raw_event,
+                        timestamp,
+                        &source,
+                        stream_direct_channel.clone(),
+                    )
+                    .await?;
                 }
                 if store.flush().is_ok() {
                     ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
@@ -468,10 +503,10 @@ async fn check_sources_conn(
 
                 for source_key in keys {
                     let timestamp = Utc::now();
-                    sources.insert(source_key.clone(), timestamp);
                     if source_store.insert(&source_key, timestamp).is_err(){
                         error!("Failed to append Source store");
                     }
+                    sources.insert(source_key, timestamp);
                 }
             }
 
@@ -483,10 +518,10 @@ async fn check_sources_conn(
                     sources.write().await.remove(&source_key);
                     packet_sources.write().await.remove(&source_key);
                 } else {
-                    sources.write().await.insert(source_key.to_string(), timestamp_val);
                     if source_store.insert(&source_key, timestamp_val).is_err(){
                         error!("Failed to append Source store");
                     }
+                    sources.write().await.insert(source_key, timestamp_val);
                 }
 
             }

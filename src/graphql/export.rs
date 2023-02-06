@@ -19,11 +19,11 @@ use giganto_client::{
 };
 use rocksdb::Direction;
 use serde::{de::DeserializeOwned, Serialize};
-use std::io::Write;
 use std::{
     borrow::Cow,
     fmt::Display,
     fs::{self, File},
+    io::Write,
     net::IpAddr,
     path::{Path, PathBuf},
 };
