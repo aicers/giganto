@@ -18,7 +18,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Modify module name `ingestion` to `ingest`.
-- Create giganto's communication part as a separate crate.
+- Create giganto's communication part as a separate crate. (giganto-client)
+- Move init tracing to giganto-client crate for oplog logging.
 
 ## [0.7.0] - 2023-01-04
 

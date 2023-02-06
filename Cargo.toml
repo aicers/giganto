@@ -16,7 +16,6 @@ futures-util = "0.3"
 giganto-client = { path ="giganto-client" }
 humantime = "2.1"
 humantime-serde = "1"
-lazy_static = "1.4"
 num_enum = "0.5"
 quinn = "0.9"
 rocksdb = "0.19"

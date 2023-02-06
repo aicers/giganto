@@ -3,6 +3,7 @@
  roots = ["tests/root.pem"]
  ingest_address = "0.0.0.0:38370"
  publish_address = "0.0.0.0:38371"
+ graphql_address = "127.0.0.1:8443"
  data_dir = "tests/data"
  retention = "10000d"
  log_dir = "tests/logs/apps"

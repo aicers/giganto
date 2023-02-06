@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
 
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
 
     let schema = graphql::schema(
         database.clone(),
@@ -88,10 +89,16 @@ async fn main() -> Result<()> {
         key.clone(),
         files.clone(),
     );
-    task::spawn(publish_server.run(database.clone(), packet_sources.clone()));
+    task::spawn(publish_server.run(
+        database.clone(),
+        packet_sources.clone(),
+        stream_direct_channel.clone(),
+    ));
 
     let ingest_server = ingest::Server::new(settings.ingest_address, cert, key, files);
-    ingest_server.run(database, packet_sources, sources).await;
+    ingest_server
+        .run(database, packet_sources, sources, stream_direct_channel)
+        .await;
 
     Ok(())
 }

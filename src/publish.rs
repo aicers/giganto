@@ -4,46 +4,37 @@ mod tests;
 
 use self::implement::{RequestRangeMessage, RequestStreamMessage};
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::ingest::implement::EventFilter;
-use crate::ingest::{NetworkKey, PacketSources};
+use crate::ingest::{implement::EventFilter, NetworkKey, PacketSources, StreamDirectChannel};
 use crate::server::{certificate_info, config_server};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
-use giganto_client::connection::server_handshake;
-use giganto_client::frame::send_bytes;
-use giganto_client::publish::range::{
-    MessageCode, REconvergeKindType, RequestRange, RequestTimeSeriesRange, ResponseRangeData,
+use giganto_client::{
+    connection::server_handshake,
+    frame::send_bytes,
+    publish::{
+        pcap_extract_request,
+        range::{
+            MessageCode, REconvergeKindType, RequestRange, RequestTimeSeriesRange,
+            ResponseRangeData,
+        },
+        receive_range_data_request, receive_stream_request, send_crusher_data,
+        send_crusher_stream_start_message, send_err, send_hog_stream_start_message, send_ok,
+        send_range_data,
+        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+        Pcapfilter,
+    },
 };
-use giganto_client::publish::stream::{
-    NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord,
-};
-use giganto_client::publish::{
-    pcap_extract_request, receive_range_data_request, receive_stream_request, send_crusher_data,
-    send_crusher_stream_start_message, send_hog_stream_start_message, send_range_data, Pcapfilter,
-};
-use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, net::SocketAddr};
-use tokio::{
-    select,
-    sync::{
-        mpsc::{unbounded_channel, UnboundedSender},
-        RwLock,
-    },
-};
+use std::net::SocketAddr;
+use tokio::{select, sync::mpsc::unbounded_channel};
 use tracing::{debug, error, info};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
-
-lazy_static! {
-    pub static ref STREAM_DIRECT_CHANNEL: RwLock<HashMap<String, UnboundedSender<Vec<u8>>>> =
-        RwLock::new(HashMap::new());
-}
 
 pub struct Server {
     server_config: ServerConfig,
@@ -65,7 +56,12 @@ impl Server {
         }
     }
 
-    pub async fn run(self, db: Database, packet_sources: PacketSources) {
+    pub async fn run(
+        self,
+        db: Database,
+        packet_sources: PacketSources,
+        stream_direct_channel: StreamDirectChannel,
+    ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
             "listening on {}",
@@ -75,8 +71,11 @@ impl Server {
         while let Some(conn) = endpoint.accept().await {
             let db = db.clone();
             let packet_sources = packet_sources.clone();
+            let stream_direct_channel = stream_direct_channel.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, db, packet_sources).await {
+                if let Err(e) =
+                    handle_connection(conn, db, packet_sources, stream_direct_channel).await
+                {
                     error!("connection failed: {}", e);
                 }
             });
@@ -88,6 +87,7 @@ async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
     packet_sources: PacketSources,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -111,6 +111,7 @@ async fn handle_connection(
         recv,
         source,
         packet_sources.clone(),
+        stream_direct_channel.clone(),
     ));
 
     async {
@@ -146,6 +147,7 @@ async fn request_stream(
     mut recv: RecvStream,
     conn_source: String,
     packet_sources: PacketSources,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
     loop {
         match receive_stream_request(&mut recv).await {
@@ -153,6 +155,7 @@ async fn request_stream(
                 let db = stream_db.clone();
                 let conn = connection.clone();
                 let source = conn_source.clone();
+                let stream_direct_channel = stream_direct_channel.clone();
                 if record_type == RequestStreamRecord::Pcap {
                     process_pcap_extract(&raw_data, packet_sources.clone(), &mut send).await?;
                 } else {
@@ -168,6 +171,7 @@ async fn request_stream(
                                             node_type,
                                             record_type,
                                             msg,
+                                            stream_direct_channel,
                                         )
                                         .await
                                         {
@@ -189,6 +193,7 @@ async fn request_stream(
                                             node_type,
                                             record_type,
                                             msg,
+                                            stream_direct_channel,
                                         )
                                         .await
                                         {
@@ -221,13 +226,13 @@ async fn process_pcap_extract(
     let mut buf = Vec::new();
     let filters = match bincode::deserialize::<Vec<Pcapfilter>>(filter_data) {
         Ok(filters) => {
-            giganto_client::publish::send_ok(resp_send, &mut buf, ())
+            send_ok(resp_send, &mut buf, ())
                 .await
                 .context("Failed to send ok")?;
             filters
         }
         Err(e) => {
-            giganto_client::publish::send_err(resp_send, &mut buf, e)
+            send_err(resp_send, &mut buf, e)
                 .await
                 .context("Failed to send err")?;
             bail!("Failed to deserialize Pcapfilters")
@@ -256,6 +261,7 @@ async fn process_stream<T>(
     node_type: NodeType,
     record_type: RequestStreamRecord,
     request_msg: T,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()>
 where
     T: RequestStreamMessage,
@@ -263,8 +269,16 @@ where
     match record_type {
         RequestStreamRecord::Conn => {
             if let Ok(store) = db.conn_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -274,8 +288,16 @@ where
         }
         RequestStreamRecord::Dns => {
             if let Ok(store) = db.dns_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -285,8 +307,16 @@ where
         }
         RequestStreamRecord::Rdp => {
             if let Ok(store) = db.rdp_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -296,8 +326,16 @@ where
         }
         RequestStreamRecord::Http => {
             if let Ok(store) = db.http_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -307,8 +345,16 @@ where
         }
         RequestStreamRecord::Log => {
             if let Ok(store) = db.log_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -318,8 +364,16 @@ where
         }
         RequestStreamRecord::Smtp => {
             if let Ok(store) = db.smtp_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -329,8 +383,16 @@ where
         }
         RequestStreamRecord::Ntlm => {
             if let Ok(store) = db.ntlm_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -340,8 +402,16 @@ where
         }
         RequestStreamRecord::Kerberos => {
             if let Ok(store) = db.kerberos_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -351,8 +421,16 @@ where
         }
         RequestStreamRecord::Ssh => {
             if let Ok(store) = db.ssh_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -362,8 +440,16 @@ where
         }
         RequestStreamRecord::DceRpc => {
             if let Ok(store) = db.dce_rpc_store() {
-                if let Err(e) =
-                    send_stream(store, conn, record_type, request_msg, source, node_type).await
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
                 {
                     error!("Failed to send network stream : {}", e);
                 }
@@ -381,8 +467,9 @@ pub async fn send_direct_stream(
     raw_event: &Vec<u8>,
     timestamp: i64,
     source: &str,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
-    for (req_key, sender) in STREAM_DIRECT_CHANNEL.read().await.iter() {
+    for (req_key, sender) in stream_direct_channel.read().await.iter() {
         if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
@@ -410,6 +497,7 @@ async fn send_stream<T, N>(
     msg: N,
     source: Option<String>,
     node_type: NodeType,
+    stream_direct_channel: StreamDirectChannel,
 ) -> Result<()>
 where
     T: EventFilter + Serialize + DeserializeOwned,
@@ -422,7 +510,7 @@ where
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let channel_remove_key = channel_key.clone();
 
-    STREAM_DIRECT_CHANNEL
+    stream_direct_channel
         .write()
         .await
         .insert(channel_key, send);
@@ -478,7 +566,7 @@ where
                         continue;
                     }
                     if send_bytes(&mut sender, &buf).await.is_err(){
-                        STREAM_DIRECT_CHANNEL
+                        stream_direct_channel
                         .write()
                         .await
                         .remove(&channel_remove_key);
