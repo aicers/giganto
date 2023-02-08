@@ -1,5 +1,6 @@
 use super::{
-    get_timestamp, load_connection, FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    base64_engine, get_timestamp, load_connection, Engine, FromKeyValue, RawEventFilter, TimeRange,
+    TIMESTAMP_SIZE,
 };
 use crate::storage::Database;
 use async_graphql::{
@@ -55,7 +56,7 @@ impl FromKeyValue<pk> for Packet {
         Ok(Packet {
             request_time: get_timestamp(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
             packet_time: get_timestamp(key)?,
-            packet: base64::encode(pk.packet),
+            packet: base64_engine.encode(pk.packet),
         })
     }
 }

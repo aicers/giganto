@@ -1,4 +1,6 @@
-use super::{get_filtered_iter, get_timestamp, load_connection, FromKeyValue};
+use super::{
+    base64_engine, get_filtered_iter, get_timestamp, load_connection, Engine, FromKeyValue,
+};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, FilteredIter},
@@ -820,7 +822,7 @@ fn network_connection(
         if selected == conn_ts {
             if let Some((key, value)) = conn_data {
                 result_vec.push(Edge::new(
-                    base64::encode(&key),
+                    base64_engine.encode(&key),
                     NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
                 ));
                 conn_data = conn_iter.next();
@@ -829,7 +831,7 @@ fn network_connection(
         } else if selected == dns_ts {
             if let Some((key, value)) = dns_data {
                 result_vec.push(Edge::new(
-                    base64::encode(&key),
+                    base64_engine.encode(&key),
                     NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
                 ));
                 dns_data = dns_iter.next();
@@ -838,7 +840,7 @@ fn network_connection(
         } else if selected == http_ts {
             if let Some((key, value)) = http_data {
                 result_vec.push(Edge::new(
-                    base64::encode(&key),
+                    base64_engine.encode(&key),
                     NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
                 ));
                 http_data = http_iter.next();
@@ -847,7 +849,7 @@ fn network_connection(
         } else if selected == rdp_ts {
             if let Some((key, value)) = rdp_data {
                 result_vec.push(Edge::new(
-                    base64::encode(&key),
+                    base64_engine.encode(&key),
                     NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
                 ));
                 rdp_data = rdp_iter.next();

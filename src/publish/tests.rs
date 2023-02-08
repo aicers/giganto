@@ -3,6 +3,7 @@ use crate::{
     storage::{Database, RawEventStore},
     to_cert_chain, to_private_key,
 };
+use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use giganto_client::{
     connection::client_handshake,
@@ -370,7 +371,7 @@ fn gen_dce_rpc_raw_event() -> Vec<u8> {
 fn gen_log_raw_event() -> Vec<u8> {
     let log_body = Log {
         kind: String::from("Hello"),
-        log: base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+        log: base64_engine.decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
 
     bincode::serialize(&log_body).unwrap()

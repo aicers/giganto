@@ -1,5 +1,6 @@
 use super::Server;
 use crate::{storage::Database, to_cert_chain, to_private_key};
+use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{Duration, Utc};
 use giganto_client::{
     connection::client_handshake,
@@ -249,7 +250,7 @@ async fn log() {
 
     let log_body = Log {
         kind: String::from("Hello"),
-        log: base64::decode("aGVsbG8gd29ybGQ=").unwrap(),
+        log: base64_engine.decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
 
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
