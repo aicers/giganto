@@ -16,6 +16,7 @@ use async_graphql::{
     connection::{Connection, Edge},
     EmptyMutation, EmptySubscription, InputObject, MergedObject, OutputType, Result,
 };
+use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{net::IpAddr, path::PathBuf};
@@ -95,7 +96,7 @@ where
         let (start, end) = filter.time();
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64::decode(before)?;
+        let cursor = base64_engine.decode(before)?;
         let time = upper_closed_bound_key(key_prefix, end);
         if cursor.cmp(&time) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
@@ -125,7 +126,7 @@ where
         let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64::decode(after)?;
+        let cursor = base64_engine.decode(after)?;
         let time = lower_closed_bound_key(key_prefix, start);
         if cursor.cmp(&time) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
@@ -195,7 +196,7 @@ where
         .into_iter()
         .map(|(key, node)| {
             Edge::new(
-                base64::encode(&key),
+                base64_engine.encode(&key),
                 N::from_key_value(&key, node).expect("failed to convert value"),
             )
         })
@@ -265,7 +266,7 @@ where
         let (start, end) = filter.time();
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64::decode(before)?;
+        let cursor = base64_engine.decode(before)?;
         let time = upper_closed_bound_key(key_prefix, end);
         if cursor.cmp(&time) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
@@ -287,7 +288,7 @@ where
         let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64::decode(after)?;
+        let cursor = base64_engine.decode(after)?;
         let time = lower_closed_bound_key(key_prefix, start);
         if cursor.cmp(&time) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());

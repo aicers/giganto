@@ -1,4 +1,6 @@
-use super::{get_timestamp, load_connection, network::key_prefix, FromKeyValue};
+use super::{
+    base64_engine, get_timestamp, load_connection, network::key_prefix, Engine, FromKeyValue,
+};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::Database,
@@ -104,7 +106,7 @@ impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
             timestamp: get_timestamp(key)?,
-            log: base64::encode(l.log),
+            log: base64_engine.encode(l.log),
         })
     }
 }
@@ -191,7 +193,7 @@ impl LogQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
+    use super::{base64_engine, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
     use crate::{
         graphql::{TestSchema, TimeRange},
         storage::RawEventStore,
@@ -236,11 +238,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
 
@@ -267,15 +269,15 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 3);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log3"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log4"
         );
         assert_eq!(
-            base64::decode(&connection.edges[2].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[2].node.log).unwrap(),
             b"log5"
         );
 
@@ -302,15 +304,15 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 3);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
         assert_eq!(
-            base64::decode(&connection.edges[2].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[2].node.log).unwrap(),
             b"log3"
         );
 
@@ -340,11 +342,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
 
@@ -371,15 +373,15 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 3);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log3"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log4"
         );
         assert_eq!(
-            base64::decode(&connection.edges[2].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[2].node.log).unwrap(),
             b"log5"
         );
 
@@ -406,11 +408,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
 
@@ -433,20 +435,18 @@ mod tests {
                 kind: Some("kind1".to_string()),
             },
             None,
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03")),
             None,
             Some(3),
         )
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
 
@@ -466,20 +466,18 @@ mod tests {
                 kind: Some("kind1".to_string()),
             },
             None,
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04")),
             None,
             Some(3),
         )
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log2"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log3"
         );
 
@@ -499,24 +497,22 @@ mod tests {
                 kind: Some("kind1".to_string()),
             },
             None,
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04")),
             None,
             Some(3),
         )
         .unwrap();
         assert_eq!(connection.edges.len(), 3);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log2"
         );
         assert_eq!(
-            base64::decode(&connection.edges[2].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[2].node.log).unwrap(),
             b"log3"
         );
 
@@ -538,9 +534,7 @@ mod tests {
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
             },
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
             None,
             Some(3),
             None,
@@ -548,11 +542,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log2"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log3"
         );
 
@@ -571,9 +565,7 @@ mod tests {
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
             },
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03")),
             None,
             None,
             None,
@@ -581,11 +573,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log4"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log5"
         );
 
@@ -604,9 +596,7 @@ mod tests {
                 source: "src1".to_string(),
                 kind: Some("kind1".to_string()),
             },
-            Some(base64::encode(
-                b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01",
-            )),
+            Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
             None,
             None,
             None,
@@ -614,11 +604,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 2);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log2"
         );
         assert_eq!(
-            base64::decode(&connection.edges[1].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[1].node.log).unwrap(),
             b"log3"
         );
 
@@ -642,11 +632,11 @@ mod tests {
         .unwrap();
         assert_eq!(connection.edges.len(), 5);
         assert_eq!(
-            base64::decode(&connection.edges[0].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[0].node.log).unwrap(),
             b"log1"
         );
         assert_eq!(
-            base64::decode(&connection.edges[4].node.log).unwrap(),
+            base64_engine.decode(&connection.edges[4].node.log).unwrap(),
             b"log5"
         );
     }
@@ -692,7 +682,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}],pageInfo: {{hasPreviousPage: false}}}}}}", base64::encode("log 1"))
+            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}],pageInfo: {{hasPreviousPage: false}}}}}}", base64_engine.encode("log 1"))
         );
     }
 
