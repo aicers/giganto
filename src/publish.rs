@@ -92,7 +92,7 @@ async fn handle_connection(
     let connection = conn.await?;
 
     let (send, recv) = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
-        Ok((send, recv)) => {
+        Ok((send, recv, _)) => {
             info!("Compatible version");
             (send, recv)
         }
