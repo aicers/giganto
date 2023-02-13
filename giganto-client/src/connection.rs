@@ -87,7 +87,7 @@ pub async fn client_handshake(
 pub async fn server_handshake(
     conn: &Connection,
     std_version: &str,
-) -> Result<(SendStream, RecvStream), HandshakeError> {
+) -> Result<(SendStream, RecvStream, bool), HandshakeError> {
     let (mut send, mut recv) = conn
         .accept_bi()
         .await
@@ -98,17 +98,17 @@ pub async fn server_handshake(
         .await
         .map_err(|_| HandshakeError::InvalidMessage)?;
 
-    let recv_veriosn = String::from_utf8(buf).map_err(|_| HandshakeError::InvalidMessage)?;
+    let recv_version = String::from_utf8(buf).map_err(|_| HandshakeError::InvalidMessage)?;
     let version_req = VersionReq::parse(std_version).expect("valid version requirement");
-    let protocol_version = Version::parse(&recv_veriosn)
-        .map_err(|_| HandshakeError::IncompatibleProtocol(recv_veriosn))?;
-
+    let protocol_version = Version::parse(&recv_version)
+        .map_err(|_| HandshakeError::IncompatibleProtocol(recv_version))?;
     if version_req.matches(&protocol_version) {
+        let is_reproduce = protocol_version.to_string().ends_with("reproduce");
         let resp_data = bincode::serialize::<Option<&str>>(&Some(std_version))?;
         send_handshake(&mut send, &resp_data)
             .await
             .map_err(HandshakeError::from)?;
-        return Ok((send, recv));
+        return Ok((send, recv, is_reproduce));
     }
     let resp_data = bincode::serialize::<Option<&str>>(&None)?;
     send_handshake(&mut send, &resp_data)

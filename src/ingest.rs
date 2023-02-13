@@ -118,10 +118,12 @@ async fn handle_connection(
     sender: Sender<SourceInfo>,
     stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
+    let rep: bool;
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
-        Ok((mut send, _)) => {
+        Ok((mut send, _, is_reproduce)) => {
             info!("Compatible version");
+            rep = is_reproduce;
             send.finish().await?;
         }
         Err(e) => {
@@ -133,13 +135,15 @@ async fn handle_connection(
 
     let source = certificate_info(&connection)?;
 
-    packet_sources
-        .write()
-        .await
-        .insert(source.clone(), connection.clone());
+    if !rep {
+        packet_sources
+            .write()
+            .await
+            .insert(source.clone(), connection.clone());
+    }
 
     if let Err(error) = sender.send((source.clone(), Utc::now(), false)).await {
-        error!("Faild to send channel data : {}", error);
+        error!("Failed to send channel data : {}", error);
     }
 
     async {
@@ -148,10 +152,13 @@ async fn handle_connection(
             let stream = match stream {
                 Err(conn_err) => {
                     if let Err(error) = sender.send((source, Utc::now(), true)).await {
-                        error!("Faild to send channel data : {}", error);
+                        error!("Failed to send internal channel data : {}", error);
                     }
                     match conn_err {
-                        quinn::ConnectionError::ApplicationClosed(_) => return Ok(()),
+                        quinn::ConnectionError::ApplicationClosed(_) => {
+                            info!("application closed");
+                            return Ok(());
+                        }
                         _ => return Err(conn_err),
                     }
                 }
