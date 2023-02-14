@@ -670,6 +670,7 @@ impl NetworkQuery {
         .await
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn network_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -759,27 +760,115 @@ impl NetworkQuery {
                     }
                 }
 
+                let (ntlm_iter, cursor, _) = get_filtered_iter(
+                    &db.ntlm_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut ntlm_iter = ntlm_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = ntlm_iter.peek() {
+                        if key.as_ref() == cursor {
+                            ntlm_iter.next();
+                        }
+                    }
+                }
+
+                let (kerberos_iter, cursor, _) = get_filtered_iter(
+                    &db.kerberos_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut kerberos_iter = kerberos_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = kerberos_iter.peek() {
+                        if key.as_ref() == cursor {
+                            kerberos_iter.next();
+                        }
+                    }
+                }
+
+                let (ssh_iter, cursor, _) = get_filtered_iter(
+                    &db.ssh_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut ssh_iter = ssh_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = ssh_iter.peek() {
+                        if key.as_ref() == cursor {
+                            ssh_iter.next();
+                        }
+                    }
+                }
+
+                let (dce_rpc_iter, cursor, _) = get_filtered_iter(
+                    &db.dce_rpc_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut dce_rpc_iter = dce_rpc_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = dce_rpc_iter.peek() {
+                        if key.as_ref() == cursor {
+                            dce_rpc_iter.next();
+                        }
+                    }
+                }
+
                 let mut is_forward: bool = true;
                 if before.is_some() || last.is_some() {
                     is_forward = false;
                 }
 
-                network_connection(conn_iter, dns_iter, http_iter, rdp_iter, size, is_forward)
+                network_connection(
+                    conn_iter,
+                    dns_iter,
+                    http_iter,
+                    rdp_iter,
+                    ntlm_iter,
+                    kerberos_iter,
+                    ssh_iter,
+                    dce_rpc_iter,
+                    size,
+                    is_forward,
+                )
             },
         )
         .await
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn network_connection(
     mut conn_iter: Peekable<FilteredIter<Conn>>,
     mut dns_iter: Peekable<FilteredIter<Dns>>,
     mut http_iter: Peekable<FilteredIter<Http>>,
     mut rdp_iter: Peekable<FilteredIter<Rdp>>,
+    mut ntlm_iter: Peekable<FilteredIter<Ntlm>>,
+    mut kerberos_iter: Peekable<FilteredIter<Kerberos>>,
+    mut ssh_iter: Peekable<FilteredIter<Ssh>>,
+    mut dce_rpc_iter: Peekable<FilteredIter<DceRpc>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
-    let timestamp = Utc::now();
+    let timestamp = min_max_time(is_forward);
     let mut result_vec: Vec<Edge<String, NetworkRawEvents, _>> = Vec::new();
     let mut has_previous_page: bool = false;
     let mut has_next_page: bool = false;
@@ -789,83 +878,175 @@ fn network_connection(
     let mut dns_data = dns_iter.next();
     let mut http_data = http_iter.next();
     let mut rdp_data = rdp_iter.next();
+    let mut ntlm_data = ntlm_iter.next();
+    let mut kerberos_data = kerberos_iter.next();
+    let mut ssh_data = ssh_iter.next();
+    let mut dce_rpc_data = dce_rpc_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
             get_timestamp(key)?
         } else {
-            Utc::now()
+            min_max_time(is_forward)
         };
 
         let dns_ts = if let Some((ref key, _)) = dns_data {
             get_timestamp(key)?
         } else {
-            Utc::now()
+            min_max_time(is_forward)
         };
 
         let http_ts = if let Some((ref key, _)) = http_data {
             get_timestamp(key)?
         } else {
-            Utc::now()
+            min_max_time(is_forward)
         };
 
         let rdp_ts = if let Some((ref key, _)) = rdp_data {
             get_timestamp(key)?
         } else {
-            Utc::now()
+            min_max_time(is_forward)
         };
-        let selected = if is_forward {
-            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts))))
+
+        let ntlm_ts = if let Some((ref key, _)) = ntlm_data {
+            get_timestamp(key)?
         } else {
-            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts))))
+            min_max_time(is_forward)
         };
-        if selected == conn_ts {
-            if let Some((key, value)) = conn_data {
-                result_vec.push(Edge::new(
-                    base64_engine.encode(&key),
-                    NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
-                ));
-                conn_data = conn_iter.next();
-            } else {
-            };
-        } else if selected == dns_ts {
-            if let Some((key, value)) = dns_data {
-                result_vec.push(Edge::new(
-                    base64_engine.encode(&key),
-                    NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
-                ));
-                dns_data = dns_iter.next();
-            } else {
-            };
-        } else if selected == http_ts {
-            if let Some((key, value)) = http_data {
-                result_vec.push(Edge::new(
-                    base64_engine.encode(&key),
-                    NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
-                ));
-                http_data = http_iter.next();
-            } else {
-            };
-        } else if selected == rdp_ts {
-            if let Some((key, value)) = rdp_data {
-                result_vec.push(Edge::new(
-                    base64_engine.encode(&key),
-                    NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
-                ));
-                rdp_data = rdp_iter.next();
-            } else {
-            };
+
+        let kerberos_ts = if let Some((ref key, _)) = kerberos_data {
+            get_timestamp(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let ssh_ts = if let Some((ref key, _)) = ssh_data {
+            get_timestamp(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let dce_rpc_ts = if let Some((ref key, _)) = dce_rpc_data {
+            get_timestamp(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let selected = if is_forward {
+            timestamp.min(dns_ts.min(conn_ts.min(
+                http_ts.min(rdp_ts.min(ntlm_ts.min(kerberos_ts.min(ssh_ts.min(dce_rpc_ts))))),
+            )))
+        } else {
+            timestamp.max(dns_ts.max(conn_ts.max(
+                http_ts.max(rdp_ts.max(ntlm_ts.max(kerberos_ts.max(ssh_ts.max(dce_rpc_ts))))),
+            )))
+        };
+
+        match selected {
+            _ if selected == conn_ts => {
+                if let Some((key, value)) = conn_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
+                    ));
+                    conn_data = conn_iter.next();
+                } else {
+                };
+            }
+            _ if selected == dns_ts => {
+                if let Some((key, value)) = dns_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
+                    ));
+                    dns_data = dns_iter.next();
+                } else {
+                };
+            }
+            _ if selected == http_ts => {
+                if let Some((key, value)) = http_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    http_data = http_iter.next();
+                } else {
+                };
+            }
+            _ if selected == rdp_ts => {
+                if let Some((key, value)) = rdp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    rdp_data = rdp_iter.next();
+                } else {
+                };
+            }
+            _ if selected == ntlm_ts => {
+                if let Some((key, value)) = ntlm_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::NtlmRawEvent(NtlmRawEvent::from_key_value(&key, value)?),
+                    ));
+                    ntlm_data = ntlm_iter.next();
+                } else {
+                };
+            }
+            _ if selected == kerberos_ts => {
+                if let Some((key, value)) = kerberos_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::KerberosRawEvent(KerberosRawEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    kerberos_data = kerberos_iter.next();
+                } else {
+                };
+            }
+            _ if selected == ssh_ts => {
+                if let Some((key, value)) = ssh_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::SshRawEvent(SshRawEvent::from_key_value(&key, value)?),
+                    ));
+                    ssh_data = ssh_iter.next();
+                } else {
+                };
+            }
+            _ if selected == dce_rpc_ts => {
+                if let Some((key, value)) = dce_rpc_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::DceRpcRawEvent(DceRpcRawEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    dce_rpc_data = dce_rpc_iter.next();
+                } else {
+                };
+            }
+            _ => {}
         }
         if (result_vec.len() >= size)
             || (conn_data.is_none()
                 && dns_data.is_none()
                 && http_data.is_none()
-                && rdp_data.is_none())
+                && rdp_data.is_none()
+                && ntlm_data.is_none()
+                && kerberos_data.is_none()
+                && ssh_data.is_none()
+                && dce_rpc_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
                 || http_data.is_some()
                 || rdp_data.is_some()
+                || ntlm_data.is_some()
+                || kerberos_data.is_some()
+                || ssh_data.is_some()
+                || dce_rpc_data.is_some()
             {
                 has_next_value = true;
             }
@@ -890,6 +1071,14 @@ pub(crate) fn key_prefix(source: &str) -> Vec<u8> {
     prefix.extend_from_slice(source.as_bytes());
     prefix.push(0);
     prefix
+}
+
+fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+    if is_forward {
+        DateTime::<Utc>::MAX_UTC
+    } else {
+        DateTime::<Utc>::MIN_UTC
+    }
 }
 
 #[cfg(test)]
@@ -1608,6 +1797,10 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
         let rdp_store = schema.db.rdp_store().unwrap();
+        let ntlm_store = schema.db.ntlm_store().unwrap();
+        let kerberos_store = schema.db.kerberos_store().unwrap();
+        let ssh_store = schema.db.ssh_store().unwrap();
+        let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
 
         insert_conn_raw_event(
             &conn_store,
@@ -1637,7 +1830,36 @@ mod tests {
                 .unwrap()
                 .timestamp_nanos(),
         );
+        insert_ntlm_raw_event(
+            &ntlm_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
+        );
+        insert_kerberos_raw_event(
+            &kerberos_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos(),
+        );
+        insert_ssh_raw_event(
+            &ssh_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
+                .unwrap()
+                .timestamp_nanos(),
+        );
+        insert_dce_rpc_raw_event(
+            &dce_rpc_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
+                .unwrap()
+                .timestamp_nanos(),
+        );
 
+        // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos
         let query = r#"
         {
             networkRawEvents(
@@ -1645,7 +1867,7 @@ mod tests {
                     time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
                     source: "src 1"
                 }
-                first: 4
+                first: 10
               ) {
                 edges {
                     node {
@@ -1661,12 +1883,24 @@ mod tests {
                         ... on RdpRawEvent {
                             timestamp
                         }
+                        ... on NtlmRawEvent {
+                            timestamp
+                        }
+                        ... on KerberosRawEvent {
+                            timestamp
+                        }
+                        ... on SshRawEvent {
+                            timestamp
+                        }
+                        ... on DceRpcRawEvent {
+                            timestamp
+                        }
                         __typename
                     }
                 }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}}]}}");
+        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}}]}}");
     }
 }
