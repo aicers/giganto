@@ -744,6 +744,7 @@ dependencies = [
  "bincode",
  "chrono",
  "config",
+ "data-encoding",
  "directories",
  "futures-util",
  "giganto-client",
