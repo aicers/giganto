@@ -1,6 +1,5 @@
 use super::{
-    base64_engine, get_timestamp, load_connection, Engine, FromKeyValue, RawEventFilter, TimeRange,
-    TIMESTAMP_SIZE,
+    get_timestamp, load_connection, FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::storage::Database;
 use async_graphql::{
@@ -8,6 +7,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
+use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
 use std::net::IpAddr;
 
@@ -56,7 +56,7 @@ impl FromKeyValue<pk> for Packet {
         Ok(Packet {
             request_time: get_timestamp(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
             packet_time: get_timestamp(key)?,
-            packet: base64_engine.encode(pk.packet),
+            packet: BASE64.encode(&pk.packet),
         })
     }
 }

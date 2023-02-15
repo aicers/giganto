@@ -2,7 +2,6 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use crate::graphql::TIMESTAMP_SIZE;
 use crate::publish::send_direct_stream;
 use crate::server::{certificate_info, config_server};
 use crate::storage::{Database, RawEventStore};
@@ -408,7 +407,7 @@ async fn handle_data<T>(
     });
     loop {
         match receive_event(&mut recv).await {
-            Ok((mut raw_event, timestamp)) => {
+            Ok((raw_event, timestamp)) => {
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                 {
@@ -443,16 +442,10 @@ async fn handle_data<T>(
                         key.extend_from_slice(&timestamp.to_be_bytes());
                     }
                     RecordType::Packet => {
-                        let (ts, pk) = raw_event.split_at(TIMESTAMP_SIZE);
-                        let packet_timestamp = i64::from_le_bytes(ts.try_into().expect("to array"));
-                        let packet = Packet {
-                            packet_timestamp,
-                            packet: pk.to_vec(),
-                        };
+                        let packet = bincode::deserialize::<Packet>(&raw_event)?;
                         key.extend_from_slice(&timestamp.to_be_bytes());
                         key.push(0);
-                        key.extend_from_slice(&packet_timestamp.to_be_bytes());
-                        raw_event = bincode::serialize(&packet)?;
+                        key.extend_from_slice(&packet.packet_timestamp.to_be_bytes());
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }
