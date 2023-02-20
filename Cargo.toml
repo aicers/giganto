@@ -19,7 +19,7 @@ humantime = "2.1"
 humantime-serde = "1"
 num_enum = "0.5"
 quinn = "0.9"
-rocksdb = "0.19"
+rocksdb = "0.20"
 rustls = "0.20"
 rustls-pemfile = "1.0"
 serde = { version = "1", features = ["derive"] }
