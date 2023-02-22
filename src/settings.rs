@@ -24,6 +24,10 @@ pub struct Settings {
     pub graphql_address: SocketAddr, // IP address & port to graphql
     pub log_dir: PathBuf,    //giganto's syslog path
     pub export_dir: PathBuf, //giganto's export file path
+
+    // db options
+    pub max_open_files: i32,
+    pub max_mb_of_level_base: u64,
 }
 
 impl Settings {
@@ -95,6 +99,10 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("log dir")
         .set_default("export_path", export_path)
         .expect("export_dir")
+        .set_default("max_open_files", 8000)
+        .expect("default max open files")
+        .set_default("max_mb_of_level_base", 512)
+        .expect("default max mb of level base")
 }
 
 /// Deserializes a socket address.

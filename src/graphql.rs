@@ -337,11 +337,12 @@ struct TestSchema {
 #[cfg(test)]
 impl TestSchema {
     fn new() -> Self {
+        use crate::storage::DbOptions;
         use std::{collections::HashMap, sync::Arc};
         use tokio::sync::RwLock;
 
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path()).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let packet_sources = Arc::new(RwLock::new(HashMap::new()));
         let export_dir = tempfile::tempdir().unwrap();
         let schema = schema(db.clone(), packet_sources, export_dir.path().to_path_buf());

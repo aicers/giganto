@@ -1,5 +1,8 @@
 use super::Server;
-use crate::{storage::Database, to_cert_chain, to_private_key};
+use crate::{
+    storage::{Database, DbOptions},
+    to_cert_chain, to_private_key,
+};
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{Duration, Utc};
 use giganto_client::{
@@ -746,7 +749,7 @@ async fn one_short_reproduce_channel_close() {
 }
 
 fn run_server(db_dir: TempDir) -> JoinHandle<()> {
-    let db = Database::open(db_dir.path()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
