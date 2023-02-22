@@ -1,6 +1,6 @@
 use super::Server;
 use crate::{
-    storage::{Database, RawEventStore},
+    storage::{Database, DbOptions, RawEventStore},
     to_cert_chain, to_private_key,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
@@ -496,7 +496,7 @@ async fn request_range_data_with_protocol() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
     tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
@@ -1066,7 +1066,7 @@ async fn request_range_data_with_log() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
     tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
@@ -1142,7 +1142,7 @@ async fn request_range_data_with_period_time_series() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
     tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
@@ -1235,7 +1235,7 @@ async fn request_network_event_stream() {
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
 
     let hog_msg = RequestHogStream {
         start: 0,

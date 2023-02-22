@@ -14,6 +14,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Publish support Packet request/response through QUIC.
 - Add Packet store.
 - Add GraphQL API for Packet.
+- Add database options to config file.
 
 ### Changed
 

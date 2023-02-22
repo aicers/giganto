@@ -51,7 +51,9 @@ async fn main() -> Result<()> {
     let key = to_private_key(&key_pem).context("cannot read private key")?;
 
     let db_path = settings.data_dir.join("db");
-    let database = storage::Database::open(&db_path)?;
+    let db_options =
+        crate::storage::DbOptions::new(settings.max_open_files, settings.max_mb_of_level_base);
+    let database = storage::Database::open(&db_path, &db_options)?;
 
     let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
 

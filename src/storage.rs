@@ -13,7 +13,7 @@ use giganto_client::ingest::{
     Packet,
 };
 pub use rocksdb::Direction;
-use rocksdb::{ColumnFamily, DBIteratorWithThreadMode, Options, DB};
+use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
 use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::time;
@@ -38,6 +38,29 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 14] = [
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
 
+pub struct DbOptions {
+    max_open_files: i32,
+    max_mb_of_level_base: u64,
+}
+
+impl Default for DbOptions {
+    fn default() -> Self {
+        Self {
+            max_open_files: 8000,
+            max_mb_of_level_base: 512,
+        }
+    }
+}
+
+impl DbOptions {
+    pub fn new(max_open_files: i32, max_mb_of_level_base: u64) -> Self {
+        DbOptions {
+            max_open_files,
+            max_mb_of_level_base,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
@@ -45,19 +68,20 @@ pub struct Database {
 
 impl Database {
     /// Opens the database at the given path.
-    pub fn open(path: &Path) -> Result<Database> {
-        let mut opts = Options::default();
-        let mut cfs: Vec<&str> = Vec::with_capacity(
+    pub fn open(path: &Path, db_options: &DbOptions) -> Result<Database> {
+        let (db_opts, cf_opts) = rockdb_options(db_options);
+        let mut cfs_name: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
         );
-        cfs.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
-        cfs.extend(META_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
 
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
-        opts.set_max_open_files(8000);
-        let db = DB::open_cf(&opts, path, cfs).context("cannot open database")?;
+        let mut cfs: Vec<ColumnFamilyDescriptor> = Vec::new();
+        for name in cfs_name {
+            cfs.push(ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+        }
 
+        let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
         Ok(Database { db: Arc::new(db) })
     }
 
@@ -504,4 +528,19 @@ pub async fn retain_periodically(
             }
         }
     }
+}
+
+fn rockdb_options(db_options: &DbOptions) -> (Options, Options) {
+    let max_bytes = db_options.max_mb_of_level_base * 1024 * 1024;
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(true);
+    db_opts.create_missing_column_families(true);
+    db_opts.set_max_open_files(db_options.max_open_files);
+
+    let mut cf_opts = Options::default();
+    cf_opts.set_write_buffer_size((max_bytes / 4).try_into().expect("u64 to usize"));
+    cf_opts.set_max_bytes_for_level_base(max_bytes);
+    cf_opts.set_target_file_size_base(max_bytes / 10);
+
+    (db_opts, cf_opts)
 }
