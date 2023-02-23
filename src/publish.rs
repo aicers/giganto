@@ -239,17 +239,19 @@ async fn process_pcap_extract(
         }
     };
 
-    for filter in filters {
-        if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
-            // send/receive extract request from piglet
-            match pcap_extract_request(source_conn, &filter).await {
-                Ok(_) => (),
-                Err(e) => debug!("failed to relay pcap request, {e}"),
+    tokio::spawn(async move {
+        for filter in filters {
+            if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
+                // send/receive extract request from piglet
+                match pcap_extract_request(source_conn, &filter).await {
+                    Ok(_) => (),
+                    Err(e) => debug!("failed to relay pcap request, {e}"),
+                }
+            } else {
+                error!("Failed to get {}'s connection", filter.source);
             }
-        } else {
-            error!("Failed to get {}'s connection", filter.source);
         }
-    }
+    });
     Ok(())
 }
 
