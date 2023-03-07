@@ -536,6 +536,8 @@ fn rockdb_options(db_options: &DbOptions) -> (Options, Options) {
     db_opts.create_if_missing(true);
     db_opts.create_missing_column_families(true);
     db_opts.set_max_open_files(db_options.max_open_files);
+    db_opts.set_keep_log_file_num(10);
+    db_opts.set_stats_dump_period_sec(3600);
 
     let mut cf_opts = Options::default();
     cf_opts.set_write_buffer_size((max_bytes / 4).try_into().expect("u64 to usize"));
