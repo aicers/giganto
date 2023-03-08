@@ -1,5 +1,7 @@
 use super::{
-    get_timestamp, load_connection, FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    collect_records, get_key_prefix_packets, get_timestamp, load_connection,
+    lower_closed_bound_key, upper_open_bound_key, write_run_tcpdump, Direction, FromKeyValue,
+    RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::storage::Database;
 use async_graphql::{
@@ -51,6 +53,12 @@ struct Packet {
     packet: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct Pcap {
+    request_time: DateTime<Utc>,
+    parsed_pcap: String,
+}
+
 impl FromKeyValue<pk> for Packet {
     fn from_key_value(key: &[u8], pk: pk) -> Result<Self> {
         Ok(Packet {
@@ -74,12 +82,7 @@ impl PacketQuery {
     ) -> Result<Connection<String, Packet>> {
         let db = ctx.data::<Database>()?;
         let store = db.packet_store()?;
-
-        let mut key_prefix = Vec::with_capacity(filter.source.len() + TIMESTAMP_SIZE + 2);
-        key_prefix.extend_from_slice(filter.source.as_bytes());
-        key_prefix.push(0);
-        key_prefix.extend_from_slice(&filter.request_time.timestamp_nanos().to_be_bytes());
-        key_prefix.push(0);
+        let key_prefix = get_key_prefix_packets(&filter.source, filter.request_time);
 
         query(
             after,
@@ -91,6 +94,31 @@ impl PacketQuery {
             },
         )
         .await
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn pcap<'ctx>(&self, ctx: &Context<'ctx>, filter: PacketFilter) -> Result<Pcap> {
+        let db = ctx.data::<Database>()?;
+        let store = db.packet_store()?;
+        let key_prefix = get_key_prefix_packets(&filter.source, filter.request_time);
+
+        let (start, end) = filter.time();
+
+        let iter = store.boundary_iter(
+            &lower_closed_bound_key(&key_prefix, start),
+            &upper_open_bound_key(&key_prefix, end),
+            Direction::Forward,
+        );
+        let (records, _) = collect_records(iter, 1000, &filter)?;
+
+        let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
+
+        let pcap = write_run_tcpdump(&packet_vector)?;
+
+        Ok(Pcap {
+            request_time: filter.request_time,
+            parsed_pcap: pcap,
+        })
     }
 }
 
@@ -205,6 +233,95 @@ mod tests {
         }"#;
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
+    }
+
+    #[tokio::test]
+    async fn pcap_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.packet_store().unwrap();
+
+        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
+        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
+        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+
+        let ts1 = dt1.timestamp_nanos();
+        let ts2 = dt2.timestamp_nanos();
+        let ts3 = dt3.timestamp_nanos();
+
+        insert_packet(&store, "src 1", ts1, ts1);
+        insert_packet(&store, "src 1", ts1, ts2);
+
+        insert_packet(&store, "src 2", ts1, ts1);
+        insert_packet(&store, "src 2", ts1, ts3);
+
+        insert_packet(&store, "src 1", ts2, ts1);
+        insert_packet(&store, "src 1", ts2, ts3);
+
+        let query = r#"
+        {
+            pcap(
+                filter: {
+                    source: "src 1"
+                    requestTime: "2023-01-20T00:00:00Z"
+                }
+            ) {
+                parsedPcap
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:01.404277 [|ether]\\n\"}}");
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:01.404277  [|ether]\\n\"}}");
+
+        let query = r#"
+        {
+            pcap(
+                filter: {
+                    source: "src 2"
+                    requestTime: "2023-01-20T00:00:00Z"
+                }
+            ) {
+                parsedPcap
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:02.328237 [|ether]\\n\"}}");
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:02.328237  [|ether]\\n\"}}");
+
+        let query = r#"
+        {
+            pcap(
+                filter: {
+                    source: "src 1"
+                    requestTime: "2023-01-20T00:00:01Z"
+                }
+            ) {
+                parsedPcap
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:02.328237 [|ether]\\n\"}}");
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:02.328237  [|ether]\\n\"}}");
     }
 
     fn insert_packet(
