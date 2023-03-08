@@ -466,7 +466,7 @@ where
 
 pub async fn send_direct_stream(
     network_key: &NetworkKey,
-    raw_event: &Vec<u8>,
+    raw_event: &[u8],
     timestamp: i64,
     source: &str,
     stream_direct_channel: StreamDirectChannel,

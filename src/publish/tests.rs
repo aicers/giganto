@@ -1214,7 +1214,7 @@ async fn request_range_data_with_period_time_series() {
 
 #[tokio::test]
 async fn request_network_event_stream() {
-    use crate::ingest::gen_network_key;
+    use crate::ingest::NetworkKey;
     use crate::publish::send_direct_stream;
 
     const HOG_TYPE: NodeType = NodeType::Hog;
@@ -1275,7 +1275,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
         let send_conn_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "conn");
+        let key = NetworkKey::new(SOURCE_ONE, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
@@ -1321,7 +1321,7 @@ async fn request_network_event_stream() {
 
         // direct conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "conn");
+        let key = NetworkKey::new(SOURCE_TWO, "conn");
         let conn_data = gen_conn_raw_event();
 
         send_direct_stream(
@@ -1363,7 +1363,7 @@ async fn request_network_event_stream() {
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
         let send_dns_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "dns");
+        let key = NetworkKey::new(SOURCE_ONE, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
@@ -1410,7 +1410,7 @@ async fn request_network_event_stream() {
 
         // direct dns network event for crusher
         let send_dns_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "dns");
+        let key = NetworkKey::new(SOURCE_TWO, "dns");
         let dns_data = gen_dns_raw_event();
 
         send_direct_stream(
@@ -1452,7 +1452,7 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
         let send_rdp_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "rdp");
+        let key = NetworkKey::new(SOURCE_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
@@ -1499,7 +1499,7 @@ async fn request_network_event_stream() {
 
         // direct rdp network event for crusher
         let send_rdp_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "rdp");
+        let key = NetworkKey::new(SOURCE_TWO, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_stream(
             &key,
@@ -1541,7 +1541,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
         let send_http_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "http");
+        let key = NetworkKey::new(SOURCE_ONE, "http");
         let http_data = gen_conn_raw_event();
 
         send_direct_stream(
@@ -1589,7 +1589,7 @@ async fn request_network_event_stream() {
 
         // direct http network event for crusher
         let send_http_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "http");
+        let key = NetworkKey::new(SOURCE_TWO, "http");
         let http_data = gen_http_raw_event();
         send_direct_stream(
             &key,
@@ -1631,7 +1631,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
         let send_smtp_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "smtp");
+        let key = NetworkKey::new(SOURCE_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
         send_direct_stream(
@@ -1679,7 +1679,7 @@ async fn request_network_event_stream() {
 
         // direct smtp network event for crusher
         let send_smtp_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "smtp");
+        let key = NetworkKey::new(SOURCE_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
         send_direct_stream(
             &key,
@@ -1721,7 +1721,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
         let send_ntlm_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "ntlm");
+        let key = NetworkKey::new(SOURCE_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
         send_direct_stream(
@@ -1769,7 +1769,7 @@ async fn request_network_event_stream() {
 
         //direct ntlm network event for crusher
         let send_ntlm_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "ntlm");
+        let key = NetworkKey::new(SOURCE_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
         send_direct_stream(
             &key,
@@ -1810,7 +1810,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
         let send_kerberos_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "kerberos");
+        let key = NetworkKey::new(SOURCE_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
         send_direct_stream(
@@ -1859,7 +1859,7 @@ async fn request_network_event_stream() {
 
         //direct kerberos network event for crusher
         let send_kerberos_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "kerberos");
+        let key = NetworkKey::new(SOURCE_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
         send_direct_stream(
             &key,
@@ -1900,7 +1900,7 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
         let send_ssh_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "ssh");
+        let key = NetworkKey::new(SOURCE_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
         send_direct_stream(
@@ -1948,7 +1948,7 @@ async fn request_network_event_stream() {
 
         //direct ssh network event for crusher
         let send_ssh_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "ssh");
+        let key = NetworkKey::new(SOURCE_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
         send_direct_stream(
             &key,
@@ -1985,7 +1985,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_ONE, "dce rpc");
+        let key = NetworkKey::new(SOURCE_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
         send_direct_stream(
@@ -2033,7 +2033,7 @@ async fn request_network_event_stream() {
 
         //direct dce_rpc network event for crusher
         let send_dce_rpc_time = Utc::now().timestamp_nanos();
-        let key = gen_network_key(SOURCE_TWO, "dce rpc");
+        let key = NetworkKey::new(SOURCE_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
         send_direct_stream(
             &key,

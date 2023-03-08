@@ -31,7 +31,7 @@ use tokio::{
     select,
     sync::{
         mpsc::{channel, Receiver, Sender, UnboundedSender},
-        Mutex, RwLock,
+        Mutex, Notify, RwLock,
     },
     task, time,
 };
@@ -42,15 +42,19 @@ const ACK_ROTATION_CNT: u8 = 128;
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const ITV_RESET: bool = true;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = "0.8.0-alpha.1";
 
-type SourceInfo = (String, DateTime<Utc>, bool);
+type SourceInfo = (String, DateTime<Utc>, ConnState);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannel = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
+
+enum ConnState {
+    Connected,
+    Disconnected,
+}
 
 pub struct Server {
     server_config: ServerConfig,
@@ -141,7 +145,10 @@ async fn handle_connection(
             .insert(source.clone(), connection.clone());
     }
 
-    if let Err(error) = sender.send((source.clone(), Utc::now(), false)).await {
+    if let Err(error) = sender
+        .send((source.clone(), Utc::now(), ConnState::Connected))
+        .await
+    {
         error!("Failed to send channel data : {}", error);
     }
 
@@ -150,7 +157,10 @@ async fn handle_connection(
             let stream = connection.accept_bi().await;
             let stream = match stream {
                 Err(conn_err) => {
-                    if let Err(error) = sender.send((source, Utc::now(), true)).await {
+                    if let Err(error) = sender
+                        .send((source, Utc::now(), ConnState::Disconnected))
+                        .await
+                    {
                         error!("Failed to send internal channel data : {}", error);
                     }
                     match conn_err {
@@ -194,7 +204,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Conn,
-                Some(gen_network_key(&source, "conn")),
+                Some(NetworkKey::new(&source, "conn")),
                 source,
                 db.conn_store()?,
                 stream_direct_channel,
@@ -206,7 +216,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Dns,
-                Some(gen_network_key(&source, "dns")),
+                Some(NetworkKey::new(&source, "dns")),
                 source,
                 db.dns_store()?,
                 stream_direct_channel,
@@ -218,7 +228,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Log,
-                Some(gen_network_key(&source, "log")),
+                Some(NetworkKey::new(&source, "log")),
                 source,
                 db.log_store()?,
                 stream_direct_channel,
@@ -230,7 +240,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Http,
-                Some(gen_network_key(&source, "http")),
+                Some(NetworkKey::new(&source, "http")),
                 source,
                 db.http_store()?,
                 stream_direct_channel,
@@ -242,7 +252,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Rdp,
-                Some(gen_network_key(&source, "rdp")),
+                Some(NetworkKey::new(&source, "rdp")),
                 source,
                 db.rdp_store()?,
                 stream_direct_channel,
@@ -266,7 +276,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Smtp,
-                Some(gen_network_key(&source, "smtp")),
+                Some(NetworkKey::new(&source, "smtp")),
                 source,
                 db.smtp_store()?,
                 stream_direct_channel,
@@ -278,7 +288,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Ntlm,
-                Some(gen_network_key(&source, "ntlm")),
+                Some(NetworkKey::new(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
                 stream_direct_channel,
@@ -290,7 +300,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Kerberos,
-                Some(gen_network_key(&source, "kerberos")),
+                Some(NetworkKey::new(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
                 stream_direct_channel,
@@ -302,7 +312,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::Ssh,
-                Some(gen_network_key(&source, "ssh")),
+                Some(NetworkKey::new(&source, "ssh")),
                 source,
                 db.ssh_store()?,
                 stream_direct_channel,
@@ -314,7 +324,7 @@ async fn handle_request(
                 send,
                 recv,
                 RecordType::DceRpc,
-                Some(gen_network_key(&source, "dce rpc")),
+                Some(NetworkKey::new(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
                 stream_direct_channel,
@@ -382,7 +392,8 @@ async fn handle_data<T>(
 
     let mut itv = time::interval(time::Duration::from_secs(ACK_INTERVAL_TIME));
     itv.reset();
-    let (tx, mut rx) = channel(100);
+    let ack_time_notify = Arc::new(Notify::new());
+    let ack_time_notified = ack_time_notify.clone();
 
     let handler = task::spawn(async move {
         loop {
@@ -399,7 +410,7 @@ async fn handle_data<T>(
                     }
                 }
 
-                Some(_) = rx.recv() => {
+                _ = ack_time_notified.notified() => {
                     itv.reset();
                 }
             }
@@ -466,7 +477,7 @@ async fn handle_data<T>(
                     if ACK_ROTATION_CNT <= ack_cnt_rotation.load(Ordering::SeqCst) {
                         send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                         ack_cnt_rotation.store(0, Ordering::SeqCst);
-                        tx.send(ITV_RESET).await?;
+                        ack_time_notify.notify_one();
                     }
                 }
             }
@@ -510,20 +521,22 @@ async fn check_sources_conn(
                 }
             }
 
-            Some((source_key,timestamp_val,is_close)) = rx.recv() => {
-                if is_close {
-                    if source_store.insert(&source_key, timestamp_val).is_err(){
-                        error!("Failed to append Source store");
+            Some((source_key,timestamp_val,conn_state)) = rx.recv() => {
+                match conn_state{
+                    ConnState::Connected =>{
+                        if source_store.insert(&source_key, timestamp_val).is_err(){
+                            error!("Failed to append Source store");
+                        }
+                        sources.write().await.insert(source_key, timestamp_val);
                     }
-                    sources.write().await.remove(&source_key);
-                    packet_sources.write().await.remove(&source_key);
-                } else {
-                    if source_store.insert(&source_key, timestamp_val).is_err(){
-                        error!("Failed to append Source store");
+                    ConnState::Disconnected =>{
+                        if source_store.insert(&source_key, timestamp_val).is_err(){
+                            error!("Failed to append Source store");
+                        }
+                        sources.write().await.remove(&source_key);
+                        packet_sources.write().await.remove(&source_key);
                     }
-                    sources.write().await.insert(source_key, timestamp_val);
                 }
-
             }
         }
     }
@@ -534,12 +547,14 @@ pub struct NetworkKey {
     pub(crate) all_key: String,
 }
 
-pub fn gen_network_key(source: &str, protocol: &str) -> NetworkKey {
-    let source_key = format!("{source}\0{protocol}");
-    let all_key = format!("all\0{protocol}");
+impl NetworkKey {
+    pub fn new(source: &str, protocol: &str) -> Self {
+        let source_key = format!("{source}\0{protocol}");
+        let all_key = format!("all\0{protocol}");
 
-    NetworkKey {
-        source_key,
-        all_key,
+        Self {
+            source_key,
+            all_key,
+        }
     }
 }
