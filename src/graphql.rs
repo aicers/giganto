@@ -5,6 +5,7 @@ mod packet;
 pub mod status;
 mod timeseries;
 
+use self::network::NetworkFilter;
 use crate::{
     ingest::{implement::EventFilter, PacketSources},
     storage::{
@@ -19,11 +20,23 @@ use async_graphql::{
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, TimeZone, Utc};
+use giganto_client::ingest::Packet as pk;
+use libc::timeval;
+use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{net::IpAddr, path::PathBuf, sync::Arc};
+#[cfg(target_os = "macos")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    net::IpAddr,
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::Arc,
+};
+use tempfile::tempfile;
 use tokio::sync::Notify;
-
-use self::network::NetworkFilter;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
@@ -85,6 +98,7 @@ pub fn schema(
 /// provided.
 /// Maximum size: 100.
 const MAXIMUM_PAGE_SIZE: usize = 100;
+const A_BILLION: i64 = 1_000_000_000;
 
 fn get_connection<T>(
     store: &RawEventStore<'_, T>,
@@ -337,6 +351,71 @@ where
     };
 
     Ok((iter, cursor, size))
+}
+
+fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
+    let mut temp_file = tempfile()?;
+    let fd = temp_file.as_raw_fd();
+    let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
+    let mut file = unsafe { new_pcap.savefile_raw_fd(fd)? };
+
+    for packet in packets {
+        let len = u32::try_from(packet.packet.len()).unwrap_or_default();
+        let header = PacketHeader {
+            ts: timeval {
+                tv_sec: packet.packet_timestamp / A_BILLION,
+                #[cfg(target_os = "macos")]
+                tv_usec: i32::try_from(packet.packet_timestamp & A_BILLION).unwrap_or_default(),
+                #[cfg(target_os = "linux")]
+                tv_usec: packet.packet_timestamp & A_BILLION,
+            },
+            caplen: len,
+            len,
+        };
+        let p = Packet {
+            header: &header,
+            data: &packet.packet,
+        };
+        file.write(&p);
+    }
+    let mut buf = Vec::new();
+    let _ = file.flush();
+    let _ = temp_file.seek(SeekFrom::Start(0));
+    let _ = temp_file.read_to_end(&mut buf)?;
+
+    let cmd = "tcpdump";
+    let args = ["-n", "-X", "-tttt", "-v", "-r", "-"];
+
+    let mut child = Command::new(cmd)
+        .env("PATH", "/usr/sbin:/usr/bin")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut child_stdin) = child.stdin.take() {
+        #[cfg(target_os = "macos")]
+        child_stdin.write_all(&[0, 0, 0, 0])?;
+        child_stdin.write_all(&buf)?;
+    } else {
+        return Err(anyhow!("failed to execute tcpdump"));
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(anyhow!("failed to run tcpdump"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn get_key_prefix_packets(source: &String, request_time: DateTime<Utc>) -> Vec<u8> {
+    let mut key_prefix = Vec::with_capacity(source.len() + TIMESTAMP_SIZE + 2);
+    key_prefix.extend_from_slice(source.as_bytes());
+    key_prefix.push(0);
+    key_prefix.extend_from_slice(&request_time.timestamp_nanos().to_be_bytes());
+    key_prefix.push(0);
+    key_prefix
 }
 
 #[cfg(test)]

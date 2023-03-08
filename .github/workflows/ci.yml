@@ -34,6 +34,10 @@ jobs:
       with:
         rust-version: stable
     - uses: actions/checkout@v2
+    - name: Install libcap on Ubuntu
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+             sudo apt-get install libpcap-dev libpcap0.8
     - name: Build
       run: cargo build --verbose
     - name: Run tests
@@ -47,6 +51,9 @@ jobs:
       with:
         rust-version: stable
     - uses: actions/checkout@v2
+    - name: Install libcap on Ubuntu
+      run: |
+            sudo apt-get install libpcap-dev libpcap0.8
     - name: Install Tarpaulin
       run: cargo install cargo-tarpaulin
     - name: Generate coverage report
