@@ -24,7 +24,7 @@ use giganto_client::{
         send_crusher_stream_start_message, send_err, send_hog_stream_start_message, send_ok,
         send_range_data,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
-        Pcapfilter,
+        PcapFilter,
     },
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
@@ -224,7 +224,7 @@ async fn process_pcap_extract(
     resp_send: &mut SendStream,
 ) -> Result<()> {
     let mut buf = Vec::new();
-    let filters = match bincode::deserialize::<Vec<Pcapfilter>>(filter_data) {
+    let filters = match bincode::deserialize::<Vec<PcapFilter>>(filter_data) {
         Ok(filters) => {
             send_ok(resp_send, &mut buf, ())
                 .await

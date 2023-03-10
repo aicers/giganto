@@ -59,8 +59,8 @@ impl From<frame::SendError> for PublishError {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Pcapfilter {
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct PcapFilter {
     pub timestamp: i64,
     pub source: String,
     pub src_addr: IpAddr,
@@ -349,7 +349,7 @@ where
 /// * `PublishError::RequestFail`: if the extract request ack data is Err
 pub async fn pcap_extract_request(
     conn: &Connection,
-    pcap_filter: &Pcapfilter,
+    pcap_filter: &PcapFilter,
 ) -> Result<(), PublishError> {
     //open target(piglet) source's channel
     let (mut send, mut recv) = conn.open_bi().await?;
@@ -378,10 +378,10 @@ pub async fn pcap_extract_request(
 pub async fn pcap_extract_response(
     mut send: SendStream,
     mut recv: RecvStream,
-) -> Result<Pcapfilter, PublishError> {
+) -> Result<PcapFilter, PublishError> {
     // Recieve pcap extract request filter
     let mut buf = Vec::new();
-    match frame::recv::<Pcapfilter>(&mut recv, &mut buf).await {
+    match frame::recv::<PcapFilter>(&mut recv, &mut buf).await {
         Ok(filter) => {
             // Send ack response (Ok())
             send_ok(&mut send, &mut buf, ()).await?;
@@ -457,7 +457,7 @@ mod tests {
         use crate::publish::{
             range::ResponseRangeData,
             stream::{RequestCrusherStream, RequestHogStream},
-            Pcapfilter,
+            PcapFilter,
         };
         use crate::test::{channel, TOKEN};
         use std::net::IpAddr;
@@ -617,7 +617,7 @@ mod tests {
         );
 
         // send/recv pcap extract request
-        let p_filter = Pcapfilter {
+        let p_filter = PcapFilter {
             timestamp: 12345,
             source: "hello".to_string(),
             src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
