@@ -2,6 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
+mod status;
 mod timeseries;
 
 use crate::{
@@ -32,6 +33,7 @@ pub struct Query(
     export::ExportQuery,
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
+    status::GigantoStatusQuery,
 );
 
 #[derive(InputObject, Serialize)]
