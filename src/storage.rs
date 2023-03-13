@@ -69,7 +69,7 @@ pub struct Database {
 impl Database {
     /// Opens the database at the given path.
     pub fn open(path: &Path, db_options: &DbOptions) -> Result<Database> {
-        let (db_opts, cf_opts) = rockdb_options(db_options);
+        let (db_opts, cf_opts) = rocksdb_options(db_options);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
         );
@@ -530,7 +530,7 @@ pub async fn retain_periodically(
     }
 }
 
-fn rockdb_options(db_options: &DbOptions) -> (Options, Options) {
+fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     let max_bytes = db_options.max_mb_of_level_base * 1024 * 1024;
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
@@ -538,11 +538,17 @@ fn rockdb_options(db_options: &DbOptions) -> (Options, Options) {
     db_opts.set_max_open_files(db_options.max_open_files);
     db_opts.set_keep_log_file_num(10);
     db_opts.set_stats_dump_period_sec(3600);
+    db_opts.set_max_total_wal_size(max_bytes);
+    db_opts.set_manual_wal_flush(true);
 
     let mut cf_opts = Options::default();
     cf_opts.set_write_buffer_size((max_bytes / 4).try_into().expect("u64 to usize"));
     cf_opts.set_max_bytes_for_level_base(max_bytes);
     cf_opts.set_target_file_size_base(max_bytes / 10);
+    cf_opts.set_target_file_size_multiplier(10);
+    cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
+    cf_opts.set_bottommost_compression_type(rocksdb::DBCompressionType::Zstd);
+    cf_opts.set_bottommost_zstd_max_train_bytes(0, true);
 
     (db_opts, cf_opts)
 }

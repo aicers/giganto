@@ -22,6 +22,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Create giganto's communication part as a separate crate. (giganto-client)
 - Move init tracing to giganto-client crate for oplog logging.
 - Fix packet logic in ingest.
+- Rocksdb compression type has changed to Lz4, zstd from snappy
 
 ## [0.7.0] - 2023-01-04
 
