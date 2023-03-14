@@ -12,6 +12,8 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
     Packet,
 };
+#[cfg(debug_assertions)]
+use rocksdb::properties;
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
@@ -37,6 +39,13 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 14] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
+
+#[cfg(debug_assertions)]
+pub struct CfProperties {
+    pub estimate_live_data_size: u64,
+    pub estimate_num_keys: u64,
+    pub stats: String,
+}
 
 pub struct DbOptions {
     max_open_files: i32,
@@ -76,13 +85,55 @@ impl Database {
         cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
 
-        let mut cfs: Vec<ColumnFamilyDescriptor> = Vec::new();
-        for name in cfs_name {
-            cfs.push(ColumnFamilyDescriptor::new(name, cf_opts.clone()));
-        }
+        let cfs = cfs_name
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
         Ok(Database { db: Arc::new(db) })
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn properties_cf(&self, cfname: &str) -> Result<CfProperties> {
+        let stats = if let Some(s) = self.db.property_value_cf(
+            &self
+                .db
+                .cf_handle(cfname)
+                .context("invalid record type name")?,
+            properties::STATS,
+        )? {
+            s
+        } else {
+            "invalid".to_string()
+        };
+        let size = if let Some(u) = self.db.property_int_value_cf(
+            &self
+                .db
+                .cf_handle(cfname)
+                .context("invalid record type name")?,
+            properties::ESTIMATE_LIVE_DATA_SIZE,
+        )? {
+            u
+        } else {
+            0
+        };
+        let num_keys = if let Some(n) = self.db.property_int_value_cf(
+            &self
+                .db
+                .cf_handle(cfname)
+                .context("invalid record type name")?,
+            properties::ESTIMATE_NUM_KEYS,
+        )? {
+            n
+        } else {
+            0
+        };
+
+        Ok(CfProperties {
+            estimate_live_data_size: size,
+            estimate_num_keys: num_keys,
+            stats,
+        })
     }
 
     /// Returns the raw event store for all type. (exclude log type)
