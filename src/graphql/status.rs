@@ -1,4 +1,8 @@
-use async_graphql::{Object, Result, SimpleObject};
+#[cfg(debug_assertions)]
+use crate::storage::Database;
+#[cfg(debug_assertions)]
+use async_graphql::Context;
+use async_graphql::{InputObject, Object, Result, SimpleObject};
 
 #[derive(SimpleObject, Debug)]
 struct GigantoStatus {
@@ -8,6 +12,18 @@ struct GigantoStatus {
     used_memory: u64,
     total_disk_space: u64,
     used_disk_space: u64,
+}
+
+#[derive(InputObject)]
+struct PropertyFilter {
+    record_type: String,
+}
+
+#[derive(SimpleObject, Debug)]
+struct Properties {
+    estimate_live_data_size: u64,
+    estimate_num_keys: u64,
+    stats: String,
 }
 
 #[derive(Default)]
@@ -27,5 +43,24 @@ impl GigantoStatusQuery {
             used_disk_space: usg.used_disk_space,
         };
         Ok(usg)
+    }
+
+    #[allow(clippy::unused_async)]
+    #[cfg(debug_assertions)]
+    async fn properties_cf<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: PropertyFilter,
+    ) -> Result<Properties> {
+        let cfname = filter.record_type;
+        let db = ctx.data::<Database>()?;
+
+        let props = db.properties_cf(&cfname)?;
+
+        Ok(Properties {
+            estimate_live_data_size: props.estimate_live_data_size,
+            estimate_num_keys: props.estimate_num_keys,
+            stats: props.stats,
+        })
     }
 }
