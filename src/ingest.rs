@@ -46,7 +46,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = "0.8.0-alpha.1";
 
-type SourceInfo = (String, DateTime<Utc>, ConnState);
+type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannel = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
@@ -146,7 +146,7 @@ async fn handle_connection(
     }
 
     if let Err(error) = sender
-        .send((source.clone(), Utc::now(), ConnState::Connected))
+        .send((source.clone(), Utc::now(), ConnState::Connected, rep))
         .await
     {
         error!("Failed to send channel data : {}", error);
@@ -158,7 +158,7 @@ async fn handle_connection(
             let stream = match stream {
                 Err(conn_err) => {
                     if let Err(error) = sender
-                        .send((source, Utc::now(), ConnState::Disconnected))
+                        .send((source, Utc::now(), ConnState::Disconnected, rep))
                         .await
                     {
                         error!("Failed to send internal channel data : {}", error);
@@ -521,20 +521,22 @@ async fn check_sources_conn(
                 }
             }
 
-            Some((source_key,timestamp_val,conn_state)) = rx.recv() => {
-                match conn_state{
-                    ConnState::Connected =>{
-                        if source_store.insert(&source_key, timestamp_val).is_err(){
-                            error!("Failed to append Source store");
+            Some((source_key,timestamp_val,conn_state, rep)) = rx.recv() => {
+                if !rep {
+                    match conn_state{
+                        ConnState::Connected =>{
+                            if source_store.insert(&source_key, timestamp_val).is_err(){
+                                error!("Failed to append Source store");
+                            }
+                            sources.write().await.insert(source_key, timestamp_val);
                         }
-                        sources.write().await.insert(source_key, timestamp_val);
-                    }
-                    ConnState::Disconnected =>{
-                        if source_store.insert(&source_key, timestamp_val).is_err(){
-                            error!("Failed to append Source store");
+                        ConnState::Disconnected =>{
+                            if source_store.insert(&source_key, timestamp_val).is_err(){
+                                error!("Failed to append Source store");
+                            }
+                            sources.write().await.remove(&source_key);
+                            packet_sources.write().await.remove(&source_key);
                         }
-                        sources.write().await.remove(&source_key);
-                        packet_sources.write().await.remove(&source_key);
                     }
                 }
             }
