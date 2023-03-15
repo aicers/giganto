@@ -15,7 +15,7 @@ use crate::{
 use anyhow::anyhow;
 use async_graphql::{
     connection::{Connection, Edge},
-    EmptyMutation, EmptySubscription, InputObject, MergedObject, OutputType, Result,
+    EmptySubscription, InputObject, MergedObject, OutputType, Result,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, TimeZone, Utc};
@@ -35,6 +35,9 @@ pub struct Query(
     timeseries::TimeSeriesQuery,
     status::GigantoStatusQuery,
 );
+
+#[derive(Default, MergedObject)]
+pub struct Mutation(status::GigantoConfigMutation);
 
 #[derive(InputObject, Serialize)]
 pub struct TimeRange {
@@ -60,11 +63,11 @@ pub trait FromKeyValue<T>: Sized {
     fn from_key_value(key: &[u8], value: T) -> Result<Self>;
 }
 
-pub type Schema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
+pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub fn schema(database: Database, packet_sources: PacketSources, export_path: PathBuf) -> Schema {
-    Schema::build(Query::default(), EmptyMutation, EmptySubscription)
+    Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
         .data(packet_sources)
         .data(export_path)
