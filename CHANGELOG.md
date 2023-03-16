@@ -20,6 +20,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Change field name `duration` to `last_time`.  (Except Conn struct)
+- Modify to receive and process `multiple sources` of stream request messages
+  from `HOG`.
 - Modify module name `ingestion` to `ingest`.
 - Create giganto's communication part as a separate crate. (giganto-client)
 - Move init tracing to giganto-client crate for oplog logging.

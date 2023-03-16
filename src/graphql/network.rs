@@ -160,7 +160,7 @@ struct DnsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
@@ -183,7 +183,7 @@ struct HttpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     method: String,
     host: String,
     uri: String,
@@ -210,7 +210,7 @@ struct RdpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     cookie: String,
 }
 
@@ -222,7 +222,7 @@ struct SmtpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     mailfrom: String,
     date: String,
     from: String,
@@ -239,7 +239,7 @@ struct NtlmRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     username: String,
     hostname: String,
     domainname: String,
@@ -257,7 +257,7 @@ struct KerberosRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     request_type: String,
     client: String,
     service: String,
@@ -280,7 +280,7 @@ struct SshRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     version: i64,
     auth_success: String,
     auth_attempts: i64,
@@ -303,7 +303,7 @@ struct DceRpcRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     rtt: i64,
     named_pipe: String,
     endpoint: String,
@@ -335,7 +335,7 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
-                    duration: val.duration,
+                    last_time: val.last_time,
                     $(
                         $fields: val.$fields,
                     )*
@@ -345,15 +345,25 @@ macro_rules! from_key_value {
     };
 }
 
-from_key_value!(
-    ConnRawEvent,
-    Conn,
-    service,
-    orig_bytes,
-    resp_bytes,
-    orig_pkts,
-    resp_pkts
-);
+impl FromKeyValue<Conn> for ConnRawEvent {
+    fn from_key_value(key: &[u8], val: Conn) -> Result<Self> {
+        Ok(ConnRawEvent {
+            timestamp: get_timestamp(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            duration: val.duration,
+            service: val.service,
+            orig_bytes: val.orig_bytes,
+            resp_bytes: val.resp_bytes,
+            orig_pkts: val.orig_pkts,
+            resp_pkts: val.resp_pkts,
+        })
+    }
+}
+
 from_key_value!(
     HttpRawEvent,
     Http,
@@ -1266,7 +1276,7 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             query: "Hello Server Hello Server Hello Server".to_string(),
             answer: vec!["1.1.1.1".to_string()],
             trans_id: 1,
@@ -1361,7 +1371,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             method: "POST".to_string(),
             host: "einsis".to_string(),
             uri: "/einsis.gif".to_string(),
@@ -1460,7 +1470,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             cookie: "rdp_test".to_string(),
         };
         let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
@@ -1510,7 +1520,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             mailfrom: "mailfrom".to_string(),
             date: "date".to_string(),
             from: "from".to_string(),
@@ -1565,7 +1575,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             username: "bly".to_string(),
             hostname: "host".to_string(),
             domainname: "domain".to_string(),
@@ -1621,7 +1631,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             request_type: "req_type".to_string(),
             client: "client".to_string(),
             service: "service".to_string(),
@@ -1682,7 +1692,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             version: 01,
             auth_success: "auth_success".to_string(),
             auth_attempts: 3,
@@ -1743,7 +1753,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             rtt: 3,
             named_pipe: "named_pipe".to_string(),
             endpoint: "endpoint".to_string(),
