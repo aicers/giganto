@@ -27,8 +27,6 @@ data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
 log_dir = "/data/logs/apps"                # path to giganto's syslog file
 export_dir = "tests/export"                # path to giganto's export file
-
-# Optional
 max_open_files = 8000                      # db options max open files,
 max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1
 ```
@@ -37,6 +35,16 @@ By default, giganto reads the config file from the following directories:
 
 * Linux: `$HOME/.config/giganto/config.toml`
 * macOS: `$HOME/Library/Application Support/com.einsis.giganto/config.toml`
+
+For the `max_mb_of_level_base`, the last level has 100,000 times capacity,
+and it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
+appropriate.
+For example, `90`MB or less for 10TB Database, `900`MB or less for 100TB would
+be appropriate.
+
+These values assume you've used all the way up to level 6, so the actual values may
+change if you want to grow your data further at the level base.
+So if it's less than `512`MB, it's recommended to set default value of `512`MB.
 
 ## Test
 

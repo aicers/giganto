@@ -1,8 +1,16 @@
 #[cfg(debug_assertions)]
 use crate::storage::Database;
+use anyhow::Context as ct;
 #[cfg(debug_assertions)]
 use async_graphql::Context;
 use async_graphql::{InputObject, Object, Result, SimpleObject};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+};
+use toml_edit::{value, Document};
+
+const DEFAULT_TOML: &str = "/usr/local/aice/conf/giganto.toml";
 
 #[derive(SimpleObject, Debug)]
 struct GigantoStatus {
@@ -26,8 +34,31 @@ struct Properties {
     stats: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct GigantoConfig {
+    ingest_address: String,
+    publish_address: String,
+    graphql_address: String,
+    retention: String,
+    max_open_files: String,
+    max_mb_of_level_base: String,
+}
+
+#[derive(InputObject)]
+struct UserConfig {
+    ingest_address: Option<String>,
+    publish_address: Option<String>,
+    graphql_address: Option<String>,
+    retention: Option<String>,
+    max_open_files: Option<String>,
+    max_mb_of_level_base: Option<String>,
+}
+
 #[derive(Default)]
 pub(super) struct GigantoStatusQuery;
+
+#[derive(Default)]
+pub(super) struct GigantoConfigMutation;
 
 #[Object]
 impl GigantoStatusQuery {
@@ -62,5 +93,82 @@ impl GigantoStatusQuery {
             estimate_num_keys: props.estimate_num_keys,
             stats: props.stats,
         })
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn giganto_config(&self) -> Result<GigantoConfig> {
+        let toml = fs::read_to_string(DEFAULT_TOML).context("toml not found")?;
+        let doc = toml.parse::<Document>()?;
+
+        let ingest_address = doc
+            .get("ingest_address")
+            .context("\"ingest_address\" not found")?
+            .to_string();
+        let publish_address = doc
+            .get("publish_address")
+            .context("\"publish_address\" not found")?
+            .to_string();
+        let graphql_address = doc
+            .get("graphql_address")
+            .context("\"graphql_address\" not found")?
+            .to_string();
+        let retention = doc
+            .get("retention")
+            .context("\"retention\" not found")?
+            .to_string();
+        let max_open_files = doc
+            .get("max_open_files")
+            .context("\"max_open_files\" not found")?
+            .to_string();
+        let max_mb_of_level_base = doc
+            .get("max_mb_of_level_base")
+            .context("\"max_mb_of_level_base\" not found")?
+            .to_string();
+
+        Ok(GigantoConfig {
+            ingest_address,
+            publish_address,
+            graphql_address,
+            retention,
+            max_open_files,
+            max_mb_of_level_base,
+        })
+    }
+}
+
+#[Object]
+impl GigantoConfigMutation {
+    #[allow(clippy::unused_async)]
+    async fn set_giganto_config(&self, field: UserConfig) -> Result<String> {
+        let toml = fs::read_to_string(DEFAULT_TOML).context("toml not found")?;
+        let mut doc = toml.parse::<Document>()?;
+
+        if let Some(ingest_address) = field.ingest_address {
+            doc["ingest_address"] = value(ingest_address);
+        }
+        if let Some(publish_address) = field.publish_address {
+            doc["publish_address"] = value(publish_address);
+        }
+        if let Some(graphql_address) = field.graphql_address {
+            doc["graphql_address"] = value(graphql_address);
+        }
+        if let Some(retention) = field.retention {
+            doc["retention"] = value(retention);
+        }
+        if let Some(max_open_files) = field.max_open_files {
+            doc["max_open_files"] = value(max_open_files);
+        }
+        if let Some(max_mb_of_level_base) = field.max_mb_of_level_base {
+            doc["max_mb_of_level_base"] = value(max_mb_of_level_base);
+        }
+
+        let output = doc.to_string();
+        let mut toml_file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(DEFAULT_TOML)?;
+        writeln!(toml_file, "{output}")?;
+
+        Ok("Done".to_string())
     }
 }

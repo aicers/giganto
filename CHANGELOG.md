@@ -15,6 +15,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add Packet store.
 - Add GraphQL API for Packet.
 - Add database options to config file.
+- Add GraphQL API for config file.
 
 ### Changed
 
