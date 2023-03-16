@@ -5,6 +5,10 @@ use std::sync::Arc;
 use tracing::info;
 use x509_parser::nom::Parser;
 
+pub const SERVER_REBOOT_DELAY: u64 = 3000;
+pub const SERVER_ENDPOINT_DELAY: u64 = 300;
+pub const SERVER_CONNNECTION_DELAY: u64 = 200;
+
 #[allow(clippy::module_name_repetitions)]
 pub fn config_server(
     certs: Vec<Certificate>,

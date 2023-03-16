@@ -5,7 +5,9 @@ mod tests;
 use self::implement::{RequestRangeMessage, RequestStreamMessage};
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingest::{implement::EventFilter, NetworkKey, PacketSources, StreamDirectChannel};
-use crate::server::{certificate_info, config_server};
+use crate::server::{
+    certificate_info, config_server, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+};
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
 };
@@ -30,8 +32,12 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Serialize};
-use std::net::SocketAddr;
-use tokio::{select, sync::mpsc::unbounded_channel};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+use tokio::{
+    select,
+    sync::{mpsc::unbounded_channel, Notify},
+    time::sleep,
+};
 use tracing::{debug, error, info};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.7.0, <=0.8.0-alpha.1";
@@ -61,6 +67,7 @@ impl Server {
         db: Database,
         packet_sources: PacketSources,
         stream_direct_channel: StreamDirectChannel,
+        wait_shutdown: Arc<Notify>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -68,17 +75,34 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
-        while let Some(conn) = endpoint.accept().await {
-            let db = db.clone();
-            let packet_sources = packet_sources.clone();
-            let stream_direct_channel = stream_direct_channel.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    handle_connection(conn, db, packet_sources, stream_direct_channel).await
-                {
-                    error!("connection failed: {}", e);
-                }
-            });
+        loop {
+            select! {
+                Some(conn) = endpoint.accept()  => {
+                    let db = db.clone();
+                    let packet_sources = packet_sources.clone();
+                    let stream_direct_channel = stream_direct_channel.clone();
+                    let shutdown_notify = wait_shutdown.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(
+                            conn,
+                            db,
+                            packet_sources,
+                            stream_direct_channel,
+                            shutdown_notify
+                        )
+                        .await
+                        {
+                            error!("connection failed: {}", e);
+                        }
+                    });
+                },
+                _ = wait_shutdown.notified() => {
+                    sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
+                    endpoint.close(0_u32.into(), &[]);
+                    info!("Shutting down publish");
+                    break;
+                },
+            }
         }
     }
 }
@@ -88,6 +112,7 @@ async fn handle_connection(
     db: Database,
     packet_sources: PacketSources,
     stream_direct_channel: StreamDirectChannel,
+    wait_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -102,7 +127,6 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-
     let source = certificate_info(&connection)?;
     tokio::spawn(request_stream(
         connection.clone(),
@@ -114,30 +138,35 @@ async fn handle_connection(
         stream_direct_channel.clone(),
     ));
 
-    async {
-        loop {
-            let stream = connection.accept_bi().await;
-            let stream = match stream {
-                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                    return Ok(());
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-                Ok(s) => s,
-            };
+    loop {
+        select! {
+            stream = connection.accept_bi()  => {
+                let stream = match stream {
+                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                    Ok(s) => s,
+                };
 
-            let db = db.clone();
-            let packet_sources = packet_sources.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_request(stream, db, packet_sources).await {
-                    error!("failed: {}", e);
-                }
-            });
+                let db = db.clone();
+                let packet_sources = packet_sources.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_request(stream, db, packet_sources).await {
+                        error!("failed: {}", e);
+                    }
+                });
+            },
+            _ = wait_shutdown.notified() => {
+                // Wait time for channels to be ready for shutdown.
+                sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
+                connection.close(0_u32.into(), &[]);
+                return Ok(())
+            },
         }
     }
-    .await?;
-    Ok(())
 }
 
 async fn request_stream(

@@ -2,7 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
-mod status;
+pub mod status;
 mod timeseries;
 
 use crate::{
@@ -20,7 +20,8 @@ use async_graphql::{
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, path::PathBuf, sync::Arc};
+use tokio::sync::Notify;
 
 use self::network::NetworkFilter;
 
@@ -66,11 +67,17 @@ pub trait FromKeyValue<T>: Sized {
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
-pub fn schema(database: Database, packet_sources: PacketSources, export_path: PathBuf) -> Schema {
+pub fn schema(
+    database: Database,
+    packet_sources: PacketSources,
+    export_path: PathBuf,
+    config_reload: Arc<Notify>,
+) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
         .data(packet_sources)
         .data(export_path)
+        .data(config_reload)
         .finish()
 }
 
@@ -343,14 +350,20 @@ struct TestSchema {
 impl TestSchema {
     fn new() -> Self {
         use crate::storage::DbOptions;
-        use std::{collections::HashMap, sync::Arc};
+        use std::collections::HashMap;
         use tokio::sync::RwLock;
 
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let packet_sources = Arc::new(RwLock::new(HashMap::new()));
         let export_dir = tempfile::tempdir().unwrap();
-        let schema = schema(db.clone(), packet_sources, export_dir.path().to_path_buf());
+        let config_reload = Arc::new(Notify::new());
+        let schema = schema(
+            db.clone(),
+            packet_sources,
+            export_dir.path().to_path_buf(),
+            config_reload,
+        );
         Self {
             _dir: db_dir,
             db,

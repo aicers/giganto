@@ -18,7 +18,7 @@ pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
 use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
-use tokio::time;
+use tokio::{select, sync::Notify, time};
 use tracing::error;
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 14] = [
@@ -528,6 +528,7 @@ pub async fn retain_periodically(
     duration: Duration,
     retention_period: Duration,
     db: Database,
+    wait_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let mut itv = time::interval(duration);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
@@ -538,45 +539,51 @@ pub async fn retain_periodically(
     .timestamp_nanos()
     .to_be_bytes();
     loop {
-        itv.tick().await;
-        let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
-        let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
-        let sources = db.sources_store()?.names();
-        let all_store = db.retain_period_store()?;
-        let log_store = db.log_store()?;
+        select! {
+            _ = itv.tick() => {
+                let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
+                let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
+                let sources = db.sources_store()?.names();
+                let all_store = db.retain_period_store()?;
+                let log_store = db.log_store()?;
 
-        for source in sources {
-            let mut from: Vec<u8> = source.clone();
-            from.push(0x00);
-            from.extend_from_slice(&from_timestamp);
+                for source in sources {
+                    let mut from: Vec<u8> = source.clone();
+                    from.push(0x00);
+                    from.extend_from_slice(&from_timestamp);
 
-            let mut to: Vec<u8> = source.clone();
-            to.push(0x00);
-            to.extend_from_slice(&standard_duration_vec);
+                    let mut to: Vec<u8> = source.clone();
+                    to.push(0x00);
+                    to.extend_from_slice(&standard_duration_vec);
 
-            for store in &all_store {
-                if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
-                    error!("Failed to delete range data");
+                    for store in &all_store {
+                        if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
+                            error!("Failed to delete range data");
+                        }
+                    }
+
+                    for (key, _) in log_store
+                        .db
+                        .prefix_iterator_cf(log_store.cf, source.clone())
+                        .flatten()
+                        .filter(|(key, _)| {
+                            let store_duration = i64::from_be_bytes(
+                                key[(key.len() - TIMESTAMP_SIZE)..]
+                                    .try_into()
+                                    .expect("valid key"),
+                            );
+                            standard_duration > store_duration
+                        })
+                    {
+                        if log_store.delete(&key).is_err() {
+                            error!("Failed to delete log data");
+                        }
+                    }
                 }
             }
-
-            for (key, _) in log_store
-                .db
-                .prefix_iterator_cf(log_store.cf, source.clone())
-                .flatten()
-                .filter(|(key, _)| {
-                    let store_duration = i64::from_be_bytes(
-                        key[(key.len() - TIMESTAMP_SIZE)..]
-                            .try_into()
-                            .expect("valid key"),
-                    );
-                    standard_duration > store_duration
-                })
-            {
-                if log_store.delete(&key).is_err() {
-                    error!("Failed to delete log data");
-                }
-            }
+            _ = wait_shutdown.notified() => {
+                return Ok(());
+            },
         }
     }
 }

@@ -6,12 +6,18 @@ mod settings;
 mod storage;
 mod web;
 
+use crate::{graphql::status::DEFAULT_TOML, server::SERVER_REBOOT_DELAY};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::init_tracing;
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
-use std::{collections::HashMap, env, fs, process::exit, sync::Arc};
-use tokio::{sync::RwLock, task, time};
+use std::{collections::HashMap, env, fs, process::exit, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Notify, RwLock},
+    task,
+    time::{self, sleep},
+};
+use tracing::{error, warn};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -28,7 +34,7 @@ ARG:
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let settings = if let Some(config_filename) = parse() {
+    let mut settings = if let Some(config_filename) = parse() {
         Settings::from_file(&config_filename)?
     } else {
         Settings::new()?
@@ -63,46 +69,78 @@ async fn main() -> Result<()> {
         files.push(file);
     }
 
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    loop {
+        let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+        let sources = Arc::new(RwLock::new(HashMap::new()));
+        let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+        let config_reload = Arc::new(Notify::new());
+        let notify_shutdown = Arc::new(Notify::new());
 
-    let schema = graphql::schema(
-        database.clone(),
-        packet_sources.clone(),
-        settings.export_dir.clone(),
-    );
-    task::spawn(web::serve(
-        schema,
-        settings.graphql_address,
-        cert_pem,
-        key_pem,
-    ));
+        let schema = graphql::schema(
+            database.clone(),
+            packet_sources.clone(),
+            settings.export_dir.clone(),
+            config_reload.clone(),
+        );
+        task::spawn(web::serve(
+            schema,
+            settings.graphql_address,
+            cert_pem.clone(),
+            key_pem.clone(),
+            notify_shutdown.clone(),
+        ));
 
-    task::spawn(storage::retain_periodically(
-        time::Duration::from_secs(ONE_DAY),
-        settings.retention,
-        database.clone(),
-    ));
+        task::spawn(storage::retain_periodically(
+            time::Duration::from_secs(ONE_DAY),
+            settings.retention,
+            database.clone(),
+            notify_shutdown.clone(),
+        ));
 
-    let publish_server = publish::Server::new(
-        settings.publish_address,
-        cert.clone(),
-        key.clone(),
-        files.clone(),
-    );
-    task::spawn(publish_server.run(
-        database.clone(),
-        packet_sources.clone(),
-        stream_direct_channel.clone(),
-    ));
+        let publish_server = publish::Server::new(
+            settings.publish_address,
+            cert.clone(),
+            key.clone(),
+            files.clone(),
+        );
+        task::spawn(publish_server.run(
+            database.clone(),
+            packet_sources.clone(),
+            stream_direct_channel.clone(),
+            notify_shutdown.clone(),
+        ));
 
-    let ingest_server = ingest::Server::new(settings.ingest_address, cert, key, files);
-    ingest_server
-        .run(database, packet_sources, sources, stream_direct_channel)
-        .await;
-
-    Ok(())
+        let ingest_server = ingest::Server::new(
+            settings.ingest_address,
+            cert.clone(),
+            key.clone(),
+            files.clone(),
+        );
+        task::spawn(ingest_server.run(
+            database.clone(),
+            packet_sources,
+            sources,
+            stream_direct_channel,
+            notify_shutdown.clone(),
+        ));
+        loop {
+            config_reload.notified().await;
+            match Settings::from_file(DEFAULT_TOML) {
+                Ok(new_settings) => {
+                    settings = new_settings;
+                    notify_shutdown.notify_waiters();
+                    notify_shutdown.notified().await; // Wait for the shutdown to complete
+                    break;
+                }
+                Err(e) => {
+                    error!("Failed to load the new configuration: {:#}", e);
+                    warn!("Run giganto with the previous config");
+                    continue;
+                }
+            }
+        }
+        sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
+    }
 }
 
 /// Parses the command line arguments and returns the first argument.
