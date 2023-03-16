@@ -31,7 +31,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 lazy_static! {
     pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
@@ -499,7 +499,12 @@ async fn request_range_data_with_protocol() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
+    tokio::spawn(server().run(
+        db.clone(),
+        packet_sources,
+        stream_direct_channel,
+        Arc::new(Notify::new()),
+    ));
     let publish = TestClient::new().await;
 
     // conn protocol
@@ -1069,7 +1074,12 @@ async fn request_range_data_with_log() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
+    tokio::spawn(server().run(
+        db.clone(),
+        packet_sources,
+        stream_direct_channel,
+        Arc::new(Notify::new()),
+    ));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1145,7 +1155,12 @@ async fn request_range_data_with_period_time_series() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel));
+    tokio::spawn(server().run(
+        db.clone(),
+        packet_sources,
+        stream_direct_channel,
+        Arc::new(Notify::new()),
+    ));
     let publish = TestClient::new().await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -1250,7 +1265,12 @@ async fn request_network_event_stream() {
     };
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db.clone(), packet_sources, stream_direct_channel.clone()));
+    tokio::spawn(server().run(
+        db.clone(),
+        packet_sources,
+        stream_direct_channel.clone(),
+        Arc::new(Notify::new()),
+    ));
     let mut publish = TestClient::new().await;
 
     {

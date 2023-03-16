@@ -7,10 +7,14 @@ use async_graphql::{InputObject, Object, Result, SimpleObject};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    sync::Arc,
+    time::Duration,
 };
+use tokio::sync::Notify;
 use toml_edit::{value, Document};
 
-const DEFAULT_TOML: &str = "/usr/local/aice/conf/giganto.toml";
+pub const DEFAULT_TOML: &str = "/usr/local/aice/conf/giganto.toml";
+const GRAPHQL_REBOOT_DELAY: u64 = 100;
 
 #[derive(SimpleObject, Debug)]
 struct GigantoStatus {
@@ -139,7 +143,11 @@ impl GigantoStatusQuery {
 #[Object]
 impl GigantoConfigMutation {
     #[allow(clippy::unused_async)]
-    async fn set_giganto_config(&self, field: UserConfig) -> Result<String> {
+    async fn set_giganto_config<'ctx>(
+        &self,
+        ctx: &async_graphql::Context<'ctx>,
+        field: UserConfig,
+    ) -> Result<String> {
         let toml = fs::read_to_string(DEFAULT_TOML).context("toml not found")?;
         let mut doc = toml.parse::<Document>()?;
 
@@ -168,6 +176,13 @@ impl GigantoConfigMutation {
             .truncate(true)
             .open(DEFAULT_TOML)?;
         writeln!(toml_file, "{output}")?;
+
+        let config_reload = ctx.data::<Arc<Notify>>()?.clone();
+        tokio::spawn(async move {
+            // Used to complete the response of a graphql Mutation.
+            tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
+            config_reload.notify_one();
+        });
 
         Ok("Done".to_string())
     }

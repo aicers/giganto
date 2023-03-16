@@ -9,6 +9,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add Giganto Restart processing.
 - Add more fields to `dns`, `conn`, `http`
 - Add common fields to network events.
 - Publish support Packet request/response through QUIC.

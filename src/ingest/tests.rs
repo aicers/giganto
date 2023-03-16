@@ -27,7 +27,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 
@@ -753,5 +753,11 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-    tokio::spawn(server().run(db, packet_sources, sources, stream_direct_channel))
+    tokio::spawn(server().run(
+        db,
+        packet_sources,
+        sources,
+        stream_direct_channel,
+        Arc::new(Notify::new()),
+    ))
 }

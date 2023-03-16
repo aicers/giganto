@@ -3,7 +3,9 @@ pub mod implement;
 mod tests;
 
 use crate::publish::send_direct_stream;
-use crate::server::{certificate_info, config_server};
+use crate::server::{
+    certificate_info, config_server, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+};
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -23,9 +25,10 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicI64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering},
         Arc,
     },
+    time::Duration,
 };
 use tokio::{
     select,
@@ -34,6 +37,7 @@ use tokio::{
         Mutex, Notify, RwLock,
     },
     task, time,
+    time::sleep,
 };
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
@@ -82,6 +86,7 @@ impl Server {
         packet_sources: PacketSources,
         sources: Sources,
         stream_direct_channel: StreamDirectChannel,
+        wait_shutdown: Arc<Notify>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -98,18 +103,34 @@ impl Server {
             rx,
         ));
 
-        while let Some(conn) = endpoint.accept().await {
-            let sender = tx.clone();
-            let db = db.clone();
-            let packet_sources = packet_sources.clone();
-            let stream_direct_channel = stream_direct_channel.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    handle_connection(conn, db, packet_sources, sender, stream_direct_channel).await
-                {
-                    error!("connection failed: {}", e);
-                }
-            });
+        let shutdown_signal = Arc::new(AtomicBool::new(false));
+
+        loop {
+            select! {
+                Some(conn) = endpoint.accept()  => {
+                    let sender = tx.clone();
+                    let db = db.clone();
+                    let packet_sources = packet_sources.clone();
+                    let stream_direct_channel = stream_direct_channel.clone();
+                    let shutdown_notify = wait_shutdown.clone();
+                    let shutdown_sig = shutdown_signal.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            handle_connection(conn, db, packet_sources, sender, stream_direct_channel,shutdown_notify,shutdown_sig).await
+                        {
+                            error!("connection failed: {}", e);
+                        }
+                    });
+                },
+                _ = wait_shutdown.notified() => {
+                    shutdown_signal.store(true,Ordering::SeqCst); // Setting signal to handle termination on each channel.
+                    sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
+                    endpoint.close(0_u32.into(), &[]);
+                    info!("Shutting down ingest");
+                    wait_shutdown.notify_one();
+                    break;
+                },
+            }
         }
     }
 }
@@ -120,6 +141,8 @@ async fn handle_connection(
     packet_sources: PacketSources,
     sender: Sender<SourceInfo>,
     stream_direct_channel: StreamDirectChannel,
+    wait_shutdown: Arc<Notify>,
+    shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let rep: bool;
     let connection = conn.await?;
@@ -151,40 +174,45 @@ async fn handle_connection(
     {
         error!("Failed to send channel data : {}", error);
     }
-
-    async {
-        loop {
-            let stream = connection.accept_bi().await;
-            let stream = match stream {
-                Err(conn_err) => {
-                    if let Err(error) = sender
-                        .send((source, Utc::now(), ConnState::Disconnected, rep))
-                        .await
-                    {
-                        error!("Failed to send internal channel data : {}", error);
-                    }
-                    match conn_err {
-                        quinn::ConnectionError::ApplicationClosed(_) => {
-                            info!("application closed");
-                            return Ok(());
+    loop {
+        select! {
+            stream = connection.accept_bi()  => {
+                let stream = match stream {
+                    Err(conn_err) => {
+                        if let Err(error) = sender
+                            .send((source, Utc::now(), ConnState::Disconnected, rep))
+                            .await
+                        {
+                            error!("Failed to send internal channel data : {}", error);
                         }
-                        _ => return Err(conn_err),
+                        match conn_err {
+                            quinn::ConnectionError::ApplicationClosed(_) => {
+                                info!("application closed");
+                                return Ok(());
+                            }
+                            _ => return Err(conn_err.into()),
+                        }
                     }
-                }
-                Ok(s) => s,
-            };
-            let source = source.clone();
-            let db = db.clone();
-            let stream_direct_channel = stream_direct_channel.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_request(source, stream, db, stream_direct_channel).await {
-                    error!("failed: {}", e);
-                }
-            });
+                    Ok(s) => s,
+                };
+                let source = source.clone();
+                let db = db.clone();
+                let stream_direct_channel = stream_direct_channel.clone();
+                let shutdown_signal = shutdown_signal.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_request(source, stream, db, stream_direct_channel,shutdown_signal).await {
+                        error!("failed: {}", e);
+                    }
+                });
+            },
+            _ = wait_shutdown.notified() => {
+                // Wait time for channels to be ready for shutdown.
+                sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
+                connection.close(0_u32.into(), &[]);
+                return Ok(())
+            },
         }
     }
-    .await?;
-    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -193,6 +221,7 @@ async fn handle_request(
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
     stream_direct_channel: StreamDirectChannel,
+    shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut buf = [0; 4];
     receive_record_header(&mut recv, &mut buf)
@@ -208,6 +237,7 @@ async fn handle_request(
                 source,
                 db.conn_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -220,6 +250,7 @@ async fn handle_request(
                 source,
                 db.dns_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -232,6 +263,7 @@ async fn handle_request(
                 source,
                 db.log_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -244,6 +276,7 @@ async fn handle_request(
                 source,
                 db.http_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -256,6 +289,7 @@ async fn handle_request(
                 source,
                 db.rdp_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -268,6 +302,7 @@ async fn handle_request(
                 source,
                 db.periodic_time_series_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -280,6 +315,7 @@ async fn handle_request(
                 source,
                 db.smtp_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -292,6 +328,7 @@ async fn handle_request(
                 source,
                 db.ntlm_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -304,6 +341,7 @@ async fn handle_request(
                 source,
                 db.kerberos_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -316,6 +354,7 @@ async fn handle_request(
                 source,
                 db.ssh_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -328,6 +367,7 @@ async fn handle_request(
                 source,
                 db.dce_rpc_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -340,6 +380,7 @@ async fn handle_request(
                 source,
                 db.statistics_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -352,6 +393,7 @@ async fn handle_request(
                 source,
                 db.oplog_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -364,6 +406,7 @@ async fn handle_request(
                 source,
                 db.packet_store()?,
                 stream_direct_channel,
+                shutdown_signal,
             )
             .await?;
         }
@@ -380,6 +423,7 @@ async fn handle_data<T>(
     source: String,
     store: RawEventStore<'_, T>,
     stream_direct_channel: StreamDirectChannel,
+    shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -479,6 +523,10 @@ async fn handle_data<T>(
                         ack_cnt_rotation.store(0, Ordering::SeqCst);
                         ack_time_notify.notify_one();
                     }
+                }
+                if shutdown_signal.load(Ordering::SeqCst) {
+                    handler.abort();
+                    break;
                 }
             }
             Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
