@@ -59,7 +59,7 @@ struct DnsJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
@@ -83,7 +83,7 @@ struct HttpJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     method: String,
     host: String,
     uri: String,
@@ -111,7 +111,7 @@ struct RdpJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     cookie: String,
 }
 
@@ -124,7 +124,7 @@ struct SmtpJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     mailfrom: String,
     date: String,
     from: String,
@@ -142,7 +142,7 @@ struct NtlmJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     username: String,
     hostname: String,
     domainname: String,
@@ -161,7 +161,7 @@ struct KerberosJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     request_type: String,
     client: String,
     service: String,
@@ -185,7 +185,7 @@ struct SshJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     version: i64,
     auth_success: String,
     auth_attempts: i64,
@@ -209,7 +209,7 @@ struct DceRpcJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    duration: i64,
+    last_time: i64,
     rtt: i64,
     named_pipe: String,
     endpoint: String,
@@ -255,7 +255,7 @@ macro_rules! convert_json_output {
                     resp_addr: self.resp_addr.to_string(),
                     resp_port: self.resp_port,
                     proto: self.proto,
-                    duration: self.duration,
+                    last_time: self.last_time,
                     $(
                         $fields: self.$fields.clone(),
                     )*
@@ -264,16 +264,6 @@ macro_rules! convert_json_output {
         }
     };
 }
-
-convert_json_output!(
-    ConnJsonOutput,
-    Conn,
-    service,
-    orig_bytes,
-    resp_bytes,
-    orig_pkts,
-    resp_pkts
-);
 
 convert_json_output!(
     HttpJsonOutput,
@@ -364,6 +354,26 @@ convert_json_output!(
     operation
 );
 
+impl JsonOutput<ConnJsonOutput> for Conn {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<ConnJsonOutput> {
+        Ok(ConnJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            duration: self.duration,
+            service: self.service.clone(),
+            orig_bytes: self.orig_bytes,
+            resp_bytes: self.resp_bytes,
+            orig_pkts: self.orig_pkts,
+            resp_pkts: self.resp_pkts,
+        })
+    }
+}
+
 impl JsonOutput<DnsJsonOutput> for Dns {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsJsonOutput> {
         let ttl = if self.ttl.is_empty() {
@@ -380,7 +390,7 @@ impl JsonOutput<DnsJsonOutput> for Dns {
             resp_addr: self.resp_addr.to_string(),
             resp_port: self.resp_port,
             proto: self.proto,
-            duration: self.duration,
+            last_time: self.last_time,
             query: self.query.clone(),
             answer: self.answer.clone(),
             trans_id: self.trans_id,
@@ -1078,7 +1088,7 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            duration: 1,
+            last_time: 1,
             query: "Hello Server Hello Server Hello Server".to_string(),
             answer: vec!["1.1.1.1".to_string()],
             trans_id: 1,
@@ -1154,7 +1164,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             method: "POST".to_string(),
             host: "einsis".to_string(),
             uri: "/einsis.gif".to_string(),
@@ -1234,7 +1244,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             cookie: "rdp_test".to_string(),
         };
         let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
@@ -1299,7 +1309,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             mailfrom: "mailfrom".to_string(),
             date: "date".to_string(),
             from: "from".to_string(),
@@ -1369,7 +1379,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             username: "bly".to_string(),
             hostname: "host".to_string(),
             domainname: "domain".to_string(),
@@ -1440,7 +1450,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             request_type: "req_type".to_string(),
             client: "client".to_string(),
             service: "service".to_string(),
@@ -1515,7 +1525,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             version: 01,
             auth_success: "auth_success".to_string(),
             auth_attempts: 3,
@@ -1590,7 +1600,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 6,
-            duration: 1,
+            last_time: 1,
             rtt: 3,
             named_pipe: "named_pipe".to_string(),
             endpoint: "endpoint".to_string(),

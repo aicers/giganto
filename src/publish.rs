@@ -535,16 +535,17 @@ where
     N: RequestStreamMessage,
 {
     let mut sender = conn.open_uni().await?;
-    let db_key_prefix = msg.database_key()?;
-    let channel_key = msg.channel_key(source, record_type.convert_to_str())?;
+    let channel_keys = msg.channel_key(source, record_type.convert_to_str())?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
-    let channel_remove_key = channel_key.clone();
+    let channel_remove_keys = channel_keys.clone();
+    for c_key in channel_keys {
+        stream_direct_channel
+            .write()
+            .await
+            .insert(c_key, send.clone());
+    }
 
-    stream_direct_channel
-        .write()
-        .await
-        .insert(channel_key, send);
     let mut last_ts = 0_i64;
 
     // send stored record raw data
@@ -556,6 +557,7 @@ where
             info!("start hog's publish Stream : {:?}", record_type);
         }
         NodeType::Crusher => {
+            let db_key_prefix = msg.database_key()?;
             // crusher's policy Id always exists.
             let id = msg.source_id().unwrap();
             send_crusher_stream_start_message(&mut sender, id)
@@ -597,10 +599,12 @@ where
                         continue;
                     }
                     if send_bytes(&mut sender, &buf).await.is_err(){
-                        stream_direct_channel
-                        .write()
-                        .await
-                        .remove(&channel_remove_key);
+                        for r_key in channel_remove_keys{
+                            stream_direct_channel
+                            .write()
+                            .await
+                            .remove(&r_key);
+                        }
                         break;
                     }
                 }
