@@ -26,6 +26,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Fix packet logic in ingest.
 - Rocksdb compression type has changed to Lz4, zstd from snappy
 - Move giganto-client to separate repo [giganto-client](https://github.com/aicers/giganto-client).
+- Change `duration` field name to `last_time`.
 
 ## [0.7.0] - 2023-01-04
 

@@ -14,7 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 data-encoding = "2.3"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.1.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "132f050" }
 humantime = "2.1"
 humantime-serde = "1"
 libc = "0.2"

@@ -83,7 +83,7 @@ impl RequestStreamMessage for RequestCrusherStream {
     }
 
     fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool {
-        match (self.src_ip, self.des_ip) {
+        match (self.src_ip, self.dst_ip) {
             (Some(c_orig_addr), Some(c_resp_addr)) => {
                 if c_orig_addr == orig_addr && c_resp_addr == resp_addr {
                     return true;
