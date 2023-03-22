@@ -20,7 +20,7 @@ humantime-serde = "1"
 num_enum = "0.5"
 quinn = "0.9"
 rocksdb = "0.20"
-roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.1.0" }
+roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.0" }
 rustls = "0.20"
 rustls-pemfile = "1.0"
 serde = { version = "1", features = ["derive"] }
