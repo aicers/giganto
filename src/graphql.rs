@@ -2,6 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
+mod source;
 pub mod status;
 mod timeseries;
 
@@ -48,6 +49,7 @@ pub struct Query(
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
     status::GigantoStatusQuery,
+    source::SourceQuery,
 );
 
 #[derive(Default, MergedObject)]
