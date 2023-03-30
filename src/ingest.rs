@@ -570,18 +570,20 @@ async fn check_sources_conn(
             }
 
             Some((source_key,timestamp_val,conn_state, rep)) = rx.recv() => {
-                if !rep {
-                    match conn_state{
-                        ConnState::Connected =>{
-                            if source_store.insert(&source_key, timestamp_val).is_err(){
-                                error!("Failed to append Source store");
-                            }
+                match conn_state {
+                    ConnState::Connected => {
+                        if source_store.insert(&source_key, timestamp_val).is_err() {
+                            error!("Failed to append Source store");
+                        }
+                        if !rep {
                             sources.write().await.insert(source_key, timestamp_val);
                         }
-                        ConnState::Disconnected =>{
-                            if source_store.insert(&source_key, timestamp_val).is_err(){
-                                error!("Failed to append Source store");
-                            }
+                    }
+                    ConnState::Disconnected => {
+                        if source_store.insert(&source_key, timestamp_val).is_err() {
+                            error!("Failed to append Source store");
+                        }
+                        if !rep {
                             sources.write().await.remove(&source_key);
                             packet_sources.write().await.remove(&source_key);
                         }

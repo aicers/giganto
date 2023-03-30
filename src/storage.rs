@@ -360,7 +360,7 @@ impl<'db> SourceStore<'db> {
     }
 
     /// Returns the names of all sources.
-    fn names(&self) -> Vec<Vec<u8>> {
+    pub fn names(&self) -> Vec<Vec<u8>> {
         self.db
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
             .flatten()
