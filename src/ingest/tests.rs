@@ -10,7 +10,7 @@ use giganto_client::{
     frame::recv_bytes,
     ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
         receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
@@ -667,6 +667,50 @@ async fn packet() {
         .expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"packet_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn ftp() {
+    const RECORD_TYPE_FTP: RecordType = RecordType::Ftp;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_ftp, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let ftp_body = Ftp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        user: "einsis".to_string(),
+        password: "aice".to_string(),
+        command: "command".to_string(),
+        reply_code: "500".to_string(),
+        reply_msg: "reply_message".to_string(),
+        data_passive: false,
+        data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        data_resp_port: 80,
+        file: "fpt_file".to_string(),
+        file_size: 100,
+        file_id: "1".to_string(),
+    };
+
+    send_record_header(&mut send_ftp, RECORD_TYPE_FTP)
+        .await
+        .unwrap();
+    send_event(&mut send_ftp, Utc::now().timestamp_nanos(), ftp_body)
+        .await
+        .unwrap();
+
+    send_ftp.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"ftp_done");
     client.endpoint.wait_idle().await;
 }
 

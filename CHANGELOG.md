@@ -9,15 +9,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add GIGANTO DB version compatibility check.
 - Add a publish API to return the source, raw_events
   from the source, timestamps for REconverge.
+- Supports the FTP protocol.
 
 ## [0.9.0] - 2023-04-03
 
 ### Added
 
 - Add GraphQL API to return source list.
-- Add GIGANTO DB version compatibility check.
 
 ### Changed
 

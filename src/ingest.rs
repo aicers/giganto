@@ -410,6 +410,19 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Ftp => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Ftp,
+                Some(NetworkKey::new(&source, "ftp")),
+                source,
+                db.ftp_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
     };
     Ok(())
 }

@@ -1,6 +1,6 @@
 use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
-    network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -283,6 +283,27 @@ impl EventFilter for Packet {
     }
     fn resp_port(&self) -> Option<u16> {
         None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Ftp {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
     }
     fn log_level(&self) -> Option<String> {
         None
