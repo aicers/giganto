@@ -13,7 +13,7 @@ use giganto_client::{
     convert_time_format,
     ingest::{
         log::{Log, Oplog},
-        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
         timeseries::PeriodicTimeSeries,
     },
 };
@@ -213,6 +213,26 @@ struct DceRpcJsonOutput {
     named_pipe: String,
     endpoint: String,
     operation: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FtpJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u16,
+    last_time: i64,
+    user: String,
+    password: String,
+    data_passive: bool,
+    data_orig_addr: String,
+    data_resp_addr: String,
+    data_resp_port: u16,
+    file: String,
+    file_id: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -438,6 +458,29 @@ impl JsonOutput<OpLogJsonOutput> for Oplog {
             agent_id: source,
             level: self.log_level().unwrap_or_else(|| "-".to_string()),
             contents: self.contents.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FtpJsonOutput> for Ftp {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<FtpJsonOutput> {
+        Ok(FtpJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            last_time: self.last_time,
+            user: self.user.clone(),
+            password: self.password.clone(),
+            data_passive: self.data_passive,
+            data_orig_addr: self.data_orig_addr.to_string(),
+            data_resp_addr: self.data_resp_addr.to_string(),
+            data_resp_port: self.data_resp_port,
+            file: self.file.clone(),
+            file_id: self.file_id.clone(),
         })
     }
 }
@@ -779,6 +822,20 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "ftp" => tokio::spawn(async move {
+            if let Ok(store) = db.ftp_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -894,7 +951,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
         timeseries::PeriodicTimeSeries,
     };
     use std::mem;
@@ -1788,5 +1845,81 @@ mod tests {
         let value = bincode::serialize(&oplog_body).unwrap();
 
         store.append(&key, &value).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_ftp() {
+        let schema = TestSchema::new();
+        let store = schema.db.ftp_store().unwrap();
+
+        insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_ftp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "ftp",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("ftp"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "ftp",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("ftp"));
+    }
+
+    fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let ftp_body = Ftp {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            user: "einsis".to_string(),
+            password: "aice".to_string(),
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "fpt_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        };
+        let ser_ftp_body = bincode::serialize(&ftp_body).unwrap();
+
+        store.append(&key, &ser_ftp_body).unwrap();
     }
 }

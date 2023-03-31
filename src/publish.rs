@@ -488,6 +488,25 @@ where
                 error!("Failed to open dce rpc store");
             }
         }
+        RequestStreamRecord::Ftp => {
+            if let Ok(store) = db.ftp_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open ftp store");
+            }
+        }
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
@@ -718,6 +737,15 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Ftp => {
+                    process_range_data(
+                        &mut send,
+                        db.ftp_store().context("Failed to open ftp store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::PeriodicTimeSeries => {
@@ -765,6 +793,9 @@ async fn handle_request(
                 }
                 REconvergeKindType::DceRpc => {
                     process_raw_events(&mut send, db.dce_rpc_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Ftp => {
+                    process_raw_events(&mut send, db.ftp_store()?, msg.input).await?;
                 }
                 REconvergeKindType::Log => {
                     // For REconvergeKindType::LOG, the source_kind is required as the source.

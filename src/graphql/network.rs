@@ -10,7 +10,9 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
+};
 use serde::Serialize;
 use std::{fmt::Debug, iter::Peekable, net::IpAddr};
 
@@ -310,6 +312,25 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct FtpRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u16,
+    last_time: i64,
+    user: String,
+    password: String,
+    data_passive: bool,
+    data_orig_addr: String,
+    data_resp_addr: String,
+    data_resp_port: u16,
+    file: String,
+    file_id: String,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum NetworkRawEvents {
@@ -321,6 +342,7 @@ enum NetworkRawEvents {
     KerberosRawEvent(KerberosRawEvent),
     SshRawEvent(SshRawEvent),
     DceRpcRawEvent(DceRpcRawEvent),
+    FtpRawEvent(FtpRawEvent),
 }
 
 macro_rules! from_key_value {
@@ -360,6 +382,28 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_bytes: val.resp_bytes,
             orig_pkts: val.orig_pkts,
             resp_pkts: val.resp_pkts,
+        })
+    }
+}
+
+impl FromKeyValue<Ftp> for FtpRawEvent {
+    fn from_key_value(key: &[u8], val: Ftp) -> Result<Self> {
+        Ok(FtpRawEvent {
+            timestamp: get_timestamp(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            last_time: val.last_time,
+            user: val.user,
+            password: val.password,
+            data_passive: val.data_passive,
+            data_orig_addr: val.data_orig_addr.to_string(),
+            data_resp_addr: val.data_resp_addr.to_string(),
+            data_resp_port: val.data_resp_port,
+            file: val.file,
+            file_id: val.file_id,
         })
     }
 }
@@ -680,6 +724,31 @@ impl NetworkQuery {
         .await
     }
 
+    async fn ftp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, FtpRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ftp_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn network_raw_events<'ctx>(
         &self,
@@ -842,6 +911,24 @@ impl NetworkQuery {
                     }
                 }
 
+                let (ftp_iter, cursor, _) = get_filtered_iter(
+                    &db.ftp_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut ftp_iter = ftp_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = ftp_iter.peek() {
+                        if key.as_ref() == cursor {
+                            ftp_iter.next();
+                        }
+                    }
+                }
+
                 let mut is_forward: bool = true;
                 if before.is_some() || last.is_some() {
                     is_forward = false;
@@ -856,6 +943,7 @@ impl NetworkQuery {
                     kerberos_iter,
                     ssh_iter,
                     dce_rpc_iter,
+                    ftp_iter,
                     size,
                     is_forward,
                 )
@@ -875,6 +963,7 @@ fn network_connection(
     mut kerberos_iter: Peekable<FilteredIter<Kerberos>>,
     mut ssh_iter: Peekable<FilteredIter<Ssh>>,
     mut dce_rpc_iter: Peekable<FilteredIter<DceRpc>>,
+    mut ftp_iter: Peekable<FilteredIter<Ftp>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -892,6 +981,7 @@ fn network_connection(
     let mut kerberos_data = kerberos_iter.next();
     let mut ssh_data = ssh_iter.next();
     let mut dce_rpc_data = dce_rpc_iter.next();
+    let mut ftp_data = ftp_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -942,14 +1032,20 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
-        let selected = if is_forward {
-            timestamp.min(dns_ts.min(conn_ts.min(
-                http_ts.min(rdp_ts.min(ntlm_ts.min(kerberos_ts.min(ssh_ts.min(dce_rpc_ts))))),
-            )))
+        let ftp_ts = if let Some((ref key, _)) = ftp_data {
+            get_timestamp(key)?
         } else {
-            timestamp.max(dns_ts.max(conn_ts.max(
-                http_ts.max(rdp_ts.max(ntlm_ts.max(kerberos_ts.max(ssh_ts.max(dce_rpc_ts))))),
-            )))
+            min_max_time(is_forward)
+        };
+
+        let selected = if is_forward {
+            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(
+                rdp_ts.min(ntlm_ts.min(kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts))))),
+            ))))
+        } else {
+            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(
+                rdp_ts.max(ntlm_ts.max(kerberos_ts.max(ssh_ts.max(dce_rpc_ts.min(ftp_ts))))),
+            ))))
         };
 
         match selected {
@@ -1037,6 +1133,16 @@ fn network_connection(
                 } else {
                 };
             }
+            _ if selected == ftp_ts => {
+                if let Some((key, value)) = ftp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::FtpRawEvent(FtpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    ftp_data = ftp_iter.next();
+                } else {
+                };
+            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -1047,7 +1153,8 @@ fn network_connection(
                 && ntlm_data.is_none()
                 && kerberos_data.is_none()
                 && ssh_data.is_none()
-                && dce_rpc_data.is_none())
+                && dce_rpc_data.is_none()
+                && ftp_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -1057,6 +1164,7 @@ fn network_connection(
                 || kerberos_data.is_some()
                 || ssh_data.is_some()
                 || dce_rpc_data.is_some()
+                || ftp_data.is_some()
             {
                 has_next_value = true;
             }
@@ -1097,7 +1205,7 @@ mod tests {
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use giganto_client::ingest::network::{
-        Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
     };
     use std::mem;
     use std::net::IpAddr;
@@ -1765,6 +1873,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ftp_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ftp_store().unwrap();
+
+        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            ftpRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let ftp_body = Ftp {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            user: "einsis".to_string(),
+            password: "aice".to_string(),
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "fpt_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        };
+        let ser_ftp_body = bincode::serialize(&ftp_body).unwrap();
+
+        store.append(&key, &ser_ftp_body).unwrap();
+    }
+
+    #[tokio::test]
     async fn conn_with_start_or_end() {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
@@ -1811,6 +1980,7 @@ mod tests {
         let kerberos_store = schema.db.kerberos_store().unwrap();
         let ssh_store = schema.db.ssh_store().unwrap();
         let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
+        let ftp_store = schema.db.ftp_store().unwrap();
 
         insert_conn_raw_event(
             &conn_store,
@@ -1868,8 +2038,15 @@ mod tests {
                 .unwrap()
                 .timestamp_nanos(),
         );
+        insert_ftp_raw_event(
+            &ftp_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
+                .unwrap()
+                .timestamp_nanos(),
+        );
 
-        // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos
+        // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp
         let query = r#"
         {
             networkRawEvents(
@@ -1905,12 +2082,15 @@ mod tests {
                         ... on DceRpcRawEvent {
                             timestamp
                         }
+                        ... on FtpRawEvent {
+                            timestamp
+                        }
                         __typename
                     }
                 }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}}]}}");
+        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}}]}}");
     }
 }
