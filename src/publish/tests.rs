@@ -42,7 +42,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.8.0";
+const PROTOCOL_VERSION: &str = "0.9.0";
 
 struct TestClient {
     send: SendStream,
@@ -548,9 +548,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -560,11 +561,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             conn_data.response_data(send_conn_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -606,9 +609,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -618,11 +622,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Dns::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             dns_data.response_data(send_dns_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -667,9 +673,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -679,11 +686,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Http::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             http_data.response_data(send_http_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -725,9 +734,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -737,11 +747,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Rdp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             rdp_data.response_data(send_rdp_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -786,9 +798,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -798,11 +811,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             smtp_data.response_data(send_smtp_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -847,9 +862,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -859,11 +875,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ntlm::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             ntlm_data.response_data(send_ntlm_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -907,9 +925,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -919,13 +938,15 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Kerberos::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             kerberos_data
                 .response_data(send_kerberos_time, SOURCE)
                 .unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -967,9 +988,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -979,11 +1001,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ssh::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             ssh_data.response_data(send_ssh_time, SOURCE).unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -1028,9 +1052,10 @@ async fn request_range_data_with_protocol() {
 
         let mut result_data = Vec::new();
         loop {
-            let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
-                .await
-                .unwrap();
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
 
             result_data.push(resp_data.clone());
             if resp_data.is_none() {
@@ -1040,13 +1065,15 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             DceRpc::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
         assert_eq!(
             dce_rpc_data
                 .response_data(send_dce_rpc_time, SOURCE)
                 .unwrap(),
-            bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
         );
     }
 
@@ -1122,7 +1149,7 @@ async fn request_range_data_with_log() {
 
     let mut result_data = Vec::new();
     loop {
-        let resp_data = receive_range_data::<Option<(i64, Vec<u8>)>>(&mut recv_pub_resp)
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
             .await
             .unwrap();
 
@@ -1134,11 +1161,11 @@ async fn request_range_data_with_log() {
 
     assert_eq!(
         Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         log_data.response_data(send_log_time, SOURCE).unwrap(),
-        bincode::serialize::<Option<(i64, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -1202,7 +1229,7 @@ async fn request_range_data_with_period_time_series() {
 
     let mut result_data = Vec::new();
     loop {
-        let resp_data = receive_range_data::<Option<(i64, Vec<f64>)>>(&mut recv_pub_resp)
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<f64>)>>(&mut recv_pub_resp)
             .await
             .unwrap();
 
@@ -1214,13 +1241,13 @@ async fn request_range_data_with_period_time_series() {
 
     assert_eq!(
         PeriodicTimeSeries::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         time_series_data
             .response_data(send_time_series_time, SAMPLING_POLICY_ID)
             .unwrap(),
-        bincode::serialize::<Option<(i64, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
