@@ -136,7 +136,7 @@ impl RawEventFilter for NetworkFilter {
 }
 
 #[derive(SimpleObject, Debug)]
-struct ConnRawEvent {
+pub struct ConnRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -153,7 +153,7 @@ struct ConnRawEvent {
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug)]
-struct DnsRawEvent {
+pub struct DnsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -176,7 +176,34 @@ struct DnsRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-struct HttpRawEvent {
+pub struct HttpRawEvent {
+    pub timestamp: DateTime<Utc>,
+    pub orig_addr: String,
+    pub orig_port: u16,
+    pub resp_addr: String,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub last_time: i64,
+    pub method: String,
+    pub host: String,
+    pub uri: String,
+    pub referrer: String,
+    pub version: String,
+    pub user_agent: String,
+    pub request_len: usize,
+    pub response_len: usize,
+    pub status_code: u16,
+    pub status_msg: String,
+    pub username: String,
+    pub password: String,
+    pub cookie: String,
+    pub content_encoding: String,
+    pub content_type: String,
+    pub cache_control: String,
+}
+
+#[derive(SimpleObject, Debug)]
+pub struct RdpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -184,38 +211,11 @@ struct HttpRawEvent {
     resp_port: u16,
     proto: u8,
     last_time: i64,
-    method: String,
-    host: String,
-    uri: String,
-    referrer: String,
-    version: String,
-    user_agent: String,
-    request_len: usize,
-    response_len: usize,
-    status_code: u16,
-    status_msg: String,
-    username: String,
-    password: String,
-    cookie: String,
-    content_encoding: String,
-    content_type: String,
-    cache_control: String,
-}
-
-#[derive(SimpleObject, Debug)]
-struct RdpRawEvent {
-    timestamp: DateTime<Utc>,
-    orig_addr: String,
-    orig_port: u16,
-    resp_addr: String,
-    resp_port: u16,
-    proto: u8,
-    last_time: i64,
     cookie: String,
 }
 
 #[derive(SimpleObject, Debug)]
-struct SmtpRawEvent {
+pub struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -232,7 +232,7 @@ struct SmtpRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-struct NtlmRawEvent {
+pub struct NtlmRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -250,7 +250,7 @@ struct NtlmRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-struct KerberosRawEvent {
+pub struct KerberosRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -273,7 +273,7 @@ struct KerberosRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-struct SshRawEvent {
+pub struct SshRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -296,7 +296,7 @@ struct SshRawEvent {
 }
 
 #[derive(SimpleObject, Debug)]
-struct DceRpcRawEvent {
+pub struct DceRpcRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
@@ -310,9 +310,9 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::module_name_repetitions, clippy::enum_variant_names)]
 #[derive(Union)]
-enum NetworkRawEvents {
+pub enum NetworkRawEvents {
     ConnRawEvent(ConnRawEvent),
     DnsRawEvent(DnsRawEvent),
     HttpRawEvent(HttpRawEvent),
@@ -865,8 +865,12 @@ impl NetworkQuery {
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn network_connection(
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::module_name_repetitions
+)]
+pub fn network_connection(
     mut conn_iter: Peekable<FilteredIter<Conn>>,
     mut dns_iter: Peekable<FilteredIter<Dns>>,
     mut http_iter: Peekable<FilteredIter<Http>>,

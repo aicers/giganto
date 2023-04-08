@@ -4,6 +4,7 @@ version = "0.9.0"
 edition = "2021"
 
 [dependencies]
+aho-corasick = "0.7"
 anyhow = "1.0"
 async-graphql = { version = "5.0", features = ["chrono"] }
 async-graphql-warp = "5.0"

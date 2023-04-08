@@ -2,6 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
+pub mod search;
 mod source;
 pub mod status;
 mod timeseries;
@@ -43,6 +44,7 @@ pub const TIMESTAMP_SIZE: usize = 8;
 
 #[derive(Default, MergedObject)]
 pub struct Query(
+    search::SearchQuery,
     log::LogQuery,
     network::NetworkQuery,
     export::ExportQuery,
