@@ -1,5 +1,6 @@
 mod graphql;
 mod ingest;
+mod peer;
 mod publish;
 mod server;
 mod settings;
@@ -11,13 +12,20 @@ use anyhow::{anyhow, Context, Result};
 use giganto_client::init_tracing;
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
-use std::{collections::HashMap, env, fs, process::exit, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    env, fs,
+    process::exit,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
+    select,
     sync::{Notify, RwLock},
     task,
     time::{self, sleep},
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -75,12 +83,19 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let notify_ctrlc = Arc::new(Notify::new());
+    let r = notify_ctrlc.clone();
+    if let Err(ctrlc::Error::System(e)) = ctrlc::set_handler(move || r.notify_one()) {
+        return Err(anyhow!("failed to set signal handler: {}", e));
+    }
+
     loop {
         let packet_sources = Arc::new(RwLock::new(HashMap::new()));
         let sources = Arc::new(RwLock::new(HashMap::new()));
         let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
         let config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
+        let mut notify_change_source = None;
 
         let schema = graphql::schema(
             database.clone(),
@@ -103,6 +118,27 @@ async fn main() -> Result<()> {
             database.clone(),
             notify_shutdown.clone(),
         ));
+
+        if let Some(peer_address) = settings.peer_address {
+            let peer_server =
+                peer::Peer::new(peer_address, cert.clone(), key.clone(), files.clone())?;
+            let peer_sources = Arc::new(RwLock::new(HashMap::new()));
+            let notify_source = Arc::new(Notify::new());
+            let peers = if let Some(peers) = settings.peers {
+                peers
+            } else {
+                HashSet::new()
+            };
+            task::spawn(peer_server.run(
+                peers,
+                sources.clone(),
+                peer_sources,
+                notify_source.clone(),
+                notify_shutdown.clone(),
+                settings.cfg_path.clone(),
+            ));
+            notify_change_source = Some(notify_source);
+        }
 
         let publish_server = publish::Server::new(
             settings.publish_address,
@@ -129,21 +165,33 @@ async fn main() -> Result<()> {
             sources,
             stream_direct_channel,
             notify_shutdown.clone(),
+            notify_change_source,
         ));
+
         loop {
-            config_reload.notified().await;
-            match Settings::from_file(&settings.cfg_path) {
-                Ok(new_settings) => {
-                    settings = new_settings;
+            select! {
+                _ = config_reload.notified() =>{
+                    match Settings::from_file(&settings.cfg_path) {
+                        Ok(new_settings) => {
+                            settings = new_settings;
+                            notify_shutdown.notify_waiters();
+                            notify_shutdown.notified().await; // Wait for the shutdown to complete
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Failed to load the new configuration: {:#}", e);
+                            warn!("Run giganto with the previous config");
+                            continue;
+                        }
+                    }
+                },
+                _ = notify_ctrlc.notified() =>{
+                    info!("Termination signal: Giganto deamon exit");
                     notify_shutdown.notify_waiters();
-                    notify_shutdown.notified().await; // Wait for the shutdown to complete
-                    break;
+                    sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
+                    return Ok(())
                 }
-                Err(e) => {
-                    error!("Failed to load the new configuration: {:#}", e);
-                    warn!("Run giganto with the previous config");
-                    continue;
-                }
+
             }
         }
         sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;

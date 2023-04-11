@@ -1,12 +1,17 @@
-key = "tests/key.pem"
-cert = "tests/cert.pem"
-roots = ["tests/root.pem"]
+key = "key.pem"
+cert = "cert.pem"
+roots = ["ca1.pem", "ca2.pem", "ca3.pem"]
 ingest_address = "0.0.0.0:38370"
 publish_address = "0.0.0.0:38371"
 graphql_address = "127.0.0.1:8443"
 data_dir = "tests/data"
-retention = "10000d"
-log_dir = "tests/logs/apps"
+retention = "100d"
+log_dir = "/data/logs/apps"
 export_dir = "tests/export"
 max_open_files = 8000
 max_mb_of_level_base = 512
+peer_address= "100.101.102.1:38383"
+peers=[
+	{ address = "100.101.102.2:38383", host_name = "einsis1"},
+	{ address = "100.101.102.3:38383", host_name = "einsis2"},
+]

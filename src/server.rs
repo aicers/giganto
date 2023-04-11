@@ -1,13 +1,14 @@
 use anyhow::{bail, Context, Result};
-use quinn::{Connection, ServerConfig};
+use quinn::{ClientConfig, Connection, ServerConfig, TransportConfig};
 use rustls::{Certificate, PrivateKey};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tracing::info;
 use x509_parser::nom::Parser;
 
 pub const SERVER_REBOOT_DELAY: u64 = 3000;
 pub const SERVER_ENDPOINT_DELAY: u64 = 300;
 pub const SERVER_CONNNECTION_DELAY: u64 = 200;
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(5_000);
 
 #[allow(clippy::module_name_repetitions)]
 pub fn config_server(
@@ -44,13 +45,17 @@ pub fn config_server(
     Ok(server_config)
 }
 
-pub fn certificate_info(connection: &Connection) -> Result<(String, String)> {
+pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate>> {
     let Some(conn_info) = connection.peer_identity() else {
         bail!("no peer identity");
     };
-    let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>() else {
+    let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>().cloned() else {
         bail!("non-certificate identity");
     };
+    Ok(cert_info)
+}
+
+pub fn certificate_info(cert_info: &[Certificate]) -> Result<(String, String)> {
     let Some(cert) = cert_info.get(0) else {
         bail!("no certificate in identity");
     };
@@ -73,4 +78,35 @@ pub fn certificate_info(connection: &Connection) -> Result<(String, String)> {
     } else {
         bail!("the subject of the certificate is not valid");
     }
+}
+
+pub fn config_client(
+    cert: Vec<Certificate>,
+    key: PrivateKey,
+    files: Vec<Vec<u8>>,
+) -> Result<ClientConfig> {
+    let mut root_store = rustls::RootCertStore::empty();
+    for file in files {
+        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
+            .context("invalid PEM-encoded certificate")?
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect();
+        if let Some(cert) = root_cert.get(0) {
+            root_store
+                .add(cert)
+                .context("failed to add client auth root cert")?;
+        }
+    }
+    let tls_config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_store)
+        .with_single_cert(cert, key)?;
+
+    let mut transport = TransportConfig::default();
+    transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+
+    let mut config = ClientConfig::new(Arc::new(tls_config));
+    config.transport_config(Arc::new(transport));
+    Ok(config)
 }

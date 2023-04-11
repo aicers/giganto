@@ -6,7 +6,8 @@ use self::implement::{RequestRangeMessage, RequestStreamMessage};
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingest::{implement::EventFilter, NetworkKey, PacketSources, StreamDirectChannel};
 use crate::server::{
-    certificate_info, config_server, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+    certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
+    SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{
     lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
@@ -126,7 +127,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (_, source) = certificate_info(&connection)?;
+    let (_, source) = certificate_info(&extract_cert_from_conn(&connection)?)?;
     tokio::spawn(request_stream(
         connection.clone(),
         db.clone(),

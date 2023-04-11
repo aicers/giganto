@@ -5,6 +5,13 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- added Giganto clustering funtionality. This feature connects giganto peer-to-peer,
+  and connected gigantos share each other's `peer` list and connected `source` list.
+
 ## [0.11.0] - 2023-05-16
 
 ### Changed
@@ -178,8 +185,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
 [0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
-[0.10.2]: https://github.com/aicers/giganto/compare/0.10.0...0.10.2
+[0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2
 [0.10.1]: https://github.com/aicers/giganto/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aicers/giganto/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aicers/giganto/compare/0.8.0...0.9.0
