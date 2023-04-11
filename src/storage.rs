@@ -1,6 +1,9 @@
 //! Raw event storage based on RocksDB.
 use crate::{
-    graphql::{network::NetworkFilter, RawEventFilter},
+    graphql::{
+        network::{key_prefix, NetworkFilter},
+        RawEventFilter,
+    },
     ingest::implement::EventFilter,
 };
 use anyhow::{bail, Context, Result};
@@ -328,6 +331,34 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn flush(&self) -> Result<()> {
         self.db.flush_wal(true)?;
         Ok(())
+    }
+
+    pub fn multi_get_with_source(
+        &self,
+        source: &str,
+        timestamps: &[i64],
+    ) -> Vec<(String, Vec<u8>)> {
+        let key_prefix = key_prefix(source);
+
+        let multi_keys: Vec<(&ColumnFamily, Vec<u8>)> = timestamps
+            .iter()
+            .map(|timestamp| {
+                let mut key: Vec<u8> = key_prefix.clone();
+                key.extend_from_slice(&timestamp.to_be_bytes());
+                (self.cf, key)
+            })
+            .collect();
+
+        let values = self.db.multi_get_cf(multi_keys);
+
+        let values_with_source: Vec<(String, Vec<u8>)> = values
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|value| (source.to_string(), value))
+            .collect();
+
+        values_with_source
     }
 }
 

@@ -19,12 +19,12 @@ use giganto_client::{
     publish::{
         pcap_extract_request,
         range::{
-            MessageCode, REconvergeKindType, RequestRange, RequestTimeSeriesRange,
+            MessageCode, REconvergeKindType, RequestRange, RequestRawData, RequestTimeSeriesRange,
             ResponseRangeData,
         },
         receive_range_data_request, receive_stream_request, send_crusher_data,
         send_crusher_stream_start_message, send_err, send_hog_stream_start_message, send_ok,
-        send_range_data,
+        send_range_data, send_raw_events,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
         PcapFilter,
     },
@@ -735,6 +735,43 @@ async fn handle_request(
         MessageCode::Pcap => {
             process_pcap_extract(&msg_buf, packet_sources.clone(), &mut send).await?;
         }
+        MessageCode::RawData => {
+            let msg = bincode::deserialize::<RequestRawData>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+            match REconvergeKindType::convert_type(&msg.kind) {
+                REconvergeKindType::Conn => {
+                    process_raw_events(&mut send, db.conn_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Dns => {
+                    process_raw_events(&mut send, db.dns_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Rdp => {
+                    process_raw_events(&mut send, db.rdp_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Http => {
+                    process_raw_events(&mut send, db.http_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Smtp => {
+                    process_raw_events(&mut send, db.smtp_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Ntlm => {
+                    process_raw_events(&mut send, db.ntlm_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Kerberos => {
+                    process_raw_events(&mut send, db.kerberos_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Ssh => {
+                    process_raw_events(&mut send, db.ssh_store()?, msg.input).await?;
+                }
+                REconvergeKindType::DceRpc => {
+                    process_raw_events(&mut send, db.dce_rpc_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Log => {
+                    // For REconvergeKindType::LOG, the source_kind is required as the source.
+                    process_raw_events(&mut send, db.log_store()?, msg.input).await?;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -769,5 +806,24 @@ where
     }
     send_range_data::<T>(send, None).await?;
     send.finish().await?;
+    Ok(())
+}
+
+async fn process_raw_events<'c, T>(
+    send: &mut SendStream,
+    store: RawEventStore<'c, T>,
+    msg: Vec<(String, Vec<i64>)>,
+) -> Result<()>
+where
+    T: DeserializeOwned,
+{
+    let mut output: Vec<(String, Vec<u8>)> = Vec::new();
+
+    for (source, timestamps) in msg {
+        output.extend_from_slice(&store.multi_get_with_source(&source, &timestamps));
+    }
+
+    send_raw_events(send, output).await?;
+
     Ok(())
 }

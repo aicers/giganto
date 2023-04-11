@@ -13,10 +13,12 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
     publish::{
-        range::{MessageCode, RequestRange, RequestTimeSeriesRange, ResponseRangeData},
+        range::{
+            MessageCode, RequestRange, RequestRawData, RequestTimeSeriesRange, ResponseRangeData,
+        },
         receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
-        receive_hog_stream_start_message, receive_range_data, send_range_data_request,
-        send_stream_request,
+        receive_hog_stream_start_message, receive_range_data, receive_raw_events,
+        send_range_data_request, send_stream_request,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
     },
 };
@@ -2274,4 +2276,45 @@ async fn request_network_event_stream() {
 
     publish.conn.close(0u32.into(), b"publish_time_done");
     publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn request_raw_events() {
+    const PUBLISH_RAW_DATA_MESSAGE_CODE: MessageCode = MessageCode::RawData;
+    const SOURCE: &str = "src 1";
+    const KIND: &str = "conn";
+
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    tokio::spawn(server().run(
+        db.clone(),
+        packet_sources,
+        stream_direct_channel,
+        Arc::new(Notify::new()),
+    ));
+    let publish = TestClient::new().await;
+
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let conn_store = db.conn_store().unwrap();
+    let send_conn_time = 1;
+    let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
+
+    let message = RequestRawData {
+        kind: String::from(KIND),
+        input: vec![(String::from(SOURCE), vec![1])],
+    };
+
+    send_range_data_request(&mut send_pub_req, PUBLISH_RAW_DATA_MESSAGE_CODE, message)
+        .await
+        .unwrap();
+
+    let resp_data = receive_raw_events(&mut recv_pub_resp).await.unwrap();
+
+    assert_eq!(&resp_data[0].0, "src 1");
+    assert_eq!(resp_data[0].1, conn_raw_data);
 }
