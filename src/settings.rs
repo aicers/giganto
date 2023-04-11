@@ -1,11 +1,13 @@
 //! Configurations for the application.
+use crate::peer::PeerInfo;
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
 const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
+const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
@@ -31,6 +33,11 @@ pub struct Settings {
 
     //config file path
     pub cfg_path: String,
+
+    //peers
+    #[serde(deserialize_with = "deserialize_peer_addr")]
+    pub peer_address: Option<SocketAddr>, // IP address & port for peer connection
+    pub peers: Option<HashSet<PeerInfo>>,
 }
 
 impl Settings {
@@ -110,6 +117,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max mb of level base")
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
         .expect("deafult config dir")
+        .set_default("peer_address", DEFAULT_INVALID_PEER_ADDRESS)
+        .expect("peer address")
 }
 
 /// Deserializes a socket address.
@@ -124,4 +133,28 @@ where
     let addr = String::deserialize(deserializer)?;
     addr.parse()
         .map_err(|e| D::Error::custom(format!("invalid address \"{addr}\": {e}")))
+}
+
+/// Deserializes a giganto's peer socket address.
+///
+/// `Ok(None)` is returned if the address is an empty string or there is no `peer_address`
+///  option in the configuration file.
+///
+/// # Errors
+///
+/// Returns an error if the address is invalid.
+fn deserialize_peer_addr<'de, D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
+        // Cluster mode is only available if there is a value for 'Peer Address' in the configuration file.
+        if addr == DEFAULT_INVALID_PEER_ADDRESS || addr.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
+                D::Error::custom(format!("invalid address \"{addr}\": {e}"))
+            })?))
+        }
+    })
 }

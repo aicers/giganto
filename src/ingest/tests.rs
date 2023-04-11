@@ -841,5 +841,6 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
         sources,
         stream_direct_channel,
         Arc::new(Notify::new()),
+        Some(Arc::new(Notify::new())),
     ))
 }

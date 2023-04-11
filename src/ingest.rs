@@ -4,7 +4,8 @@ mod tests;
 
 use crate::publish::send_direct_stream;
 use crate::server::{
-    certificate_info, config_server, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+    certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
+    SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
@@ -87,6 +88,7 @@ impl Server {
         sources: Sources,
         stream_direct_channel: StreamDirectChannel,
         wait_shutdown: Arc<Notify>,
+        notify_source: Option<Arc<Notify>>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -101,6 +103,7 @@ impl Server {
             packet_sources.clone(),
             sources,
             rx,
+            notify_source,
         ));
 
         let shutdown_signal = Arc::new(AtomicBool::new(false));
@@ -157,7 +160,7 @@ async fn handle_connection(
         }
     };
 
-    let (agent, source) = certificate_info(&connection)?;
+    let (agent, source) = certificate_info(&extract_cert_from_conn(&connection)?)?;
     let rep = agent.contains("reproduce");
 
     if !rep {
@@ -587,6 +590,7 @@ async fn check_sources_conn(
     packet_sources: PacketSources,
     sources: Sources,
     mut rx: Receiver<SourceInfo>,
+    notify_source: Option<Arc<Notify>>,
 ) -> Result<()> {
     let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
     itv.reset();
@@ -616,6 +620,9 @@ async fn check_sources_conn(
                         }
                         if !rep {
                             sources.write().await.insert(source_key, timestamp_val);
+                            if let Some(ref notify) = notify_source {
+                                notify.notify_one();
+                            }
                         }
                     }
                     ConnState::Disconnected => {
@@ -625,6 +632,9 @@ async fn check_sources_conn(
                         if !rep {
                             sources.write().await.remove(&source_key);
                             packet_sources.write().await.remove(&source_key);
+                            if let Some(ref notify) = notify_source {
+                                notify.notify_one();
+                            }
                         }
                     }
                 }
