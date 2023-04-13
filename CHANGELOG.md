@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add a GraphQL API that can delete timeseries from the database using an ID.
+
 ### Changed
 
 - Replaced `lazy_static` with the new `std::sync::OnceLock`.
