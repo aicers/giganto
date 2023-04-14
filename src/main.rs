@@ -6,7 +6,9 @@ mod settings;
 mod storage;
 mod web;
 
-use crate::{graphql::status::DEFAULT_TOML, server::SERVER_REBOOT_DELAY};
+use crate::{
+    graphql::status::DEFAULT_TOML, server::SERVER_REBOOT_DELAY, storage::migrate_data_dir,
+};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::init_tracing;
 use rustls::{Certificate, PrivateKey};
@@ -32,6 +34,7 @@ ARG:
     <CONFIG>    A TOML config file
 ";
 
+#[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut settings = if let Some(config_filename) = parse() {
@@ -67,6 +70,11 @@ async fn main() -> Result<()> {
     for root in &settings.roots {
         let file = fs::read(root).expect("Failed to read file");
         files.push(file);
+    }
+
+    if let Err(e) = migrate_data_dir(&settings.data_dir) {
+        error!("migration failed: {e}");
+        return Ok(());
     }
 
     loop {

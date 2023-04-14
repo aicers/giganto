@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add GraphQL API to return source list.
+- Add GIGANTO DB version compatibility check.
 
 ### Changed
 
