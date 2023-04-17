@@ -837,13 +837,13 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.3.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.3.0#72bbda3d99b49d59778c095558e4ae8ab7657f44"
+version = "0.3.1"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.3.1#f704868520dba791b0054ae158bcd6c56a7e37b5"
 dependencies = [
  "anyhow",
  "bincode",
  "chrono",
- "num_enum 0.5.11",
+ "num_enum 0.6.0",
  "oinq",
  "quinn",
  "semver",
