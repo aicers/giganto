@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     ingest::implement::EventFilter,
-    storage::{lower_closed_bound_key, upper_open_bound_key, Database, RawEventStore},
+    storage::{lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore},
 };
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
@@ -17,7 +17,6 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
-use rocksdb::Direction;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Cow,
