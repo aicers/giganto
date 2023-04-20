@@ -6,7 +6,7 @@ mod source;
 pub mod status;
 mod timeseries;
 
-use self::network::NetworkFilter;
+use self::network::{IpRange, NetworkFilter, PortRange, SearchFilter};
 use crate::{
     ingest::{implement::EventFilter, PacketSources},
     storage::{
@@ -30,6 +30,7 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
 use std::{
+    collections::BTreeSet,
     io::{Read, Seek, SeekFrom, Write},
     net::IpAddr,
     path::PathBuf,
@@ -64,6 +65,7 @@ pub struct TimeRange {
 pub trait RawEventFilter {
     fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
+    #[allow(clippy::too_many_arguments)]
     fn check(
         &self,
         orig_addr: Option<IpAddr>,
@@ -72,6 +74,7 @@ pub trait RawEventFilter {
         resp_port: Option<u16>,
         log_level: Option<String>,
         log_contents: Option<String>,
+        text: Option<String>,
     ) -> Result<bool>;
 }
 
@@ -101,6 +104,48 @@ pub fn schema(
 /// Maximum size: 100.
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
+
+fn collect_exist_timestamp<T>(
+    target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
+    filter: &SearchFilter,
+) -> Vec<DateTime<Utc>>
+where
+    T: EventFilter + DeserializeOwned,
+{
+    let (start, end) = time_range(filter.time());
+    let search_time = target_data
+        .iter()
+        .filter_map(|(time, value)| {
+            bincode::deserialize::<T>(value).ok().and_then(|raw_event| {
+                if *time >= start && *time < end {
+                    filter
+                        .check(
+                            raw_event.orig_addr(),
+                            raw_event.resp_addr(),
+                            raw_event.orig_port(),
+                            raw_event.resp_port(),
+                            raw_event.log_level(),
+                            raw_event.log_contents(),
+                            raw_event.text(),
+                        )
+                        .map_or(None, |c| c.then_some(*time))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    search_time
+}
+
+fn time_range(
+    time_range: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let (start, end) = time_range;
+    let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
+    let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
+    (start, end)
+}
 
 fn get_connection<T>(
     store: &RawEventStore<'_, T>,
@@ -252,6 +297,7 @@ where
             item.1.resp_port(),
             item.1.log_level(),
             item.1.log_contents(),
+            item.1.text(),
         ) {
             Ok(true) => records.push(item),
             Ok(false) | Err(_) => {}
@@ -264,7 +310,7 @@ where
     Ok((records, has_more))
 }
 
-fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         return Ok(Utc.timestamp_nanos(nanos));
@@ -418,6 +464,49 @@ fn get_key_prefix_packets(source: &String, request_time: DateTime<Utc>) -> Vec<u
     key_prefix.extend_from_slice(&request_time.timestamp_nanos().to_be_bytes());
     key_prefix.push(0);
     key_prefix
+}
+
+fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
+    if let Some(ip_range) = filter_addr {
+        if let Some(addr) = target_addr {
+            let end = if let Some(end) = &ip_range.end {
+                addr >= end.parse::<IpAddr>()?
+            } else {
+                false
+            };
+
+            let start = if let Some(start) = &ip_range.start {
+                addr < start.parse::<IpAddr>()?
+            } else {
+                false
+            };
+            if end || start {
+                return Ok(false);
+            };
+        }
+    }
+    Ok(true)
+}
+
+fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool {
+    if let Some(port_range) = filter_port {
+        if let Some(port) = target_port {
+            let end = if let Some(end) = port_range.end {
+                port >= end
+            } else {
+                false
+            };
+            let start = if let Some(start) = port_range.start {
+                port < start
+            } else {
+                false
+            };
+            if end || start {
+                return false;
+            };
+        }
+    }
+    true
 }
 
 #[cfg(test)]

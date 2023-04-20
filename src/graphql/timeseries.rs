@@ -38,6 +38,7 @@ impl RawEventFilter for TimeSeriesFilter {
         _resp_port: Option<u16>,
         _log_level: Option<String>,
         _log_contents: Option<String>,
+        _text: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }

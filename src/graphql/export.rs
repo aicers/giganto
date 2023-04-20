@@ -1,4 +1,5 @@
 use super::{
+    check_address, check_port,
     network::{IpRange, PortRange},
     RawEventFilter, TimeRange,
 };
@@ -515,78 +516,16 @@ impl RawEventFilter for ExportFilter {
         resp_port: Option<u16>,
         _log_level: Option<String>,
         _log_contents: Option<String>,
+        _text: Option<String>,
     ) -> Result<bool> {
-        if let Some(ip_range) = &self.orig_addr {
-            if let Some(orig_addr) = orig_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    orig_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-
-                let start = if let Some(start) = &ip_range.start {
-                    orig_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
+        if check_address(&self.orig_addr, orig_addr)?
+            && check_address(&self.resp_addr, resp_addr)?
+            && check_port(&self.orig_port, orig_port)
+            && check_port(&self.resp_port, resp_port)
+        {
+            return Ok(true);
         }
-        if let Some(ip_range) = &self.resp_addr {
-            if let Some(resp_addr) = resp_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    resp_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-
-                let start = if let Some(start) = &ip_range.start {
-                    resp_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        if let Some(port_range) = &self.orig_port {
-            if let Some(orig_port) = orig_port {
-                let end = if let Some(end) = port_range.end {
-                    orig_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    orig_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        if let Some(port_range) = &self.resp_port {
-            if let Some(resp_port) = resp_port {
-                let end = if let Some(end) = port_range.end {
-                    resp_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    resp_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        Ok(true)
+        Ok(false)
     }
 }
 
@@ -887,6 +826,7 @@ where
             value.resp_port(),
             value.log_level(),
             value.log_contents(),
+            value.text(),
         ) {
             Ok(true) => {
                 let (source, timestamp) = parse_key(&key)?;
