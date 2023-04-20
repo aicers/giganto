@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
     network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
@@ -13,6 +14,12 @@ pub trait EventFilter {
     fn resp_port(&self) -> Option<u16>;
     fn log_level(&self) -> Option<String>;
     fn log_contents(&self) -> Option<String>;
+    fn timestamp(&self) -> Option<DateTime<Utc>> {
+        None
+    }
+    fn text(&self) -> Option<String> {
+        None
+    }
 }
 
 impl EventFilter for Conn {
@@ -75,6 +82,12 @@ impl EventFilter for Http {
     }
     fn log_contents(&self) -> Option<String> {
         None
+    }
+    fn timestamp(&self) -> Option<DateTime<Utc>> {
+        None
+    }
+    fn text(&self) -> Option<String> {
+        Some(self.to_string())
     }
 }
 

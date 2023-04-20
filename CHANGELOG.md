@@ -13,6 +13,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add a publish API to return the source, raw_events
   from the source, timestamps for REconverge.
 - Supports the FTP protocol.
+- Add a GraphQL API to search http events
 
 ## [0.9.0] - 2023-04-03
 

@@ -4,6 +4,7 @@ mod migration;
 
 use crate::{
     graphql::{
+        get_timestamp,
         network::{key_prefix, NetworkFilter},
         RawEventFilter,
     },
@@ -338,6 +339,25 @@ impl<'db, T> RawEventStore<'db, T> {
         Ok(())
     }
 
+    pub fn multi_get_from_ts(
+        &self,
+        source: &str,
+        timestamps: &[DateTime<Utc>],
+    ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
+        let key_prefix = key_prefix(source);
+        timestamps
+            .iter()
+            .filter_map(|timestamp| {
+                let mut key = key_prefix.clone();
+                key.extend_from_slice(&timestamp.timestamp_nanos().to_be_bytes());
+                self.db
+                    .get_cf(&self.cf, &key)
+                    .ok()
+                    .and_then(|val| get_timestamp(&key).ok().zip(val))
+            })
+            .collect::<Vec<_>>()
+    }
+
     pub fn multi_get_with_source(
         &self,
         source: &str,
@@ -488,6 +508,7 @@ where
                 elem.1.resp_port(),
                 elem.1.log_level(),
                 elem.1.log_contents(),
+                elem.1.text(),
             ) {
                 return Some(elem);
             }

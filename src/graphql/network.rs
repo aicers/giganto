@@ -1,5 +1,6 @@
 use super::{
-    base64_engine, get_filtered_iter, get_timestamp, load_connection, Engine, FromKeyValue,
+    base64_engine, check_address, check_port, collect_exist_timestamp, get_filtered_iter,
+    get_timestamp, load_connection, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
@@ -14,7 +15,7 @@ use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
 };
 use serde::Serialize;
-use std::{fmt::Debug, iter::Peekable, net::IpAddr};
+use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
@@ -31,6 +32,21 @@ pub struct NetworkFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
+}
+
+#[derive(InputObject, Serialize)]
+pub struct SearchFilter {
+    time: Option<TimeRange>,
+    #[serde(skip)]
+    pub source: String,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
+    log_level: Option<String>,
+    log_contents: Option<String>,
+    timestamps: Vec<DateTime<Utc>>,
+    keyword: Option<String>,
 }
 
 #[derive(InputObject, Serialize)]
@@ -62,78 +78,55 @@ impl RawEventFilter for NetworkFilter {
         resp_port: Option<u16>,
         _log_level: Option<String>,
         _log_contents: Option<String>,
+        _text: Option<String>,
     ) -> Result<bool> {
-        if let Some(ip_range) = &self.orig_addr {
-            if let Some(orig_addr) = orig_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    orig_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
+        if check_address(&self.orig_addr, orig_addr)?
+            && check_address(&self.resp_addr, resp_addr)?
+            && check_port(&self.orig_port, orig_port)
+            && check_port(&self.resp_port, resp_port)
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
 
-                let start = if let Some(start) = &ip_range.start {
-                    orig_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
+impl RawEventFilter for SearchFilter {
+    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
         }
-        if let Some(ip_range) = &self.resp_addr {
-            if let Some(resp_addr) = resp_addr {
-                let end = if let Some(end) = &ip_range.end {
-                    resp_addr >= end.parse::<IpAddr>()?
-                } else {
-                    false
-                };
+    }
 
-                let start = if let Some(start) = &ip_range.start {
-                    resp_addr < start.parse::<IpAddr>()?
-                } else {
-                    false
-                };
-                if end || start {
+    fn check(
+        &self,
+        orig_addr: Option<IpAddr>,
+        resp_addr: Option<IpAddr>,
+        orig_port: Option<u16>,
+        resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
+        text: Option<String>,
+    ) -> Result<bool> {
+        if let Some(keyword) = &self.keyword {
+            if let Some(text) = text {
+                if !text.to_lowercase().contains(&keyword.to_lowercase()) {
                     return Ok(false);
-                };
+                }
+            } else {
+                return Ok(false);
             }
         }
-        if let Some(port_range) = &self.orig_port {
-            if let Some(orig_port) = orig_port {
-                let end = if let Some(end) = port_range.end {
-                    orig_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    orig_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
+        if check_address(&self.orig_addr, orig_addr)?
+            && check_address(&self.resp_addr, resp_addr)?
+            && check_port(&self.orig_port, orig_port)
+            && check_port(&self.resp_port, resp_port)
+        {
+            return Ok(true);
         }
-        if let Some(port_range) = &self.resp_port {
-            if let Some(resp_port) = resp_port {
-                let end = if let Some(end) = port_range.end {
-                    resp_port >= end
-                } else {
-                    false
-                };
-                let start = if let Some(start) = port_range.start {
-                    resp_port < start
-                } else {
-                    false
-                };
-                if end || start {
-                    return Ok(false);
-                };
-            }
-        }
-        Ok(true)
+        Ok(false)
     }
 }
 
@@ -950,6 +943,21 @@ impl NetworkQuery {
             },
         )
         .await
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn search_http_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.http_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Http>(&exist_data, &filter))
     }
 }
 
@@ -2092,5 +2100,60 @@ mod tests {
         }"#;
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}}]}}");
+    }
+
+    #[tokio::test]
+    async fn search_http_empty() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            searchHttpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{searchHttpRawEvents: []}");
+    }
+
+    #[tokio::test]
+    async fn search_http_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.http_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_http_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_http_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_http_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_http_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchHttpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
     }
 }
