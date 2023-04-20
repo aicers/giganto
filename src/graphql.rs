@@ -381,9 +381,9 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
         file.write(&p);
     }
     let mut buf = Vec::new();
-    let _ = file.flush();
-    let _ = temp_file.seek(SeekFrom::Start(0));
-    let _ = temp_file.read_to_end(&mut buf)?;
+    file.flush()?;
+    temp_file.seek(SeekFrom::Start(0))?;
+    temp_file.read_to_end(&mut buf)?;
 
     let cmd = "tcpdump";
     let args = ["-n", "-X", "-tttt", "-v", "-r", "-"];
