@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn db_verion_create() {
         let data_dir = tempfile::tempdir().unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_ok())
+        assert!(migrate_data_dir(&data_dir.path()).is_ok());
     }
 
     #[test]
@@ -75,7 +75,7 @@ mod tests {
         let file_path = data_dir.path().join("VERSION");
         let mut file = File::create(file_path).unwrap();
         writeln!(file, env!("CARGO_PKG_VERSION")).unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_ok())
+        assert!(migrate_data_dir(&data_dir.path()).is_ok());
     }
 
     #[test]
@@ -84,6 +84,6 @@ mod tests {
         let file_path = data_dir.path().join("VERSION");
         let mut file = File::create(file_path).unwrap();
         writeln!(file, "11.11.11").unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_err())
+        assert!(migrate_data_dir(&data_dir.path()).is_err());
     }
 }
