@@ -9,14 +9,11 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, Utc};
-use giganto_client::{
-    convert_time_format,
-    ingest::{
-        log::{Log, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
-        timeseries::PeriodicTimeSeries,
-    },
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use giganto_client::ingest::{
+    log::{Log, Oplog},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
+    timeseries::PeriodicTimeSeries,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -830,24 +827,19 @@ where
         ) {
             Ok(true) => {
                 let (source, timestamp) = parse_key(&key)?;
+                let timestamp = {
+                    let secs = timestamp / 1_000_000_000;
+                    let nanosecs =
+                        u32::try_from(timestamp % 1_000_000_000).expect("< 1_000_000_000");
+                    NaiveDateTime::from_timestamp_opt(secs, nanosecs)
+                        .map_or("-".to_string(), |s| s.format("%s%.9f").to_string())
+                };
                 match export_type {
                     "csv" => {
-                        writeln!(
-                            writer,
-                            "{}",
-                            format_args!(
-                                "{}\t{}\t{}",
-                                convert_time_format(timestamp),
-                                source,
-                                value
-                            )
-                        )?;
+                        writeln!(writer, "{}", format_args!("{timestamp}\t{source}\t{value}"))?;
                     }
                     "json" => {
-                        let json_data = value.convert_json_output(
-                            convert_time_format(timestamp),
-                            source.to_string(),
-                        )?;
+                        let json_data = value.convert_json_output(timestamp, source.to_string())?;
                         let json_data = serde_json::to_string(&json_data)?;
                         writeln!(writer, "{json_data}")?;
                     }
