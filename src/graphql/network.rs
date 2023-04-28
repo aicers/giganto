@@ -1,3 +1,4 @@
+#![allow(clippy::unused_async)]
 use super::{
     base64_engine, check_address, check_port, collect_exist_timestamp, get_filtered_iter,
     get_timestamp, load_connection, Engine, FromKeyValue,
@@ -945,7 +946,34 @@ impl NetworkQuery {
         .await
     }
 
-    #[allow(clippy::unused_async)]
+    async fn search_conn_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.conn_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Conn>(&exist_data, &filter))
+    }
+
+    async fn search_dns_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.dns_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Dns>(&exist_data, &filter))
+    }
+
     async fn search_http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -958,6 +986,104 @@ impl NetworkQuery {
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Http>(&exist_data, &filter))
+    }
+
+    async fn search_rdp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.rdp_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Rdp>(&exist_data, &filter))
+    }
+
+    async fn search_smtp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.smtp_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Smtp>(&exist_data, &filter))
+    }
+
+    async fn search_ntlm_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ntlm_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Ntlm>(&exist_data, &filter))
+    }
+
+    async fn search_kerberos_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.kerberos_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Kerberos>(&exist_data, &filter))
+    }
+
+    async fn search_ssh_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ssh_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Ssh>(&exist_data, &filter))
+    }
+
+    async fn search_dce_rpc_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.dce_rpc_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<DceRpc>(&exist_data, &filter))
+    }
+
+    async fn search_ftp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.ftp_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Ftp>(&exist_data, &filter))
     }
 }
 
@@ -2103,7 +2229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_http_empty() {
+    async fn search_empty() {
         let schema = TestSchema::new();
         let query = r#"
         {
@@ -2114,6 +2240,7 @@ mod tests {
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 46377, end: 46380 }
                     timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
                 }
             )
@@ -2146,6 +2273,7 @@ mod tests {
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
                     timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
                 }
             )
@@ -2154,6 +2282,330 @@ mod tests {
         assert_eq!(
             res.data.to_string(),
             "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_conn_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.conn_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_conn_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchConnRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchConnRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_dns_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.dns_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_dns_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_dns_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_dns_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_dns_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchDnsRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                    origPort: { start: 70, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_rdp_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.rdp_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_rdp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_rdp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_rdp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_rdp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchRdpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchRdpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_smtp_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.smtp_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_smtp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchSmtpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchSmtpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_ntlm_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ntlm_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_ntlm_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchNtlmRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchNtlmRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_kerberos_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.kerberos_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_kerberos_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchKerberosRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchKerberosRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_ssh_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ssh_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_ssh_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchSshRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchSshRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_dce_rpc_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.dce_rpc_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchDceRpcRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_ftp_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.ftp_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_ftp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchFtpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
         );
     }
 }
