@@ -836,7 +836,7 @@ where
                 };
                 match export_type {
                     "csv" => {
-                        writeln!(writer, "{}", format_args!("{timestamp}\t{source}\t{value}"))?;
+                        writeln!(writer, "{timestamp}\t{source}\t{value}")?;
                     }
                     "json" => {
                         let json_data = value.convert_json_output(timestamp, source.to_string())?;
