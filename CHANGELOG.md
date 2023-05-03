@@ -10,6 +10,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Supports the MQTT protocol.
+- Add `cfg path` fields to Settings. This path is used to fetch/modify
+  giganto's config.
 
 ### Fixed
 
