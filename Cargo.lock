@@ -860,6 +860,7 @@ dependencies = [
  "roxy",
  "rustls",
  "rustls-pemfile",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
