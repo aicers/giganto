@@ -13,7 +13,6 @@ use std::{
 use tokio::sync::Notify;
 use toml_edit::{value, Document};
 
-pub const DEFAULT_TOML: &str = "/usr/local/aice/conf/giganto.toml";
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
 
 #[derive(SimpleObject, Debug)]
@@ -100,8 +99,9 @@ impl GigantoStatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn giganto_config(&self) -> Result<GigantoConfig> {
-        let toml = fs::read_to_string(DEFAULT_TOML).context("toml not found")?;
+    async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
+        let cfg_path = ctx.data::<String>()?;
+        let toml = fs::read_to_string(cfg_path).context("toml not found")?;
         let doc = toml.parse::<Document>()?;
 
         let ingest_address = doc
@@ -148,7 +148,8 @@ impl GigantoConfigMutation {
         ctx: &async_graphql::Context<'ctx>,
         field: UserConfig,
     ) -> Result<String> {
-        let toml = fs::read_to_string(DEFAULT_TOML).context("toml not found")?;
+        let cfg_path = ctx.data::<String>()?;
+        let toml = fs::read_to_string(cfg_path).context("toml not found")?;
         let mut doc = toml.parse::<Document>()?;
 
         if let Some(ingest_address) = field.ingest_address {
@@ -174,7 +175,7 @@ impl GigantoConfigMutation {
         let mut toml_file = OpenOptions::new()
             .write(true)
             .truncate(true)
-            .open(DEFAULT_TOML)?;
+            .open(cfg_path)?;
         writeln!(toml_file, "{output}")?;
 
         let config_reload = ctx.data::<Arc<Notify>>()?.clone();

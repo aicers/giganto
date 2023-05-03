@@ -90,12 +90,14 @@ pub fn schema(
     packet_sources: PacketSources,
     export_path: PathBuf,
     config_reload: Arc<Notify>,
+    config_file_path: String,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
         .data(packet_sources)
         .data(export_path)
         .data(config_reload)
+        .data(config_file_path)
         .finish()
 }
 
@@ -533,6 +535,7 @@ impl TestSchema {
             packet_sources,
             export_dir.path().to_path_buf(),
             config_reload,
+            "file_path".to_string(),
         );
         Self {
             _dir: db_dir,

@@ -28,6 +28,9 @@ pub struct Settings {
     // db options
     pub max_open_files: i32,
     pub max_mb_of_level_base: u64,
+
+    //config file path
+    pub cfg_path: String,
 }
 
 impl Settings {
@@ -56,8 +59,9 @@ impl Settings {
         let s = default_config_builder()
             .add_source(File::with_name(cfg_path))
             .build()?;
-
-        s.try_deserialize()
+        let mut setting: Settings = s.try_deserialize()?;
+        setting.cfg_path = cfg_path.to_string();
+        Ok(setting)
     }
 }
 
@@ -79,6 +83,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
     let config_dir = dirs.config_dir();
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
+    let config_path = config_dir.join("config.toml");
 
     Config::builder()
         .set_default("cert", cert_path.to_str().expect("path to string"))
@@ -103,6 +108,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max open files")
         .set_default("max_mb_of_level_base", 512)
         .expect("default max mb of level base")
+        .set_default("cfg_path", config_path.to_str().expect("path to string"))
+        .expect("deafult config dir")
 }
 
 /// Deserializes a socket address.

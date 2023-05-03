@@ -6,9 +6,7 @@ mod settings;
 mod storage;
 mod web;
 
-use crate::{
-    graphql::status::DEFAULT_TOML, server::SERVER_REBOOT_DELAY, storage::migrate_data_dir,
-};
+use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::init_tracing;
 use rustls::{Certificate, PrivateKey};
@@ -89,6 +87,7 @@ async fn main() -> Result<()> {
             packet_sources.clone(),
             settings.export_dir.clone(),
             config_reload.clone(),
+            settings.cfg_path.clone(),
         );
         task::spawn(web::serve(
             schema,
@@ -133,7 +132,7 @@ async fn main() -> Result<()> {
         ));
         loop {
             config_reload.notified().await;
-            match Settings::from_file(DEFAULT_TOML) {
+            match Settings::from_file(&settings.cfg_path) {
                 Ok(new_settings) => {
                     settings = new_settings;
                     notify_shutdown.notify_waiters();
