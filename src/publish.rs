@@ -571,7 +571,7 @@ where
         NodeType::Hog => {
             send_hog_stream_start_message(&mut sender, record_type)
                 .await
-                .map_err(|e| anyhow!("Failed to write hog start mesaage: {}", e))?;
+                .map_err(|e| anyhow!("Failed to write hog start message: {}", e))?;
             info!("start hog's publish Stream : {:?}", record_type);
         }
         NodeType::Crusher => {
@@ -580,8 +580,8 @@ where
             let id = msg.source_id().unwrap();
             send_crusher_stream_start_message(&mut sender, id)
                 .await
-                .map_err(|e| anyhow!("Failed to write crusher start mesaage: {}", e))?;
-            info!("start cruhser's publish Stream : {:?}", record_type);
+                .map_err(|e| anyhow!("Failed to write crusher start message: {}", e))?;
+            info!("start crusher's publish Stream : {:?}", record_type);
 
             let iter = store.boundary_iter(
                 &lower_closed_bound_key(

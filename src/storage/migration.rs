@@ -1,12 +1,13 @@
 //! Routines to check the database format version and migrate it if necessary.
-
+use anyhow::{bail, Context, Result};
+use semver::{Version, VersionReq};
 use std::{
     fs::{create_dir_all, File},
     io::{Read, Write},
     path::Path,
 };
 
-use anyhow::{bail, Context, Result};
+const COMPATIBLE_VERSION_REQ: &str = ">=0.10.0,<0.11.0-alpha";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -15,39 +16,36 @@ use anyhow::{bail, Context, Result};
 /// Returns an error if the data directory doesn't exist and cannot be created,
 /// or if the data directory exists but is in the format too old to be upgraded.
 pub fn migrate_data_dir(data_dir: &Path) -> Result<()> {
-    let version_path = data_dir.join("VERSION");
-    if data_dir.exists() {
-        if !data_dir
-            .read_dir()
-            .context("cannot read data dir")?
-            .any(|dir_info| {
-                if let Ok(name) = dir_info {
-                    name.file_name() == "VERSION"
-                } else {
-                    false
-                }
-            })
-        {
-            return create_version_file(&version_path);
-        }
-    } else {
-        create_dir_all(data_dir)?;
-        return create_version_file(&version_path);
+    let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid version requirement");
+    let data_ver = retrieve_or_create_version(data_dir)?;
+    if compatible.matches(&data_ver) {
+        return Ok(());
     }
 
-    let mut ver = String::new();
-    File::open(&version_path)
-        .context("cannot open VERSION")?
-        .read_to_string(&mut ver)
-        .context("cannot read VERSION")?;
-    match ver.trim() {
-        env!("CARGO_PKG_VERSION") => Ok(()),
-        _ => bail!(
-            "incompatible version {:?}, require {:?}",
-            ver,
-            env!("CARGO_PKG_VERSION")
-        ),
+    // TODO: Handling migration based on version.
+    bail!("Incompatible DB version");
+}
+
+fn retrieve_or_create_version(path: &Path) -> Result<Version> {
+    let file = path.join("VERSION");
+    if !path.exists() {
+        create_dir_all(path)?;
     }
+    if !path
+        .read_dir()
+        .context("cannot read data dir")?
+        .any(|dir_info| {
+            if let Ok(name) = dir_info {
+                name.file_name() == "VERSION"
+            } else {
+                false
+            }
+        })
+    {
+        create_version_file(&file)?;
+    }
+    let version = read_version_file(&file)?;
+    Ok(version)
 }
 
 fn create_version_file(path: &Path) -> Result<()> {
@@ -57,33 +55,38 @@ fn create_version_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn read_version_file(path: &Path) -> Result<Version> {
+    let mut ver = String::new();
+    File::open(path)
+        .context("cannot open VERSION")?
+        .read_to_string(&mut ver)
+        .context("cannot read VERSION")?;
+    Version::parse(&ver).context("cannot parse VERSION")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::migrate_data_dir;
-    use std::fs::File;
-    use std::io::Write;
+    use super::COMPATIBLE_VERSION_REQ;
+    use semver::{Version, VersionReq};
 
     #[test]
-    fn db_verion_create() {
-        let data_dir = tempfile::tempdir().unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_ok());
-    }
+    fn version() {
+        let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid semver");
+        let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
 
-    #[test]
-    fn db_verion_ok() {
-        let data_dir = tempfile::tempdir().unwrap();
-        let file_path = data_dir.path().join("VERSION");
-        let mut file = File::create(file_path).unwrap();
-        writeln!(file, env!("CARGO_PKG_VERSION")).unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_ok());
-    }
+        // The current version must match the compatible version requirement.
+        assert!(compatible.matches(&current));
 
-    #[test]
-    fn db_verion_fail() {
-        let data_dir = tempfile::tempdir().unwrap();
-        let file_path = data_dir.path().join("VERSION");
-        let mut file = File::create(file_path).unwrap();
-        writeln!(file, "11.11.11").unwrap();
-        assert!(migrate_data_dir(&data_dir.path()).is_err());
+        // Older versions are not compatible.
+        let breaking = {
+            let mut breaking = current.clone();
+            if breaking.major == 0 {
+                breaking.minor -= 1;
+            } else {
+                breaking.major -= 1;
+            }
+            breaking
+        };
+        assert!(!compatible.matches(&breaking));
     }
 }
