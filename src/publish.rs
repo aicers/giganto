@@ -506,6 +506,25 @@ where
                 error!("Failed to open ftp store");
             }
         }
+        RequestStreamRecord::Mqtt => {
+            if let Ok(store) = db.mqtt_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open mqtt store");
+            }
+        }
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
@@ -770,6 +789,15 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Mqtt => {
+                    process_range_data(
+                        &mut send,
+                        db.mqtt_store().context("Failed to open mqtt store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::PeriodicTimeSeries => {
@@ -820,6 +848,9 @@ async fn handle_request(
                 }
                 REconvergeKindType::Ftp => {
                     process_raw_events(&mut send, db.ftp_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Mqtt => {
+                    process_raw_events(&mut send, db.mqtt_store()?, msg.input).await?;
                 }
                 REconvergeKindType::Log => {
                     // For REconvergeKindType::LOG, the source_kind is required as the source.

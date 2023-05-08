@@ -13,7 +13,7 @@ use async_graphql::{
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh,
 };
 use serde::Serialize;
 use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
@@ -325,6 +325,23 @@ struct FtpRawEvent {
     file_id: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct MqttRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u16,
+    last_time: i64,
+    protocol: String,
+    version: u8,
+    client_id: String,
+    connack_reason: u8,
+    subscribe: Vec<String>,
+    suback_reason: Vec<u8>,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum NetworkRawEvents {
@@ -337,6 +354,7 @@ enum NetworkRawEvents {
     SshRawEvent(SshRawEvent),
     DceRpcRawEvent(DceRpcRawEvent),
     FtpRawEvent(FtpRawEvent),
+    MqttRawEvent(MqttRawEvent),
 }
 
 macro_rules! from_key_value {
@@ -490,6 +508,17 @@ from_key_value!(
 );
 
 from_key_value!(DceRpcRawEvent, DceRpc, rtt, named_pipe, endpoint, operation);
+
+from_key_value!(
+    MqttRawEvent,
+    Mqtt,
+    protocol,
+    version,
+    client_id,
+    connack_reason,
+    subscribe,
+    suback_reason
+);
 
 #[Object]
 impl NetworkQuery {
@@ -743,6 +772,31 @@ impl NetworkQuery {
         .await
     }
 
+    async fn mqtt_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, MqttRawEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.mqtt_store()?;
+        let key_prefix = key_prefix(&filter.source);
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn network_raw_events<'ctx>(
         &self,
@@ -923,6 +977,24 @@ impl NetworkQuery {
                     }
                 }
 
+                let (mqtt_iter, cursor, _) = get_filtered_iter(
+                    &db.mqtt_store()?,
+                    &key_prefix,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+                let mut mqtt_iter = mqtt_iter.peekable();
+                if let Some(cursor) = cursor {
+                    if let Some((key, _)) = mqtt_iter.peek() {
+                        if key.as_ref() == cursor {
+                            mqtt_iter.next();
+                        }
+                    }
+                }
+
                 let mut is_forward: bool = true;
                 if before.is_some() || last.is_some() {
                     is_forward = false;
@@ -938,6 +1010,7 @@ impl NetworkQuery {
                     ssh_iter,
                     dce_rpc_iter,
                     ftp_iter,
+                    mqtt_iter,
                     size,
                     is_forward,
                 )
@@ -1085,6 +1158,20 @@ impl NetworkQuery {
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Ftp>(&exist_data, &filter))
     }
+
+    async fn search_mqtt_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.mqtt_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<Mqtt>(&exist_data, &filter))
+    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1098,6 +1185,7 @@ fn network_connection(
     mut ssh_iter: Peekable<FilteredIter<Ssh>>,
     mut dce_rpc_iter: Peekable<FilteredIter<DceRpc>>,
     mut ftp_iter: Peekable<FilteredIter<Ftp>>,
+    mut mqtt_iter: Peekable<FilteredIter<Mqtt>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -1116,6 +1204,7 @@ fn network_connection(
     let mut ssh_data = ssh_iter.next();
     let mut dce_rpc_data = dce_rpc_iter.next();
     let mut ftp_data = ftp_iter.next();
+    let mut mqtt_data = mqtt_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -1172,14 +1261,20 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
-        let selected = if is_forward {
-            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(
-                rdp_ts.min(ntlm_ts.min(kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts))))),
-            ))))
+        let mqtt_ts = if let Some((ref key, _)) = mqtt_data {
+            get_timestamp(key)?
         } else {
-            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(
-                rdp_ts.max(ntlm_ts.max(kerberos_ts.max(ssh_ts.max(dce_rpc_ts.min(ftp_ts))))),
-            ))))
+            min_max_time(is_forward)
+        };
+
+        let selected = if is_forward {
+            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(
+                ntlm_ts.min(kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(mqtt_ts))))),
+            )))))
+        } else {
+            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(
+                ntlm_ts.max(kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(mqtt_ts))))),
+            )))))
         };
 
         match selected {
@@ -1277,6 +1372,16 @@ fn network_connection(
                 } else {
                 };
             }
+            _ if selected == mqtt_ts => {
+                if let Some((key, value)) = mqtt_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::MqttRawEvent(MqttRawEvent::from_key_value(&key, value)?),
+                    ));
+                    mqtt_data = mqtt_iter.next();
+                } else {
+                };
+            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -1288,7 +1393,8 @@ fn network_connection(
                 && kerberos_data.is_none()
                 && ssh_data.is_none()
                 && dce_rpc_data.is_none()
-                && ftp_data.is_none())
+                && ftp_data.is_none()
+                && mqtt_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -1299,6 +1405,7 @@ fn network_connection(
                 || ssh_data.is_some()
                 || dce_rpc_data.is_some()
                 || ftp_data.is_some()
+                || mqtt_data.is_some()
             {
                 has_next_value = true;
             }
@@ -1339,7 +1446,7 @@ mod tests {
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use giganto_client::ingest::network::{
-        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh,
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh,
     };
     use std::mem;
     use std::net::IpAddr;
@@ -2068,6 +2175,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mqtt_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.mqtt_store().unwrap();
+
+        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+
+        let query = r#"
+        {
+            mqttRawEvents(
+                filter: {
+                    source: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+    }
+
+    fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let mqtt_body = Mqtt {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            protocol: "protocol".to_string(),
+            version: 1,
+            client_id: "1".to_string(),
+            connack_reason: 1,
+            subscribe: vec!["subscribe".to_string()],
+            suback_reason: vec![1],
+        };
+        let ser_mqtt_body = bincode::serialize(&mqtt_body).unwrap();
+
+        store.append(&key, &ser_mqtt_body).unwrap();
+    }
+
+    #[tokio::test]
     async fn conn_with_start_or_end() {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
@@ -2115,6 +2277,7 @@ mod tests {
         let ssh_store = schema.db.ssh_store().unwrap();
         let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
         let ftp_store = schema.db.ftp_store().unwrap();
+        let mqtt_store = schema.db.mqtt_store().unwrap();
 
         insert_conn_raw_event(
             &conn_store,
@@ -2179,8 +2342,15 @@ mod tests {
                 .unwrap()
                 .timestamp_nanos(),
         );
+        insert_mqtt_raw_event(
+            &mqtt_store,
+            "src 1",
+            Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
+                .unwrap()
+                .timestamp_nanos(),
+        );
 
-        // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp
+        // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt
         let query = r#"
         {
             networkRawEvents(
@@ -2219,13 +2389,16 @@ mod tests {
                         ... on FtpRawEvent {
                             timestamp
                         }
+                        ... on MqttRawEvent {
+                            timestamp
+                        }
                         __typename
                     }
                 }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}}]}}");
+        assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"MqttRawEvent\"}}]}}");
     }
 
     #[tokio::test]
@@ -2606,6 +2779,42 @@ mod tests {
         assert_eq!(
             res.data.to_string(),
             "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_mqtt_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.mqtt_store().unwrap();
+
+        let timestamp1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+        let timestamp2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+        let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+        let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+        insert_mqtt_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+
+        let query = r#"
+        {
+            searchMqttRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 1"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
         );
     }
 }
