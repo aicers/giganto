@@ -23,7 +23,7 @@ pcap = "1"
 quinn = "0.9"
 rocksdb = "0.20"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.0" }
-rustls = "0.20"
+rustls = "0.21"
 rustls-pemfile = "1.0"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
