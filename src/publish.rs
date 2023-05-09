@@ -15,16 +15,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use giganto_client::{
     connection::server_handshake,
-    frame::send_bytes,
+    frame,
     publish::{
         pcap_extract_request,
         range::{
             MessageCode, REconvergeKindType, RequestRange, RequestRawData, RequestTimeSeriesRange,
             ResponseRangeData,
         },
-        receive_range_data_request, receive_stream_request, send_crusher_data,
-        send_crusher_stream_start_message, send_err, send_hog_stream_start_message, send_ok,
-        send_range_data, send_raw_events,
+        receive_range_data_request, receive_stream_request, send_err,
+        send_hog_stream_start_message, send_ok, send_range_data, send_raw_events,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
         PcapFilter,
     },
@@ -617,7 +616,7 @@ where
                     if last_ts > ts {
                         continue;
                     }
-                    if send_bytes(&mut sender, &buf).await.is_err(){
+                    if frame::send_bytes(&mut sender, &buf).await.is_err(){
                         for r_key in channel_remove_keys{
                             stream_direct_channel
                             .write()
@@ -631,6 +630,31 @@ where
             }
         }
     });
+    Ok(())
+}
+
+/// Sends the crusher stream start message from giganto's publish module.
+///
+/// # Errors
+///
+/// Returns an error if the message could not be sent.
+async fn send_crusher_stream_start_message(send: &mut SendStream, start_msg: String) -> Result<()> {
+    frame::send_raw(send, start_msg.as_bytes()).await?;
+    Ok(())
+}
+
+/// Sends the record data. (timestamp /record structure)
+///
+/// # Errors
+///
+/// Returns an error if the message could not be sent.
+async fn send_crusher_data<T>(send: &mut SendStream, timestamp: i64, record_data: T) -> Result<()>
+where
+    T: Serialize,
+{
+    frame::send_bytes(send, &timestamp.to_le_bytes()).await?;
+    let mut buf = Vec::new();
+    frame::send(send, &mut buf, record_data).await?;
     Ok(())
 }
 
