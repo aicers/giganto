@@ -423,6 +423,19 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Mqtt => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Mqtt,
+                Some(NetworkKey::new(&source, "mqtt")),
+                source,
+                db.mqtt_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }

@@ -10,7 +10,7 @@ use giganto_client::{
     frame::recv_bytes,
     ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
         receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
@@ -711,6 +711,44 @@ async fn ftp() {
     send_ftp.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ftp_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn mqtt() {
+    const RECORD_TYPE_MQTT: RecordType = RecordType::Mqtt;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_mqtt, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let mqtt_body = Mqtt {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        protocol: "protocol".to_string(),
+        version: 1,
+        client_id: "1".to_string(),
+        connack_reason: 1,
+        subscribe: vec!["subscribe".to_string()],
+        suback_reason: vec![1],
+    };
+
+    send_record_header(&mut send_mqtt, RECORD_TYPE_MQTT)
+        .await
+        .unwrap();
+    send_event(&mut send_mqtt, Utc::now().timestamp_nanos(), mqtt_body)
+        .await
+        .unwrap();
+
+    send_mqtt.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"mqtt_done");
     client.endpoint.wait_idle().await;
 }
 

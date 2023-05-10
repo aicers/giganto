@@ -9,7 +9,7 @@ use giganto_client::{
     connection::client_handshake,
     ingest::{
         log::Log,
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
         timeseries::PeriodicTimeSeries,
     },
     publish::{
@@ -413,6 +413,25 @@ fn gen_ftp_raw_event() -> Vec<u8> {
     bincode::serialize(&ftp_body).unwrap()
 }
 
+fn gen_mqtt_raw_event() -> Vec<u8> {
+    let mqtt_body = Mqtt {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        protocol: "protocol".to_string(),
+        version: 1,
+        client_id: "1".to_string(),
+        connack_reason: 1,
+        subscribe: vec!["subscribe".to_string()],
+        suback_reason: vec![1],
+    };
+
+    bincode::serialize(&mqtt_body).unwrap()
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
@@ -514,6 +533,13 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64
     ser_ftp_body
 }
 
+fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_mqtt_body = gen_mqtt_raw_event();
+    store.append(&key, &ser_mqtt_body).unwrap();
+    ser_mqtt_body
+}
+
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::Log;
@@ -528,6 +554,7 @@ async fn request_range_data_with_protocol() {
     const SSH_KIND: &str = "ssh";
     const DCE_RPC_KIND: &str = "dce rpc";
     const FTP_KIND: &str = "ftp";
+    const MQTT_KIND: &str = "mqtt";
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1162,12 +1189,76 @@ async fn request_range_data_with_protocol() {
         }
 
         assert_eq!(
-            DceRpc::response_done().unwrap(),
+            Ftp::response_done().unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
         assert_eq!(
             ftp_data.response_data(send_ftp_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
+    // mqtt protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let mqtt_store = db.mqtt_store().unwrap();
+        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
+            &mqtt_store,
+            SOURCE,
+            send_mqtt_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(MQTT_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Mqtt::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            mqtt_data.response_data(send_mqtt_time, SOURCE).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1367,6 +1458,7 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_SSH: RequestStreamRecord = RequestStreamRecord::Ssh;
     const NETWORK_STREAM_DCE_RPC: RequestStreamRecord = RequestStreamRecord::DceRpc;
     const NETWORK_STREAM_FTP: RequestStreamRecord = RequestStreamRecord::Ftp;
+    const NETWORK_STREAM_MQTT: RequestStreamRecord = RequestStreamRecord::Mqtt;
 
     const SOURCE_HOG_ONE: &str = "src1";
     const SOURCE_HOG_TWO: &str = "src2";
@@ -2378,9 +2470,14 @@ async fn request_network_event_stream() {
         let ftp_store = db.ftp_store().unwrap();
 
         // direct ftp network event for hog (src1,src2)
-        send_stream_request(&mut publish.send, NETWORK_STREAM_FTP, HOG_TYPE, hog_msg)
-            .await
-            .unwrap();
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_FTP,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
 
         let send_ftp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
 
@@ -2410,7 +2507,7 @@ async fn request_network_event_stream() {
 
         let send_ftp_time = Utc::now().timestamp_nanos();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "ftp");
-        let ftp_data = gen_dce_rpc_raw_event();
+        let ftp_data = gen_ftp_raw_event();
 
         send_direct_stream(
             &key,
@@ -2435,7 +2532,7 @@ async fn request_network_event_stream() {
             &mut publish.send,
             NETWORK_STREAM_FTP,
             CRUSHER_TYPE,
-            crusher_msg,
+            crusher_msg.clone(),
         )
         .await
         .unwrap();
@@ -2464,7 +2561,7 @@ async fn request_network_event_stream() {
             &ftp_data,
             send_ftp_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel,
+            stream_direct_channel.clone(),
         )
         .await
         .unwrap();
@@ -2475,6 +2572,110 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(send_ftp_time, recv_timestamp);
         assert_eq!(ftp_data, recv_data);
+    }
+
+    {
+        let mqtt_store = db.mqtt_store().unwrap();
+
+        // direct mqtt network event for hog (src1,src2)
+        send_stream_request(&mut publish.send, NETWORK_STREAM_MQTT, HOG_TYPE, hog_msg)
+            .await
+            .unwrap();
+
+        let send_mqtt_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let mqtt_start_msg =
+            receive_hog_stream_start_message(&mut (*send_mqtt_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
+
+        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "mqtt");
+        let mqtt_data = gen_mqtt_raw_event();
+
+        send_direct_stream(
+            &key,
+            &mqtt_data,
+            send_mqtt_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_mqtt_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(mqtt_data, recv_data[20..]);
+
+        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "mqtt");
+        let mqtt_data = gen_mqtt_raw_event();
+
+        send_direct_stream(
+            &key,
+            &mqtt_data,
+            send_mqtt_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_mqtt_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(mqtt_data, recv_data[20..]);
+
+        // database mqtt network event for crusher
+        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let mqtt_data = insert_mqtt_raw_event(&mqtt_store, SOURCE_CRUSHER_THREE, send_mqtt_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_MQTT,
+            CRUSHER_TYPE,
+            crusher_msg,
+        )
+        .await
+        .unwrap();
+
+        let send_mqtt_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let mqtt_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_mqtt_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(mqtt_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_mqtt_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_mqtt_time, recv_timestamp);
+        assert_eq!(mqtt_data, recv_data);
+
+        //direct mqtt network event for crusher
+        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "mqtt");
+        let mqtt_data = gen_mqtt_raw_event();
+        send_direct_stream(
+            &key,
+            &mqtt_data,
+            send_mqtt_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channel,
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_mqtt_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_mqtt_time, recv_timestamp);
+        assert_eq!(mqtt_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");

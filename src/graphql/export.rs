@@ -12,7 +12,7 @@ use async_graphql::{Context, InputObject, Object, Result};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
     timeseries::PeriodicTimeSeries,
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -231,6 +231,24 @@ struct FtpJsonOutput {
     data_resp_port: u16,
     file: String,
     file_id: String,
+}
+
+#[derive(Serialize, Debug)]
+struct MqttJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u16,
+    last_time: i64,
+    protocol: String,
+    version: u8,
+    client_id: String,
+    connack_reason: u8,
+    subscribe: Vec<String>,
+    suback_reason: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -479,6 +497,35 @@ impl JsonOutput<FtpJsonOutput> for Ftp {
             data_resp_port: self.data_resp_port,
             file: self.file.clone(),
             file_id: self.file_id.clone(),
+        })
+    }
+}
+
+impl JsonOutput<MqttJsonOutput> for Mqtt {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<MqttJsonOutput> {
+        let suback_reason = if self.suback_reason.is_empty() {
+            vec!["-".to_string()]
+        } else {
+            self.suback_reason
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        Ok(MqttJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            last_time: self.last_time,
+            protocol: self.protocol.clone(),
+            version: self.version,
+            client_id: self.client_id.clone(),
+            connack_reason: self.connack_reason,
+            subscribe: self.subscribe.clone(),
+            suback_reason,
         })
     }
 }
@@ -772,6 +819,20 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "mqtt" => tokio::spawn(async move {
+            if let Ok(store) = db.mqtt_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -883,7 +944,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
         timeseries::PeriodicTimeSeries,
     };
     use std::mem;
@@ -1853,5 +1914,75 @@ mod tests {
         let ser_ftp_body = bincode::serialize(&ftp_body).unwrap();
 
         store.append(&key, &ser_ftp_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_mqtt() {
+        let schema = TestSchema::new();
+        let store = schema.db.mqtt_store().unwrap();
+
+        insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "mqtt",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("mqtt"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "mqtt",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("mqtt"));
+    }
+
+    fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let mqtt_body = Mqtt {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            protocol: "protocol".to_string(),
+            version: 1,
+            client_id: "client".to_string(),
+            connack_reason: 1,
+            subscribe: vec!["subscribe".to_string()],
+            suback_reason: vec![1],
+        };
+        let ser_mqtt_body = bincode::serialize(&mqtt_body).unwrap();
+
+        store.append(&key, &ser_mqtt_body).unwrap();
     }
 }

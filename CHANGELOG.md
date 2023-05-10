@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Supports the MQTT protocol.
+
 ### Fixed
 
 - Fixed to check for DB compatibility version.
@@ -164,6 +168,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.10.0...main
 [0.10.1]: https://github.com/aicers/giganto/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aicers/giganto/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aicers/giganto/compare/0.8.0...0.9.0
