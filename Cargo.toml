@@ -20,7 +20,7 @@ humantime-serde = "1"
 libc = "0.2"
 num_enum = "0.6"
 pcap = "1"
-quinn = "0.9"
+quinn = "0.10"
 rocksdb = "0.21"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.0" }
 rustls = "0.20"
