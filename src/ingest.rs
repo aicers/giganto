@@ -11,10 +11,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::{
     connection::server_handshake,
-    frame::RecvError,
+    frame::{self, RecvError, SendError},
     ingest::{
         log::{Log, Oplog},
-        receive_event, receive_record_header, send_ack_timestamp,
+        receive_event, receive_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
     },
@@ -569,6 +569,17 @@ async fn handle_data<T>(
         }
     }
 
+    Ok(())
+}
+
+/// Sends a cumulative acknowledgement message up to the given timestamp over the given send
+/// stream.
+///
+/// # Errors
+///
+/// Returns a `SendError` if an error occurs while sending the acknowledgement.
+async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result<(), SendError> {
+    frame::send_bytes(send, &timestamp.to_be_bytes()).await?;
     Ok(())
 }
 
