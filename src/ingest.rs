@@ -48,7 +48,7 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.8.0-reproduce, <=0.10.2";
+const INGEST_VERSION_REQ: &str = "0.10";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
@@ -144,12 +144,10 @@ async fn handle_connection(
     wait_shutdown: Arc<Notify>,
     shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
-    let rep: bool;
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
-        Ok((mut send, _, is_reproduce)) => {
+        Ok((mut send, _)) => {
             info!("Compatible version");
-            rep = is_reproduce;
             send.finish().await?;
         }
         Err(e) => {
@@ -159,7 +157,8 @@ async fn handle_connection(
         }
     };
 
-    let source = certificate_info(&connection)?;
+    let (agent, source) = certificate_info(&connection)?;
+    let rep = agent.contains("reproduce");
 
     if !rep {
         packet_sources

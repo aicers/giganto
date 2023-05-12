@@ -14,16 +14,16 @@ chrono = { version = "0.4", features = ["serde"] }
 data-encoding = "2.3"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.6.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.7.0" }
 humantime = "2.1"
 humantime-serde = "1"
 libc = "0.2"
 num_enum = "0.6"
 pcap = "1"
-quinn = "0.9"
+quinn = "0.10"
 rocksdb = "0.21"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.0" }
-rustls = "0.20"
+rustls = "0.21"
 rustls-pemfile = "1.0"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
