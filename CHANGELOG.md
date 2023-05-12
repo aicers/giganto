@@ -5,6 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Modify the certificate verification.
+- Update quinn to version 0.10 and rustls to version 0.21 for giganto-client
+  version 0.7.0
+
 ## [0.10.2] - 2023-05-12
 
 ### Added

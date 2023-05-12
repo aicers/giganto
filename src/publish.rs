@@ -116,7 +116,7 @@ async fn handle_connection(
     let connection = conn.await?;
 
     let (send, recv) = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
-        Ok((send, recv, _)) => {
+        Ok((send, recv)) => {
             info!("Compatible version");
             (send, recv)
         }
@@ -126,7 +126,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let source = certificate_info(&connection)?;
+    let (_, source) = certificate_info(&connection)?;
     tokio::spawn(request_stream(
         connection.clone(),
         db.clone(),

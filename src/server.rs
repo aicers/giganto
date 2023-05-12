@@ -28,7 +28,7 @@ pub fn config_server(
                 .context("failed to add client auth root cert")?;
         }
     }
-    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots);
+    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots).boxed();
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_auth)
@@ -44,7 +44,7 @@ pub fn config_server(
     Ok(server_config)
 }
 
-pub fn certificate_info(connection: &Connection) -> Result<String> {
+pub fn certificate_info(connection: &Connection) -> Result<(String, String)> {
     let Some(conn_info) = connection.peer_identity() else {
         bail!("no peer identity");
     };
@@ -65,6 +65,12 @@ pub fn certificate_info(connection: &Connection) -> Result<String> {
         .next()
         .and_then(|cn| cn.as_str().ok())
         .context("the subject of the certificate is not valid")?;
-    info!("Connected Client Name : {}", subject);
-    Ok(String::from(subject))
+    if subject.contains('@') {
+        info!("Connected Client Name : {}", subject);
+        let parsed = subject.split('@').collect::<Vec<&str>>();
+
+        Ok((String::from(parsed[0]), String::from(parsed[1])))
+    } else {
+        bail!("the subject of the certificate is not valid");
+    }
 }
