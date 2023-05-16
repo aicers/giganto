@@ -39,7 +39,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.9.0, <=0.10.2";
+const PUBLISH_VERSION_REQ: &str = ">=0.9.0, <=0.11.0";
 
 pub struct Server {
     server_config: ServerConfig,
