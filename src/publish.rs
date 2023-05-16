@@ -2,7 +2,7 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use self::implement::{RequestRangeMessage, RequestStreamMessage};
+use self::implement::RequestStreamMessage;
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingest::{implement::EventFilter, NetworkKey, PacketSources, StreamDirectChannel};
 use crate::server::{
@@ -19,10 +19,7 @@ use giganto_client::{
     frame,
     publish::{
         pcap_extract_request,
-        range::{
-            MessageCode, REconvergeKindType, RequestRange, RequestRawData, RequestTimeSeriesRange,
-            ResponseRangeData,
-        },
+        range::{MessageCode, REconvergeKindType, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err,
         send_hog_stream_start_message, send_ok, send_range_data, send_raw_events,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
@@ -40,7 +37,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.9.0, <=0.11.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.12.0,<0.13.0";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -705,7 +702,7 @@ async fn handle_request(
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
-        MessageCode::Log => {
+        MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
             match REconvergeKindType::convert_type(&msg.kind) {
@@ -818,6 +815,16 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Timeseries => {
+                    process_range_data(
+                        &mut send,
+                        db.periodic_time_series_store()
+                            .context("Failed to open periodic time series storage")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
                 REconvergeKindType::Ldap => {
                     process_range_data(
                         &mut send,
@@ -828,18 +835,6 @@ async fn handle_request(
                     .await?;
                 }
             }
-        }
-        MessageCode::PeriodicTimeSeries => {
-            let msg = bincode::deserialize::<RequestTimeSeriesRange>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deseralize timeseries message: {}", e))?;
-            process_range_data(
-                &mut send,
-                db.periodic_time_series_store()
-                    .context("Failed to open periodic time series storage")?,
-                msg,
-                false,
-            )
-            .await?;
         }
         MessageCode::Pcap => {
             process_pcap_extract(&msg_buf, packet_sources.clone(), &mut send).await?;
@@ -888,39 +883,42 @@ async fn handle_request(
                     // For REconvergeKindType::LOG, the source_kind is required as the source.
                     process_raw_events(&mut send, db.log_store()?, msg.input).await?;
                 }
+                REconvergeKindType::Timeseries => {
+                    process_raw_events(&mut send, db.periodic_time_series_store()?, msg.input)
+                        .await?;
+                }
             }
         }
     }
     Ok(())
 }
 
-async fn process_range_data<'c, T, K>(
+async fn process_range_data<'c, T>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
-    msg: K,
+    msg: RequestRange,
     availd_kind: bool,
 ) -> Result<()>
 where
     T: DeserializeOwned + ResponseRangeData,
-    K: RequestRangeMessage,
 {
     let mut key_prefix = Vec::new();
-    key_prefix.extend_from_slice(msg.source().as_bytes());
+    key_prefix.extend_from_slice(msg.source.as_bytes());
     key_prefix.push(0);
     if availd_kind {
-        key_prefix.extend_from_slice(msg.kind().as_bytes());
+        key_prefix.extend_from_slice(msg.kind.as_bytes());
         key_prefix.push(0);
     }
     let iter = store.boundary_iter(
-        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start()))),
-        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end()))),
+        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
+        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
         Direction::Forward,
     );
 
-    for item in iter.take(msg.count()) {
+    for item in iter.take(msg.count) {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        send_range_data(send, Some((val, timestamp, msg.source()))).await?;
+        send_range_data(send, Some((val, timestamp, &msg.source))).await?;
     }
     send_range_data::<T>(send, None).await?;
     send.finish().await?;
@@ -935,12 +933,11 @@ async fn process_raw_events<'c, T>(
 where
     T: DeserializeOwned,
 {
-    let mut output: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut output: Vec<(i64, String, Vec<u8>)> = Vec::new();
 
     for (source, timestamps) in msg {
         output.extend_from_slice(&store.multi_get_with_source(&source, &timestamps));
     }
-
     send_raw_events(send, output).await?;
 
     Ok(())

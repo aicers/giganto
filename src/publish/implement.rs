@@ -1,8 +1,5 @@
 use anyhow::{bail, Result};
-use giganto_client::publish::{
-    range::{RequestRange, RequestTimeSeriesRange},
-    stream::{NodeType, RequestCrusherStream, RequestHogStream},
-};
+use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
 use std::{net::IpAddr, vec};
 
 pub trait RequestStreamMessage {
@@ -109,49 +106,5 @@ impl RequestStreamMessage for RequestCrusherStream {
 
     fn source_id(&self) -> Option<String> {
         Some(self.id.clone())
-    }
-}
-
-pub trait RequestRangeMessage {
-    fn source(&self) -> &str;
-    fn kind(&self) -> &str;
-    fn start(&self) -> i64;
-    fn end(&self) -> i64;
-    fn count(&self) -> usize;
-}
-
-impl RequestRangeMessage for RequestRange {
-    fn source(&self) -> &str {
-        &self.source
-    }
-    fn kind(&self) -> &str {
-        &self.kind
-    }
-    fn start(&self) -> i64 {
-        self.start
-    }
-    fn end(&self) -> i64 {
-        self.end
-    }
-    fn count(&self) -> usize {
-        self.count
-    }
-}
-
-impl RequestRangeMessage for RequestTimeSeriesRange {
-    fn source(&self) -> &str {
-        &self.source
-    }
-    fn kind(&self) -> &str {
-        ""
-    }
-    fn start(&self) -> i64 {
-        self.start
-    }
-    fn end(&self) -> i64 {
-        self.end
-    }
-    fn count(&self) -> usize {
-        self.count
     }
 }

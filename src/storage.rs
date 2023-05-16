@@ -382,27 +382,19 @@ impl<'db, T> RawEventStore<'db, T> {
         &self,
         source: &str,
         timestamps: &[i64],
-    ) -> Vec<(String, Vec<u8>)> {
+    ) -> Vec<(i64, String, Vec<u8>)> {
         let key_prefix = key_prefix(source);
-
-        let multi_keys: Vec<(&ColumnFamily, Vec<u8>)> = timestamps
+        let values_with_source: Vec<(i64, String, Vec<u8>)> = timestamps
             .iter()
-            .map(|timestamp| {
+            .filter_map(|timestamp| {
                 let mut key: Vec<u8> = key_prefix.clone();
                 key.extend_from_slice(&timestamp.to_be_bytes());
-                (self.cf, key)
+                self.db
+                    .get_cf(&self.cf, &key)
+                    .ok()
+                    .and_then(|value| value.map(|val| (*timestamp, source.to_string(), val)))
             })
             .collect();
-
-        let values = self.db.multi_get_cf(multi_keys);
-
-        let values_with_source: Vec<(String, Vec<u8>)> = values
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|value| (source.to_string(), value))
-            .collect();
-
         values_with_source
     }
 }

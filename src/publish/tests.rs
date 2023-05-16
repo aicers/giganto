@@ -13,9 +13,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
     publish::{
-        range::{
-            MessageCode, RequestRange, RequestRawData, RequestTimeSeriesRange, ResponseRangeData,
-        },
+        range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
         receive_hog_stream_start_message, receive_range_data, receive_raw_events,
         send_range_data_request, send_stream_request,
@@ -44,7 +42,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.11.0";
+const PROTOCOL_VERSION: &str = "0.12.0";
 
 struct TestClient {
     send: SendStream,
@@ -573,7 +571,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i
 
 #[tokio::test]
 async fn request_range_data_with_protocol() {
-    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::Log;
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SOURCE: &str = "einsis";
     const CONN_KIND: &str = "conn";
     const DNS_KIND: &str = "dns";
@@ -636,7 +634,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -697,7 +695,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -761,7 +759,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -822,7 +820,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -886,7 +884,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -950,7 +948,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1013,7 +1011,7 @@ async fn request_range_data_with_protocol() {
             end: end.timestamp_nanos(),
             count: 5,
         };
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1076,7 +1074,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1140,7 +1138,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1203,7 +1201,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1267,7 +1265,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1331,7 +1329,7 @@ async fn request_range_data_with_protocol() {
             count: 5,
         };
 
-        send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
             .await
             .unwrap();
 
@@ -1366,7 +1364,7 @@ async fn request_range_data_with_protocol() {
 
 #[tokio::test]
 async fn request_range_data_with_log() {
-    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::Log;
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SOURCE: &str = "einsis";
     const KIND: &str = "Hello";
 
@@ -1426,7 +1424,7 @@ async fn request_range_data_with_log() {
         count: 5,
     };
 
-    send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
         .await
         .unwrap();
 
@@ -1457,8 +1455,9 @@ async fn request_range_data_with_log() {
 
 #[tokio::test]
 async fn request_range_data_with_period_time_series() {
-    const PUBLISH_LOG_MESSAGE_CODE: MessageCode = MessageCode::PeriodicTimeSeries;
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SAMPLING_POLICY_ID: &str = "policy_one";
+    const KIND: &str = "timeseries";
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1499,14 +1498,15 @@ async fn request_range_data_with_period_time_series() {
             .expect("valid time"),
         Utc,
     );
-    let message = RequestTimeSeriesRange {
+    let message = RequestRange {
         source: String::from(SAMPLING_POLICY_ID),
+        kind: String::from(KIND),
         start: start.timestamp_nanos(),
         end: end.timestamp_nanos(),
         count: 5,
     };
 
-    send_range_data_request(&mut send_pub_req, PUBLISH_LOG_MESSAGE_CODE, message)
+    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
         .await
         .unwrap();
 
@@ -2893,6 +2893,7 @@ async fn request_raw_events() {
     const PUBLISH_RAW_DATA_MESSAGE_CODE: MessageCode = MessageCode::RawData;
     const SOURCE: &str = "src 1";
     const KIND: &str = "conn";
+    const TIMESTAMP: i64 = 100;
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -2911,12 +2912,12 @@ async fn request_raw_events() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let conn_store = db.conn_store().unwrap();
-    let send_conn_time = 1;
+    let send_conn_time = TIMESTAMP;
     let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
 
     let message = RequestRawData {
         kind: String::from(KIND),
-        input: vec![(String::from(SOURCE), vec![1])],
+        input: vec![(String::from(SOURCE), vec![TIMESTAMP])],
     };
 
     send_range_data_request(&mut send_pub_req, PUBLISH_RAW_DATA_MESSAGE_CODE, message)
@@ -2925,6 +2926,7 @@ async fn request_raw_events() {
 
     let resp_data = receive_raw_events(&mut recv_pub_resp).await.unwrap();
 
-    assert_eq!(&resp_data[0].0, "src 1");
-    assert_eq!(resp_data[0].1, conn_raw_data);
+    assert_eq!(resp_data[0].0, TIMESTAMP);
+    assert_eq!(&resp_data[0].1, "src 1");
+    assert_eq!(resp_data[0].2, conn_raw_data);
 }

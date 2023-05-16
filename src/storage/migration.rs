@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.10.0,<0.12.0-alpha";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.10.0,<0.13.0-alpha";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -81,7 +81,7 @@ mod tests {
         let breaking = {
             let mut breaking = current.clone();
             if breaking.major == 0 {
-                breaking.minor -= 2;
+                breaking.minor -= 3;
             } else {
                 breaking.major -= 1;
             }

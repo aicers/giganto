@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2023-06-20
 
 ### Added
 
@@ -17,6 +17,13 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Supports the expanded HTTP protocol.
 - Modify `proto` field of `Ftp`, `Mqtt`, `Ldap` to u8 from u16.
+- Supports the LDAP protocol.
+- Modify the processing part of REconverge's data request.
+  - Modify to handle network, log, and time series data requests with `ReqRange`
+    and `RequestRange`.
+  - Add to handle `Timeseries` requests in `MessageCode::RawData`.
+  - Modify `multi_get_with_source` to return in the form of
+    `Vec<(i64, String, Vec<u8>)>`.
 
 ## [0.11.0] - 2023-05-16
 
@@ -191,7 +198,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
+[0.12.0]: https://github.com/aicers/giganto/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
 [0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2
 [0.10.1]: https://github.com/aicers/giganto/compare/0.10.0...0.10.1
