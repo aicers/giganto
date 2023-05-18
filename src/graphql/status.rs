@@ -1,7 +1,6 @@
 #[cfg(debug_assertions)]
 use crate::storage::Database;
 use anyhow::Context as ct;
-#[cfg(debug_assertions)]
 use async_graphql::Context;
 use async_graphql::{InputObject, Object, Result, SimpleObject};
 use std::{
