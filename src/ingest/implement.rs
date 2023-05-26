@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -327,6 +327,27 @@ impl EventFilter for Ftp {
 }
 
 impl EventFilter for Mqtt {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Ldap {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }

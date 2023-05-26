@@ -10,7 +10,7 @@ use giganto_client::{
     frame::recv_bytes,
     ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
         receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
@@ -749,6 +749,45 @@ async fn mqtt() {
     send_mqtt.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"mqtt_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn ldap() {
+    const RECORD_TYPE_LDAP: RecordType = RecordType::Ldap;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_ldap, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let ldap_body = Ldap {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        message_id: 1,
+        version: 1,
+        opcode: vec!["opcode".to_string()],
+        result: vec!["result".to_string()],
+        diagnostic_message: Vec::new(),
+        object: Vec::new(),
+        argument: Vec::new(),
+    };
+
+    send_record_header(&mut send_ldap, RECORD_TYPE_LDAP)
+        .await
+        .unwrap();
+    send_event(&mut send_ldap, Utc::now().timestamp_nanos(), ldap_body)
+        .await
+        .unwrap();
+
+    send_ldap.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"ldap_done");
     client.endpoint.wait_idle().await;
 }
 

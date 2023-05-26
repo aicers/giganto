@@ -12,7 +12,9 @@ use async_graphql::{Context, InputObject, Object, Result};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh},
+    network::{
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh,
+    },
     timeseries::PeriodicTimeSeries,
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -252,6 +254,25 @@ struct MqttJsonOutput {
 }
 
 #[derive(Serialize, Debug)]
+struct LdapJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u16,
+    last_time: i64,
+    message_id: u32,
+    version: u8,
+    opcode: Vec<String>,
+    result: Vec<String>,
+    diagnostic_message: Vec<String>,
+    object: Vec<String>,
+    argument: Vec<String>,
+}
+
+#[derive(Serialize, Debug)]
 struct LogJsonOutput {
     timestamp: String,
     source: String,
@@ -389,6 +410,18 @@ convert_json_output!(
     operation
 );
 
+convert_json_output!(
+    LdapJsonOutput,
+    Ldap,
+    message_id,
+    version,
+    opcode,
+    result,
+    diagnostic_message,
+    object,
+    argument
+);
+
 impl JsonOutput<ConnJsonOutput> for Conn {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<ConnJsonOutput> {
         Ok(ConnJsonOutput {
@@ -411,12 +444,6 @@ impl JsonOutput<ConnJsonOutput> for Conn {
 
 impl JsonOutput<DnsJsonOutput> for Dns {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsJsonOutput> {
-        let ttl = if self.ttl.is_empty() {
-            vec!["-".to_string()]
-        } else {
-            self.ttl.iter().map(ToString::to_string).collect::<Vec<_>>()
-        };
-
         Ok(DnsJsonOutput {
             timestamp,
             source,
@@ -437,7 +464,7 @@ impl JsonOutput<DnsJsonOutput> for Dns {
             tc_flag: self.tc_flag,
             rd_flag: self.rd_flag,
             ra_flag: self.ra_flag,
-            ttl,
+            ttl: to_vec_string(&self.ttl),
         })
     }
 }
@@ -503,14 +530,6 @@ impl JsonOutput<FtpJsonOutput> for Ftp {
 
 impl JsonOutput<MqttJsonOutput> for Mqtt {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<MqttJsonOutput> {
-        let suback_reason = if self.suback_reason.is_empty() {
-            vec!["-".to_string()]
-        } else {
-            self.suback_reason
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        };
         Ok(MqttJsonOutput {
             timestamp,
             source,
@@ -525,7 +544,7 @@ impl JsonOutput<MqttJsonOutput> for Mqtt {
             client_id: self.client_id.clone(),
             connack_reason: self.connack_reason,
             subscribe: self.subscribe.clone(),
-            suback_reason,
+            suback_reason: to_vec_string(&self.suback_reason),
         })
     }
 }
@@ -833,6 +852,20 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "ldap" => tokio::spawn(async move {
+            if let Ok(store) = db.ldap_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -937,6 +970,17 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
     Err(anyhow!("Invalid key"))
 }
 
+fn to_vec_string<T>(vec: &Vec<T>) -> Vec<String>
+where
+    T: Display,
+{
+    if vec.is_empty() {
+        vec!["-".to_string()]
+    } else {
+        vec.iter().map(ToString::to_string).collect::<Vec<_>>()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::graphql::TestSchema;
@@ -944,7 +988,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
         timeseries::PeriodicTimeSeries,
     };
     use std::mem;
@@ -1984,5 +2028,76 @@ mod tests {
         let ser_mqtt_body = bincode::serialize(&mqtt_body).unwrap();
 
         store.append(&key, &ser_mqtt_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_ldap() {
+        let schema = TestSchema::new();
+        let store = schema.db.ldap_store().unwrap();
+
+        insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_ldap_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "ldap",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("ldap"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "ldap",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("ldap"));
+    }
+
+    fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let ldap_body = Ldap {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            message_id: 1,
+            version: 1,
+            opcode: vec!["opcode".to_string()],
+            result: vec!["result".to_string()],
+            diagnostic_message: Vec::new(),
+            object: Vec::new(),
+            argument: Vec::new(),
+        };
+        let ser_ldap_body = bincode::serialize(&ldap_body).unwrap();
+
+        store.append(&key, &ser_ldap_body).unwrap();
     }
 }
