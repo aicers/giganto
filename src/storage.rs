@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
     statistics::Statistics,
     timeseries::PeriodicTimeSeries,
     Packet,
@@ -29,7 +29,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 16] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 17] = [
     "conn",
     "dns",
     "log",
@@ -46,6 +46,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 16] = [
     "packet",
     "ftp",
     "mqtt",
+    "ldap",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -311,6 +312,15 @@ impl Database {
             .db
             .cf_handle("mqtt")
             .context("cannot access mqtt column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for Mqtt
+    pub fn ldap_store(&self) -> Result<RawEventStore<Ldap>> {
+        let cf = self
+            .db
+            .cf_handle("ldap")
+            .context("cannot access ldap column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

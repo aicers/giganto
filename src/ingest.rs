@@ -438,6 +438,19 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Ldap => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Ldap,
+                Some(NetworkKey::new(&source, "ldap")),
+                source,
+                db.ldap_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }
