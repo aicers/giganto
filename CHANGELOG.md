@@ -11,6 +11,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - added Giganto clustering funtionality. This feature connects giganto peer-to-peer,
   and connected gigantos share each other's `peer` list and connected `source` list.
+- Supports the LDAP protocol.
 
 ## [0.11.0] - 2023-05-16
 
@@ -185,6 +186,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
 [Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
 [0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
 [0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2
