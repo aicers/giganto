@@ -302,6 +302,10 @@ async fn http() {
         content_encoding: String::new(),
         content_type: String::new(),
         cache_control: String::new(),
+        orig_filenames: Vec::new(),
+        orig_mime_types: Vec::new(),
+        resp_filenames: Vec::new(),
+        resp_mime_types: Vec::new(),
     };
 
     send_record_header(&mut send_http, RECORD_TYPE_HTTP)
