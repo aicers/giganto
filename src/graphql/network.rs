@@ -196,6 +196,10 @@ struct HttpRawEvent {
     content_encoding: String,
     content_type: String,
     cache_control: String,
+    orig_filenames: Vec<String>,
+    orig_mime_types: Vec<String>,
+    resp_filenames: Vec<String>,
+    resp_mime_types: Vec<String>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -313,7 +317,7 @@ struct FtpRawEvent {
     orig_port: u16,
     resp_addr: String,
     resp_port: u16,
-    proto: u16,
+    proto: u8,
     last_time: i64,
     user: String,
     password: String,
@@ -332,7 +336,7 @@ struct MqttRawEvent {
     orig_port: u16,
     resp_addr: String,
     resp_port: u16,
-    proto: u16,
+    proto: u8,
     last_time: i64,
     protocol: String,
     version: u8,
@@ -349,7 +353,7 @@ struct LdapRawEvent {
     orig_port: u16,
     resp_addr: String,
     resp_port: u16,
-    proto: u16,
+    proto: u8,
     last_time: i64,
     message_id: u32,
     version: u8,
@@ -457,7 +461,11 @@ from_key_value!(
     cookie,
     content_encoding,
     content_type,
-    cache_control
+    cache_control,
+    orig_filenames,
+    orig_mime_types,
+    resp_filenames,
+    resp_mime_types
 );
 from_key_value!(RdpRawEvent, Rdp, cookie);
 
@@ -1846,6 +1854,10 @@ mod tests {
             content_encoding: String::new(),
             content_type: String::new(),
             cache_control: String::new(),
+            orig_filenames: Vec::new(),
+            orig_mime_types: Vec::new(),
+            resp_filenames: Vec::new(),
+            resp_mime_types: Vec::new(),
         };
         let ser_http_body = bincode::serialize(&http_body).unwrap();
 

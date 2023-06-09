@@ -13,6 +13,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   and connected gigantos share each other's `peer` list and connected `source` list.
 - Supports the LDAP protocol.
 
+### Changed
+
+- Supports the expanded HTTP protocol.
+- Modify `proto` field of `Ftp`, `Mqtt`, `Ldap` to u8 from u16.
+
 ## [0.11.0] - 2023-05-16
 
 ### Changed
@@ -186,7 +191,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
 [Unreleased]: https://github.com/aicers/giganto/compare/0.11.0...main
 [0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
 [0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2
