@@ -668,21 +668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "futures"
-version = "0.3.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23342abe12aba583913b2e62f22225ff9c950774065e4bfb61a19cd9770fec40"
-dependencies = [
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-io",
- "futures-sink",
- "futures-task",
- "futures-util",
-]
-
-[[package]]
 name = "futures-channel"
 version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -697,17 +682,6 @@ name = "futures-core"
 version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bca583b7e26f571124fe5b7561d49cb2868d79116cfa0eefce955557c6fee8c"
-
-[[package]]
-name = "futures-executor"
-version = "0.3.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccecee823288125bd88b4d7f565c9e58e41858e47ab72e8ea2d64e93624386e0"
-dependencies = [
- "futures-core",
- "futures-task",
- "futures-util",
-]
 
 [[package]]
 name = "futures-io"
@@ -744,7 +718,6 @@ version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26b01e40b772d54cf6c6d721c1d1abd0647a0106a12ecaa1c186273392a69533"
 dependencies = [
- "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -827,14 +800,13 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.7.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.7.0#fb7509ed9d3a20864b403608cb81c2b57fadfdd7"
+version = "0.8.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.8.0#8af8e8a1493a925d224799532145198404745b0c"
 dependencies = [
  "anyhow",
  "bincode",
  "chrono",
  "num_enum",
- "oinq",
  "quinn",
  "semver",
  "serde",
@@ -1102,9 +1074,6 @@ name = "ipnet"
 version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12b6ee2129af8d4fb011108c73d99a1b83a85977f23b82460c0ae2e25bb4b57f"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "ipnetwork"
@@ -1446,23 +1415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9bedf36ffb6ba96c2eb7144ef6270557b52e54b20c0a8e1eb2ff99a6c6959bff"
 dependencies = [
  "asn1-rs",
-]
-
-[[package]]
-name = "oinq"
-version = "0.7.0"
-source = "git+https://github.com/petabi/oinq.git?tag=0.7.0#708871bda0bd80d73f732e33a6590fad78a69c22"
-dependencies = [
- "async-trait",
- "bincode",
- "futures",
- "ipnet",
- "num_enum",
- "quinn",
- "semver",
- "serde",
- "thiserror",
- "tokio",
 ]
 
 [[package]]
