@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
     statistics::Statistics,
     timeseries::PeriodicTimeSeries,
     Packet,
@@ -29,7 +29,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 17] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 18] = [
     "conn",
     "dns",
     "log",
@@ -47,6 +47,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 17] = [
     "ftp",
     "mqtt",
     "ldap",
+    "tls",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -315,12 +316,21 @@ impl Database {
         Ok(RawEventStore::new(&self.db, cf))
     }
 
-    /// Returns the store for Mqtt
+    /// Returns the store for ldap
     pub fn ldap_store(&self) -> Result<RawEventStore<Ldap>> {
         let cf = self
             .db
             .cf_handle("ldap")
             .context("cannot access ldap column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for tls
+    pub fn tls_store(&self) -> Result<RawEventStore<Tls>> {
+        let cf = self
+            .db
+            .cf_handle("tls")
+            .context("cannot access tls column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }
@@ -413,11 +423,9 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
             direction,
         )
     }
-    pub fn _iter(&self, from: &[u8]) -> Iter<'db> {
-        Iter::new(self.db.iterator_cf(
-            self.cf,
-            rocksdb::IteratorMode::From(from, Direction::Forward),
-        ))
+
+    pub fn iter_forward(&self) -> Iter<'db> {
+        Iter::new(self.db.iterator_cf(self.cf, rocksdb::IteratorMode::Start))
     }
 }
 

@@ -5,6 +5,15 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Supports the TLS protocol.
+- Added migration functionality in `0.12.0`. This feature adds values for new fields
+  (`orig_filenames`, `orig_mime_types`, `resp_filenames`, `resp_mime_types`) to
+  `http raw event` in versions 0.12.0 and earlier.
+
 ## [0.12.0] - 2023-06-20
 
 ### Added
@@ -17,7 +26,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Supports the expanded HTTP protocol.
 - Modify `proto` field of `Ftp`, `Mqtt`, `Ldap` to u8 from u16.
-- Supports the LDAP protocol.
 - Modify the processing part of REconverge's data request.
   - Modify to handle network, log, and time series data requests with `ReqRange`
     and `RequestRange`.
@@ -198,6 +206,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.12.0...main
 [0.12.0]: https://github.com/aicers/giganto/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
 [0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2

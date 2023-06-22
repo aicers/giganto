@@ -14,6 +14,7 @@ use giganto_client::ingest::{
     log::{Log, Oplog},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh,
+        Tls,
     },
     timeseries::PeriodicTimeSeries,
 };
@@ -277,6 +278,36 @@ struct LdapJsonOutput {
 }
 
 #[derive(Serialize, Debug)]
+struct TlsJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    server_name: String,
+    alpn_protocol: String,
+    ja3: String,
+    version: String,
+    cipher: u16,
+    ja3s: String,
+    serial: String,
+    subject_country: String,
+    subject_org_name: String,
+    subject_common_name: String,
+    validity_not_before: i64,
+    validity_not_after: i64,
+    subject_alt_name: String,
+    issuer_country: String,
+    issuer_org_name: String,
+    issuer_org_unit_name: String,
+    issuer_common_name: String,
+    last_alert: u8,
+}
+
+#[derive(Serialize, Debug)]
 struct LogJsonOutput {
     timestamp: String,
     source: String,
@@ -428,6 +459,29 @@ convert_json_output!(
     diagnostic_message,
     object,
     argument
+);
+
+convert_json_output!(
+    TlsJsonOutput,
+    Tls,
+    server_name,
+    alpn_protocol,
+    ja3,
+    version,
+    cipher,
+    ja3s,
+    serial,
+    subject_country,
+    subject_org_name,
+    subject_common_name,
+    validity_not_before,
+    validity_not_after,
+    subject_alt_name,
+    issuer_country,
+    issuer_org_name,
+    issuer_org_unit_name,
+    issuer_common_name,
+    last_alert
 );
 
 impl JsonOutput<ConnJsonOutput> for Conn {
@@ -874,6 +928,20 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "tls" => tokio::spawn(async move {
+            if let Ok(store) = db.tls_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -996,7 +1064,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
         timeseries::PeriodicTimeSeries,
     };
     use std::mem;
@@ -2111,5 +2179,87 @@ mod tests {
         let ser_ldap_body = bincode::serialize(&ldap_body).unwrap();
 
         store.append(&key, &ser_ldap_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_tls() {
+        let schema = TestSchema::new();
+        let store = schema.db.tls_store().unwrap();
+
+        insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_tls_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "tls",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("tls"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "tls",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("tls"));
+    }
+
+    fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let tls_body = Tls {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            server_name: "server_name".to_string(),
+            alpn_protocol: "alpn_protocol".to_string(),
+            ja3: "ja3".to_string(),
+            version: "version".to_string(),
+            cipher: 10,
+            ja3s: "ja3s".to_string(),
+            serial: "serial".to_string(),
+            subject_country: "sub_contry".to_string(),
+            subject_org_name: "sub_org".to_string(),
+            subject_common_name: "sub_comm".to_string(),
+            validity_not_before: 11,
+            validity_not_after: 12,
+            subject_alt_name: "sub_alt".to_string(),
+            issuer_country: "issuer_contry".to_string(),
+            issuer_org_name: "issuer_org".to_string(),
+            issuer_org_unit_name: "issuer_org_unit".to_string(),
+            issuer_common_name: "issuer_comm".to_string(),
+            last_alert: 13,
+        };
+        let ser_tls_body = bincode::serialize(&tls_body).unwrap();
+
+        store.append(&key, &ser_tls_body).unwrap();
     }
 }

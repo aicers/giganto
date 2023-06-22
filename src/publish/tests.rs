@@ -9,7 +9,7 @@ use giganto_client::{
     connection::client_handshake,
     ingest::{
         log::Log,
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
         timeseries::PeriodicTimeSeries,
     },
     publish::{
@@ -454,6 +454,37 @@ fn gen_ldap_raw_event() -> Vec<u8> {
     bincode::serialize(&ldap_body).unwrap()
 }
 
+fn gen_tls_raw_event() -> Vec<u8> {
+    let tls_body = Tls {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        server_name: "server_name".to_string(),
+        alpn_protocol: "alpn_protocol".to_string(),
+        ja3: "ja3".to_string(),
+        version: "version".to_string(),
+        cipher: 10,
+        ja3s: "ja3s".to_string(),
+        serial: "serial".to_string(),
+        subject_country: "sub_contry".to_string(),
+        subject_org_name: "sub_org".to_string(),
+        subject_common_name: "sub_comm".to_string(),
+        validity_not_before: 11,
+        validity_not_after: 12,
+        subject_alt_name: "sub_alt".to_string(),
+        issuer_country: "issuer_contry".to_string(),
+        issuer_org_name: "issuer_org".to_string(),
+        issuer_org_unit_name: "issuer_org_unit".to_string(),
+        issuer_common_name: "issuer_comm".to_string(),
+        last_alert: 13,
+    };
+
+    bincode::serialize(&tls_body).unwrap()
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
@@ -569,6 +600,13 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i
     ser_ldap_body
 }
 
+fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_tls_body = gen_tls_raw_event();
+    store.append(&key, &ser_tls_body).unwrap();
+    ser_tls_body
+}
+
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
@@ -585,6 +623,7 @@ async fn request_range_data_with_protocol() {
     const FTP_KIND: &str = "ftp";
     const MQTT_KIND: &str = "mqtt";
     const LDAP_KIND: &str = "ldap";
+    const TLS_KIND: &str = "tls";
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1358,6 +1397,67 @@ async fn request_range_data_with_protocol() {
         );
     }
 
+    // tls protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let tls_store = db.tls_store().unwrap();
+        let send_tls_time = Utc::now().timestamp_nanos();
+        let tls_data =
+            bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SOURCE, send_tls_time))
+                .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(TLS_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Tls::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            tls_data.response_data(send_tls_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
     publish.conn.close(0u32.into(), b"publish_protocol_done");
     publish.endpoint.wait_idle().await;
 }
@@ -1556,6 +1656,7 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_FTP: RequestStreamRecord = RequestStreamRecord::Ftp;
     const NETWORK_STREAM_MQTT: RequestStreamRecord = RequestStreamRecord::Mqtt;
     const NETWORK_STREAM_LDAP: RequestStreamRecord = RequestStreamRecord::Ldap;
+    const NETWORK_STREAM_TLS: RequestStreamRecord = RequestStreamRecord::Tls;
 
     const SOURCE_HOG_ONE: &str = "src1";
     const SOURCE_HOG_TWO: &str = "src2";
@@ -2784,9 +2885,14 @@ async fn request_network_event_stream() {
         let ldap_store = db.ldap_store().unwrap();
 
         // direct ldap network event for hog (src1,src2)
-        send_stream_request(&mut publish.send, NETWORK_STREAM_LDAP, HOG_TYPE, hog_msg)
-            .await
-            .unwrap();
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_LDAP,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
 
         let send_ldap_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
 
@@ -2842,7 +2948,7 @@ async fn request_network_event_stream() {
             &mut publish.send,
             NETWORK_STREAM_LDAP,
             CRUSHER_TYPE,
-            crusher_msg,
+            crusher_msg.clone(),
         )
         .await
         .unwrap();
@@ -2871,7 +2977,7 @@ async fn request_network_event_stream() {
             &ldap_data,
             send_ldap_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel,
+            stream_direct_channel.clone(),
         )
         .await
         .unwrap();
@@ -2882,6 +2988,109 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(send_ldap_time, recv_timestamp);
         assert_eq!(ldap_data, recv_data);
+    }
+
+    {
+        let tls_store = db.tls_store().unwrap();
+
+        // direct tls network event for hog (src1,src2)
+        send_stream_request(&mut publish.send, NETWORK_STREAM_TLS, HOG_TYPE, hog_msg)
+            .await
+            .unwrap();
+
+        let send_tls_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let tls_start_msg = receive_hog_stream_start_message(&mut (*send_tls_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
+
+        let send_tls_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "tls");
+        let tls_data = gen_tls_raw_event();
+
+        send_direct_stream(
+            &key,
+            &tls_data,
+            send_tls_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_tls_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(tls_data, recv_data[20..]);
+
+        let send_tls_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "tls");
+        let tls_data = gen_tls_raw_event();
+
+        send_direct_stream(
+            &key,
+            &tls_data,
+            send_tls_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_tls_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(tls_data, recv_data[20..]);
+
+        // database tls network event for crusher
+        let send_tls_time = Utc::now().timestamp_nanos();
+        let tls_data = insert_tls_raw_event(&tls_store, SOURCE_CRUSHER_THREE, send_tls_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_TLS,
+            CRUSHER_TYPE,
+            crusher_msg,
+        )
+        .await
+        .unwrap();
+
+        let send_tls_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let tls_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_tls_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(tls_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_tls_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_tls_time, recv_timestamp);
+        assert_eq!(tls_data, recv_data);
+
+        //direct tls network event for crusher
+        let send_tls_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "tls");
+        let tls_data = gen_tls_raw_event();
+        send_direct_stream(
+            &key,
+            &tls_data,
+            send_tls_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channel,
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_tls_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_tls_time, recv_timestamp);
+        assert_eq!(tls_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");

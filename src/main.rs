@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         files.push(file);
     }
 
-    if let Err(e) = migrate_data_dir(&settings.data_dir) {
+    if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
         error!("migration failed: {e}");
         return Ok(());
     }
