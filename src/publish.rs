@@ -542,6 +542,25 @@ where
                 error!("Failed to open ldap store");
             }
         }
+        RequestStreamRecord::Tls => {
+            if let Ok(store) = db.tls_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open tls store");
+            }
+        }
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
@@ -834,6 +853,15 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Tls => {
+                    process_range_data(
+                        &mut send,
+                        db.tls_store().context("Failed to open tls store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::Pcap => {
@@ -878,6 +906,9 @@ async fn handle_request(
                 }
                 REconvergeKindType::Ldap => {
                     process_raw_events(&mut send, db.ldap_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Tls => {
+                    process_raw_events(&mut send, db.tls_store()?, msg.input).await?;
                 }
                 REconvergeKindType::Log => {
                     // For REconvergeKindType::LOG, the source_kind is required as the source.

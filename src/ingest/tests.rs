@@ -10,7 +10,7 @@ use giganto_client::{
     frame::recv_bytes,
     ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
         receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
@@ -792,6 +792,56 @@ async fn ldap() {
     send_ldap.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ldap_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn tls() {
+    const RECORD_TYPE_TLS: RecordType = RecordType::Tls;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_tls, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let tls_body = Tls {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        server_name: "server_name".to_string(),
+        alpn_protocol: "alpn_protocol".to_string(),
+        ja3: "ja3".to_string(),
+        version: "version".to_string(),
+        cipher: 10,
+        ja3s: "ja3s".to_string(),
+        serial: "serial".to_string(),
+        subject_country: "sub_contry".to_string(),
+        subject_org_name: "sub_org".to_string(),
+        subject_common_name: "sub_comm".to_string(),
+        validity_not_before: 11,
+        validity_not_after: 12,
+        subject_alt_name: "sub_alt".to_string(),
+        issuer_country: "issuer_contry".to_string(),
+        issuer_org_name: "issuer_org".to_string(),
+        issuer_org_unit_name: "issuer_org_unit".to_string(),
+        issuer_common_name: "issuer_comm".to_string(),
+        last_alert: 13,
+    };
+
+    send_record_header(&mut send_tls, RECORD_TYPE_TLS)
+        .await
+        .unwrap();
+    send_event(&mut send_tls, Utc::now().timestamp_nanos(), tls_body)
+        .await
+        .unwrap();
+
+    send_tls.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"tls_done");
     client.endpoint.wait_idle().await;
 }
 

@@ -451,6 +451,19 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Tls => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Tls,
+                Some(NetworkKey::new(&source, "tls")),
+                source,
+                db.tls_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }
