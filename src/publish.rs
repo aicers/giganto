@@ -561,6 +561,44 @@ where
                 error!("Failed to open tls store");
             }
         }
+        RequestStreamRecord::Smb => {
+            if let Ok(store) = db.smb_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open smb store");
+            }
+        }
+        RequestStreamRecord::Nfs => {
+            if let Ok(store) = db.nfs_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open nfs store");
+            }
+        }
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
@@ -862,6 +900,24 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Smb => {
+                    process_range_data(
+                        &mut send,
+                        db.smb_store().context("Failed to open smb store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Nfs => {
+                    process_range_data(
+                        &mut send,
+                        db.nfs_store().context("Failed to open nfs store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::Pcap => {
@@ -909,6 +965,12 @@ async fn handle_request(
                 }
                 REconvergeKindType::Tls => {
                     process_raw_events(&mut send, db.tls_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Smb => {
+                    process_raw_events(&mut send, db.smb_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Nfs => {
+                    process_raw_events(&mut send, db.nfs_store()?, msg.input).await?;
                 }
                 REconvergeKindType::Log => {
                     // For REconvergeKindType::LOG, the source_kind is required as the source.

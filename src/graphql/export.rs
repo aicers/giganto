@@ -13,8 +13,8 @@ use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
     network::{
-        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Qclass, Qtype, Rdp, Smtp, Ssh,
-        Tls,
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
+        Smtp, Ssh, Tls,
     },
     timeseries::PeriodicTimeSeries,
 };
@@ -308,6 +308,43 @@ struct TlsJsonOutput {
 }
 
 #[derive(Serialize, Debug)]
+struct SmbJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    command: u8,
+    path: String,
+    service: String,
+    file_name: String,
+    file_size: u64,
+    resource_type: u16,
+    fid: u16,
+    create_time: i64,
+    access_time: i64,
+    write_time: i64,
+    change_time: i64,
+}
+
+#[derive(Serialize, Debug)]
+struct NfsJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    read_files: Vec<String>,
+    write_files: Vec<String>,
+}
+
+#[derive(Serialize, Debug)]
 struct LogJsonOutput {
     timestamp: String,
     source: String,
@@ -483,6 +520,24 @@ convert_json_output!(
     issuer_common_name,
     last_alert
 );
+
+convert_json_output!(
+    SmbJsonOutput,
+    Smb,
+    command,
+    path,
+    service,
+    file_name,
+    file_size,
+    resource_type,
+    fid,
+    create_time,
+    access_time,
+    write_time,
+    change_time
+);
+
+convert_json_output!(NfsJsonOutput, Nfs, read_files, write_files);
 
 impl JsonOutput<ConnJsonOutput> for Conn {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<ConnJsonOutput> {
@@ -942,6 +997,34 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
+        "smb" => tokio::spawn(async move {
+            if let Ok(store) = db.smb_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "nfs" => tokio::spawn(async move {
+            if let Ok(store) = db.nfs_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
         }
@@ -1064,7 +1147,9 @@ mod tests {
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
+        network::{
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+        },
         timeseries::PeriodicTimeSeries,
     };
     use std::mem;
@@ -2261,5 +2346,146 @@ mod tests {
         let ser_tls_body = bincode::serialize(&tls_body).unwrap();
 
         store.append(&key, &ser_tls_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_smb() {
+        let schema = TestSchema::new();
+        let store = schema.db.smb_store().unwrap();
+
+        insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_smb_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "smb",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("smb"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "smb",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("smb"));
+    }
+
+    fn insert_smb_raw_event(store: &RawEventStore<Smb>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let smb_body = Smb {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            command: 0,
+            path: "something/path".to_string(),
+            service: "sevice".to_string(),
+            file_name: "fine_name".to_string(),
+            file_size: 10,
+            resource_type: 20,
+            fid: 30,
+            create_time: 10000000,
+            access_time: 20000000,
+            write_time: 10000000,
+            change_time: 20000000,
+        };
+        let ser_smb_body = bincode::serialize(&smb_body).unwrap();
+
+        store.append(&key, &ser_smb_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_nfs() {
+        let schema = TestSchema::new();
+        let store = schema.db.nfs_store().unwrap();
+
+        insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos());
+        insert_nfs_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+
+        // export csv file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "nfs",
+                    sourceId: "src1",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"csv")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("nfs"));
+
+        // export json file
+        let query = r#"
+        {
+            export(
+                filter:{
+                    protocol: "nfs",
+                    sourceId: "src2",
+                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                ,exportType:"json")
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.data.to_string().contains("nfs"));
+    }
+
+    fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        let nfs_body = Nfs {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            last_time: 1,
+            read_files: vec![],
+            write_files: vec![],
+        };
+        let ser_nfs_body = bincode::serialize(&nfs_body).unwrap();
+
+        store.append(&key, &ser_nfs_body).unwrap();
     }
 }

@@ -10,7 +10,9 @@ use giganto_client::{
     frame::recv_bytes,
     ingest::{
         log::{Log, OpLogLevel, Oplog},
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
+        network::{
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+        },
         receive_ack_timestamp, send_event, send_record_header,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
@@ -40,7 +42,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.12.1";
+const PROTOCOL_VERSION: &str = "0.12.2";
 
 struct TestClient {
     conn: Connection,
@@ -842,6 +844,83 @@ async fn tls() {
     send_tls.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"tls_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn smb() {
+    const RECORD_TYPE_SMB: RecordType = RecordType::Smb;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_smb, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let smb_body = Smb {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        command: 0,
+        path: "something/path".to_string(),
+        service: "sevice".to_string(),
+        file_name: "fine_name".to_string(),
+        file_size: 10,
+        resource_type: 20,
+        fid: 30,
+        create_time: 10000000,
+        access_time: 20000000,
+        write_time: 10000000,
+        change_time: 20000000,
+    };
+
+    send_record_header(&mut send_smb, RECORD_TYPE_SMB)
+        .await
+        .unwrap();
+    send_event(&mut send_smb, Utc::now().timestamp_nanos(), smb_body)
+        .await
+        .unwrap();
+
+    send_smb.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"smb_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn nfs() {
+    const RECORD_TYPE_NFS: RecordType = RecordType::Nfs;
+    let _lock = TOKEN.lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_nfs, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let nfs_body = Nfs {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        read_files: vec![],
+        write_files: vec![],
+    };
+
+    send_record_header(&mut send_nfs, RECORD_TYPE_NFS)
+        .await
+        .unwrap();
+    send_event(&mut send_nfs, Utc::now().timestamp_nanos(), nfs_body)
+        .await
+        .unwrap();
+
+    send_nfs.finish().await.expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"nfs_done");
     client.endpoint.wait_idle().await;
 }
 
