@@ -464,6 +464,32 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Smb => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Smb,
+                Some(NetworkKey::new(&source, "smb")),
+                source,
+                db.smb_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::Nfs => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Nfs,
+                Some(NetworkKey::new(&source, "nfs")),
+                source,
+                db.nfs_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }

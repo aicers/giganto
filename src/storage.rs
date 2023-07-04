@@ -14,7 +14,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
+    network::{
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    },
     statistics::Statistics,
     timeseries::PeriodicTimeSeries,
     Packet,
@@ -29,7 +31,7 @@ use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 18] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
     "conn",
     "dns",
     "log",
@@ -48,6 +50,8 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 18] = [
     "mqtt",
     "ldap",
     "tls",
+    "smb",
+    "nfs",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 const TIMESTAMP_SIZE: usize = 8;
@@ -331,6 +335,24 @@ impl Database {
             .db
             .cf_handle("tls")
             .context("cannot access tls column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for smb
+    pub fn smb_store(&self) -> Result<RawEventStore<Smb>> {
+        let cf = self
+            .db
+            .cf_handle("smb")
+            .context("cannot access smb column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for nfs
+    pub fn nfs_store(&self) -> Result<RawEventStore<Nfs>> {
+        let cf = self
+            .db
+            .cf_handle("nfs")
+            .context("cannot access nfs column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

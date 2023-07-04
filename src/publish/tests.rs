@@ -9,7 +9,9 @@ use giganto_client::{
     connection::client_handshake,
     ingest::{
         log::Log,
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
+        network::{
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+        },
         timeseries::PeriodicTimeSeries,
     },
     publish::{
@@ -42,7 +44,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.12.1";
+const PROTOCOL_VERSION: &str = "0.12.2";
 
 struct TestClient {
     send: SendStream,
@@ -485,6 +487,45 @@ fn gen_tls_raw_event() -> Vec<u8> {
     bincode::serialize(&tls_body).unwrap()
 }
 
+fn gen_smb_raw_event() -> Vec<u8> {
+    let smb_body = Smb {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        command: 0,
+        path: "something/path".to_string(),
+        service: "sevice".to_string(),
+        file_name: "fine_name".to_string(),
+        file_size: 10,
+        resource_type: 20,
+        fid: 30,
+        create_time: 10000000,
+        access_time: 20000000,
+        write_time: 10000000,
+        change_time: 20000000,
+    };
+
+    bincode::serialize(&smb_body).unwrap()
+}
+
+fn gen_nfs_raw_event() -> Vec<u8> {
+    let nfs_body = Nfs {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        read_files: vec![],
+        write_files: vec![],
+    };
+
+    bincode::serialize(&nfs_body).unwrap()
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
@@ -607,6 +648,20 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64
     ser_tls_body
 }
 
+fn insert_smb_raw_event(store: &RawEventStore<Smb>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_smb_body = gen_smb_raw_event();
+    store.append(&key, &ser_smb_body).unwrap();
+    ser_smb_body
+}
+
+fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_nfs_body = gen_nfs_raw_event();
+    store.append(&key, &ser_nfs_body).unwrap();
+    ser_nfs_body
+}
+
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
@@ -624,6 +679,8 @@ async fn request_range_data_with_protocol() {
     const MQTT_KIND: &str = "mqtt";
     const LDAP_KIND: &str = "ldap";
     const TLS_KIND: &str = "tls";
+    const SMB_KIND: &str = "smb";
+    const NFS_KIND: &str = "nfs";
 
     let _lock = TOKEN.lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1458,6 +1515,128 @@ async fn request_range_data_with_protocol() {
         );
     }
 
+    // smb protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let smb_store = db.smb_store().unwrap();
+        let send_smb_time = Utc::now().timestamp_nanos();
+        let smb_data =
+            bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SOURCE, send_smb_time))
+                .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(SMB_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Smb::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            smb_data.response_data(send_smb_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
+    // nfs protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let nfs_store = db.nfs_store().unwrap();
+        let send_nfs_time = Utc::now().timestamp_nanos();
+        let nfs_data =
+            bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SOURCE, send_nfs_time))
+                .unwrap();
+
+        let start = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("vaild date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_utc(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(NFS_KIND),
+            start: start.timestamp_nanos(),
+            end: end.timestamp_nanos(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Nfs::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            nfs_data.response_data(send_nfs_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
     publish.conn.close(0u32.into(), b"publish_protocol_done");
     publish.endpoint.wait_idle().await;
 }
@@ -1657,6 +1836,8 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_MQTT: RequestStreamRecord = RequestStreamRecord::Mqtt;
     const NETWORK_STREAM_LDAP: RequestStreamRecord = RequestStreamRecord::Ldap;
     const NETWORK_STREAM_TLS: RequestStreamRecord = RequestStreamRecord::Tls;
+    const NETWORK_STREAM_SMB: RequestStreamRecord = RequestStreamRecord::Smb;
+    const NETWORK_STREAM_NFS: RequestStreamRecord = RequestStreamRecord::Nfs;
 
     const SOURCE_HOG_ONE: &str = "src1";
     const SOURCE_HOG_TWO: &str = "src2";
@@ -2994,9 +3175,14 @@ async fn request_network_event_stream() {
         let tls_store = db.tls_store().unwrap();
 
         // direct tls network event for hog (src1,src2)
-        send_stream_request(&mut publish.send, NETWORK_STREAM_TLS, HOG_TYPE, hog_msg)
-            .await
-            .unwrap();
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_TLS,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
 
         let send_tls_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
 
@@ -3051,7 +3237,7 @@ async fn request_network_event_stream() {
             &mut publish.send,
             NETWORK_STREAM_TLS,
             CRUSHER_TYPE,
-            crusher_msg,
+            crusher_msg.clone(),
         )
         .await
         .unwrap();
@@ -3080,7 +3266,7 @@ async fn request_network_event_stream() {
             &tls_data,
             send_tls_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel,
+            stream_direct_channel.clone(),
         )
         .await
         .unwrap();
@@ -3091,6 +3277,222 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(send_tls_time, recv_timestamp);
         assert_eq!(tls_data, recv_data);
+    }
+
+    {
+        let smb_store = db.smb_store().unwrap();
+
+        // direct smb network event for hog (src1,src2)
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_SMB,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_smb_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let smb_start_msg = receive_hog_stream_start_message(&mut (*send_smb_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
+
+        let send_smb_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "smb");
+        let smb_data = gen_smb_raw_event();
+
+        send_direct_stream(
+            &key,
+            &smb_data,
+            send_smb_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_smb_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(smb_data, recv_data[20..]);
+
+        let send_smb_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "smb");
+        let smb_data = gen_smb_raw_event();
+
+        send_direct_stream(
+            &key,
+            &smb_data,
+            send_smb_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_smb_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(smb_data, recv_data[20..]);
+
+        // database smb network event for crusher
+        let send_smb_time = Utc::now().timestamp_nanos();
+        let smb_data = insert_smb_raw_event(&smb_store, SOURCE_CRUSHER_THREE, send_smb_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_SMB,
+            CRUSHER_TYPE,
+            crusher_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_smb_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let smb_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_smb_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(smb_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_smb_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_smb_time, recv_timestamp);
+        assert_eq!(smb_data, recv_data);
+
+        //direct smb network event for crusher
+        let send_smb_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "smb");
+        let smb_data = gen_smb_raw_event();
+        send_direct_stream(
+            &key,
+            &smb_data,
+            send_smb_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_smb_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_smb_time, recv_timestamp);
+        assert_eq!(smb_data, recv_data);
+    }
+
+    {
+        let nfs_store = db.nfs_store().unwrap();
+
+        // direct nfs network event for hog (src1,src2)
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_NFS,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_nfs_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let nfs_start_msg = receive_hog_stream_start_message(&mut (*send_nfs_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
+
+        let send_nfs_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "nfs");
+        let nfs_data = gen_nfs_raw_event();
+
+        send_direct_stream(
+            &key,
+            &nfs_data,
+            send_nfs_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_nfs_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(nfs_data, recv_data[20..]);
+
+        let send_nfs_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "nfs");
+        let nfs_data = gen_nfs_raw_event();
+
+        send_direct_stream(
+            &key,
+            &nfs_data,
+            send_nfs_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_nfs_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(nfs_data, recv_data[20..]);
+
+        // database nfs network event for crusher
+        let send_nfs_time = Utc::now().timestamp_nanos();
+        let nfs_data = insert_nfs_raw_event(&nfs_store, SOURCE_CRUSHER_THREE, send_nfs_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_NFS,
+            CRUSHER_TYPE,
+            crusher_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_nfs_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let nfs_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_nfs_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(nfs_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_nfs_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_nfs_time, recv_timestamp);
+        assert_eq!(nfs_data, recv_data);
+
+        //direct nfs network event for crusher
+        let send_nfs_time = Utc::now().timestamp_nanos();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "nfs");
+        let nfs_data = gen_nfs_raw_event();
+        send_direct_stream(
+            &key,
+            &nfs_data,
+            send_nfs_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channel.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_nfs_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_nfs_time, recv_timestamp);
+        assert_eq!(nfs_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");

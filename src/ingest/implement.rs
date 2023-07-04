@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
-    network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Ntlm, Rdp, Smtp, Ssh, Tls},
+    network::{
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    },
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -369,6 +371,48 @@ impl EventFilter for Ldap {
 }
 
 impl EventFilter for Tls {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Smb {
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Nfs {
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
