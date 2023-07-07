@@ -130,10 +130,7 @@ impl GigantoStatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn giganto_config<'ctx>(
-        &self,
-        ctx: &async_graphql::Context<'ctx>,
-    ) -> Result<GigantoConfig> {
+    async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
         let cfg_path = ctx.data::<String>()?;
         let doc = read_toml_file(cfg_path)?;
         let ingest_address = parse_toml_element(CONFIG_INGEST_ADDRESS, &doc)?;

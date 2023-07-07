@@ -110,7 +110,7 @@ impl PacketQuery {
             &upper_open_bound_key(&key_prefix, end),
             Direction::Forward,
         );
-        let (records, _) = collect_records(iter, 1000, &filter)?;
+        let (records, _) = collect_records(iter, 1000, &filter);
 
         let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
 

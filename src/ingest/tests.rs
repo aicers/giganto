@@ -42,7 +42,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.12.2";
+const PROTOCOL_VERSION: &str = "0.12.3";
 
 struct TestClient {
     conn: Connection,
@@ -702,7 +702,7 @@ async fn ftp() {
         data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         data_resp_port: 80,
-        file: "fpt_file".to_string(),
+        file: "ftp_file".to_string(),
         file_size: 100,
         file_id: "1".to_string(),
     };

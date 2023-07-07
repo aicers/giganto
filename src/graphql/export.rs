@@ -232,11 +232,15 @@ struct FtpJsonOutput {
     last_time: i64,
     user: String,
     password: String,
+    command: String,
+    reply_code: String,
+    reply_msg: String,
     data_passive: bool,
     data_orig_addr: String,
     data_resp_addr: String,
     data_resp_port: u16,
     file: String,
+    file_size: u64,
     file_id: String,
 }
 
@@ -635,11 +639,15 @@ impl JsonOutput<FtpJsonOutput> for Ftp {
             last_time: self.last_time,
             user: self.user.clone(),
             password: self.password.clone(),
+            command: self.command.clone(),
+            reply_code: self.reply_code.clone(),
+            reply_msg: self.reply_msg.clone(),
             data_passive: self.data_passive,
             data_orig_addr: self.data_orig_addr.to_string(),
             data_resp_addr: self.data_resp_addr.to_string(),
             data_resp_port: self.data_resp_port,
             file: self.file.clone(),
+            file_size: self.file_size,
             file_id: self.file_id.clone(),
         })
     }
@@ -2116,7 +2124,7 @@ mod tests {
             data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             data_resp_port: 80,
-            file: "fpt_file".to_string(),
+            file: "ftp_file".to_string(),
             file_size: 100,
             file_id: "1".to_string(),
         };
