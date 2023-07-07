@@ -1981,7 +1981,7 @@ dependencies = [
 [[package]]
 name = "roxy"
 version = "0.1.0"
-source = "git+https://github.com/aicers/roxy.git?tag=0.2.0#b67ddb3890e2b0521fbe22f3e0061a3fe7a07709"
+source = "git+https://github.com/aicers/roxy.git?tag=0.2.0#64cc94eba6ebfdcd009cb7a9a3e710ab93b966e3"
 dependencies = [
  "anyhow",
  "bincode",
