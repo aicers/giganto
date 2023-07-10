@@ -10,6 +10,7 @@ use giganto_client::ingest::{
 use std::net::IpAddr;
 
 pub trait EventFilter {
+    fn data_type(&self) -> String;
     fn orig_addr(&self) -> Option<IpAddr>;
     fn resp_addr(&self) -> Option<IpAddr>;
     fn orig_port(&self) -> Option<u16>;
@@ -25,6 +26,9 @@ pub trait EventFilter {
 }
 
 impl EventFilter for Conn {
+    fn data_type(&self) -> String {
+        "conn".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -46,6 +50,9 @@ impl EventFilter for Conn {
 }
 
 impl EventFilter for Dns {
+    fn data_type(&self) -> String {
+        "dns".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -67,6 +74,9 @@ impl EventFilter for Dns {
 }
 
 impl EventFilter for Http {
+    fn data_type(&self) -> String {
+        "http".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -94,6 +104,9 @@ impl EventFilter for Http {
 }
 
 impl EventFilter for Rdp {
+    fn data_type(&self) -> String {
+        "rdp".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -115,6 +128,9 @@ impl EventFilter for Rdp {
 }
 
 impl EventFilter for Smtp {
+    fn data_type(&self) -> String {
+        "smtp".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -136,6 +152,9 @@ impl EventFilter for Smtp {
 }
 
 impl EventFilter for Ntlm {
+    fn data_type(&self) -> String {
+        "ntlm".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -157,6 +176,9 @@ impl EventFilter for Ntlm {
 }
 
 impl EventFilter for Kerberos {
+    fn data_type(&self) -> String {
+        "kerberos".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -178,6 +200,9 @@ impl EventFilter for Kerberos {
 }
 
 impl EventFilter for Ssh {
+    fn data_type(&self) -> String {
+        "ssh".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -199,6 +224,9 @@ impl EventFilter for Ssh {
 }
 
 impl EventFilter for DceRpc {
+    fn data_type(&self) -> String {
+        "dce rpc".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -220,6 +248,9 @@ impl EventFilter for DceRpc {
 }
 
 impl EventFilter for Log {
+    fn data_type(&self) -> String {
+        "log".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         None
     }
@@ -241,6 +272,9 @@ impl EventFilter for Log {
 }
 
 impl EventFilter for Oplog {
+    fn data_type(&self) -> String {
+        "oplog".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         None
     }
@@ -266,6 +300,9 @@ impl EventFilter for Oplog {
 }
 
 impl EventFilter for PeriodicTimeSeries {
+    fn data_type(&self) -> String {
+        "periodic time series".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         None
     }
@@ -287,6 +324,9 @@ impl EventFilter for PeriodicTimeSeries {
 }
 
 impl EventFilter for Packet {
+    fn data_type(&self) -> String {
+        "packet".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         None
     }
@@ -308,6 +348,9 @@ impl EventFilter for Packet {
 }
 
 impl EventFilter for Ftp {
+    fn data_type(&self) -> String {
+        "ftp".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -329,6 +372,9 @@ impl EventFilter for Ftp {
 }
 
 impl EventFilter for Mqtt {
+    fn data_type(&self) -> String {
+        "mqtt".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -350,6 +396,9 @@ impl EventFilter for Mqtt {
 }
 
 impl EventFilter for Ldap {
+    fn data_type(&self) -> String {
+        "ldap".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -371,6 +420,9 @@ impl EventFilter for Ldap {
 }
 
 impl EventFilter for Tls {
+    fn data_type(&self) -> String {
+        "tls".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -392,6 +444,9 @@ impl EventFilter for Tls {
 }
 
 impl EventFilter for Smb {
+    fn data_type(&self) -> String {
+        "smb".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }
@@ -413,6 +468,9 @@ impl EventFilter for Smb {
 }
 
 impl EventFilter for Nfs {
+    fn data_type(&self) -> String {
+        "nfs".to_string()
+    }
     fn orig_addr(&self) -> Option<IpAddr> {
         Some(self.orig_addr)
     }

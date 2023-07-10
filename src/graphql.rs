@@ -39,6 +39,7 @@ use std::{
 };
 use tempfile::tempfile;
 use tokio::sync::Notify;
+use tracing::error;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
@@ -188,7 +189,7 @@ where
                 iter.next();
             }
         }
-        let (mut records, has_previous) = collect_records(iter, last, filter)?;
+        let (mut records, has_previous) = collect_records(iter, last, filter);
         records.reverse();
         (records, has_previous, false)
     } else if let Some(after) = after {
@@ -218,7 +219,7 @@ where
                 iter.next();
             }
         }
-        let (records, has_next) = collect_records(iter, first, filter)?;
+        let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
     } else if let Some(last) = last {
         if first.is_some() {
@@ -232,7 +233,7 @@ where
             &lower_closed_bound_key(key_prefix, start),
             Direction::Reverse,
         );
-        let (mut records, has_previous) = collect_records(iter, last, filter)?;
+        let (mut records, has_previous) = collect_records(iter, last, filter);
         records.reverse();
         (records, has_previous, false)
     } else {
@@ -244,7 +245,7 @@ where
             &upper_open_bound_key(key_prefix, end),
             Direction::Forward,
         );
-        let (records, has_next) = collect_records(iter, first, filter)?;
+        let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
     };
     Ok((records, has_previous, has_next))
@@ -283,15 +284,22 @@ fn collect_records<I, T>(
     mut iter: I,
     size: usize,
     filter: &impl RawEventFilter,
-) -> Result<(Vec<KeyValue<T>>, bool)>
+) -> (Vec<KeyValue<T>>, bool)
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>>,
     T: EventFilter,
 {
     let mut records = Vec::with_capacity(size);
     let mut has_more = false;
+    let mut invalid_data_cnt: u32 = 0;
     while let Some(item) = iter.next() {
-        let item = item.map_err(|e| format!("failed to read database: {e}"))?;
+        if item.is_err() {
+            invalid_data_cnt += 1;
+            continue;
+        }
+        let item = item.expect("not error value");
+        let data_type = item.1.data_type();
+
         match filter.check(
             item.1.orig_addr(),
             item.1.resp_addr(),
@@ -305,11 +313,15 @@ where
             Ok(false) | Err(_) => {}
         }
         if records.len() == size {
+            error!(
+                "failed to read database or invalid data of {} #{}",
+                data_type, invalid_data_cnt
+            );
             has_more = iter.next().is_some();
             break;
         }
     }
-    Ok((records, has_more))
+    (records, has_more)
 }
 
 pub fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {

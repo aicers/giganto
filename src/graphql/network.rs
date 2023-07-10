@@ -321,11 +321,15 @@ struct FtpRawEvent {
     last_time: i64,
     user: String,
     password: String,
+    command: String,
+    reply_code: String,
+    reply_msg: String,
     data_passive: bool,
     data_orig_addr: String,
     data_resp_addr: String,
     data_resp_port: u16,
     file: String,
+    file_size: u64,
     file_id: String,
 }
 
@@ -500,11 +504,15 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             last_time: val.last_time,
             user: val.user,
             password: val.password,
+            command: val.command,
+            reply_code: val.reply_code,
+            reply_msg: val.reply_msg,
             data_passive: val.data_passive,
             data_orig_addr: val.data_orig_addr.to_string(),
             data_resp_addr: val.data_resp_addr.to_string(),
             data_resp_port: val.data_resp_port,
             file: val.file,
+            file_size: val.file_size,
             file_id: val.file_id,
         })
     }
@@ -2633,7 +2641,7 @@ mod tests {
             data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             data_resp_port: 80,
-            file: "fpt_file".to_string(),
+            file: "ftp_file".to_string(),
             file_size: 100,
             file_id: "1".to_string(),
         };
