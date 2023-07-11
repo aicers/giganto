@@ -831,7 +831,7 @@ dependencies = [
  "quinn",
  "rocksdb",
  "roxy",
- "rustls 0.21.3",
+ "rustls 0.21.5",
  "rustls-pemfile",
  "semver",
  "serde",
@@ -1776,7 +1776,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.21.3",
+ "rustls 0.21.5",
  "thiserror",
  "tokio",
  "tracing",
@@ -1792,7 +1792,7 @@ dependencies = [
  "rand",
  "ring",
  "rustc-hash",
- "rustls 0.21.3",
+ "rustls 0.21.5",
  "rustls-native-certs",
  "slab",
  "thiserror",
@@ -2058,9 +2058,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.21.3"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b19faa85ecb5197342b54f987b142fb3e30d0c90da40f80ef4fa9a726e6676ed"
+checksum = "79ea77c539259495ce8ca47f53e66ae0330a8819f67e23ac96ca02f50e7b7d36"
 dependencies = [
  "log",
  "ring",
