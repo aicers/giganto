@@ -101,7 +101,7 @@ pub fn config_client(
     let tls_config = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(root_store)
-        .with_single_cert(cert, key)?;
+        .with_client_auth_cert(cert, key)?;
 
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));

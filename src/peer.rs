@@ -686,20 +686,21 @@ mod tests {
     };
     use chrono::Utc;
     use giganto_client::connection::client_handshake;
-    use lazy_static::lazy_static;
     use quinn::{Connection, Endpoint, RecvStream, SendStream};
     use std::{
         collections::{HashMap, HashSet},
         fs::{self, File},
         net::{IpAddr, Ipv6Addr, SocketAddr},
         path::Path,
-        sync::Arc,
+        sync::{Arc, OnceLock},
     };
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, RwLock};
 
-    lazy_static! {
-        pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
+    fn get_token() -> &'static Mutex<u32> {
+        static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
+
+        TOKEN.get_or_init(|| Mutex::new(0))
     }
 
     const CERT_PATH: &str = "tests/cert.pem";
@@ -799,7 +800,7 @@ mod tests {
         let client_crypto = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(server_root)
-            .with_single_cert(cert_chain, pv_key)
+            .with_client_auth_cert(cert_chain, pv_key)
             .expect("the server root, cert chain or private key are not valid");
 
         let mut endpoint =
@@ -827,7 +828,7 @@ mod tests {
 
     #[tokio::test]
     async fn recv_peer_data() {
-        let _lock = TOKEN.lock().await;
+        let _lock = get_token().lock().await;
 
         // peer server's peer list
         let peer_addr = SocketAddr::new("123.123.123.123".parse::<IpAddr>().unwrap(), TEST_PORT);

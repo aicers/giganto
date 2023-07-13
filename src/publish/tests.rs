@@ -22,7 +22,6 @@ use giganto_client::{
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
     },
 };
-use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint, SendStream};
 use serde::Serialize;
 use std::{
@@ -31,12 +30,14 @@ use std::{
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tokio::sync::{Mutex, Notify, RwLock};
 
-lazy_static! {
-    pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
+fn get_token() -> &'static Mutex<u32> {
+    static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
+
+    TOKEN.get_or_init(|| Mutex::new(0))
 }
 
 const CERT_PATH: &str = "tests/cert.pem";
@@ -155,7 +156,7 @@ fn init_client() -> Endpoint {
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(server_root)
-        .with_single_cert(cert_chain, pv_key)
+        .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
 
     let mut endpoint =
@@ -682,7 +683,7 @@ async fn request_range_data_with_protocol() {
     const SMB_KIND: &str = "smb";
     const NFS_KIND: &str = "nfs";
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
@@ -1656,7 +1657,7 @@ async fn request_range_data_with_log() {
         count: usize,
     }
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
@@ -1738,7 +1739,7 @@ async fn request_range_data_with_period_time_series() {
     const SAMPLING_POLICY_ID: &str = "policy_one";
     const KIND: &str = "timeseries";
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
@@ -1844,7 +1845,7 @@ async fn request_network_event_stream() {
     const SOURCE_CRUSHER_THREE: &str = "src3";
     const POLICY_ID: u32 = 1;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
 
@@ -3506,7 +3507,7 @@ async fn request_raw_events() {
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
