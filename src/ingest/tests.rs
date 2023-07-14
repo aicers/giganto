@@ -18,14 +18,13 @@ use giganto_client::{
         Packet, RecordType,
     },
 };
-use lazy_static::lazy_static;
 use quinn::{Connection, Endpoint};
 use std::{
     collections::HashMap,
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tempfile::TempDir;
 use tokio::{
@@ -33,8 +32,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-lazy_static! {
-    pub(crate) static ref TOKEN: Mutex<u32> = Mutex::new(0);
+fn get_token() -> &'static Mutex<u32> {
+    static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
+
+    TOKEN.get_or_init(|| Mutex::new(0))
 }
 
 const CERT_PATH: &str = "tests/cert.pem";
@@ -148,7 +149,7 @@ fn init_client() -> Endpoint {
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(server_root)
-        .with_single_cert(cert_chain, pv_key)
+        .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
 
     let mut endpoint =
@@ -162,7 +163,7 @@ fn init_client() -> Endpoint {
 async fn conn() {
     const RECORD_TYPE_CONN: RecordType = RecordType::Conn;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -201,7 +202,7 @@ async fn conn() {
 async fn dns() {
     const RECORD_TYPE_DNS: RecordType = RecordType::Dns;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -246,7 +247,7 @@ async fn dns() {
 async fn log() {
     const RECORD_TYPE_LOG: RecordType = RecordType::Log;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -274,7 +275,7 @@ async fn log() {
 #[tokio::test]
 async fn http() {
     const RECORD_TYPE_HTTP: RecordType = RecordType::Http;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -326,7 +327,7 @@ async fn http() {
 #[tokio::test]
 async fn rdp() {
     const RECORD_TYPE_RDP: RecordType = RecordType::Rdp;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -359,7 +360,7 @@ async fn rdp() {
 #[tokio::test]
 async fn periodic_time_series() {
     const RECORD_TYPE_PERIOD_TIME_SERIES: RecordType = RecordType::PeriodicTimeSeries;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -398,7 +399,7 @@ async fn periodic_time_series() {
 #[tokio::test]
 async fn smtp() {
     const RECORD_TYPE_SMTP: RecordType = RecordType::Smtp;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -436,7 +437,7 @@ async fn smtp() {
 #[tokio::test]
 async fn ntlm() {
     const RECORD_TYPE_NTLM: RecordType = RecordType::Ntlm;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -475,7 +476,7 @@ async fn ntlm() {
 #[tokio::test]
 async fn kerberos() {
     const RECORD_TYPE_KERBEROS: RecordType = RecordType::Kerberos;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -526,7 +527,7 @@ async fn kerberos() {
 #[tokio::test]
 async fn ssh() {
     const RECORD_TYPE_SSH: RecordType = RecordType::Ssh;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -570,7 +571,7 @@ async fn ssh() {
 #[tokio::test]
 async fn dce_rpc() {
     const RECORD_TYPE_DCE_RPC: RecordType = RecordType::DceRpc;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -614,7 +615,7 @@ async fn dce_rpc() {
 async fn oplog() {
     const RECORD_TYPE_OPLOG: RecordType = RecordType::Oplog;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -647,7 +648,7 @@ async fn oplog() {
 async fn packet() {
     const RECORD_TYPE_PACKET: RecordType = RecordType::Packet;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -679,7 +680,7 @@ async fn packet() {
 #[tokio::test]
 async fn ftp() {
     const RECORD_TYPE_FTP: RecordType = RecordType::Ftp;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -723,7 +724,7 @@ async fn ftp() {
 #[tokio::test]
 async fn mqtt() {
     const RECORD_TYPE_MQTT: RecordType = RecordType::Mqtt;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -761,7 +762,7 @@ async fn mqtt() {
 #[tokio::test]
 async fn ldap() {
     const RECORD_TYPE_LDAP: RecordType = RecordType::Ldap;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -800,7 +801,7 @@ async fn ldap() {
 #[tokio::test]
 async fn tls() {
     const RECORD_TYPE_TLS: RecordType = RecordType::Tls;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -850,7 +851,7 @@ async fn tls() {
 #[tokio::test]
 async fn smb() {
     const RECORD_TYPE_SMB: RecordType = RecordType::Smb;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -893,7 +894,7 @@ async fn smb() {
 #[tokio::test]
 async fn nfs() {
     const RECORD_TYPE_NFS: RecordType = RecordType::Nfs;
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -928,7 +929,7 @@ async fn nfs() {
 async fn ack_info() {
     const RECORD_TYPE_LOG: RecordType = RecordType::Log;
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
@@ -974,7 +975,7 @@ async fn one_short_reproduce_channel_close() {
     const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
     const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 
-    let _lock = TOKEN.lock().await;
+    let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
 
