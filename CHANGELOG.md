@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Replaced `lazy_static` with the new `std::sync::OnceLock`.
+- Modify `pcap_with_data` test function to compare times based on utc timezone.
 
 ## [0.12.3] - 2023-07-10
 
