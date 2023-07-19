@@ -39,3 +39,4 @@ x509-parser = "0.15"
 [dev-dependencies]
 tempfile = "3"
 url = "2"
+regex = "1"

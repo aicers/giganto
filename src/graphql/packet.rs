@@ -126,9 +126,9 @@ impl PacketQuery {
 #[cfg(test)]
 mod tests {
     use crate::{graphql::TestSchema, storage::RawEventStore};
-    use chrono::{TimeZone, Utc};
+    use chrono::{NaiveDateTime, Offset, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
-    use std::mem;
+    use std::{mem, time::Duration};
 
     #[tokio::test]
     async fn packets_empty() {
@@ -241,6 +241,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
+        let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
+        let re = regex::Regex::new(pattern).unwrap();
+
         let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
         let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
         let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
@@ -270,15 +273,22 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        #[cfg(target_os = "macos")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:01.404277 [|ether]\\n\"}}");
 
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:01.404277  [|ether]\\n\"}}");
+        // get response timestamps
+        let res_json = res.data.into_json().unwrap();
+        let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
+        let timestamps: Vec<chrono::NaiveDateTime> = re
+            .find_iter(parsed_pcap)
+            .map(|m| m.as_str())
+            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .collect();
+
+        // Change to the UTC timezone by applying an offset
+        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
+        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
+        assert_eq!(timestamp2, "2023-01-20 00:00:01.404277");
 
         let query = r#"
         {
@@ -292,15 +302,22 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        #[cfg(target_os = "macos")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:02.328237 [|ether]\\n\"}}");
 
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:02.328237  [|ether]\\n\"}}");
+        // get response timestamps
+        let res_json = res.data.into_json().unwrap();
+        let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
+        let timestamps: Vec<chrono::NaiveDateTime> = re
+            .find_iter(parsed_pcap)
+            .map(|m| m.as_str())
+            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .collect();
+
+        // Change to the UTC timezone by applying an offset
+        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
+        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
+        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237");
 
         let query = r#"
         {
@@ -314,15 +331,22 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        #[cfg(target_os = "macos")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745 [|ether]\\n2023-01-20 00:00:02.328237 [|ether]\\n\"}}");
 
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            res.data.to_string(),
-            "{pcap: {parsedPcap: \"2023-01-20 00:00:00.412745  [|ether]\\n2023-01-20 00:00:02.328237  [|ether]\\n\"}}");
+        // get response timestamps
+        let res_json = res.data.into_json().unwrap();
+        let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
+        let timestamps: Vec<chrono::NaiveDateTime> = re
+            .find_iter(parsed_pcap)
+            .map(|m| m.as_str())
+            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .collect();
+
+        // Change to the UTC timezone by applying an offset
+        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
+        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
+        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237");
     }
 
     fn insert_packet(
@@ -347,5 +371,12 @@ mod tests {
         let ser_packet_body = bincode::serialize(&packet_body).unwrap();
 
         store.append(&key, &ser_packet_body).unwrap();
+    }
+
+    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
+        let offset = chrono::Local::now().offset().fix().local_minus_utc();
+        let offset_duration = Duration::from_secs(offset as u64);
+        let utc_time = timestamp - chrono::Duration::from_std(offset_duration).unwrap();
+        utc_time.to_string()
     }
 }
