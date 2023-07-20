@@ -375,8 +375,12 @@ mod tests {
 
     fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
         let offset = chrono::Local::now().offset().fix().local_minus_utc();
-        let offset_duration = Duration::from_secs(offset as u64);
-        let utc_time = timestamp - chrono::Duration::from_std(offset_duration).unwrap();
+        let offset_duration = Duration::from_secs(offset.abs() as u64);
+        let utc_time = if offset.is_negative() {
+            timestamp + chrono::Duration::from_std(offset_duration).unwrap()
+        } else {
+            timestamp - chrono::Duration::from_std(offset_duration).unwrap()
+        };
         utc_time.to_string()
     }
 }
