@@ -1,0 +1,11 @@
+name: Cache Cargo's directory
+description: Cache Cargo directory to speed up build times
+runs:
+  using: composite
+  steps:
+    - name: Cache Cargo's directory
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        path: |
+          ~/.cargo
