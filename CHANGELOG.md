@@ -7,10 +7,26 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add GraphQL query `statistics` to read data from `statistics` store.
+  The result format is `Protocol/Size/Count`.
+  - `Protocol`: target protocol name like `Statistics`, `Http`, `Dns`.
+    `Statistics` is the input traffic statistics of the collector device.
+  - `Size`: packet size for `Statistics` or 0 for other protocols.
+  - `Count`: packet count for `Statistics` or event count for other protocols.
+
 ### Changed
 
 - Replaced `lazy_static` with the new `std::sync::OnceLock`.
 - Modify `pcap_with_data` test function to compare times based on utc timezone.
+- Change the key of `statistics` store to `source + core id + timestamp` not to
+  overwrite statistics data from other core of same machine.
+  When Giganto is loading with old DB version, the old data will be removed
+  because it's possible to be overwritten by other core's data.
+- Change `export` query to support `statistics` store.
+  This change makes it possible to export statistics data of only core 0 of
+  the collector device. This will be fixed in next change.
 
 ## [0.12.3] - 2023-07-10
 

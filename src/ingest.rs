@@ -10,6 +10,7 @@ use crate::server::{
 use crate::storage::{Database, RawEventStore};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::statistics::Statistics;
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
@@ -584,6 +585,12 @@ async fn handle_data<T>(
                         key.extend_from_slice(&timestamp.to_be_bytes());
                         key.push(0);
                         key.extend_from_slice(&packet.packet_timestamp.to_be_bytes());
+                    }
+                    RecordType::Statistics => {
+                        let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
+                        key.extend_from_slice(&statistics.core.to_be_bytes());
+                        key.push(0);
+                        key.extend_from_slice(&timestamp.to_be_bytes());
                     }
                     _ => key.extend_from_slice(&timestamp.to_be_bytes()),
                 }

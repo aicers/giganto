@@ -4,6 +4,7 @@ use giganto_client::ingest::{
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     },
+    statistics::Statistics,
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -482,6 +483,30 @@ impl EventFilter for Nfs {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Statistics {
+    fn data_type(&self) -> String {
+        "statistics".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
     }
     fn log_level(&self) -> Option<String> {
         None

@@ -14,6 +14,7 @@ use giganto_client::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_event, send_record_header,
+        statistics::Statistics,
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
     },
@@ -922,6 +923,42 @@ async fn nfs() {
     send_nfs.finish().await.expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"nfs_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn statistics() {
+    const RECORD_TYPE_STATISTICS: RecordType = RecordType::Statistics;
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_statistics, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let statistics_body = Statistics {
+        core: 1,
+        period: 600,
+        stats: vec![(RECORD_TYPE_STATISTICS, 1000, 10001000)],
+    };
+
+    send_record_header(&mut send_statistics, RECORD_TYPE_STATISTICS)
+        .await
+        .unwrap();
+    send_event(
+        &mut send_statistics,
+        Utc::now().timestamp_nanos(),
+        statistics_body,
+    )
+    .await
+    .unwrap();
+
+    send_statistics
+        .finish()
+        .await
+        .expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"statistics_done");
     client.endpoint.wait_idle().await;
 }
 
