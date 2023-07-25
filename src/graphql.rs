@@ -55,7 +55,10 @@ pub struct Query(
 );
 
 #[derive(Default, MergedObject)]
-pub struct Mutation(status::GigantoConfigMutation);
+pub struct Mutation(
+    status::GigantoConfigMutation,
+    timeseries::TimeSeriesMutation,
+);
 
 #[derive(InputObject, Serialize)]
 pub struct TimeRange {
@@ -555,6 +558,7 @@ impl TestSchema {
             schema,
         }
     }
+
     async fn execute(&self, query: &str) -> async_graphql::Response {
         let request: async_graphql::Request = query.into();
         self.schema.execute(request).await

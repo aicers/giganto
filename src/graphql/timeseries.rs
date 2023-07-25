@@ -1,7 +1,7 @@
-use super::{get_timestamp, load_connection, FromKeyValue};
+use super::{get_timestamp, load_connection, network::key_prefix, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::Database,
+    storage::{lower_closed_bound_key, upper_open_bound_key, Database},
 };
 use async_graphql::{
     connection::{query, Connection},
@@ -13,6 +13,9 @@ use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct TimeSeriesQuery;
+
+#[derive(Default)]
+pub(super) struct TimeSeriesMutation;
 
 // #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject)]
@@ -92,6 +95,31 @@ impl TimeSeriesQuery {
     }
 }
 
+#[Object]
+impl TimeSeriesMutation {
+    #[allow(clippy::unused_async)]
+    async fn delete_time_series<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        ids: Vec<String>,
+    ) -> Result<String> {
+        let store = ctx.data::<Database>()?.periodic_time_series_store()?;
+        for id in ids {
+            let prefix = key_prefix(&id);
+            let iter = store.boundary_iter(
+                &lower_closed_bound_key(&prefix, None),
+                &upper_open_bound_key(&prefix, None),
+                rocksdb::Direction::Forward,
+            );
+            for item in iter {
+                let (key, _) = item.map_err(|e| format!("failed to read database: {e}"))?;
+                if store.delete(&key).is_err() {}
+            }
+        }
+        Ok("deleted".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{graphql::TestSchema, storage::RawEventStore};
@@ -119,12 +147,12 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store().unwrap();
 
-        insert_time_series(&store, "src 1", 1, vec![0.0; 12]);
-        insert_time_series(&store, "src 1", 2, vec![0.0; 12]);
+        insert_time_series(&store, "id 1", 1, vec![0.0; 12]);
+        insert_time_series(&store, "id 1", 2, vec![0.0; 12]);
 
         let query = r#"
         {
-            periodicTimeSeries (filter: {id: "src 1"}, first: 1) {
+            periodicTimeSeries (filter: {id: "id 1"}, first: 10) {
                 edges {
                     node {
                         id
@@ -139,8 +167,51 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{periodicTimeSeries: {edges: [{node: {id: \"src 1\",data: [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]}}],pageInfo: {hasPreviousPage: false}}}"
+            "{periodicTimeSeries: {edges: [{node: {id: \"id 1\",data: [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]}},{node: {id: \"id 1\",data: [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]}}],pageInfo: {hasPreviousPage: false}}}"
         );
+
+        let mutation = r#"
+        mutation {
+            deleteTimeSeries (ids: ["id 1"])
+        }
+        "#;
+
+        let res = schema.execute(mutation).await;
+        assert_eq!(res.data.to_string(), "{deleteTimeSeries: \"deleted\"}");
+
+        let query = r#"
+        {
+            periodicTimeSeries (filter: {id: "id 1"}, first: 10) {
+                edges {
+                    node {
+                        id
+                    }
+                }
+            }
+        }"#;
+
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{periodicTimeSeries: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn delete_time_series() {
+        let schema = TestSchema::new();
+        let store = schema.db.periodic_time_series_store().unwrap();
+
+        insert_time_series(&store, "id 1", 1, vec![0.0; 12]);
+        insert_time_series(&store, "id 1", 2, vec![0.0; 12]);
+        insert_time_series(&store, "id 2", 1, vec![0.0; 12]);
+        insert_time_series(&store, "id 2", 2, vec![0.0; 12]);
+
+        let mutation = r#"
+        mutation {
+            deleteTimeSeries (ids: ["id 1"])
+        }
+        "#;
+
+        let res = schema.execute(mutation).await;
+        assert_eq!(res.data.to_string(), "{deleteTimeSeries: \"deleted\"}");
     }
 
     fn insert_time_series(
