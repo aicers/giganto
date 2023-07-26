@@ -313,10 +313,11 @@ where
             Ok(false) | Err(_) => {}
         }
         if records.len() == size {
-            error!(
-                "failed to read database or invalid data of {} #{}",
-                data_type, invalid_data_cnt
-            );
+            if invalid_data_cnt > 1 {
+                error!(
+                    "failed to read database or invalid data of {data_type} #{invalid_data_cnt}"
+                );
+            }
             has_more = iter.next().is_some();
             break;
         }

@@ -1073,10 +1073,15 @@ where
 {
     // export file open
     let mut writer = File::create(path)?;
+    let mut invalid_data_cnt: u32 = 0;
 
     // check filter condition & write file
     for item in iter {
-        let (key, value) = item.map_err(|e| format!("Failed to read database: {e}"))?;
+        if item.is_err() {
+            invalid_data_cnt += 1;
+            continue;
+        }
+        let (key, value) = item.expect("not error value");
         match filter.check(
             value.orig_addr(),
             value.resp_addr(),
@@ -1109,6 +1114,9 @@ where
             }
             Ok(false) | Err(_) => {}
         }
+    }
+    if invalid_data_cnt > 1 {
+        error!("failed to read database or invalid data #{invalid_data_cnt}");
     }
     Ok(format!("export file success: {path:?}"))
 }

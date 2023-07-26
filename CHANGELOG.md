@@ -12,6 +12,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Replaced `lazy_static` with the new `std::sync::OnceLock`.
 - Modify `pcap_with_data` test function to compare times based on utc timezone.
 
+### Fixed
+
+- Fixed to only generate the `collect_records` error message when an error event
+  exists, and applied the same change to `export`.
+
 ## [0.12.3] - 2023-07-10
 
 ### Changed
