@@ -3,7 +3,7 @@ mod log;
 pub mod network;
 mod packet;
 mod source;
-mod statistics;
+pub mod statistics;
 pub mod status;
 mod sysmon;
 mod timeseries;

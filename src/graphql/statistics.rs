@@ -1,84 +1,61 @@
-use super::{get_timestamp_from_key, load_connection, FromKeyValue, RawEventFilter};
+#![allow(clippy::module_name_repetitions)]
+
+use super::TIMESTAMP_SIZE;
 use crate::{
     graphql::TimeRange,
-    storage::{Database, KeyExtractor},
+    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
-use async_graphql::{
-    connection::{query, Connection},
-    Context, InputObject, Object, Result, SimpleObject,
+use anyhow::anyhow;
+use async_graphql::{Context, Object, Result, SimpleObject};
+use giganto_client::ingest::{statistics::Statistics, RecordType};
+use num_traits::NumCast;
+use rocksdb::Direction;
+use serde::de::DeserializeOwned;
+use std::{
+    collections::{HashMap, HashSet},
+    iter::Peekable,
 };
-use chrono::{DateTime, Utc};
-use giganto_client::ingest::statistics::Statistics;
-use serde::Serialize;
-use std::net::IpAddr;
+use tracing::error;
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
-
-#[allow(clippy::module_name_repetitions)]
-#[derive(InputObject, Serialize)]
-pub struct StatisticsFilter {
-    time: Option<TimeRange>,
-    #[serde(skip)]
-    pub source: String,
-    core: u32,
-}
-
-impl KeyExtractor for StatisticsFilter {
-    fn get_start_key(&self) -> &str {
-        &self.source
-    }
-
-    fn get_mid_key(&self) -> Option<Vec<u8>> {
-        Some(self.core.to_be_bytes().to_vec())
-    }
-
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-        if let Some(time) = &self.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        }
-    }
-}
-
-impl RawEventFilter for StatisticsFilter {
-    fn check(
-        &self,
-        _orig_addr: Option<IpAddr>,
-        _resp_addr: Option<IpAddr>,
-        _orig_port: Option<u16>,
-        _resp_port: Option<u16>,
-        _log_level: Option<String>,
-        _log_contents: Option<String>,
-        _text: Option<String>,
-    ) -> Result<bool> {
-        Ok(true)
-    }
-}
+const BYTE_TO_BIT: u64 = 8;
+const STATS_ALLOWED_TYPES: [RecordType; 16] = [
+    RecordType::Conn,
+    RecordType::Dns,
+    RecordType::Rdp,
+    RecordType::Http,
+    RecordType::Smtp,
+    RecordType::Ntlm,
+    RecordType::Kerberos,
+    RecordType::Ssh,
+    RecordType::DceRpc,
+    RecordType::Ftp,
+    RecordType::Mqtt,
+    RecordType::Ldap,
+    RecordType::Tls,
+    RecordType::Smb,
+    RecordType::Nfs,
+    RecordType::Statistics,
+];
 
 #[derive(SimpleObject, Debug)]
-#[allow(clippy::module_name_repetitions)]
 pub struct StatisticsRawEvent {
-    timestamp: DateTime<Utc>,
-    core: u32,
-    period: u16,
-    stats: Vec<String>,
+    pub source: String,
+    pub stats: Vec<StatisticsInfo>,
 }
 
-impl FromKeyValue<Statistics> for StatisticsRawEvent {
-    fn from_key_value(key: &[u8], val: Statistics) -> Result<Self> {
-        let stats = val
-            .stats
-            .iter()
-            .map(|(rt, cnt, size)| format!("{rt:?}/{size}/{cnt}"))
-            .collect::<Vec<_>>();
-        Ok(StatisticsRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
-            core: val.core,
-            period: val.period,
-            stats,
-        })
-    }
+#[derive(SimpleObject, Debug, Clone)]
+pub struct StatisticsInfo {
+    pub timestamp: i64,
+    pub detail: Vec<StatisticsDetail>,
+}
+
+#[derive(SimpleObject, Debug, Default, Clone)]
+pub struct StatisticsDetail {
+    pub protocol: String,
+    pub bps: Option<f64>,
+    pub pps: Option<f64>,
+    pub eps: Option<f64>,
 }
 
 #[derive(Default)]
@@ -90,26 +67,198 @@ impl StatisticsQuery {
     async fn statistics<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: StatisticsFilter,
-        after: Option<String>,
-        before: Option<String>,
-        first: Option<i32>,
-        last: Option<i32>,
-    ) -> Result<Connection<String, StatisticsRawEvent>> {
+        time: Option<TimeRange>,
+        sources: Vec<String>,
+        protocols: Option<Vec<String>>,
+    ) -> Result<Vec<StatisticsRawEvent>> {
         let db = ctx.data::<Database>()?;
-        let store = db.statistics_store()?;
+        let mut total_stats: Vec<StatisticsRawEvent> = Vec::new();
+        let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
 
-        query(
-            after,
-            before,
-            first,
-            last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
-        )
-        .await
+        // Configure the protocol HashSet for which statistics output is allowed.
+        let record_types = if let Some(protocols) = &protocols {
+            let mut records = HashSet::new();
+            for proto in protocols {
+                records.insert(convert_to_stats_allowed_type(proto)?);
+            }
+            records
+        } else {
+            STATS_ALLOWED_TYPES.iter().copied().collect()
+        };
+
+        // Configure statistics results by source.
+        for source in sources {
+            for core in 0..MAX_CORE_SIZE {
+                let stats_iter = get_statistics_iter(&db.statistics_store()?, core, &source, &time);
+                let mut peek_stats_iter = stats_iter.peekable();
+                if peek_stats_iter.peek().is_some() {
+                    stats_iters.push(peek_stats_iter);
+                }
+            }
+            let stats = gen_statistics(&mut stats_iters, &source, time.is_none(), &record_types)?;
+            total_stats.push(stats);
+        }
+        Ok(total_stats)
     }
+}
+
+fn get_statistics_iter<'c, T>(
+    store: &RawEventStore<'c, T>,
+    core_id: u32,
+    source: &str,
+    time: &Option<TimeRange>,
+) -> StatisticsIter<'c, T>
+where
+    T: DeserializeOwned,
+{
+    let (start, end) = if let Some(time) = &time {
+        (time.start, time.end)
+    } else {
+        (None, None)
+    };
+
+    let key_builder = StorageKey::builder()
+        .start_key(source)
+        .mid_key(Some(core_id.to_be_bytes().to_vec()));
+    let from_key = key_builder.clone().upper_open_bound_end_key(end).build();
+    let to_key = key_builder.lower_closed_bound_end_key(start).build();
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
+    StatisticsIter::new(iter)
+}
+
+fn gen_statistics(
+    stats_iters: &mut Vec<Peekable<StatisticsIter<'_, Statistics>>>,
+    source: &str,
+    latest_flag: bool,
+    allow_record_type: &HashSet<RecordType>,
+) -> Result<StatisticsRawEvent> {
+    let mut stats_info_vec: Vec<StatisticsInfo> = Vec::new();
+    let mut stats_detail_vec: Vec<StatisticsDetail> = Vec::new();
+    let mut iter_next_values: Vec<(Box<[u8]>, Statistics)> = Vec::with_capacity(stats_iters.len());
+
+    for iter in &mut *stats_iters {
+        if let Some(item) = iter.next() {
+            iter_next_values.push(item);
+        }
+    }
+
+    loop {
+        let mut next_candidate = Vec::new();
+
+        // Find the most recent statistics in iter by core.
+        let check_latest_values = iter_next_values.clone();
+        let Some((latest_key, latest_stats)) = check_latest_values
+            .iter()
+            .max_by_key(|(key, _)| &key[(key.len() - TIMESTAMP_SIZE)..])
+        else {
+            break;
+        };
+
+        let latest_key_timestamp =
+            i64::from_be_bytes(latest_key[(latest_key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let mut total_stats: HashMap<RecordType, (u64, u64)> = HashMap::new();
+
+        // Collect statistics formed at the same timestamp as the most recent statistics into a HashMap.
+        for (idx, (key, value)) in iter_next_values.clone().iter().enumerate() {
+            let compare_key_timestamp =
+                i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+            if latest_key_timestamp == compare_key_timestamp {
+                for (record, count, size) in &value.stats {
+                    if allow_record_type.contains(record) {
+                        total_stats
+                            .entry(*record)
+                            .and_modify(|(stats_count, stats_size)| {
+                                *stats_count += count;
+                                *stats_size += size;
+                            })
+                            .or_insert((*count, *size));
+                    }
+                }
+                next_candidate.push(idx);
+            }
+        }
+        next_candidate.reverse();
+
+        // Change the value of the selected iter to the following value.
+        for idx in next_candidate {
+            if let Some(iter) = stats_iters.get_mut(idx) {
+                if let Some(item) = iter.next() {
+                    // replace new value (value is always exist)
+                    *iter_next_values.get_mut(idx).unwrap() = item;
+                } else {
+                    // No value to call with the iterator.
+                    let _ = stats_iters.remove(idx);
+                    let _ = iter_next_values.remove(idx);
+                }
+            }
+        }
+
+        // Generates StatisticsDetail by calculating the bps/pps/eps.
+        for (r_type, (count, size)) in total_stats {
+            let mut stats_detail = StatisticsDetail {
+                protocol: format!("{r_type:?}"),
+                ..Default::default()
+            };
+            if r_type == RecordType::Statistics {
+                stats_detail.bps = Some(calculate_ps(latest_stats.period, size * BYTE_TO_BIT)); // convert to bit size
+                stats_detail.pps = Some(calculate_ps(latest_stats.period, count));
+            } else {
+                stats_detail.eps = Some(calculate_ps(latest_stats.period, count));
+            }
+            stats_detail_vec.push(stats_detail);
+        }
+
+        stats_info_vec.push(StatisticsInfo {
+            timestamp: latest_key_timestamp,
+            detail: stats_detail_vec.clone(),
+        });
+        stats_detail_vec.clear();
+
+        // If there is no time condition, only the most recent statistics are passed.
+        if latest_flag {
+            break;
+        }
+    }
+
+    Ok(StatisticsRawEvent {
+        source: source.to_string(),
+        stats: stats_info_vec,
+    })
+}
+
+fn convert_to_stats_allowed_type(input: &str) -> Result<RecordType> {
+    match input {
+        "conn" => Ok(RecordType::Conn),
+        "dns" => Ok(RecordType::Dns),
+        "rdp" => Ok(RecordType::Rdp),
+        "http" => Ok(RecordType::Http),
+        "smtp" => Ok(RecordType::Smtp),
+        "ntlm" => Ok(RecordType::Ntlm),
+        "kerberos" => Ok(RecordType::Kerberos),
+        "ssh" => Ok(RecordType::Ssh),
+        "dce rpc" => Ok(RecordType::DceRpc),
+        "ftp" => Ok(RecordType::Ftp),
+        "mqtt" => Ok(RecordType::Mqtt),
+        "ldap" => Ok(RecordType::Ldap),
+        "tls" => Ok(RecordType::Tls),
+        "smb" => Ok(RecordType::Smb),
+        "nfs" => Ok(RecordType::Nfs),
+        "statistics" => Ok(RecordType::Statistics),
+        etc => Err(anyhow!("not supported protocol string: {}", etc).into()),
+    }
+}
+
+fn calculate_ps(period: u16, len: u64) -> f64 {
+    if let (Some(len), Some(period)) = (NumCast::from(len), NumCast::from(period)) {
+        let cal_len: f64 = len;
+        let cal_period: f64 = period;
+        let cal_result = format!("{:.2}", cal_len / cal_period);
+        if let Ok(result) = cal_result.parse::<f64>() {
+            return result;
+        }
+    }
+    error!("Failed to convert period/len to f64");
+    0.0
 }
 
 #[cfg(test)]
@@ -123,28 +272,29 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
         let now = Utc::now().timestamp_nanos();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 100, 1000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 601, 101, 1001);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 602, 102, 1002);
+        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1000000, 300000000);
+        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2000000, 600000000);
+        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3000000, 900000000);
 
         let query = r#"
     {
         statistics(
-            filter: {
-                source: "src 1"
-                core: 2
-            }
-            last: 1
+            sources: ["src 1"]
         ) {
-            edges {
-                node {core, period, stats}
+            source,
+            stats {
+                detail {
+                    protocol,
+                    bps,
+                    pps,
+                }
             }
         }
     }"#;
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{statistics: {edges: [{node: {core: 2,period: 602,stats: [\"Statistics/1002/102\"]}}]}}"
+            "{statistics: [{source: \"src 1\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
         );
     }
 

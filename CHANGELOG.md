@@ -5,6 +5,22 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Change the `statistics` Graphql Api.
+  - Removed `core` as an argument to the query. Also changed the condition of
+    source to allow searching for `multiple sources`.
+  - Provides statistics data by `source`/`time`/`protocol`.
+  - If the statistics data type is `statistics`, provide `bps`/`pps`.
+  - If it's of type `network` (network-sourced events collected by `piglet`),
+    provide `eps`.
+  - If there is no value for the protocol field in the filter, statistics are
+    provided for `all protocol`.
+  - If filter has no value for the time field, it will provide the most `recent`
+    statistics.
+
 ## [0.13.0] - 2023-08-28
 
 ### Added
