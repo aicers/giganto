@@ -1,9 +1,8 @@
 use super::{
-    collect_records, get_key_prefix_packets, get_timestamp, load_connection,
-    lower_closed_bound_key, upper_open_bound_key, write_run_tcpdump, Direction, FromKeyValue,
+    collect_records, get_timestamp, load_connection, write_run_tcpdump, Direction, FromKeyValue,
     RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
-use crate::storage::Database;
+use crate::storage::{Database, KeyExtractor, StorageKey};
 use async_graphql::{
     connection::{query, Connection},
     Context, InputObject, Object, Result, SimpleObject,
@@ -24,15 +23,25 @@ pub struct PacketFilter {
     packet_time: Option<TimeRange>,
 }
 
-impl RawEventFilter for PacketFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for PacketFilter {
+    fn get_start_key(&self) -> &str {
+        &self.source
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        Some(self.request_time.timestamp_nanos().to_be_bytes().to_vec())
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.packet_time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for PacketFilter {
     fn check(
         &self,
         _orig_addr: Option<IpAddr>,
@@ -83,7 +92,6 @@ impl PacketQuery {
     ) -> Result<Connection<String, Packet>> {
         let db = ctx.data::<Database>()?;
         let store = db.packet_store()?;
-        let key_prefix = get_key_prefix_packets(&filter.source, filter.request_time);
 
         query(
             after,
@@ -91,7 +99,7 @@ impl PacketQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -101,15 +109,20 @@ impl PacketQuery {
     async fn pcap<'ctx>(&self, ctx: &Context<'ctx>, filter: PacketFilter) -> Result<Pcap> {
         let db = ctx.data::<Database>()?;
         let store = db.packet_store()?;
-        let key_prefix = get_key_prefix_packets(&filter.source, filter.request_time);
 
-        let (start, end) = filter.time();
+        // generate storage search key
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(filter.get_mid_key());
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
 
-        let iter = store.boundary_iter(
-            &lower_closed_bound_key(&key_prefix, start),
-            &upper_open_bound_key(&key_prefix, end),
-            Direction::Forward,
-        );
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
         let (records, _) = collect_records(iter, 1000, &filter);
 
         let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();

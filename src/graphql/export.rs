@@ -1,11 +1,12 @@
 use super::{
     check_address, check_port,
     network::{IpRange, PortRange},
-    RawEventFilter, TimeRange,
+    statistics::MAX_CORE_SIZE,
+    RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::{
     ingest::implement::EventFilter,
-    storage::{lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore},
+    storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
@@ -26,6 +27,7 @@ use std::{
     fmt::Display,
     fs::{self, File},
     io::Write,
+    iter::Peekable,
     net::IpAddr,
     path::{Path, PathBuf},
 };
@@ -714,15 +716,25 @@ pub struct ExportFilter {
     resp_port: Option<PortRange>,
 }
 
-impl RawEventFilter for ExportFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for ExportFilter {
+    fn get_start_key(&self) -> &str {
+        &self.source_id
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        self.kind.as_ref().map(|kind| kind.as_bytes().to_vec())
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for ExportFilter {
     fn check(
         &self,
         orig_addr: Option<IpAddr>,
@@ -780,12 +792,6 @@ impl ExportQuery {
 
         let db = ctx.data::<Database>()?;
         let path = ctx.data::<PathBuf>()?;
-        let mut key_prefix = export_key_prefix(&filter.source_id, &filter.kind);
-        if filter.protocol == "statistics" {
-            // TODO: Change the key prefix to include other core's statistics data
-            key_prefix.extend(&(0_u32).to_be_bytes());
-            key_prefix.push(0);
-        }
 
         // set export file path
         if !path.exists() {
@@ -799,7 +805,7 @@ impl ExportQuery {
         let export_path = path.join(filename.replace(' ', ""));
         let download_path = export_path.display().to_string();
 
-        export_by_protocol(db.clone(), key_prefix, filter, export_type, export_path)?;
+        export_by_protocol(db.clone(), filter, export_type, export_path)?;
 
         Ok(download_path)
     }
@@ -808,7 +814,6 @@ impl ExportQuery {
 #[allow(clippy::too_many_lines)]
 fn export_by_protocol(
     db: Database,
-    key_prefix: Vec<u8>,
     filter: ExportFilter,
     export_type: String,
     export_path: PathBuf,
@@ -816,7 +821,7 @@ fn export_by_protocol(
     match filter.protocol.as_str() {
         "conn" => tokio::spawn(async move {
             if let Ok(store) = db.conn_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -830,7 +835,7 @@ fn export_by_protocol(
         }),
         "dns" => tokio::spawn(async move {
             if let Ok(store) = db.dns_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -844,7 +849,7 @@ fn export_by_protocol(
         }),
         "http" => tokio::spawn(async move {
             if let Ok(store) = db.http_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -858,7 +863,7 @@ fn export_by_protocol(
         }),
         "log" => tokio::spawn(async move {
             if let Ok(store) = db.log_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -872,7 +877,7 @@ fn export_by_protocol(
         }),
         "rdp" => tokio::spawn(async move {
             if let Ok(store) = db.rdp_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -886,7 +891,7 @@ fn export_by_protocol(
         }),
         "smtp" => tokio::spawn(async move {
             if let Ok(store) = db.smtp_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -900,7 +905,7 @@ fn export_by_protocol(
         }),
         "periodic time series" => tokio::spawn(async move {
             if let Ok(store) = db.periodic_time_series_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -914,7 +919,7 @@ fn export_by_protocol(
         }),
         "ntlm" => tokio::spawn(async move {
             if let Ok(store) = db.ntlm_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -928,7 +933,7 @@ fn export_by_protocol(
         }),
         "kerberos" => tokio::spawn(async move {
             if let Ok(store) = db.kerberos_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -942,7 +947,7 @@ fn export_by_protocol(
         }),
         "ssh" => tokio::spawn(async move {
             if let Ok(store) = db.ssh_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -956,7 +961,7 @@ fn export_by_protocol(
         }),
         "dce rpc" => tokio::spawn(async move {
             if let Ok(store) = db.dce_rpc_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -970,7 +975,7 @@ fn export_by_protocol(
         }),
         "oplog" => tokio::spawn(async move {
             if let Ok(store) = db.oplog_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -984,7 +989,7 @@ fn export_by_protocol(
         }),
         "ftp" => tokio::spawn(async move {
             if let Ok(store) = db.ftp_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -998,7 +1003,7 @@ fn export_by_protocol(
         }),
         "mqtt" => tokio::spawn(async move {
             if let Ok(store) = db.mqtt_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1012,7 +1017,7 @@ fn export_by_protocol(
         }),
         "ldap" => tokio::spawn(async move {
             if let Ok(store) = db.ldap_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1026,7 +1031,7 @@ fn export_by_protocol(
         }),
         "tls" => tokio::spawn(async move {
             if let Ok(store) = db.tls_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1040,7 +1045,7 @@ fn export_by_protocol(
         }),
         "smb" => tokio::spawn(async move {
             if let Ok(store) = db.smb_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1054,7 +1059,7 @@ fn export_by_protocol(
         }),
         "nfs" => tokio::spawn(async move {
             if let Ok(store) = db.nfs_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1068,7 +1073,7 @@ fn export_by_protocol(
         }),
         "statistics" => tokio::spawn(async move {
             if let Ok(store) = db.statistics_store() {
-                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                match process_statistics_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1089,8 +1094,7 @@ fn export_by_protocol(
 
 fn process_export<T, N>(
     store: &RawEventStore<'_, T>,
-    key_prefix: &[u8],
-    filter: &impl RawEventFilter,
+    filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     export_path: &Path,
 ) -> Result<String>
@@ -1098,18 +1102,53 @@ where
     T: DeserializeOwned + Display + EventFilter + JsonOutput<N> + Send + Serialize,
     N: Serialize,
 {
-    let (start, end) = filter.time();
-    let iter = store.boundary_iter(
-        &lower_closed_bound_key(key_prefix, start),
-        &upper_open_bound_key(key_prefix, end),
-        Direction::Forward,
-    );
+    // generate storage search key
+    let key_builder = StorageKey::builder()
+        .start_key(filter.get_start_key())
+        .mid_key(filter.get_mid_key());
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_end_key(filter.get_range_end_key().0)
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_end_key(filter.get_range_end_key().1)
+        .build();
+
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
     export_file(iter, filter, export_type, export_path)
+}
+
+fn process_statistics_export(
+    store: &RawEventStore<Statistics>,
+    filter: &(impl RawEventFilter + KeyExtractor),
+    export_type: &str,
+    export_path: &Path,
+) -> Result<String> {
+    let mut iter_vec = Vec::new();
+    for core in 0..MAX_CORE_SIZE {
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(Some(core.to_be_bytes().to_vec()));
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let mut iter = store
+            .boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward)
+            .peekable();
+        if iter.peek().is_some() {
+            iter_vec.push(iter);
+        }
+    }
+    export_statistic_file(iter_vec, filter, export_type, export_path)
 }
 
 fn export_file<I, T, N>(
     iter: I,
-    filter: &impl RawEventFilter,
+    filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     path: &Path,
 ) -> Result<String>
@@ -1129,38 +1168,7 @@ where
             continue;
         }
         let (key, value) = item.expect("not error value");
-        match filter.check(
-            value.orig_addr(),
-            value.resp_addr(),
-            value.orig_port(),
-            value.resp_port(),
-            value.log_level(),
-            value.log_contents(),
-            value.text(),
-        ) {
-            Ok(true) => {
-                let (source, timestamp) = parse_key(&key)?;
-                let timestamp = {
-                    let secs = timestamp / 1_000_000_000;
-                    let nanosecs =
-                        u32::try_from(timestamp % 1_000_000_000).expect("< 1_000_000_000");
-                    NaiveDateTime::from_timestamp_opt(secs, nanosecs)
-                        .map_or("-".to_string(), |s| s.format("%s%.9f").to_string())
-                };
-                match export_type {
-                    "csv" => {
-                        writeln!(writer, "{timestamp}\t{source}\t{value}")?;
-                    }
-                    "json" => {
-                        let json_data = value.convert_json_output(timestamp, source.to_string())?;
-                        let json_data = serde_json::to_string(&json_data)?;
-                        writeln!(writer, "{json_data}")?;
-                    }
-                    _ => {}
-                }
-            }
-            Ok(false) | Err(_) => {}
-        }
+        write_filtered_data_to_file(filter, export_type, &key, &value, &mut writer)?;
     }
     if invalid_data_cnt > 1 {
         error!("failed to read database or invalid data #{invalid_data_cnt}");
@@ -1168,15 +1176,130 @@ where
     Ok(format!("export file success: {path:?}"))
 }
 
-fn export_key_prefix(source_id: &str, kind: &Option<String>) -> Vec<u8> {
-    let mut prefix = Vec::new();
-    prefix.extend_from_slice(source_id.as_bytes());
-    prefix.push(0);
-    if let Some(kind_val) = kind {
-        prefix.extend_from_slice(kind_val.as_bytes());
-        prefix.push(0);
+fn export_statistic_file(
+    mut statistics_vec: Vec<Peekable<BoundaryIter<'_, Statistics>>>,
+    filter: &(impl RawEventFilter + KeyExtractor),
+    export_type: &str,
+    path: &Path,
+) -> Result<String> {
+    let mut writer = File::create(path)?;
+
+    // store the first value of all iters in a comparison vector.
+    let mut iter_next_values = Vec::with_capacity(statistics_vec.len());
+    let mut invalid_data_cnt: u32 = 0;
+    for iter in &mut statistics_vec {
+        loop {
+            match iter.next() {
+                Some(Ok(item)) => {
+                    iter_next_values.push(item);
+                    break;
+                }
+                Some(Err(_)) => {
+                    // deserialize fail
+                    invalid_data_cnt += 1;
+                }
+                None => {
+                    // No value to call with the iterator.
+                    break;
+                }
+            }
+        }
     }
-    prefix
+
+    loop {
+        // select the value and index with the smallest timestamp.
+        let (min_index, (key, value)) = iter_next_values.iter().enumerate().fold(
+            (0, (&iter_next_values[0].0, &iter_next_values[0].1)),
+            |(min_index, (min_key, min_value)), (index, (key, value))| {
+                if key[(key.len() - TIMESTAMP_SIZE)..] < min_key[(min_key.len() - TIMESTAMP_SIZE)..]
+                {
+                    (index, (key, value))
+                } else {
+                    (min_index, (min_key, min_value))
+                }
+            },
+        );
+
+        write_filtered_data_to_file(filter, export_type, key, value, &mut writer)?;
+
+        // change the value of the selected iter to the following value.
+        if let Some(iter) = statistics_vec.get_mut(min_index) {
+            loop {
+                match iter.next() {
+                    Some(Ok(item)) => {
+                        // replace new value (min_index's vector value is always exist)
+                        *iter_next_values.get_mut(min_index).unwrap() = item;
+                        break;
+                    }
+                    Some(Err(_)) => {
+                        // deserialize fail
+                        invalid_data_cnt += 1;
+                    }
+                    None => {
+                        // No value to call with the iterator.
+                        let _ = statistics_vec.remove(min_index);
+                        let _ = iter_next_values.remove(min_index);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // if all iters have no value, end file writing.
+        if iter_next_values.is_empty() {
+            break;
+        }
+    }
+
+    if invalid_data_cnt > 1 {
+        error!("failed to read database or invalid data #{invalid_data_cnt}");
+    }
+    Ok(format!("export file success: {path:?}"))
+}
+
+fn write_filtered_data_to_file<T, N>(
+    filter: &(impl RawEventFilter + KeyExtractor),
+    export_type: &str,
+    key: &[u8],
+    value: &T,
+    writer: &mut File,
+) -> Result<()>
+where
+    T: Display + EventFilter + JsonOutput<N> + Serialize,
+    N: Serialize,
+{
+    match filter.check(
+        value.orig_addr(),
+        value.resp_addr(),
+        value.orig_port(),
+        value.resp_port(),
+        value.log_level(),
+        value.log_contents(),
+        value.text(),
+    ) {
+        Ok(true) => {
+            let (source, timestamp) = parse_key(key)?;
+            let timestamp = {
+                let secs = timestamp / 1_000_000_000;
+                let nanosecs = u32::try_from(timestamp % 1_000_000_000).expect("< 1_000_000_000");
+                NaiveDateTime::from_timestamp_opt(secs, nanosecs)
+                    .map_or("-".to_string(), |s| s.format("%s%.9f").to_string())
+            };
+            match export_type {
+                "csv" => {
+                    writeln!(writer, "{timestamp}\t{source}\t{value}")?;
+                }
+                "json" => {
+                    let json_data = value.convert_json_output(timestamp, source.to_string())?;
+                    let json_data = serde_json::to_string(&json_data)?;
+                    writeln!(writer, "{json_data}")?;
+                }
+                _ => {}
+            }
+        }
+        Ok(false) | Err(_) => {}
+    }
+    Ok(())
 }
 
 fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {

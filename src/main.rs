@@ -186,7 +186,7 @@ async fn main() -> Result<()> {
                     }
                 },
                 _ = notify_ctrlc.notified() =>{
-                    info!("Termination signal: Giganto daemon exit");
+                    info!("Termination signal: giganto daemon exit");
                     notify_shutdown.notify_waiters();
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(())

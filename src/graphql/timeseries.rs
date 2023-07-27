@@ -1,7 +1,7 @@
 use super::{get_timestamp, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::Database,
+    storage::{Database, KeyExtractor},
 };
 use async_graphql::{
     connection::{query, Connection},
@@ -21,15 +21,26 @@ pub struct TimeSeriesFilter {
     id: String,
 }
 
-impl RawEventFilter for TimeSeriesFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for TimeSeriesFilter {
+    fn get_start_key(&self) -> &str {
+        &self.id
+    }
+
+    // timeseries event don't use mid key
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for TimeSeriesFilter {
     fn check(
         &self,
         _orig_addr: Option<IpAddr>,
@@ -72,10 +83,6 @@ impl TimeSeriesQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, TimeSeries>> {
-        let mut key_prefix = Vec::with_capacity(filter.id.len() + 2);
-        key_prefix.extend_from_slice(filter.id.as_bytes());
-        key_prefix.push(0);
-
         let db = ctx.data::<Database>()?;
         let store = db.periodic_time_series_store()?;
 
@@ -85,7 +92,7 @@ impl TimeSeriesQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
