@@ -16,7 +16,9 @@ use giganto_client::ingest::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
         Smtp, Ssh, Tls,
     },
+    statistics::Statistics,
     timeseries::PeriodicTimeSeries,
+    RecordType,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -371,6 +373,15 @@ struct OpLogJsonOutput {
     contents: String,
 }
 
+#[derive(Serialize, Debug)]
+struct StatisticsJsonOutput {
+    timestamp: String,
+    source: String,
+    core: u32,
+    period: u16,
+    stats: Vec<(RecordType, u64, u64)>,
+}
+
 pub trait JsonOutput<T>: Sized {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<T>;
 }
@@ -674,6 +685,22 @@ impl JsonOutput<MqttJsonOutput> for Mqtt {
     }
 }
 
+impl JsonOutput<StatisticsJsonOutput> for Statistics {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<StatisticsJsonOutput> {
+        Ok(StatisticsJsonOutput {
+            timestamp,
+            source,
+            core: self.core,
+            period: self.period,
+            stats: self.stats.clone(),
+        })
+    }
+}
+
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
 pub struct ExportFilter {
@@ -729,6 +756,7 @@ impl ExportQuery {
         if filter.protocol == "log"
             || filter.protocol == "periodic time series"
             || filter.protocol == "oplog"
+            || filter.protocol == "statistics"
         {
             // check log/time_series protocol filter format
             if filter.orig_addr.is_some()
@@ -752,7 +780,12 @@ impl ExportQuery {
 
         let db = ctx.data::<Database>()?;
         let path = ctx.data::<PathBuf>()?;
-        let key_prefix = export_key_prefix(&filter.source_id, &filter.kind);
+        let mut key_prefix = export_key_prefix(&filter.source_id, &filter.kind);
+        if filter.protocol == "statistics" {
+            // TODO: Change the key prefix to include other core's statistics data
+            key_prefix.extend(&(0_u32).to_be_bytes());
+            key_prefix.push(0);
+        }
 
         // set export file path
         if !path.exists() {
@@ -1021,6 +1054,20 @@ fn export_by_protocol(
         }),
         "nfs" => tokio::spawn(async move {
             if let Ok(store) = db.nfs_store() {
+                match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "statistics" => tokio::spawn(async move {
+            if let Ok(store) = db.statistics_store() {
                 match process_export(&store, &key_prefix, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);

@@ -3,6 +3,7 @@ mod log;
 pub mod network;
 mod packet;
 mod source;
+mod statistics;
 pub mod status;
 mod timeseries;
 
@@ -52,6 +53,7 @@ pub struct Query(
     timeseries::TimeSeriesQuery,
     status::GigantoStatusQuery,
     source::SourceQuery,
+    statistics::StatisticsQuery,
 );
 
 #[derive(Default, MergedObject)]

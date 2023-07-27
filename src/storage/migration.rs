@@ -1,4 +1,5 @@
 //! Routines to check the database format version and migrate it if necessary.
+use super::Database;
 use anyhow::{anyhow, Context, Result};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -10,9 +11,7 @@ use std::{
 };
 use tracing::info;
 
-use super::Database;
-
-const COMPATIBLE_VERSION_REQ: &str = ">=0.12.0,<0.13.0-alpha";
+const COMPATIBLE_VERSION_REQ: &str = ">0.12.4-alpha,<0.13.0-alpha";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -27,11 +26,18 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
         return Ok(());
     }
 
-    let migration: Vec<(_, _, fn(_) -> Result<_, _>)> = vec![(
-        VersionReq::parse(">=0.10.0,<0.12.0").expect("valid version requirement"),
-        Version::parse("0.12.0").expect("valid version"),
-        migrate_0_10_to_0_12,
-    )];
+    let migration: Vec<(_, _, fn(_) -> Result<_, _>)> = vec![
+        (
+            VersionReq::parse(">=0.10.0,<0.12.0").expect("valid version requirement"),
+            Version::parse("0.12.0").expect("valid version"),
+            migrate_0_10_to_0_12,
+        ),
+        (
+            VersionReq::parse(">=0.12.0,<0.12.4-alpha").expect("valid version requirement"),
+            Version::parse("0.12.4").expect("valid version"),
+            migrate_0_12_to_0_12_4,
+        ),
+    ];
 
     while let Some((_req, to, m)) = migration
         .iter()
@@ -189,17 +195,26 @@ fn migrate_0_10_to_0_12(db: &Database) -> Result<()> {
     Ok(())
 }
 
+// Remove old statistics data because it's overwritten
+// by the data of other core of same machine.
+fn migrate_0_12_to_0_12_4(db: &Database) -> Result<()> {
+    let store = db.statistics_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, _) = raw_event.context("Failed to read Database")?;
+        store.delete(&key)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
-
-    use crate::storage::{Database, DbOptions};
-
     use super::COMPATIBLE_VERSION_REQ;
+    use crate::storage::{Database, DbOptions};
     use chrono::Utc;
     use giganto_client::ingest::network::Http;
     use semver::{Version, VersionReq};
     use serde::{Deserialize, Serialize};
+    use std::net::IpAddr;
 
     #[test]
     fn version() {
