@@ -5,6 +5,11 @@ use giganto_client::ingest::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     },
     statistics::Statistics,
+    sysmon::{
+        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    },
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -513,5 +518,472 @@ impl EventFilter for Statistics {
     }
     fn log_contents(&self) -> Option<String> {
         None
+    }
+}
+
+impl EventFilter for ProcessCreate {
+    fn data_type(&self) -> String {
+        "process create".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for FileCreationTimeChanged {
+    fn data_type(&self) -> String {
+        "file creation time changed".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for NetworkConnection {
+    fn data_type(&self) -> String {
+        "network connection".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.source_ip)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.destination_ip)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.source_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.destination_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for ProcessTerminated {
+    fn data_type(&self) -> String {
+        "process terminated".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for ImageLoaded {
+    fn data_type(&self) -> String {
+        "image loaded".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for FileCreate {
+    fn data_type(&self) -> String {
+        "file create".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for RegistryValueSet {
+    fn data_type(&self) -> String {
+        "registry value set".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for RegistryKeyValueRename {
+    fn data_type(&self) -> String {
+        "registry key value rename".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for FileCreateStreamHash {
+    fn data_type(&self) -> String {
+        "file create stream hash".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for PipeEvent {
+    fn data_type(&self) -> String {
+        "pipe event".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for DnsEvent {
+    fn data_type(&self) -> String {
+        "dns event".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for FileDelete {
+    fn data_type(&self) -> String {
+        "file delete".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for ProcessTampering {
+    fn data_type(&self) -> String {
+        "process tampering".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for FileDeleteDetected {
+    fn data_type(&self) -> String {
+        "file delete detected".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+pub trait SysmonEvent {
+    fn agent_name(&self) -> &str;
+    fn agent_id(&self) -> &str;
+}
+
+impl SysmonEvent for ProcessCreate {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for FileCreationTimeChanged {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for NetworkConnection {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for ProcessTerminated {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for ImageLoaded {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for FileCreate {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for RegistryValueSet {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for RegistryKeyValueRename {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for FileCreateStreamHash {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for PipeEvent {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for DnsEvent {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for FileDelete {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for ProcessTampering {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
+impl SysmonEvent for FileDeleteDetected {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn agent_id(&self) -> &str {
+        &self.agent_id
     }
 }

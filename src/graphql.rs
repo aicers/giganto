@@ -5,6 +5,7 @@ mod packet;
 mod source;
 mod statistics;
 pub mod status;
+mod sysmon;
 mod timeseries;
 
 use self::network::{IpRange, NetworkFilter, PortRange, SearchFilter};
@@ -53,6 +54,7 @@ pub struct Query(
     status::GigantoStatusQuery,
     source::SourceQuery,
     statistics::StatisticsQuery,
+    sysmon::SysmonQuery,
 );
 
 #[derive(Default, MergedObject)]
