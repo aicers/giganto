@@ -18,6 +18,11 @@ use giganto_client::ingest::{
         Smtp, Ssh, Tls,
     },
     statistics::Statistics,
+    sysmon::{
+        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    },
     timeseries::PeriodicTimeSeries,
     RecordType,
 };
@@ -32,6 +37,28 @@ use std::{
     path::{Path, PathBuf},
 };
 use tracing::{error, info};
+
+const NON_NETWORK: [&str; 19] = [
+    "log",
+    "periodic time series",
+    "oplog",
+    "statistics",
+    "sysmon",
+    "process create",
+    "file create time",
+    "network connect",
+    "process terminate",
+    "image load",
+    "file create",
+    "registry value set",
+    "registry key rename",
+    "file create stream hash",
+    "pipe event",
+    "dns query",
+    "file delete",
+    "process tamper",
+    "file delete detected",
+];
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -384,6 +411,241 @@ struct StatisticsJsonOutput {
     stats: Vec<(RecordType, u64, u64)>,
 }
 
+#[derive(Serialize, Debug)]
+struct ProcessCreateJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    file_version: String,
+    description: String,
+    product: String,
+    company: String,
+    original_file_name: String,
+    command_line: String,
+    current_directory: String,
+    user: String,
+    logon_guid: String,
+    logon_id: u32,
+    terminal_session_id: u32,
+    integrity_level: String,
+    hashes: Vec<String>,
+    parent_process_guid: String,
+    parent_process_id: u32,
+    parent_image: String,
+    parent_command_line: String,
+    parent_user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FileCreateTimeJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_filename: String,
+    creation_utc_time: i64,
+    previous_creation_utc_time: i64,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct NetworkConnectJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    user: String,
+    protocol: String,
+    initiated: bool,
+    source_is_ipv6: bool,
+    source_ip: String,
+    source_hostname: String,
+    source_port: u16,
+    source_port_name: String,
+    destination_is_ipv6: bool,
+    destination_ip: String,
+    destination_hostname: String,
+    destination_port: u16,
+    destination_port_name: String,
+}
+
+#[derive(Serialize, Debug)]
+struct ProcessTerminateJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct ImageLoadJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    image_loaded: String,
+    file_version: String,
+    description: String,
+    product: String,
+    company: String,
+    original_file_name: String,
+    hashes: Vec<String>,
+    signed: bool,
+    signature: String,
+    signature_status: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FileCreateJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_filename: String,
+    creation_utc_time: i64,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct RegistryValueSetJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    event_type: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_object: String,
+    details: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct RegistryKeyRenameJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    event_type: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_object: String,
+    new_name: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FileCreateStreamHashJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_filename: String,
+    creation_utc_time: i64,
+    hash: Vec<String>,
+    contents: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct PipeEventJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    event_type: String,
+    process_guid: String,
+    process_id: u32,
+    pipe_name: String,
+    image: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct DnsQueryJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    query_name: String,
+    query_status: u32,
+    query_results: Vec<String>, // divided by ';'
+    image: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FileDeleteJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    user: String,
+    image: String,
+    target_filename: String,
+    hashes: Vec<String>,
+    is_executable: bool,
+    archived: bool,
+}
+
+#[derive(Serialize, Debug)]
+struct ProcessTamperJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    tamper_type: String,
+    user: String,
+}
+
+#[derive(Serialize, Debug)]
+struct FileDeleteDetectedJsonOutput {
+    timestamp: String,
+    source: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    user: String,
+    image: String,
+    target_filename: String,
+    hashes: Vec<String>,
+    is_executable: bool,
+}
+
 pub trait JsonOutput<T>: Sized {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<T>;
 }
@@ -703,11 +965,342 @@ impl JsonOutput<StatisticsJsonOutput> for Statistics {
     }
 }
 
+impl JsonOutput<ProcessCreateJsonOutput> for ProcessCreate {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<ProcessCreateJsonOutput> {
+        Ok(ProcessCreateJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            file_version: self.file_version.clone(),
+            description: self.description.clone(),
+            product: self.product.clone(),
+            company: self.company.clone(),
+            original_file_name: self.original_file_name.clone(),
+            command_line: self.command_line.clone(),
+            current_directory: self.current_directory.clone(),
+            user: self.user.clone(),
+            logon_guid: self.logon_guid.clone(),
+            logon_id: self.logon_id,
+            terminal_session_id: self.terminal_session_id,
+            integrity_level: self.integrity_level.clone(),
+            hashes: self.hashes.clone(),
+            parent_process_guid: self.parent_process_guid.clone(),
+            parent_process_id: self.parent_process_id,
+            parent_image: self.parent_image.clone(),
+            parent_command_line: self.parent_command_line.clone(),
+            parent_user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FileCreateTimeJsonOutput> for FileCreationTimeChanged {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<FileCreateTimeJsonOutput> {
+        Ok(FileCreateTimeJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_filename: self.target_filename.clone(),
+            creation_utc_time: self.creation_utc_time,
+            previous_creation_utc_time: self.previous_creation_utc_time,
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<NetworkConnectJsonOutput> for NetworkConnection {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<NetworkConnectJsonOutput> {
+        Ok(NetworkConnectJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            user: self.user.clone(),
+            protocol: self.protocol.clone(),
+            initiated: self.initiated,
+            source_is_ipv6: self.source_is_ipv6,
+            source_ip: self.source_ip.to_string(),
+            source_hostname: self.source_hostname.clone(),
+            source_port: self.source_port,
+            source_port_name: self.source_port_name.clone(),
+            destination_is_ipv6: self.destination_is_ipv6,
+            destination_ip: self.destination_ip.to_string(),
+            destination_hostname: self.destination_hostname.clone(),
+            destination_port: self.destination_port,
+            destination_port_name: self.destination_port_name.clone(),
+        })
+    }
+}
+
+impl JsonOutput<ProcessTerminateJsonOutput> for ProcessTerminated {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<ProcessTerminateJsonOutput> {
+        Ok(ProcessTerminateJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<ImageLoadJsonOutput> for ImageLoaded {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<ImageLoadJsonOutput> {
+        Ok(ImageLoadJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            image_loaded: self.image_loaded.clone(),
+            file_version: self.file_version.clone(),
+            description: self.description.clone(),
+            product: self.product.clone(),
+            company: self.company.clone(),
+            original_file_name: self.original_file_name.clone(),
+            hashes: self.hashes.clone(),
+            signed: self.signed,
+            signature: self.signature.clone(),
+            signature_status: self.signature_status.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FileCreateJsonOutput> for FileCreate {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<FileCreateJsonOutput> {
+        Ok(FileCreateJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_filename: self.target_filename.clone(),
+            creation_utc_time: self.creation_utc_time,
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<RegistryValueSetJsonOutput> for RegistryValueSet {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<RegistryValueSetJsonOutput> {
+        Ok(RegistryValueSetJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            event_type: self.event_type.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_object: self.target_object.clone(),
+            details: self.details.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<RegistryKeyRenameJsonOutput> for RegistryKeyValueRename {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<RegistryKeyRenameJsonOutput> {
+        Ok(RegistryKeyRenameJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            event_type: self.event_type.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_object: self.target_object.clone(),
+            new_name: self.new_name.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FileCreateStreamHashJsonOutput> for FileCreateStreamHash {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<FileCreateStreamHashJsonOutput> {
+        Ok(FileCreateStreamHashJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_filename: self.target_filename.clone(),
+            creation_utc_time: self.creation_utc_time,
+            hash: self.hash.clone(),
+            contents: self.contents.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<PipeEventJsonOutput> for PipeEvent {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<PipeEventJsonOutput> {
+        Ok(PipeEventJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            event_type: self.event_type.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            pipe_name: self.pipe_name.clone(),
+            image: self.image.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<DnsQueryJsonOutput> for DnsEvent {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsQueryJsonOutput> {
+        Ok(DnsQueryJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            query_name: self.query_name.clone(),
+            query_status: self.query_status,
+            query_results: self.query_results.clone(),
+            image: self.image.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FileDeleteJsonOutput> for FileDelete {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<FileDeleteJsonOutput> {
+        Ok(FileDeleteJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            user: self.user.clone(),
+            image: self.image.clone(),
+            target_filename: self.target_filename.clone(),
+            hashes: self.hashes.clone(),
+            is_executable: self.is_executable,
+            archived: self.archived,
+        })
+    }
+}
+
+impl JsonOutput<ProcessTamperJsonOutput> for ProcessTampering {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<ProcessTamperJsonOutput> {
+        Ok(ProcessTamperJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            tamper_type: self.tamper_type.clone(),
+            user: self.user.clone(),
+        })
+    }
+}
+
+impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        source: String,
+    ) -> Result<FileDeleteDetectedJsonOutput> {
+        Ok(FileDeleteDetectedJsonOutput {
+            timestamp,
+            source,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            user: self.user.clone(),
+            image: self.image.clone(),
+            target_filename: self.target_filename.clone(),
+            hashes: self.hashes.clone(),
+            is_executable: self.is_executable,
+        })
+    }
+}
+
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
 pub struct ExportFilter {
     protocol: String,
     source_id: String,
+    agent_name: Option<String>,
+    agent_id: Option<String>,
     kind: Option<String>,
     time: Option<TimeRange>,
     orig_addr: Option<IpRange>,
@@ -722,7 +1315,20 @@ impl KeyExtractor for ExportFilter {
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        self.kind.as_ref().map(|kind| kind.as_bytes().to_vec())
+        let mut mid_key = Vec::new();
+        if let Some(kind) = &self.kind {
+            mid_key.extend_from_slice(kind.as_bytes());
+            return Some(mid_key);
+        };
+        if let Some(agent_name) = &self.agent_name {
+            mid_key.extend_from_slice(agent_name.as_bytes());
+            if let Some(agent_id) = &self.agent_id {
+                mid_key.push(0);
+                mid_key.extend_from_slice(agent_id.as_bytes());
+            }
+            return Some(mid_key);
+        };
+        None
     }
 
     fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
@@ -765,23 +1371,19 @@ impl ExportQuery {
         export_type: String,
         filter: ExportFilter,
     ) -> Result<String> {
-        if filter.protocol == "log"
-            || filter.protocol == "periodic time series"
-            || filter.protocol == "oplog"
-            || filter.protocol == "statistics"
-        {
+        if NON_NETWORK.contains(&filter.protocol.as_str()) {
             // check log/time_series protocol filter format
             if filter.orig_addr.is_some()
                 || filter.resp_addr.is_some()
                 || filter.orig_port.is_some()
                 || filter.resp_port.is_some()
             {
-                return Err(anyhow!("Invalid id/port input").into());
+                return Err(anyhow!("Invalid ip/port input").into());
             }
         } else {
             // check network protocol filter format
-            if filter.kind.is_some() {
-                return Err(anyhow!("Invalid kind input").into());
+            if filter.kind.is_some() || filter.agent_name.is_some() || filter.agent_id.is_some() {
+                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
         }
 
@@ -1074,6 +1676,202 @@ fn export_by_protocol(
         "statistics" => tokio::spawn(async move {
             if let Ok(store) = db.statistics_store() {
                 match process_statistics_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "process_create" => tokio::spawn(async move {
+            if let Ok(store) = db.process_create_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "file_create_time" => tokio::spawn(async move {
+            if let Ok(store) = db.file_create_time_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "network_connect" => tokio::spawn(async move {
+            if let Ok(store) = db.network_connect_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "process_terminate" => tokio::spawn(async move {
+            if let Ok(store) = db.process_terminate_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "image_load" => tokio::spawn(async move {
+            if let Ok(store) = db.image_load_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "file_create" => tokio::spawn(async move {
+            if let Ok(store) = db.file_create_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "registry_value_set" => tokio::spawn(async move {
+            if let Ok(store) = db.registry_value_set_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "registry_key_rename" => tokio::spawn(async move {
+            if let Ok(store) = db.registry_key_rename_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "file_create_stream_hash" => tokio::spawn(async move {
+            if let Ok(store) = db.file_create_stream_hash_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "pipe_event" => tokio::spawn(async move {
+            if let Ok(store) = db.pipe_event_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "dns_query" => tokio::spawn(async move {
+            if let Ok(store) = db.dns_query_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "file_delete" => tokio::spawn(async move {
+            if let Ok(store) = db.file_delete_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "process_tamper" => tokio::spawn(async move {
+            if let Ok(store) = db.process_tamper_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "file_delete_detected" => tokio::spawn(async move {
+            if let Ok(store) = db.file_delete_detected_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
                     }

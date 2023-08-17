@@ -937,6 +937,146 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::ProcessCreate => {
+                    process_range_data(
+                        &mut send,
+                        db.process_create_store()
+                            .context("Failed to open process_create store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::FileCreateTime => {
+                    process_range_data(
+                        &mut send,
+                        db.file_create_store()
+                            .context("Failed to open file_create store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::NetworkConnect => {
+                    process_range_data(
+                        &mut send,
+                        db.network_connect_store()
+                            .context("Failed to open network_connect store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::ProcessTerminate => {
+                    process_range_data(
+                        &mut send,
+                        db.process_terminate_store()
+                            .context("Failed to open process_terminate store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::ImageLoad => {
+                    process_range_data(
+                        &mut send,
+                        db.image_load_store()
+                            .context("Failed to open image_load store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::FileCreate => {
+                    process_range_data(
+                        &mut send,
+                        db.file_create_store()
+                            .context("Failed to open file_create store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::RegistryValueSet => {
+                    process_range_data(
+                        &mut send,
+                        db.registry_value_set_store()
+                            .context("Failed to open registry_value_set store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::RegistryKeyRename => {
+                    process_range_data(
+                        &mut send,
+                        db.registry_key_rename_store()
+                            .context("Failed to open registry_key_rename store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::FileCreateStreamHash => {
+                    process_range_data(
+                        &mut send,
+                        db.file_create_stream_hash_store()
+                            .context("Failed to open file_create_stream_hash store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::PipeEvent => {
+                    process_range_data(
+                        &mut send,
+                        db.pipe_event_store()
+                            .context("Failed to open pipe_event store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::DnsEvent => {
+                    process_range_data(
+                        &mut send,
+                        db.dns_query_store()
+                            .context("Failed to open dns_query store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::FileDelete => {
+                    process_range_data(
+                        &mut send,
+                        db.file_delete_store()
+                            .context("Failed to open flie_delete store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::ProcessTamper => {
+                    process_range_data(
+                        &mut send,
+                        db.process_tamper_store()
+                            .context("Failed to open process_tamper store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::FileDeleteDetected => {
+                    process_range_data(
+                        &mut send,
+                        db.file_delete_detected_store()
+                            .context("Failed to open file_delete_detected store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::Pcap => {
@@ -997,6 +1137,52 @@ async fn handle_request(
                 }
                 REconvergeKindType::Timeseries => {
                     process_raw_events(&mut send, db.periodic_time_series_store()?, msg.input)
+                        .await?;
+                }
+                REconvergeKindType::ProcessCreate => {
+                    process_raw_events(&mut send, db.process_create_store()?, msg.input).await?;
+                }
+                REconvergeKindType::FileCreateTime => {
+                    process_raw_events(&mut send, db.file_create_time_store()?, msg.input).await?;
+                }
+                REconvergeKindType::NetworkConnect => {
+                    process_raw_events(&mut send, db.network_connect_store()?, msg.input).await?;
+                }
+                REconvergeKindType::ProcessTerminate => {
+                    process_raw_events(&mut send, db.process_terminate_store()?, msg.input).await?;
+                }
+                REconvergeKindType::ImageLoad => {
+                    process_raw_events(&mut send, db.image_load_store()?, msg.input).await?;
+                }
+                REconvergeKindType::FileCreate => {
+                    process_raw_events(&mut send, db.file_create_store()?, msg.input).await?;
+                }
+                REconvergeKindType::RegistryValueSet => {
+                    process_raw_events(&mut send, db.registry_value_set_store()?, msg.input)
+                        .await?;
+                }
+                REconvergeKindType::RegistryKeyRename => {
+                    process_raw_events(&mut send, db.registry_key_rename_store()?, msg.input)
+                        .await?;
+                }
+                REconvergeKindType::FileCreateStreamHash => {
+                    process_raw_events(&mut send, db.file_create_stream_hash_store()?, msg.input)
+                        .await?;
+                }
+                REconvergeKindType::PipeEvent => {
+                    process_raw_events(&mut send, db.pipe_event_store()?, msg.input).await?;
+                }
+                REconvergeKindType::DnsEvent => {
+                    process_raw_events(&mut send, db.dns_query_store()?, msg.input).await?;
+                }
+                REconvergeKindType::FileDelete => {
+                    process_raw_events(&mut send, db.file_delete_store()?, msg.input).await?;
+                }
+                REconvergeKindType::ProcessTamper => {
+                    process_raw_events(&mut send, db.process_tamper_store()?, msg.input).await?;
+                }
+                REconvergeKindType::FileDeleteDetected => {
+                    process_raw_events(&mut send, db.file_delete_detected_store()?, msg.input)
                         .await?;
                 }
             }

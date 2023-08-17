@@ -15,11 +15,11 @@ ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2.4"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.11.1" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.12.1" }
 humantime = "2.1"
 humantime-serde = "1"
 libc = "0.2"
-num_enum = "0.6"
+num_enum = "0.7"
 pcap = "1"
 quinn = "0.10"
 rocksdb = "0.21"

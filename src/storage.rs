@@ -14,6 +14,11 @@ use giganto_client::ingest::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     },
     statistics::Statistics,
+    sysmon::{
+        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    },
     timeseries::PeriodicTimeSeries,
     Packet,
 };
@@ -27,7 +32,7 @@ use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 34] = [
     "conn",
     "dns",
     "log",
@@ -48,6 +53,20 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
     "tls",
     "smb",
     "nfs",
+    "process create",
+    "file create time",
+    "network connect",
+    "process terminate",
+    "image load",
+    "file create",
+    "registry value set",
+    "registry key rename",
+    "file create stream hash",
+    "pipe event",
+    "dns query",
+    "file delete",
+    "process tamper",
+    "file delete detected",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
@@ -348,6 +367,132 @@ impl Database {
             .db
             .cf_handle("nfs")
             .context("cannot access nfs column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `ProcessCreate` (#1).
+    pub fn process_create_store(&self) -> Result<RawEventStore<ProcessCreate>> {
+        let cf = self
+            .db
+            .cf_handle("process create")
+            .context("cannot access sysmon #1 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `FileCreateTime` (#2).
+    pub fn file_create_time_store(&self) -> Result<RawEventStore<FileCreationTimeChanged>> {
+        let cf = self
+            .db
+            .cf_handle("file create time")
+            .context("cannot access sysmon #2 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `NetworkConnect` (#3).
+    pub fn network_connect_store(&self) -> Result<RawEventStore<NetworkConnection>> {
+        let cf = self
+            .db
+            .cf_handle("network connect")
+            .context("cannot access sysmon #3 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `ProcessTerminate` (#5).
+    pub fn process_terminate_store(&self) -> Result<RawEventStore<ProcessTerminated>> {
+        let cf = self
+            .db
+            .cf_handle("process terminate")
+            .context("cannot access sysmon #5 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `ImageLoad` (#7).
+    pub fn image_load_store(&self) -> Result<RawEventStore<ImageLoaded>> {
+        let cf = self
+            .db
+            .cf_handle("image load")
+            .context("cannot access sysmon #7 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `FileCreate` (#11).
+    pub fn file_create_store(&self) -> Result<RawEventStore<FileCreate>> {
+        let cf = self
+            .db
+            .cf_handle("file create")
+            .context("cannot access sysmon #11 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `RegistryValueSet` (#13).
+    pub fn registry_value_set_store(&self) -> Result<RawEventStore<RegistryValueSet>> {
+        let cf = self
+            .db
+            .cf_handle("registry value set")
+            .context("cannot access sysmon #13 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `RegistryKeyRename` (#14).
+    pub fn registry_key_rename_store(&self) -> Result<RawEventStore<RegistryKeyValueRename>> {
+        let cf = self
+            .db
+            .cf_handle("registry key rename")
+            .context("cannot access sysmon #14 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `FileCreateStreamHash` (#15).
+    pub fn file_create_stream_hash_store(&self) -> Result<RawEventStore<FileCreateStreamHash>> {
+        let cf = self
+            .db
+            .cf_handle("file create stream hash")
+            .context("cannot access sysmon #15 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `PipeEvent` (#17).
+    pub fn pipe_event_store(&self) -> Result<RawEventStore<PipeEvent>> {
+        let cf = self
+            .db
+            .cf_handle("pipe event")
+            .context("cannot access sysmon #17 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `DnsQuery` (#22).
+    pub fn dns_query_store(&self) -> Result<RawEventStore<DnsEvent>> {
+        let cf = self
+            .db
+            .cf_handle("dns query")
+            .context("cannot access sysmon #22 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `FileDelete` (#23).
+    pub fn file_delete_store(&self) -> Result<RawEventStore<FileDelete>> {
+        let cf = self
+            .db
+            .cf_handle("file delete")
+            .context("cannot access sysmon #23 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `ProcessTamper` (#25).
+    pub fn process_tamper_store(&self) -> Result<RawEventStore<ProcessTampering>> {
+        let cf = self
+            .db
+            .cf_handle("process tamper")
+            .context("cannot access sysmon #25 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for sysmon event `FileDeleteDetected` (#26).
+    pub fn file_delete_detected_store(&self) -> Result<RawEventStore<FileDeleteDetected>> {
+        let cf = self
+            .db
+            .cf_handle("file delete detected")
+            .context("cannot access sysmon #26 column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

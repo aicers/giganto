@@ -2,6 +2,7 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
+use self::implement::SysmonEvent;
 use crate::publish::send_direct_stream;
 use crate::server::{
     certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
@@ -10,13 +11,18 @@ use crate::server::{
 use crate::storage::{Database, RawEventStore, StorageKey};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::statistics::Statistics;
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
     ingest::{
         log::{Log, Oplog},
         receive_event, receive_record_header,
+        statistics::Statistics,
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
     },
@@ -491,6 +497,188 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::ProcessCreate => {
+            handle_data(
+                send,
+                recv,
+                RecordType::ProcessCreate,
+                None,
+                source,
+                db.process_create_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::FileCreateTime => {
+            handle_data(
+                send,
+                recv,
+                RecordType::FileCreateTime,
+                None,
+                source,
+                db.file_create_time_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::NetworkConnect => {
+            handle_data(
+                send,
+                recv,
+                RecordType::NetworkConnect,
+                None,
+                source,
+                db.network_connect_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::ProcessTerminate => {
+            handle_data(
+                send,
+                recv,
+                RecordType::ProcessTerminate,
+                None,
+                source,
+                db.process_terminate_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::ImageLoad => {
+            handle_data(
+                send,
+                recv,
+                RecordType::ImageLoad,
+                None,
+                source,
+                db.image_load_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::FileCreate => {
+            handle_data(
+                send,
+                recv,
+                RecordType::FileCreate,
+                None,
+                source,
+                db.file_create_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::RegistryValueSet => {
+            handle_data(
+                send,
+                recv,
+                RecordType::RegistryValueSet,
+                None,
+                source,
+                db.registry_value_set_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::RegistryKeyRename => {
+            handle_data(
+                send,
+                recv,
+                RecordType::RegistryKeyRename,
+                None,
+                source,
+                db.registry_key_rename_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::FileCreateStreamHash => {
+            handle_data(
+                send,
+                recv,
+                RecordType::FileCreateStreamHash,
+                None,
+                source,
+                db.file_create_stream_hash_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::PipeEvent => {
+            handle_data(
+                send,
+                recv,
+                RecordType::PipeEvent,
+                None,
+                source,
+                db.pipe_event_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::DnsQuery => {
+            handle_data(
+                send,
+                recv,
+                RecordType::DnsQuery,
+                None,
+                source,
+                db.dns_query_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::FileDelete => {
+            handle_data(
+                send,
+                recv,
+                RecordType::FileDelete,
+                None,
+                source,
+                db.file_delete_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::ProcessTamper => {
+            handle_data(
+                send,
+                recv,
+                RecordType::ProcessTamper,
+                None,
+                source,
+                db.process_tamper_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::FileDeleteDetected => {
+            handle_data(
+                send,
+                recv,
+                RecordType::FileDeleteDetected,
+                None,
+                source,
+                db.file_delete_detected_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }
@@ -585,6 +773,75 @@ async fn handle_data<T>(
                         key_builder
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                             .end_key(timestamp)
+                    }
+                    RecordType::ProcessCreate
+                    | RecordType::FileCreateTime
+                    | RecordType::NetworkConnect
+                    | RecordType::ProcessTerminate
+                    | RecordType::ImageLoad
+                    | RecordType::FileCreate
+                    | RecordType::RegistryValueSet
+                    | RecordType::RegistryKeyRename
+                    | RecordType::FileCreateStreamHash
+                    | RecordType::PipeEvent
+                    | RecordType::DnsQuery
+                    | RecordType::FileDelete
+                    | RecordType::ProcessTamper
+                    | RecordType::FileDeleteDetected => {
+                        let sysmon_event: Box<dyn SysmonEvent> = match record_type {
+                            RecordType::ProcessCreate => {
+                                Box::new(bincode::deserialize::<ProcessCreate>(&raw_event)?)
+                            }
+                            RecordType::FileCreateTime => {
+                                Box::new(bincode::deserialize::<FileCreationTimeChanged>(
+                                    &raw_event,
+                                )?)
+                            }
+                            RecordType::NetworkConnect => {
+                                Box::new(bincode::deserialize::<NetworkConnection>(&raw_event)?)
+                            }
+                            RecordType::ProcessTerminate => {
+                                Box::new(bincode::deserialize::<ProcessTerminated>(&raw_event)?)
+                            }
+                            RecordType::ImageLoad => {
+                                Box::new(bincode::deserialize::<ImageLoaded>(&raw_event)?)
+                            }
+                            RecordType::FileCreate => {
+                                Box::new(bincode::deserialize::<FileCreate>(&raw_event)?)
+                            }
+                            RecordType::RegistryValueSet => {
+                                Box::new(bincode::deserialize::<RegistryValueSet>(&raw_event)?)
+                            }
+                            RecordType::RegistryKeyRename => {
+                                Box::new(bincode::deserialize::<RegistryKeyValueRename>(
+                                    &raw_event,
+                                )?)
+                            }
+                            RecordType::FileCreateStreamHash => {
+                                Box::new(bincode::deserialize::<FileCreateStreamHash>(&raw_event)?)
+                            }
+                            RecordType::PipeEvent => {
+                                Box::new(bincode::deserialize::<PipeEvent>(&raw_event)?)
+                            }
+                            RecordType::DnsQuery => {
+                                Box::new(bincode::deserialize::<DnsEvent>(&raw_event)?)
+                            }
+                            RecordType::FileDelete => {
+                                Box::new(bincode::deserialize::<FileDelete>(&raw_event)?)
+                            }
+                            RecordType::ProcessTamper => {
+                                Box::new(bincode::deserialize::<ProcessTampering>(&raw_event)?)
+                            }
+                            RecordType::FileDeleteDetected => {
+                                Box::new(bincode::deserialize::<FileDeleteDetected>(&raw_event)?)
+                            }
+                            _ => unreachable!(),
+                        };
+                        let mut mid_key = sysmon_event.agent_name().as_bytes().to_vec();
+                        mid_key.push(0);
+                        mid_key.extend_from_slice(sysmon_event.agent_id().as_bytes());
+
+                        key_builder.mid_key(Some(mid_key)).end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
                 };
