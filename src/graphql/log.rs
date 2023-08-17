@@ -1,10 +1,9 @@
-use super::{
-    base64_engine, get_timestamp, load_connection, network::key_prefix, Engine, FromKeyValue,
-};
+use super::{base64_engine, get_timestamp, load_connection, Engine, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::Database,
+    storage::{Database, KeyExtractor},
 };
+use anyhow::anyhow;
 use async_graphql::{
     connection::{query, Connection},
     Context, InputObject, Object, Result, SimpleObject,
@@ -24,15 +23,25 @@ pub struct LogFilter {
     kind: Option<String>,
 }
 
-impl RawEventFilter for LogFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for LogFilter {
+    fn get_start_key(&self) -> &str {
+        &self.source
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        self.kind.as_ref().map(|kind| kind.as_bytes().to_vec())
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for LogFilter {
     fn check(
         &self,
         _orig_addr: Option<IpAddr>,
@@ -55,15 +64,26 @@ pub struct OpLogFilter {
     contents: Option<String>,
 }
 
-impl RawEventFilter for OpLogFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for OpLogFilter {
+    fn get_start_key(&self) -> &str {
+        &self.agent_id
+    }
+
+    // oplog event don't use mid key
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for OpLogFilter {
     fn check(
         &self,
         _orig_addr: Option<IpAddr>,
@@ -141,17 +161,9 @@ impl LogQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, LogRawEvent>> {
-        let kind = if let Some(kind) = &filter.kind {
-            kind
-        } else {
-            "emptykind"
-        };
-        let mut key_prefix = Vec::with_capacity(filter.source.len() + kind.len() + 2);
-        key_prefix.extend_from_slice(filter.source.as_bytes());
-        key_prefix.push(0);
-        key_prefix.extend_from_slice(kind.as_bytes());
-        key_prefix.push(0);
-
+        if filter.kind.is_none() {
+            return Err(anyhow!("log query failed: kind is required").into());
+        }
         let db = ctx.data::<Database>()?;
         let store = db.log_store()?;
 
@@ -161,7 +173,7 @@ impl LogQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -178,7 +190,6 @@ impl LogQuery {
     ) -> Result<Connection<String, OpLogRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.oplog_store()?;
-        let key_prefix = key_prefix(&filter.agent_id);
 
         query(
             after,
@@ -186,7 +197,7 @@ impl LogQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -217,7 +228,6 @@ mod tests {
         // backward traversal in `start..end`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -251,7 +261,6 @@ mod tests {
         // backward traversal in `start..`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -286,7 +295,6 @@ mod tests {
         // backward traversal in `..end`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -321,7 +329,6 @@ mod tests {
         // forward traversal in `start..end`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -355,7 +362,6 @@ mod tests {
         // forward traversal `start..`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -390,7 +396,6 @@ mod tests {
         // forward traversal `..end`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -421,7 +426,6 @@ mod tests {
         // backward traversal in `start..end` and `before cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -455,7 +459,6 @@ mod tests {
         // backward traversal in `start..` and `before cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -486,7 +489,6 @@ mod tests {
         // backward traversal in `..end` and `before cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -521,7 +523,6 @@ mod tests {
         // forward traversal in `start..end` and `after cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -555,7 +556,6 @@ mod tests {
         // forward traversal `start..` and `after cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(
@@ -586,7 +586,6 @@ mod tests {
         // forward traversal `..end` and `after cursor`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -617,7 +616,6 @@ mod tests {
         // forward traversal `..`
         let connection = super::load_connection::<LogRawEvent, _>(
             &store,
-            b"src1\x00kind1\x00",
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
@@ -744,7 +742,6 @@ mod tests {
 
         let connection = super::load_connection::<OpLogRawEvent, _>(
             &store,
-            b"giganto@src 1\x00",
             &OpLogFilter {
                 time: Some(TimeRange {
                     start: Some(DateTime::<Utc>::from_utc(

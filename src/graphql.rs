@@ -11,8 +11,7 @@ use self::network::{IpRange, NetworkFilter, PortRange, SearchFilter};
 use crate::{
     ingest::{implement::EventFilter, PacketSources},
     storage::{
-        lower_closed_bound_key, upper_closed_bound_key, upper_open_bound_key, Database, Direction,
-        FilteredIter, KeyValue, RawEventStore,
+        Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
 };
 use anyhow::anyhow;
@@ -66,8 +65,6 @@ pub struct TimeRange {
 }
 
 pub trait RawEventFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
-
     #[allow(clippy::too_many_arguments)]
     fn check(
         &self,
@@ -117,7 +114,7 @@ fn collect_exist_timestamp<T>(
 where
     T: EventFilter + DeserializeOwned,
 {
-    let (start, end) = time_range(filter.time());
+    let (start, end) = time_range(&filter.time);
     let search_time = target_data
         .iter()
         .filter_map(|(time, value)| {
@@ -143,19 +140,21 @@ where
     search_time
 }
 
-fn time_range(
-    time_range: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    let (start, end) = time_range;
+fn time_range(time_range: &Option<TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+    let (start, end) = if let Some(time) = time_range {
+        (time.start, time.end)
+    } else {
+        (None, None)
+    };
     let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
     let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
     (start, end)
 }
 
+#[allow(clippy::too_many_lines)]
 fn get_connection<T>(
     store: &RawEventStore<'_, T>,
-    key_prefix: &[u8],
-    filter: &impl RawEventFilter,
+    filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
     first: Option<usize>,
@@ -171,20 +170,27 @@ where
         if first.is_some() {
             return Err("'before' and 'first' cannot be specified simultaneously".into());
         }
-        let (start, end) = filter.time();
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(before)?;
-        let time = upper_closed_bound_key(key_prefix, end);
-        if cursor.cmp(&time) == std::cmp::Ordering::Greater {
+
+        // generate storage search key
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(filter.get_mid_key());
+        let from_key = key_builder
+            .clone()
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
         }
         let mut iter = store
-            .boundary_iter(
-                &cursor,
-                &lower_closed_bound_key(key_prefix, start),
-                Direction::Reverse,
-            )
+            .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek() {
             if key.as_ref() == cursor {
@@ -201,20 +207,26 @@ where
         if last.is_some() {
             return Err("'after' and 'last' cannot be specified simultaneously".into());
         }
-        let (start, end) = filter.time();
-
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(after)?;
-        let time = lower_closed_bound_key(key_prefix, start);
-        if cursor.cmp(&time) == std::cmp::Ordering::Less {
+
+        // generate storage search key
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(filter.get_mid_key());
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
         }
         let mut iter = store
-            .boundary_iter(
-                &cursor,
-                &upper_open_bound_key(key_prefix, end),
-                Direction::Forward,
-            )
+            .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek() {
             if key.as_ref() == cursor {
@@ -227,26 +239,39 @@ where
         if first.is_some() {
             return Err("first and last cannot be used together".into());
         }
-        let (start, end) = filter.time();
-
         let last = last.min(MAXIMUM_PAGE_SIZE);
-        let iter = store.boundary_iter(
-            &upper_open_bound_key(key_prefix, end),
-            &lower_closed_bound_key(key_prefix, start),
-            Direction::Reverse,
-        );
+
+        // generate storage search key
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(filter.get_mid_key());
+        let from_key = key_builder
+            .clone()
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
         let (mut records, has_previous) = collect_records(iter, last, filter);
         records.reverse();
         (records, has_previous, false)
     } else {
-        let (start, end) = filter.time();
-
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let iter = store.boundary_iter(
-            &lower_closed_bound_key(key_prefix, start),
-            &upper_open_bound_key(key_prefix, end),
-            Direction::Forward,
-        );
+        // generate storage search key
+        let key_builder = StorageKey::builder()
+            .start_key(filter.get_start_key())
+            .mid_key(filter.get_mid_key());
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
         let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
     };
@@ -255,8 +280,7 @@ where
 
 fn load_connection<N, T>(
     store: &RawEventStore<'_, T>,
-    key_prefix: &[u8],
-    filter: &impl RawEventFilter,
+    filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
     first: Option<usize>,
@@ -267,7 +291,7 @@ where
     T: DeserializeOwned + EventFilter,
 {
     let (records, has_previous, has_next) =
-        get_connection(store, key_prefix, filter, after, before, first, last)?;
+        get_connection(store, filter, after, before, first, last)?;
 
     let mut connection: Connection<String, N> = Connection::new(has_previous, has_next);
     connection.edges = records
@@ -337,7 +361,6 @@ pub fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
 
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
-    key_prefix: &[u8],
     filter: &'c NetworkFilter,
     after: &Option<String>,
     before: &Option<String>,
@@ -354,19 +377,24 @@ where
         if first.is_some() {
             return Err("'before' and 'first' cannot be specified simultaneously".into());
         }
-        let (start, end) = filter.time();
 
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(before)?;
-        let time = upper_closed_bound_key(key_prefix, end);
-        if cursor.cmp(&time) == std::cmp::Ordering::Greater {
+
+        // generate storage search key
+        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
+        let from_key = key_builder
+            .clone()
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
             return Err("invalid cursor".into());
         }
-        let iter = store.boundary_iter(
-            &cursor,
-            &lower_closed_bound_key(key_prefix, start),
-            Direction::Reverse,
-        );
+        let iter = store.boundary_iter(&cursor, &to_key.key(), Direction::Reverse);
 
         (FilteredIter::new(iter, filter), Some(cursor), last)
     } else if let Some(after) = after {
@@ -376,42 +404,56 @@ where
         if last.is_some() {
             return Err("'after' and 'last' cannot be specified simultaneously".into());
         }
-        let (start, end) = filter.time();
 
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(after)?;
-        let time = lower_closed_bound_key(key_prefix, start);
-        if cursor.cmp(&time) == std::cmp::Ordering::Less {
+
+        // generate storage search key
+        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
         }
-        let iter = store.boundary_iter(
-            &cursor,
-            &upper_open_bound_key(key_prefix, end),
-            Direction::Forward,
-        );
+
+        let iter = store.boundary_iter(&cursor, &to_key.key(), Direction::Forward);
         (FilteredIter::new(iter, filter), Some(cursor), first)
     } else if let Some(last) = last {
         if first.is_some() {
             return Err("first and last cannot be used together".into());
         }
-        let (start, end) = filter.time();
-
         let last = last.min(MAXIMUM_PAGE_SIZE);
-        let iter = store.boundary_iter(
-            &upper_open_bound_key(key_prefix, end),
-            &lower_closed_bound_key(key_prefix, start),
-            Direction::Reverse,
-        );
+
+        // generate storage search key
+        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
+        let from_key = key_builder
+            .clone()
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
         (FilteredIter::new(iter, filter), None, last)
     } else {
-        let (start, end) = filter.time();
-
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let iter = store.boundary_iter(
-            &lower_closed_bound_key(key_prefix, start),
-            &upper_open_bound_key(key_prefix, end),
-            Direction::Forward,
-        );
+
+        // generate storage search key
+        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
         (FilteredIter::new(iter, filter), None, first)
     };
 
@@ -472,15 +514,6 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn get_key_prefix_packets(source: &String, request_time: DateTime<Utc>) -> Vec<u8> {
-    let mut key_prefix = Vec::with_capacity(source.len() + TIMESTAMP_SIZE + 2);
-    key_prefix.extend_from_slice(source.as_bytes());
-    key_prefix.push(0);
-    key_prefix.extend_from_slice(&request_time.timestamp_nanos().to_be_bytes());
-    key_prefix.push(0);
-    key_prefix
 }
 
 fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {

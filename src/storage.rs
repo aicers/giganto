@@ -3,11 +3,7 @@
 mod migration;
 
 use crate::{
-    graphql::{
-        get_timestamp,
-        network::{key_prefix, NetworkFilter},
-        RawEventFilter,
-    },
+    graphql::{network::NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
     ingest::implement::EventFilter,
 };
 use anyhow::{Context, Result};
@@ -27,7 +23,7 @@ use rocksdb::properties;
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
-use std::{cmp, marker::PhantomData, mem, path::Path, sync::Arc, time::Duration};
+use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
@@ -54,7 +50,6 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 20] = [
     "nfs",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
-const TIMESTAMP_SIZE: usize = 8;
 
 #[cfg(debug_assertions)]
 pub struct CfProperties {
@@ -396,16 +391,18 @@ impl<'db, T> RawEventStore<'db, T> {
         source: &str,
         timestamps: &[DateTime<Utc>],
     ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
-        let key_prefix = key_prefix(source);
+        let key_builder = StorageKey::builder().start_key(source);
         timestamps
             .iter()
             .filter_map(|timestamp| {
-                let mut key = key_prefix.clone();
-                key.extend_from_slice(&timestamp.timestamp_nanos().to_be_bytes());
+                let key = key_builder
+                    .clone()
+                    .end_key(timestamp.timestamp_nanos())
+                    .build();
                 self.db
-                    .get_cf(&self.cf, &key)
+                    .get_cf(&self.cf, key.key())
                     .ok()
-                    .and_then(|val| get_timestamp(&key).ok().zip(val))
+                    .and_then(|val| Some(*timestamp).zip(val))
             })
             .collect::<Vec<_>>()
     }
@@ -415,14 +412,13 @@ impl<'db, T> RawEventStore<'db, T> {
         source: &str,
         timestamps: &[i64],
     ) -> Vec<(i64, String, Vec<u8>)> {
-        let key_prefix = key_prefix(source);
+        let key_builder = StorageKey::builder().start_key(source);
         let values_with_source: Vec<(i64, String, Vec<u8>)> = timestamps
             .iter()
             .filter_map(|timestamp| {
-                let mut key: Vec<u8> = key_prefix.clone();
-                key.extend_from_slice(&timestamp.to_be_bytes());
+                let key = key_builder.clone().end_key(*timestamp).build();
                 self.db
-                    .get_cf(&self.cf, &key)
+                    .get_cf(&self.cf, key.key())
                     .ok()
                     .and_then(|value| value.map(|val| (*timestamp, source.to_string(), val)))
             })
@@ -480,45 +476,97 @@ impl<'db> SourceStore<'db> {
 // See rust-rocksdb/rust-rocksdb#407.
 unsafe impl<'db> Send for SourceStore<'db> {}
 
-/// Creates a key corresponding to the given `prefix` and `time`.
-pub fn lower_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
-    bound.extend(prefix);
-    if let Some(time) = time {
-        bound.extend(time.timestamp_nanos().to_be_bytes());
+#[allow(clippy::module_name_repetitions)]
+#[derive(Default, Debug, Clone)]
+pub struct StorageKey(Vec<u8>);
+
+impl StorageKey {
+    #[must_use]
+    pub fn builder() -> StorageKeyBuilder {
+        StorageKeyBuilder::default()
     }
-    bound
+
+    pub fn key(self) -> Vec<u8> {
+        self.0
+    }
 }
 
-/// Creates a key corresponding to the given `prefix` and `time`.
-pub fn upper_closed_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>());
-    bound.extend(prefix);
-    if let Some(time) = time {
-        bound.extend(time.timestamp_nanos().to_be_bytes());
-    } else {
-        bound.extend(i64::MAX.to_be_bytes());
-    }
-    bound
+pub trait KeyExtractor {
+    fn get_start_key(&self) -> &str;
+    fn get_mid_key(&self) -> Option<Vec<u8>>;
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 }
 
-/// Creates a key that follows the key calculated from the given `prefix` and
-/// `time`.
-pub fn upper_open_bound_key(prefix: &[u8], time: Option<DateTime<Utc>>) -> Vec<u8> {
-    let mut bound = Vec::with_capacity(prefix.len() + mem::size_of::<i64>() + 1);
-    bound.extend(prefix);
-    if let Some(time) = time {
-        let ns = time.timestamp_nanos();
-        if let Some(ns) = ns.checked_sub(1) {
-            if ns >= 0 {
-                bound.extend(ns.to_be_bytes());
-                return bound;
+#[allow(clippy::module_name_repetitions)]
+#[derive(Default, Debug, Clone)]
+pub struct StorageKeyBuilder {
+    pre_key: Vec<u8>,
+}
+
+impl StorageKeyBuilder {
+    pub fn start_key(mut self, key: &str) -> Self {
+        let start_key = key.as_bytes();
+        self.pre_key.reserve(start_key.len() + 1);
+        self.pre_key.extend_from_slice(start_key);
+        self.pre_key.push(0);
+        self
+    }
+
+    pub fn mid_key(mut self, key: Option<Vec<u8>>) -> Self {
+        if let Some(mid_key) = key {
+            self.pre_key.reserve(mid_key.len() + 1);
+            self.pre_key.extend_from_slice(&mid_key);
+            self.pre_key.push(0);
+        }
+        self
+    }
+
+    pub fn end_key(mut self, key: i64) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        self.pre_key.extend_from_slice(&key.to_be_bytes());
+        self
+    }
+
+    pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        let end_key = if let Some(time) = time {
+            time.timestamp_nanos()
+        } else {
+            0
+        };
+        self.pre_key.extend_from_slice(&end_key.to_be_bytes());
+        self
+    }
+
+    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        let end_key = if let Some(time) = time {
+            time.timestamp_nanos()
+        } else {
+            i64::MAX
+        };
+        self.pre_key.extend_from_slice(&end_key.to_be_bytes());
+        self
+    }
+
+    pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        if let Some(time) = time {
+            let ns = time.timestamp_nanos();
+            if let Some(ns) = ns.checked_sub(1) {
+                if ns >= 0 {
+                    self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                    return self;
+                }
             }
         }
+        self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
+        self
     }
-    bound.extend(i64::MAX.to_be_bytes());
-    bound.push(0);
-    bound
+
+    pub fn build(self) -> StorageKey {
+        StorageKey(self.pre_key)
+    }
 }
 
 pub type KeyValue<T> = (Box<[u8]>, T);

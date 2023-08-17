@@ -7,7 +7,7 @@ use crate::server::{
     certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
     SERVER_ENDPOINT_DELAY,
 };
-use crate::storage::{Database, RawEventStore};
+use crate::storage::{Database, RawEventStore, StorageKey};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::statistics::Statistics;
@@ -553,48 +553,43 @@ async fn handle_data<T>(
                     send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                     continue;
                 }
-                let mut key: Vec<u8> = Vec::new();
-                key.extend_from_slice(source.as_bytes());
-                key.push(0);
-                match record_type {
+                let key_builder = StorageKey::builder().start_key(&source);
+                let key_builder = match record_type {
                     RecordType::Log => {
-                        key.extend_from_slice(
-                            bincode::deserialize::<Log>(&raw_event)?.kind.as_bytes(),
-                        );
-                        key.push(0);
-                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        let log = bincode::deserialize::<Log>(&raw_event)?;
+                        key_builder
+                            .mid_key(Some(log.kind.as_bytes().to_vec()))
+                            .end_key(timestamp)
                     }
                     RecordType::PeriodicTimeSeries => {
-                        let periodic_time_series =
-                            bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
-                        key.clear();
-                        key.extend_from_slice(periodic_time_series.id.as_bytes());
-                        key.push(0);
-                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        let time_series = bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
+                        StorageKey::builder()
+                            .start_key(&time_series.id)
+                            .end_key(timestamp)
                     }
                     RecordType::Oplog => {
                         let oplog = bincode::deserialize::<Oplog>(&raw_event)?;
                         let agent_id = format!("{}@{source}", oplog.agent_name);
-                        key.clear();
-                        key.extend_from_slice(agent_id.as_bytes());
-                        key.push(0);
-                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        StorageKey::builder()
+                            .start_key(&agent_id)
+                            .end_key(timestamp)
                     }
                     RecordType::Packet => {
                         let packet = bincode::deserialize::<Packet>(&raw_event)?;
-                        key.extend_from_slice(&timestamp.to_be_bytes());
-                        key.push(0);
-                        key.extend_from_slice(&packet.packet_timestamp.to_be_bytes());
+                        key_builder
+                            .mid_key(Some(timestamp.to_be_bytes().to_vec()))
+                            .end_key(packet.packet_timestamp)
                     }
                     RecordType::Statistics => {
                         let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
-                        key.extend_from_slice(&statistics.core.to_be_bytes());
-                        key.push(0);
-                        key.extend_from_slice(&timestamp.to_be_bytes());
+                        key_builder
+                            .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
+                            .end_key(timestamp)
                     }
-                    _ => key.extend_from_slice(&timestamp.to_be_bytes()),
-                }
-                store.append(&key, &raw_event)?;
+                    _ => key_builder.end_key(timestamp),
+                };
+                let storage_key = key_builder.build();
+                store.append(&storage_key.key(), &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
                     send_direct_stream(
                         network_key,
@@ -665,7 +660,7 @@ async fn check_sources_conn(
                 for source_key in keys {
                     let timestamp = Utc::now();
                     if source_store.insert(&source_key, timestamp).is_err(){
-                        error!("Failed to append Source store");
+                        error!("Failed to append source store");
                     }
                     sources.insert(source_key, timestamp);
                 }
@@ -675,7 +670,7 @@ async fn check_sources_conn(
                 match conn_state {
                     ConnState::Connected => {
                         if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append Source store");
+                            error!("Failed to append source store");
                         }
                         if !rep {
                             sources.write().await.insert(source_key, timestamp_val);
@@ -686,7 +681,7 @@ async fn check_sources_conn(
                     }
                     ConnState::Disconnected => {
                         if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append Source store");
+                            error!("Failed to append source store");
                         }
                         if !rep {
                             sources.write().await.remove(&source_key);

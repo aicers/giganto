@@ -71,7 +71,7 @@ pub fn certificate_info(cert_info: &[Certificate]) -> Result<(String, String)> {
         .and_then(|cn| cn.as_str().ok())
         .context("the subject of the certificate is not valid")?;
     if subject.contains('@') {
-        info!("Connected Client Name : {}", subject);
+        info!("Connected client name : {}", subject);
         let parsed = subject.split('@').collect::<Vec<&str>>();
 
         Ok((String::from(parsed[0]), String::from(parsed[1])))

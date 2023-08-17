@@ -1,5 +1,8 @@
 use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilter};
-use crate::{graphql::TimeRange, storage::Database};
+use crate::{
+    graphql::TimeRange,
+    storage::{Database, KeyExtractor},
+};
 use async_graphql::{
     connection::{query, Connection},
     Context, InputObject, Object, Result, SimpleObject,
@@ -8,6 +11,8 @@ use chrono::{DateTime, Utc};
 use giganto_client::ingest::statistics::Statistics;
 use serde::Serialize;
 use std::net::IpAddr;
+
+pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
@@ -18,15 +23,25 @@ pub struct StatisticsFilter {
     core: u32,
 }
 
-impl RawEventFilter for StatisticsFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for StatisticsFilter {
+    fn get_start_key(&self) -> &str {
+        &self.source
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        Some(self.core.to_be_bytes().to_vec())
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for StatisticsFilter {
     fn check(
         &self,
         _orig_addr: Option<IpAddr>,
@@ -81,12 +96,6 @@ impl StatisticsQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, StatisticsRawEvent>> {
-        let mut key_prefix = Vec::with_capacity(filter.source.len() + 2);
-        key_prefix.extend_from_slice(filter.source.as_bytes());
-        key_prefix.push(0);
-        key_prefix.extend_from_slice(&filter.core.to_be_bytes());
-        key_prefix.push(0);
-
         let db = ctx.data::<Database>()?;
         let store = db.statistics_store()?;
 
@@ -96,7 +105,7 @@ impl StatisticsQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await

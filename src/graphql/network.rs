@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::{Database, FilteredIter},
+    storage::{Database, FilteredIter, KeyExtractor},
 };
 use async_graphql::{
     connection::{query, Connection, Edge},
@@ -24,7 +24,7 @@ pub(super) struct NetworkQuery;
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
 pub struct NetworkFilter {
-    time: Option<TimeRange>,
+    pub time: Option<TimeRange>,
     #[serde(skip)]
     pub source: String,
     orig_addr: Option<IpRange>,
@@ -37,7 +37,7 @@ pub struct NetworkFilter {
 
 #[derive(InputObject, Serialize)]
 pub struct SearchFilter {
-    time: Option<TimeRange>,
+    pub time: Option<TimeRange>,
     #[serde(skip)]
     pub source: String,
     orig_addr: Option<IpRange>,
@@ -62,15 +62,26 @@ pub struct PortRange {
     pub end: Option<u16>,
 }
 
-impl RawEventFilter for NetworkFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl KeyExtractor for NetworkFilter {
+    fn get_start_key(&self) -> &str {
+        &self.source
+    }
+
+    // network event don't use mid key
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
             (None, None)
         }
     }
+}
 
+impl RawEventFilter for NetworkFilter {
     fn check(
         &self,
         orig_addr: Option<IpAddr>,
@@ -93,14 +104,6 @@ impl RawEventFilter for NetworkFilter {
 }
 
 impl RawEventFilter for SearchFilter {
-    fn time(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-        if let Some(time) = &self.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        }
-    }
-
     fn check(
         &self,
         orig_addr: Option<IpAddr>,
@@ -688,7 +691,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, ConnRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.conn_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -696,7 +698,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -713,7 +715,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, DnsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.dns_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -721,7 +722,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -738,7 +739,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, HttpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.http_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -746,7 +746,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -763,7 +763,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, RdpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.rdp_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -771,7 +770,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -788,7 +787,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SmtpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.smtp_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -796,7 +794,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -813,7 +811,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, NtlmRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ntlm_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -821,7 +818,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -838,7 +835,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, KerberosRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.kerberos_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -846,7 +842,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -863,7 +859,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SshRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ssh_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -871,7 +866,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -888,7 +883,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, DceRpcRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.dce_rpc_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -896,7 +890,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -913,7 +907,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, FtpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ftp_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -921,7 +914,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -938,7 +931,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, MqttRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.mqtt_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -946,7 +938,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -963,7 +955,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, LdapRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ldap_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -971,7 +962,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -988,7 +979,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, TlsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.tls_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -996,7 +986,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -1013,7 +1003,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SmbRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.smb_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -1021,7 +1010,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -1038,7 +1027,6 @@ impl NetworkQuery {
     ) -> Result<Connection<String, NfsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.nfs_store()?;
-        let key_prefix = key_prefix(&filter.source);
 
         query(
             after,
@@ -1046,7 +1034,7 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &key_prefix, &filter, after, before, first, last)
+                load_connection(&store, &filter, after, before, first, last)
             },
         )
         .await
@@ -1063,22 +1051,14 @@ impl NetworkQuery {
         last: Option<i32>,
     ) -> Result<Connection<String, NetworkRawEvents>> {
         let db = ctx.data::<Database>()?;
-        let key_prefix = key_prefix(&filter.source);
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                let (conn_iter, cursor, size) = get_filtered_iter(
-                    &db.conn_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (conn_iter, cursor, size) =
+                    get_filtered_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
                 let mut conn_iter = conn_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = conn_iter.peek() {
@@ -1088,15 +1068,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (dns_iter, cursor, _) = get_filtered_iter(
-                    &db.dns_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (dns_iter, cursor, _) =
+                    get_filtered_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
                 let mut dns_iter = dns_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = dns_iter.peek() {
@@ -1106,15 +1079,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (http_iter, cursor, _) = get_filtered_iter(
-                    &db.http_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (http_iter, cursor, _) =
+                    get_filtered_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
                 let mut http_iter = http_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = http_iter.peek() {
@@ -1124,15 +1090,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (rdp_iter, cursor, _) = get_filtered_iter(
-                    &db.rdp_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (rdp_iter, cursor, _) =
+                    get_filtered_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
                 let mut rdp_iter = rdp_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = rdp_iter.peek() {
@@ -1142,15 +1101,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (ntlm_iter, cursor, _) = get_filtered_iter(
-                    &db.ntlm_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (ntlm_iter, cursor, _) =
+                    get_filtered_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
                 let mut ntlm_iter = ntlm_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = ntlm_iter.peek() {
@@ -1162,7 +1114,6 @@ impl NetworkQuery {
 
                 let (kerberos_iter, cursor, _) = get_filtered_iter(
                     &db.kerberos_store()?,
-                    &key_prefix,
                     &filter,
                     &after,
                     &before,
@@ -1178,15 +1129,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (ssh_iter, cursor, _) = get_filtered_iter(
-                    &db.ssh_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (ssh_iter, cursor, _) =
+                    get_filtered_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
                 let mut ssh_iter = ssh_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = ssh_iter.peek() {
@@ -1196,15 +1140,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (dce_rpc_iter, cursor, _) = get_filtered_iter(
-                    &db.dce_rpc_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (dce_rpc_iter, cursor, _) =
+                    get_filtered_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
                 let mut dce_rpc_iter = dce_rpc_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = dce_rpc_iter.peek() {
@@ -1214,15 +1151,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (ftp_iter, cursor, _) = get_filtered_iter(
-                    &db.ftp_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (ftp_iter, cursor, _) =
+                    get_filtered_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
                 let mut ftp_iter = ftp_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = ftp_iter.peek() {
@@ -1232,15 +1162,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (mqtt_iter, cursor, _) = get_filtered_iter(
-                    &db.mqtt_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (mqtt_iter, cursor, _) =
+                    get_filtered_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
                 let mut mqtt_iter = mqtt_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = mqtt_iter.peek() {
@@ -1250,15 +1173,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (ldap_iter, cursor, _) = get_filtered_iter(
-                    &db.ldap_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (ldap_iter, cursor, _) =
+                    get_filtered_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
                 let mut ldap_iter = ldap_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = ldap_iter.peek() {
@@ -1268,15 +1184,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (tls_iter, cursor, _) = get_filtered_iter(
-                    &db.tls_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (tls_iter, cursor, _) =
+                    get_filtered_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
                 let mut tls_iter = tls_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = tls_iter.peek() {
@@ -1286,15 +1195,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (smb_iter, cursor, _) = get_filtered_iter(
-                    &db.smb_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (smb_iter, cursor, _) =
+                    get_filtered_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
                 let mut smb_iter = smb_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = smb_iter.peek() {
@@ -1304,15 +1206,8 @@ impl NetworkQuery {
                     }
                 }
 
-                let (nfs_iter, cursor, _) = get_filtered_iter(
-                    &db.nfs_store()?,
-                    &key_prefix,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
+                let (nfs_iter, cursor, _) =
+                    get_filtered_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
                 let mut nfs_iter = nfs_iter.peekable();
                 if let Some(cursor) = cursor {
                     if let Some((key, _)) = nfs_iter.peek() {
@@ -1895,13 +1790,6 @@ fn network_connection(
     connection.edges.extend(result_vec.into_iter());
 
     Ok(connection)
-}
-
-pub(crate) fn key_prefix(source: &str) -> Vec<u8> {
-    let mut prefix = Vec::with_capacity(source.len() + 1);
-    prefix.extend_from_slice(source.as_bytes());
-    prefix.push(0);
-    prefix
 }
 
 fn min_max_time(is_forward: bool) -> DateTime<Utc> {

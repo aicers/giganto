@@ -9,9 +9,7 @@ use crate::server::{
     certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
     SERVER_ENDPOINT_DELAY,
 };
-use crate::storage::{
-    lower_closed_bound_key, upper_open_bound_key, Database, Direction, RawEventStore,
-};
+use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use giganto_client::{
@@ -194,6 +192,7 @@ async fn request_stream(
                                             db,
                                             conn,
                                             Some(source),
+                                            None,
                                             node_type,
                                             record_type,
                                             msg,
@@ -216,6 +215,7 @@ async fn request_stream(
                                             db,
                                             conn,
                                             None,
+                                            None, //if crusher supports generating time series of logs, It will change to valid values.
                                             node_type,
                                             record_type,
                                             msg,
@@ -281,11 +281,12 @@ async fn process_pcap_extract(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn process_stream<T>(
     db: Database,
     conn: Connection,
     source: Option<String>,
+    kind: Option<String>,
     node_type: NodeType,
     record_type: RequestStreamRecord,
     request_msg: T,
@@ -303,6 +304,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -322,6 +324,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -341,6 +344,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -360,6 +364,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -379,6 +384,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -398,6 +404,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -417,6 +424,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -436,6 +444,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -455,6 +464,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -474,6 +484,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -493,6 +504,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -512,6 +524,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -531,6 +544,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -550,6 +564,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -569,6 +584,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -588,6 +604,7 @@ where
                     record_type,
                     request_msg,
                     source,
+                    kind,
                     node_type,
                     stream_direct_channel,
                 )
@@ -632,12 +649,14 @@ pub async fn send_direct_stream(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_stream<T, N>(
     store: RawEventStore<'_, T>,
     conn: Connection,
     record_type: RequestStreamRecord,
     msg: N,
     source: Option<String>,
+    kind: Option<String>,
     node_type: NodeType,
     stream_direct_channel: StreamDirectChannel,
 ) -> Result<()>
@@ -665,28 +684,28 @@ where
             send_hog_stream_start_message(&mut sender, record_type)
                 .await
                 .map_err(|e| anyhow!("Failed to write hog start message: {}", e))?;
-            info!("start hog's publish Stream : {:?}", record_type);
+            info!("start hog's publish stream : {:?}", record_type);
         }
         NodeType::Crusher => {
-            let db_key_prefix = msg.database_key()?;
             // crusher's policy Id always exists.
-            let id = msg.source_id().unwrap();
+            let id = msg.id().unwrap();
             send_crusher_stream_start_message(&mut sender, id)
                 .await
                 .map_err(|e| anyhow!("Failed to write crusher start message: {}", e))?;
-            info!("start crusher's publish Stream : {:?}", record_type);
+            info!("start crusher's publish stream : {:?}", record_type);
 
-            let iter = store.boundary_iter(
-                &lower_closed_bound_key(
-                    &db_key_prefix,
-                    Some(Utc.timestamp_nanos(msg.start_time())),
-                ),
-                &upper_open_bound_key(&db_key_prefix, None),
-                Direction::Forward,
-            );
+            let key_builder = StorageKey::builder()
+                .start_key(&msg.source()?)
+                .mid_key(kind.map(|s| s.as_bytes().to_vec()));
+            let from_key = key_builder
+                .clone()
+                .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start_time())))
+                .build();
+            let to_key = key_builder.upper_open_bound_end_key(None).build();
+            let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
 
             for item in iter {
-                let (key, val) = item.context("Failed to read Database")?;
+                let (key, val) = item.context("Failed to read database")?;
                 let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
                     bail!("Failed to deserialize database data");
                 };
@@ -995,18 +1014,22 @@ async fn process_range_data<'c, T>(
 where
     T: DeserializeOwned + ResponseRangeData,
 {
-    let mut key_prefix = Vec::new();
-    key_prefix.extend_from_slice(msg.source.as_bytes());
-    key_prefix.push(0);
-    if availd_kind {
-        key_prefix.extend_from_slice(msg.kind.as_bytes());
-        key_prefix.push(0);
-    }
-    let iter = store.boundary_iter(
-        &lower_closed_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.start))),
-        &upper_open_bound_key(&key_prefix, Some(Utc.timestamp_nanos(msg.end))),
-        Direction::Forward,
-    );
+    let key_builder = StorageKey::builder().start_key(&msg.source);
+    let key_builder = if availd_kind {
+        key_builder.mid_key(Some(msg.kind.as_bytes().to_vec()))
+    } else {
+        key_builder
+    };
+
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start)))
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_end_key(Some(Utc.timestamp_nanos(msg.end)))
+        .build();
+
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
 
     for item in iter.take(msg.count) {
         let (key, val) = item.context("Failed to read Database")?;
