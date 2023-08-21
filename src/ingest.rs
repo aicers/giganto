@@ -2,7 +2,6 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use self::implement::SysmonEvent;
 use crate::publish::send_direct_stream;
 use crate::server::{
     certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
@@ -18,11 +17,6 @@ use giganto_client::{
         log::{Log, Oplog},
         receive_event, receive_record_header,
         statistics::Statistics,
-        sysmon::{
-            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-        },
         timeseries::PeriodicTimeSeries,
         Packet, RecordType,
     },
@@ -771,77 +765,8 @@ async fn handle_data<T>(
                     RecordType::Statistics => {
                         let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
                         key_builder
-                            .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
+                            .mid_key(Some(statistics.core.to_string().as_bytes().to_vec()))
                             .end_key(timestamp)
-                    }
-                    RecordType::ProcessCreate
-                    | RecordType::FileCreateTime
-                    | RecordType::NetworkConnect
-                    | RecordType::ProcessTerminate
-                    | RecordType::ImageLoad
-                    | RecordType::FileCreate
-                    | RecordType::RegistryValueSet
-                    | RecordType::RegistryKeyRename
-                    | RecordType::FileCreateStreamHash
-                    | RecordType::PipeEvent
-                    | RecordType::DnsQuery
-                    | RecordType::FileDelete
-                    | RecordType::ProcessTamper
-                    | RecordType::FileDeleteDetected => {
-                        let sysmon_event: Box<dyn SysmonEvent> = match record_type {
-                            RecordType::ProcessCreate => {
-                                Box::new(bincode::deserialize::<ProcessCreate>(&raw_event)?)
-                            }
-                            RecordType::FileCreateTime => {
-                                Box::new(bincode::deserialize::<FileCreationTimeChanged>(
-                                    &raw_event,
-                                )?)
-                            }
-                            RecordType::NetworkConnect => {
-                                Box::new(bincode::deserialize::<NetworkConnection>(&raw_event)?)
-                            }
-                            RecordType::ProcessTerminate => {
-                                Box::new(bincode::deserialize::<ProcessTerminated>(&raw_event)?)
-                            }
-                            RecordType::ImageLoad => {
-                                Box::new(bincode::deserialize::<ImageLoaded>(&raw_event)?)
-                            }
-                            RecordType::FileCreate => {
-                                Box::new(bincode::deserialize::<FileCreate>(&raw_event)?)
-                            }
-                            RecordType::RegistryValueSet => {
-                                Box::new(bincode::deserialize::<RegistryValueSet>(&raw_event)?)
-                            }
-                            RecordType::RegistryKeyRename => {
-                                Box::new(bincode::deserialize::<RegistryKeyValueRename>(
-                                    &raw_event,
-                                )?)
-                            }
-                            RecordType::FileCreateStreamHash => {
-                                Box::new(bincode::deserialize::<FileCreateStreamHash>(&raw_event)?)
-                            }
-                            RecordType::PipeEvent => {
-                                Box::new(bincode::deserialize::<PipeEvent>(&raw_event)?)
-                            }
-                            RecordType::DnsQuery => {
-                                Box::new(bincode::deserialize::<DnsEvent>(&raw_event)?)
-                            }
-                            RecordType::FileDelete => {
-                                Box::new(bincode::deserialize::<FileDelete>(&raw_event)?)
-                            }
-                            RecordType::ProcessTamper => {
-                                Box::new(bincode::deserialize::<ProcessTampering>(&raw_event)?)
-                            }
-                            RecordType::FileDeleteDetected => {
-                                Box::new(bincode::deserialize::<FileDeleteDetected>(&raw_event)?)
-                            }
-                            _ => unreachable!(),
-                        };
-                        let mut mid_key = sysmon_event.agent_name().as_bytes().to_vec();
-                        mid_key.push(0);
-                        mid_key.extend_from_slice(sysmon_event.agent_id().as_bytes());
-
-                        key_builder.mid_key(Some(mid_key)).end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
                 };

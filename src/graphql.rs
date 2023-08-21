@@ -353,7 +353,7 @@ where
     (records, has_more)
 }
 
-pub fn get_timestamp(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         return Ok(Utc.timestamp_nanos(nanos));

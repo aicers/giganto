@@ -1,4 +1,4 @@
-use super::{get_timestamp, load_connection, FromKeyValue};
+use super::{get_timestamp_from_key, load_connection, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -65,7 +65,7 @@ struct TimeSeries {
 impl FromKeyValue<PeriodicTimeSeries> for TimeSeries {
     fn from_key_value(key: &[u8], p: PeriodicTimeSeries) -> Result<Self> {
         Ok(TimeSeries {
-            start: get_timestamp(key)?,
+            start: get_timestamp_from_key(key)?,
             id: p.id,
             data: p.data,
         })

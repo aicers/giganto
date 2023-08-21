@@ -1,4 +1,4 @@
-use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilter, TimeRange};
+use super::{get_timestamp_from_key, load_connection, FromKeyValue, RawEventFilter, TimeRange};
 use crate::storage::{Database, KeyExtractor};
 use async_graphql::{
     connection::{query, Connection},
@@ -263,7 +263,7 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty, $($fields:ident),*) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let timestamp = get_timestamp(key)?;
+                let timestamp = get_timestamp_from_key(key)?;
                 Ok(Self {
                     timestamp,
                     process_guid: val.process_guid,
@@ -421,7 +421,7 @@ from_key_value!(
 impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     fn from_key_value(key: &[u8], value: NetworkConnection) -> Result<Self> {
         Ok(NetworkConnectionEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             process_guid: value.process_guid,
             process_id: value.process_id,
             image: value.image,
