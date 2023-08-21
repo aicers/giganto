@@ -20,8 +20,8 @@ pub(super) struct SysmonQuery;
 pub struct SysmonFilter {
     time: Option<TimeRange>,
     source: String,
-    agent_name: Option<String>,
-    agent_id: Option<String>,
+    // agent_name: Option<String>,
+    // agent_id: Option<String>,
 }
 
 impl RawEventFilter for SysmonFilter {
@@ -45,15 +45,6 @@ impl KeyExtractor for SysmonFilter {
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        if let Some(agent_name) = &self.agent_name {
-            let mut mid_key = Vec::new();
-            mid_key.extend_from_slice(agent_name.as_bytes());
-            if let Some(agent_id) = &self.agent_id {
-                mid_key.push(0);
-                mid_key.extend_from_slice(agent_id.as_bytes());
-            }
-            return Some(mid_key);
-        }
         None
     }
 
@@ -69,6 +60,8 @@ impl KeyExtractor for SysmonFilter {
 #[derive(SimpleObject, Debug)]
 struct ProcessCreateEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -95,6 +88,8 @@ struct ProcessCreateEvent {
 #[derive(SimpleObject, Debug)]
 struct FileCreationTimeChangedEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -107,6 +102,8 @@ struct FileCreationTimeChangedEvent {
 #[derive(SimpleObject, Debug)]
 struct NetworkConnectionEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -128,6 +125,8 @@ struct NetworkConnectionEvent {
 #[derive(SimpleObject, Debug)]
 struct ProcessTerminatedEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -137,6 +136,8 @@ struct ProcessTerminatedEvent {
 #[derive(SimpleObject, Debug)]
 struct ImageLoadedEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -156,6 +157,8 @@ struct ImageLoadedEvent {
 #[derive(SimpleObject, Debug)]
 struct FileCreateEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -167,6 +170,8 @@ struct FileCreateEvent {
 #[derive(SimpleObject, Debug)]
 struct RegistryValueSetEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     event_type: String,
     process_guid: String,
     process_id: u32,
@@ -179,6 +184,8 @@ struct RegistryValueSetEvent {
 #[derive(SimpleObject, Debug)]
 struct RegistryKeyValueRenameEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     event_type: String,
     process_guid: String,
     process_id: u32,
@@ -191,6 +198,8 @@ struct RegistryKeyValueRenameEvent {
 #[derive(SimpleObject, Debug)]
 struct FileCreateStreamHashEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -204,6 +213,8 @@ struct FileCreateStreamHashEvent {
 #[derive(SimpleObject, Debug)]
 struct PipeEventEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     event_type: String,
     process_guid: String,
     process_id: u32,
@@ -215,6 +226,8 @@ struct PipeEventEvent {
 #[derive(SimpleObject, Debug)]
 struct DnsEventEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     query_name: String,
@@ -227,6 +240,8 @@ struct DnsEventEvent {
 #[derive(SimpleObject, Debug)]
 struct FileDeleteEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     user: String,
@@ -240,6 +255,8 @@ struct FileDeleteEvent {
 #[derive(SimpleObject, Debug)]
 struct ProcessTamperingEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     image: String,
@@ -250,6 +267,8 @@ struct ProcessTamperingEvent {
 #[derive(SimpleObject, Debug)]
 struct FileDeleteDetectedEvent {
     timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
     process_guid: String,
     process_id: u32,
     user: String,
@@ -266,6 +285,8 @@ macro_rules! from_key_value {
                 let timestamp = get_timestamp_from_key(key)?;
                 Ok(Self {
                     timestamp,
+                    agent_name: val.agent_name,
+                    agent_id: val.agent_id,
                     process_guid: val.process_guid,
                     process_id: val.process_id,
                     $(
@@ -422,6 +443,8 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     fn from_key_value(key: &[u8], value: NetworkConnection) -> Result<Self> {
         Ok(NetworkConnectionEvent {
             timestamp: get_timestamp_from_key(key)?,
+            agent_name: value.agent_name,
+            agent_id: value.agent_id,
             process_guid: value.process_guid,
             process_id: value.process_id,
             image: value.image,
