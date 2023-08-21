@@ -1,4 +1,4 @@
-use super::{base64_engine, get_timestamp, load_connection, Engine, FromKeyValue};
+use super::{base64_engine, get_timestamp_from_key, load_connection, Engine, FromKeyValue};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -127,7 +127,7 @@ struct LogRawEvent {
 impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             log: base64_engine.encode(l.log),
         })
     }
@@ -143,7 +143,7 @@ struct OpLogRawEvent {
 impl FromKeyValue<Oplog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: Oplog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
         })

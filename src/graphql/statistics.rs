@@ -1,4 +1,4 @@
-use super::{get_timestamp, load_connection, FromKeyValue, RawEventFilter};
+use super::{get_timestamp_from_key, load_connection, FromKeyValue, RawEventFilter};
 use crate::{
     graphql::TimeRange,
     storage::{Database, KeyExtractor},
@@ -73,7 +73,7 @@ impl FromKeyValue<Statistics> for StatisticsRawEvent {
             .map(|(rt, cnt, size)| format!("{rt:?}/{size}/{cnt}"))
             .collect::<Vec<_>>();
         Ok(StatisticsRawEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             core: val.core,
             period: val.period,
             stats,

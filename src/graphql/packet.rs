@@ -1,6 +1,6 @@
 use super::{
-    collect_records, get_timestamp, load_connection, write_run_tcpdump, Direction, FromKeyValue,
-    RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    collect_records, get_timestamp_from_key, load_connection, write_run_tcpdump, Direction,
+    FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::storage::{Database, KeyExtractor, StorageKey};
 use async_graphql::{
@@ -72,8 +72,8 @@ struct Pcap {
 impl FromKeyValue<pk> for Packet {
     fn from_key_value(key: &[u8], pk: pk) -> Result<Self> {
         Ok(Packet {
-            request_time: get_timestamp(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
-            packet_time: get_timestamp(key)?,
+            request_time: get_timestamp_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
+            packet_time: get_timestamp_from_key(key)?,
             packet: BASE64.encode(&pk.packet),
         })
     }

@@ -1,7 +1,7 @@
 #![allow(clippy::unused_async)]
 use super::{
     base64_engine, check_address, check_port, collect_exist_timestamp, get_filtered_iter,
-    get_timestamp, load_connection, Engine, FromKeyValue,
+    get_timestamp_from_key, load_connection, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
@@ -458,7 +458,7 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty, $($fields:ident),*) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let timestamp = get_timestamp(key)?;
+                let timestamp = get_timestamp_from_key(key)?;
                 Ok(Self {
                     timestamp,
                     orig_addr: val.orig_addr.to_string(),
@@ -479,7 +479,7 @@ macro_rules! from_key_value {
 impl FromKeyValue<Conn> for ConnRawEvent {
     fn from_key_value(key: &[u8], val: Conn) -> Result<Self> {
         Ok(ConnRawEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -498,7 +498,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
 impl FromKeyValue<Ftp> for FtpRawEvent {
     fn from_key_value(key: &[u8], val: Ftp) -> Result<Self> {
         Ok(FtpRawEvent {
-            timestamp: get_timestamp(key)?,
+            timestamp: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -1498,85 +1498,85 @@ fn network_connection(
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dns_ts = if let Some((ref key, _)) = dns_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let http_ts = if let Some((ref key, _)) = http_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let rdp_ts = if let Some((ref key, _)) = rdp_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ntlm_ts = if let Some((ref key, _)) = ntlm_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let kerberos_ts = if let Some((ref key, _)) = kerberos_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ssh_ts = if let Some((ref key, _)) = ssh_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dce_rpc_ts = if let Some((ref key, _)) = dce_rpc_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ftp_ts = if let Some((ref key, _)) = ftp_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let mqtt_ts = if let Some((ref key, _)) = mqtt_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ldap_ts = if let Some((ref key, _)) = ldap_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let tls_ts = if let Some((ref key, _)) = tls_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let smb_ts = if let Some((ref key, _)) = smb_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let nfs_ts = if let Some((ref key, _)) = nfs_data {
-            get_timestamp(key)?
+            get_timestamp_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
