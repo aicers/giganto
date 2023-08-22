@@ -1604,7 +1604,6 @@ fn network_connection(
                         NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
                     ));
                     conn_data = conn_iter.next();
-                } else {
                 };
             }
             _ if selected == dns_ts => {
@@ -1614,7 +1613,6 @@ fn network_connection(
                         NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
                     ));
                     dns_data = dns_iter.next();
-                } else {
                 };
             }
             _ if selected == http_ts => {
@@ -1624,7 +1622,6 @@ fn network_connection(
                         NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
                     ));
                     http_data = http_iter.next();
-                } else {
                 };
             }
             _ if selected == rdp_ts => {
@@ -1634,7 +1631,6 @@ fn network_connection(
                         NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
                     ));
                     rdp_data = rdp_iter.next();
-                } else {
                 };
             }
             _ if selected == ntlm_ts => {
@@ -1644,7 +1640,6 @@ fn network_connection(
                         NetworkRawEvents::NtlmRawEvent(NtlmRawEvent::from_key_value(&key, value)?),
                     ));
                     ntlm_data = ntlm_iter.next();
-                } else {
                 };
             }
             _ if selected == kerberos_ts => {
@@ -1656,7 +1651,6 @@ fn network_connection(
                         )?),
                     ));
                     kerberos_data = kerberos_iter.next();
-                } else {
                 };
             }
             _ if selected == ssh_ts => {
@@ -1666,7 +1660,6 @@ fn network_connection(
                         NetworkRawEvents::SshRawEvent(SshRawEvent::from_key_value(&key, value)?),
                     ));
                     ssh_data = ssh_iter.next();
-                } else {
                 };
             }
             _ if selected == dce_rpc_ts => {
@@ -1678,7 +1671,6 @@ fn network_connection(
                         )?),
                     ));
                     dce_rpc_data = dce_rpc_iter.next();
-                } else {
                 };
             }
             _ if selected == ftp_ts => {
@@ -1688,7 +1680,6 @@ fn network_connection(
                         NetworkRawEvents::FtpRawEvent(FtpRawEvent::from_key_value(&key, value)?),
                     ));
                     ftp_data = ftp_iter.next();
-                } else {
                 };
             }
             _ if selected == mqtt_ts => {
@@ -1698,7 +1689,6 @@ fn network_connection(
                         NetworkRawEvents::MqttRawEvent(MqttRawEvent::from_key_value(&key, value)?),
                     ));
                     mqtt_data = mqtt_iter.next();
-                } else {
                 };
             }
             _ if selected == ldap_ts => {
@@ -1708,7 +1698,6 @@ fn network_connection(
                         NetworkRawEvents::LdapRawEvent(LdapRawEvent::from_key_value(&key, value)?),
                     ));
                     ldap_data = ldap_iter.next();
-                } else {
                 };
             }
             _ if selected == tls_ts => {
@@ -1718,7 +1707,6 @@ fn network_connection(
                         NetworkRawEvents::TlsRawEvent(TlsRawEvent::from_key_value(&key, value)?),
                     ));
                     tls_data = tls_iter.next();
-                } else {
                 };
             }
             _ if selected == smb_ts => {
@@ -1728,7 +1716,6 @@ fn network_connection(
                         NetworkRawEvents::SmbRawEvent(SmbRawEvent::from_key_value(&key, value)?),
                     ));
                     smb_data = smb_iter.next();
-                } else {
                 };
             }
             _ if selected == nfs_ts => {
@@ -1738,7 +1725,6 @@ fn network_connection(
                         NetworkRawEvents::NfsRawEvent(NfsRawEvent::from_key_value(&key, value)?),
                     ));
                     nfs_data = nfs_iter.next();
-                } else {
                 };
             }
             _ => {}
@@ -1787,7 +1773,7 @@ fn network_connection(
     }
     let mut connection: Connection<String, NetworkRawEvents> =
         Connection::new(has_previous_page, has_next_page);
-    connection.edges.extend(result_vec.into_iter());
+    connection.edges.extend(result_vec);
 
     Ok(connection)
 }

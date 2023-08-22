@@ -49,7 +49,10 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
     let Some(conn_info) = connection.peer_identity() else {
         bail!("no peer identity");
     };
-    let Some(cert_info) = conn_info.downcast_ref::<Vec<rustls::Certificate>>().cloned() else {
+    let Some(cert_info) = conn_info
+        .downcast_ref::<Vec<rustls::Certificate>>()
+        .cloned()
+    else {
         bail!("non-certificate identity");
     };
     Ok(cert_info)

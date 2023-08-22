@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::info;
 
-const COMPATIBLE_VERSION_REQ: &str = ">0.12.4-alpha,<0.13.0-alpha";
+const COMPATIBLE_VERSION_REQ: &str = ">0.12.4-alpha,<=0.13.0-alpha.1";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
