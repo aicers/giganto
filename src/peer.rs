@@ -73,7 +73,7 @@ pub struct PeerConnInfo {
     peer_conn: Arc<RwLock<HashMap<String, Connection>>>, //key: hostname, value: connection
     peer_list: Arc<RwLock<HashSet<PeerInfo>>>,
     sources: Sources,
-    peer_sources: PeerSources, //key: address(for request graphql/publish), value: peer's collect sources(hashset)
+    peer_sources: PeerSources, //key: address(for request graphql/publish), value: peer's collect sources(hash set)
     peer_sender: Sender<PeerInfo>,
     local_address: SocketAddr,
     notify_source: Arc<Notify>,
@@ -534,13 +534,13 @@ async fn handle_request(
     match msg_type {
         PeerCode::UpdatePeerList => {
             let update_peer_list = bincode::deserialize::<HashSet<PeerInfo>>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deseralize peer list: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize peer list: {}", e))?;
             update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, &path)
                 .await?;
         }
         PeerCode::UpdateSourceList => {
             let update_source_list = bincode::deserialize::<HashSet<String>>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deseralize source list: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize source list: {}", e))?;
             update_to_new_source_list(update_source_list, remote_addr, peer_sources).await;
         }
     }

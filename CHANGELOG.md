@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2023-08-28
 
 ### Added
 
@@ -37,6 +37,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   the collector device. This will be fixed in next change.
 - Remove unused `time()` from `RawEventFilter` trait.
 - Modify to use `Networkfilter` in `sysmon raw event` Graphql Api.
+- Modify statistics migration version to 0.13.0 from 0.12.4.
 
 ### Fixed
 
@@ -76,7 +77,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- added Giganto clustering funtionality. This feature connects giganto peer-to-peer,
+- added Giganto clustering functionality. This feature connects giganto peer-to-peer,
   and connected gigantos share each other's `peer` list and connected `source` list.
 - Supports the LDAP protocol.
 
@@ -264,7 +265,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.12.3...main
+[0.13.0]: https://github.com/aicers/giganto/compare/0.12.3...0.13.0
 [0.12.3]: https://github.com/aicers/giganto/compare/0.12.2...0.12.3
 [0.12.2]: https://github.com/aicers/giganto/compare/0.12.1...0.12.2
 [0.12.1]: https://github.com/aicers/giganto/compare/0.12.0...0.12.1
