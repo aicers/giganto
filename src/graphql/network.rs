@@ -46,7 +46,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    timestamps: Vec<DateTime<Utc>>,
+    pub timestamps: Vec<DateTime<Utc>>,
     keyword: Option<String>,
 }
 

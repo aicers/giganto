@@ -1,8 +1,13 @@
-use super::{get_timestamp_from_key, load_connection, FromKeyValue, RawEventFilter, TimeRange};
-use crate::storage::{Database, KeyExtractor};
+#![allow(clippy::unused_async)]
+use super::{
+    collect_exist_timestamp, get_timestamp_from_key, load_connection,
+    network::{NetworkFilter, SearchFilter},
+    FromKeyValue,
+};
+use crate::storage::Database;
 use async_graphql::{
     connection::{query, Connection},
-    Context, InputObject, Object, Result, SimpleObject,
+    Context, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::sysmon::{
@@ -10,52 +15,10 @@ use giganto_client::ingest::sysmon::{
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
-use std::net::IpAddr;
+use std::collections::BTreeSet;
 
 #[derive(Default)]
 pub(super) struct SysmonQuery;
-
-#[allow(clippy::module_name_repetitions)]
-#[derive(InputObject)]
-pub struct SysmonFilter {
-    time: Option<TimeRange>,
-    source: String,
-    // agent_name: Option<String>,
-    // agent_id: Option<String>,
-}
-
-impl RawEventFilter for SysmonFilter {
-    fn check(
-        &self,
-        _orig_addr: Option<IpAddr>,
-        _resp_addr: Option<IpAddr>,
-        _orig_port: Option<u16>,
-        _resp_port: Option<u16>,
-        _log_level: Option<String>,
-        _log_contents: Option<String>,
-        _text: Option<String>,
-    ) -> Result<bool> {
-        Ok(true)
-    }
-}
-
-impl KeyExtractor for SysmonFilter {
-    fn get_start_key(&self) -> &str {
-        &self.source
-    }
-
-    fn get_mid_key(&self) -> Option<Vec<u8>> {
-        None
-    }
-
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-        if let Some(time) = &self.time {
-            (time.start, time.end)
-        } else {
-            (None, None)
-        }
-    }
-}
 
 #[derive(SimpleObject, Debug)]
 struct ProcessCreateEvent {
@@ -470,7 +433,7 @@ impl SysmonQuery {
     async fn process_create_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -494,7 +457,7 @@ impl SysmonQuery {
     async fn file_create_time_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -518,7 +481,7 @@ impl SysmonQuery {
     async fn network_connect_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -542,7 +505,7 @@ impl SysmonQuery {
     async fn process_terminate_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -566,7 +529,7 @@ impl SysmonQuery {
     async fn image_load_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -590,7 +553,7 @@ impl SysmonQuery {
     async fn file_create_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -614,7 +577,7 @@ impl SysmonQuery {
     async fn registry_value_set_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -638,7 +601,7 @@ impl SysmonQuery {
     async fn registry_key_rename_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -662,7 +625,7 @@ impl SysmonQuery {
     async fn file_create_stream_hash_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -686,7 +649,7 @@ impl SysmonQuery {
     async fn pipe_event_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -710,7 +673,7 @@ impl SysmonQuery {
     async fn dns_query_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -734,7 +697,7 @@ impl SysmonQuery {
     async fn file_delete_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -758,7 +721,7 @@ impl SysmonQuery {
     async fn process_tamper_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -782,7 +745,7 @@ impl SysmonQuery {
     async fn file_delete_detected_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: SysmonFilter,
+        filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -801,5 +764,228 @@ impl SysmonQuery {
             },
         )
         .await
+    }
+
+    async fn search_process_create_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.process_create_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<ProcessCreate>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_file_create_time_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.file_create_time_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_network_connect_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.network_connect_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<NetworkConnection>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_process_terminate_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.process_terminate_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<ProcessTerminated>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_image_load_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.image_load_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, &filter))
+    }
+
+    async fn search_file_create_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.file_create_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<FileCreate>(&exist_data, &filter))
+    }
+
+    async fn search_registry_value_set_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.registry_value_set_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<RegistryValueSet>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_registry_key_rename_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.registry_key_rename_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_file_create_stream_hash_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.file_create_stream_hash_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<FileCreateStreamHash>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_pipe_event_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.pipe_event_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, &filter))
+    }
+
+    async fn search_dns_query_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.dns_query_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, &filter))
+    }
+
+    async fn search_file_delete_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.file_delete_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<FileDelete>(&exist_data, &filter))
+    }
+
+    async fn search_process_tamper_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.process_tamper_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<ProcessTampering>(
+            &exist_data,
+            &filter,
+        ))
+    }
+
+    async fn search_file_delete_detected_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.file_delete_detected_store()?;
+        let exist_data = store
+            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        Ok(collect_exist_timestamp::<FileDeleteDetected>(
+            &exist_data,
+            &filter,
+        ))
     }
 }
