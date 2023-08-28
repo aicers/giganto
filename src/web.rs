@@ -9,6 +9,7 @@ use warp::{http::Response as HttpResponse, Filter};
 ///
 /// Note that `key` is not compatible with the DER-encoded key extracted by
 /// rustls-pemfile.
+#[allow(clippy::unused_async)]
 pub async fn serve(
     schema: Schema,
     addr: SocketAddr,

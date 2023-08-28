@@ -206,7 +206,7 @@ async fn client_run(
     local_host_name: String,
     wait_shutdown: Arc<Notify>,
 ) {
-    for peer in peer_conn_info.peer_list.read().await.iter() {
+    for peer in &*peer_conn_info.peer_list.read().await {
         tokio::spawn(client_connection(
             client_endpoint.clone(),
             peer.clone(),
@@ -300,7 +300,7 @@ async fn client_connection(
                 .await?;
 
                 // Share the received peer list with connected peers.
-                for (_, conn) in peer_conn_info.peer_conn.read().await.iter() {
+                for conn in (*peer_conn_info.peer_conn.read().await).values() {
                     tokio::spawn(update_peer_info::<HashSet<PeerInfo>>(
                         conn.clone(),
                         PeerCode::UpdatePeerList,
@@ -345,7 +345,7 @@ async fn client_connection(
                         },
                         _ = peer_conn_info.notify_source.notified() => {
                             let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
-                            for (_, conn) in peer_conn_info.peer_conn.write().await.iter() {
+                            for conn in (*peer_conn_info.peer_conn.write().await).values() {
                                 tokio::spawn(update_peer_info::<HashSet<String>>(
                                     conn.clone(),
                                     PeerCode::UpdateSourceList,
@@ -456,7 +456,7 @@ async fn server_connection(
     .await?;
 
     // Share the received peer list with your connected peers.
-    for (_, conn) in peer_conn_info.peer_conn.read().await.iter() {
+    for conn in (*peer_conn_info.peer_conn.read().await).values() {
         tokio::spawn(update_peer_info::<HashSet<PeerInfo>>(
             conn.clone(),
             PeerCode::UpdatePeerList,
@@ -501,7 +501,7 @@ async fn server_connection(
             },
             _ = peer_conn_info.notify_source.notified() => {
                 let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
-                for (_, conn) in peer_conn_info.peer_conn.read().await.iter() {
+                for conn in (*peer_conn_info.peer_conn.read().await).values() {
                     tokio::spawn(update_peer_info::<HashSet<String>>(
                         conn.clone(),
                         PeerCode::UpdateSourceList,

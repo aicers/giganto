@@ -144,14 +144,18 @@ impl GigantoStatusQuery {
             .get("peers")
             .context("peers not found")?
             .as_array()
-            .context("invaild peers format")?;
+            .context("invalid peers format")?;
         let mut peer_list = Vec::new();
-        for peer in peers_value.iter() {
+        for peer in peers_value {
             if let Some(peer_data) = peer.as_inline_table() {
-                let (Some(address_val),Some(host_name_val)) = (peer_data.get("address"),peer_data.get("host_name")) else{
+                let (Some(address_val), Some(host_name_val)) =
+                    (peer_data.get("address"), peer_data.get("host_name"))
+                else {
                     return Err(anyhow!("Invalid address/hostname Value format").into());
                 };
-                let (Some(address),Some(host_name)) = (address_val.as_str(),host_name_val.as_str()) else{
+                let (Some(address), Some(host_name)) =
+                    (address_val.as_str(), host_name_val.as_str())
+                else {
                     return Err(anyhow!("Invalid address/hostname String format").into());
                 };
                 peer_list.push(PeerList {
@@ -223,10 +227,10 @@ pub fn write_toml_file(doc: &Document, path: &str) -> Result<()> {
 
 fn parse_toml_element(key: &str, doc: &Document) -> Result<String> {
     let Some(item) = doc.get(key) else {
-        return Err(anyhow!("{} not found.",key).into());
+        return Err(anyhow!("{} not found.", key).into());
     };
     let Some(value) = item.as_str() else {
-        return Err(anyhow!("parse failed: {}'s format is not available.",key).into());
+        return Err(anyhow!("parse failed: {}'s format is not available.", key).into());
     };
     Ok(value.to_string())
 }

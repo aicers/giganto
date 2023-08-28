@@ -616,6 +616,46 @@ where
                 error!("Failed to open nfs store");
             }
         }
+        RequestStreamRecord::FileCreate => {
+            if let Ok(store) = db.file_create_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    kind,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send sysmon stream : {}", e);
+                }
+            } else {
+                error!("Failed to open file_create store");
+            }
+        }
+        RequestStreamRecord::FileDelete => {
+            if let Ok(store) = db.file_delete_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    kind,
+                    node_type,
+                    stream_direct_channel,
+                )
+                .await
+                {
+                    error!("Failed to send sysmon stream : {}", e);
+                }
+            } else {
+                error!("Failed to open file_delete store");
+            }
+        }
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
@@ -628,7 +668,7 @@ pub async fn send_direct_stream(
     source: &str,
     stream_direct_channel: StreamDirectChannel,
 ) -> Result<()> {
-    for (req_key, sender) in stream_direct_channel.read().await.iter() {
+    for (req_key, sender) in &*stream_direct_channel.read().await {
         if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
