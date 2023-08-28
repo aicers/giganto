@@ -116,7 +116,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .set_default("max_mb_of_level_base", 512)
         .expect("default max mb of level base")
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
-        .expect("deafult config dir")
+        .expect("default config dir")
         .set_default("peer_address", DEFAULT_INVALID_PEER_ADDRESS)
         .expect("peer address")
 }

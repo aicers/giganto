@@ -45,7 +45,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.12.3";
+const PROTOCOL_VERSION: &str = "0.13.0";
 
 struct TestClient {
     send: SendStream,
@@ -472,13 +472,13 @@ fn gen_tls_raw_event() -> Vec<u8> {
         cipher: 10,
         ja3s: "ja3s".to_string(),
         serial: "serial".to_string(),
-        subject_country: "sub_contry".to_string(),
+        subject_country: "sub_country".to_string(),
         subject_org_name: "sub_org".to_string(),
         subject_common_name: "sub_comm".to_string(),
         validity_not_before: 11,
         validity_not_after: 12,
         subject_alt_name: "sub_alt".to_string(),
-        issuer_country: "issuer_contry".to_string(),
+        issuer_country: "issuer_country".to_string(),
         issuer_org_name: "issuer_org".to_string(),
         issuer_org_unit_name: "issuer_org_unit".to_string(),
         issuer_common_name: "issuer_comm".to_string(),
@@ -498,7 +498,7 @@ fn gen_smb_raw_event() -> Vec<u8> {
         last_time: 1,
         command: 0,
         path: "something/path".to_string(),
-        service: "sevice".to_string(),
+        service: "service".to_string(),
         file_name: "fine_name".to_string(),
         file_size: 10,
         resource_type: 20,
@@ -711,7 +711,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -772,7 +772,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -836,7 +836,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -897,7 +897,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -961,7 +961,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1025,7 +1025,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1089,7 +1089,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1151,7 +1151,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1215,7 +1215,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1278,7 +1278,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1342,7 +1342,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1406,7 +1406,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1467,7 +1467,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1528,7 +1528,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1589,7 +1589,7 @@ async fn request_range_data_with_protocol() {
 
         let start = DateTime::<Utc>::from_utc(
             NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("vaild date")
+                .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
@@ -1684,7 +1684,7 @@ async fn request_range_data_with_log() {
 
     let start = DateTime::<Utc>::from_utc(
         NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("vaild date")
+            .expect("valid date")
             .and_hms_opt(00, 00, 00)
             .expect("valid time"),
         Utc,
@@ -1766,7 +1766,7 @@ async fn request_range_data_with_period_time_series() {
 
     let start = DateTime::<Utc>::from_utc(
         NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("vaild date")
+            .expect("valid date")
             .and_hms_opt(00, 00, 00)
             .expect("valid time"),
         Utc,

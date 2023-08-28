@@ -39,7 +39,7 @@ pub fn config_server(
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
 
     Arc::get_mut(&mut server_config.transport)
-        .expect("safevalue")
+        .expect("safe value")
         .max_concurrent_uni_streams(0_u8.into());
 
     Ok(server_config)

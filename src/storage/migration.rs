@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::info;
 
-const COMPATIBLE_VERSION_REQ: &str = ">0.12.4-alpha,<=0.13.0-alpha.1";
+const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<0.14.0-alpha";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -33,9 +33,9 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
             migrate_0_10_to_0_12,
         ),
         (
-            VersionReq::parse(">=0.12.0,<0.12.4-alpha").expect("valid version requirement"),
-            Version::parse("0.12.4").expect("valid version"),
-            migrate_0_12_to_0_12_4,
+            VersionReq::parse(">=0.12.0,<=0.13.0-alpha.1").expect("valid version requirement"),
+            Version::parse("0.13.0").expect("valid version"),
+            migrate_0_12_to_0_13_0,
         ),
     ];
 
@@ -197,7 +197,7 @@ fn migrate_0_10_to_0_12(db: &Database) -> Result<()> {
 
 // Remove old statistics data because it's overwritten
 // by the data of other core of same machine.
-fn migrate_0_12_to_0_12_4(db: &Database) -> Result<()> {
+fn migrate_0_12_to_0_13_0(db: &Database) -> Result<()> {
     let store = db.statistics_store()?;
     for raw_event in store.iter_forward() {
         let (key, _) = raw_event.context("Failed to read Database")?;

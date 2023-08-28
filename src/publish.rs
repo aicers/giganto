@@ -35,7 +35,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.12.0,<0.13.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.12.0,<0.14.0";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -820,7 +820,7 @@ async fn handle_request(
     match msg_type {
         MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
             match REconvergeKindType::convert_type(&msg.kind) {
                 REconvergeKindType::Conn => {
                     process_range_data(
@@ -1091,7 +1091,7 @@ async fn handle_request(
                     process_range_data(
                         &mut send,
                         db.file_delete_store()
-                            .context("Failed to open flie_delete store")?,
+                            .context("Failed to open file_delete store")?,
                         msg,
                         false,
                     )
@@ -1124,7 +1124,7 @@ async fn handle_request(
         }
         MessageCode::RawData => {
             let msg = bincode::deserialize::<RequestRawData>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deseralize message: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
             match REconvergeKindType::convert_type(&msg.kind) {
                 REconvergeKindType::Conn => {
                     process_raw_events(&mut send, db.conn_store()?, msg.input).await?;
@@ -1235,13 +1235,13 @@ async fn process_range_data<'c, T>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
     msg: RequestRange,
-    availd_kind: bool,
+    availed_kind: bool,
 ) -> Result<()>
 where
     T: DeserializeOwned + ResponseRangeData,
 {
     let key_builder = StorageKey::builder().start_key(&msg.source);
-    let key_builder = if availd_kind {
+    let key_builder = if availed_kind {
         key_builder.mid_key(Some(msg.kind.as_bytes().to_vec()))
     } else {
         key_builder
