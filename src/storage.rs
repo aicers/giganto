@@ -717,6 +717,30 @@ impl StorageKeyBuilder {
 pub type KeyValue<T> = (Box<[u8]>, T);
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
+pub struct StatisticsIter<'d, T> {
+    inner: BoundaryIter<'d, T>,
+}
+
+impl<'d, T> StatisticsIter<'d, T> {
+    pub fn new(inner: BoundaryIter<'d, T>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'d, T> Iterator for StatisticsIter<'d, T>
+where
+    T: DeserializeOwned,
+{
+    type Item = KeyValue<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(Ok(elem)) = self.inner.next() {
+            return Some(elem);
+        }
+        None
+    }
+}
+
 pub struct FilteredIter<'d, T> {
     inner: BoundaryIter<'d, T>,
     filter: &'d NetworkFilter,

@@ -765,7 +765,7 @@ async fn handle_data<T>(
                     RecordType::Statistics => {
                         let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
                         key_builder
-                            .mid_key(Some(statistics.core.to_string().as_bytes().to_vec()))
+                            .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
