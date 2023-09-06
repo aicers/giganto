@@ -705,6 +705,17 @@ async fn handle_data<T>(
     let ack_time_notify = Arc::new(Notify::new());
     let ack_time_notified = ack_time_notify.clone();
 
+    #[cfg(feature = "benchmark")]
+    let mut count = 0_usize;
+    #[cfg(feature = "benchmark")]
+    let mut size = 0_usize;
+    #[cfg(feature = "benchmark")]
+    let mut packetsize = 0_u64;
+    #[cfg(feature = "benchmark")]
+    let mut packetcount = 0_u64;
+    #[cfg(feature = "benchmark")]
+    let mut start = std::time::Instant::now();
+
     let handler = task::spawn(async move {
         loop {
             select! {
@@ -764,6 +775,13 @@ async fn handle_data<T>(
                     }
                     RecordType::Statistics => {
                         let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
+                        #[cfg(feature = "benchmark")]
+                        {
+                            (packetcount, packetsize) = statistics
+                                .stats
+                                .iter()
+                                .fold((0, 0), |(sumc, sums), c| (sumc + c.1, sums + c.2));
+                        }
                         key_builder
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                             .end_key(timestamp)
@@ -791,6 +809,26 @@ async fn handle_data<T>(
                         ack_time_notify.notify_one();
                     }
                 }
+                #[cfg(feature = "benchmark")]
+                {
+                    if record_type == RecordType::Statistics {
+                        count += usize::try_from(packetcount).unwrap_or_default();
+                        size += usize::try_from(packetsize).unwrap_or_default();
+                    } else {
+                        count += 1;
+                        size += raw_event.len();
+                    }
+                    if start.elapsed().as_secs() > 3600 {
+                        info!(
+                            "Ingest: source = {source} type = {record_type:?} count = {count} size = {size}, duration = {}",
+                            start.elapsed().as_secs()
+                        );
+                        count = 0;
+                        size = 0;
+                        start = std::time::Instant::now();
+                    }
+                }
+
                 if shutdown_signal.load(Ordering::SeqCst) {
                     handler.abort();
                     break;

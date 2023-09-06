@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.13.0"
+version = "0.13.1"
 edition = "2021"
 
 [dependencies]
@@ -41,3 +41,7 @@ x509-parser = "0.15"
 tempfile = "3"
 url = "2"
 regex = "1"
+
+[features]
+default = ["benchmark"]
+benchmark = []

@@ -20,6 +20,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     provided for `all protocol`.
   - If filter has no value for the time field, it will provide the most `recent`
     statistics.
+- Add feature to generate benchmark statistics for ingest events.
 
 ## [0.13.0] - 2023-08-28
 
