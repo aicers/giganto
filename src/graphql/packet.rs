@@ -139,9 +139,9 @@ impl PacketQuery {
 #[cfg(test)]
 mod tests {
     use crate::{graphql::TestSchema, storage::RawEventStore};
-    use chrono::{NaiveDateTime, Offset, TimeZone, Utc};
+    use chrono::{NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
-    use std::{mem, time::Duration};
+    use std::mem;
 
     #[tokio::test]
     async fn packets_empty() {
@@ -290,6 +290,7 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
+
         let timestamps: Vec<chrono::NaiveDateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
@@ -300,8 +301,8 @@ mod tests {
         let timestamp1 = convert_to_utc_timezone(timestamps[0]);
         let timestamp2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
-        assert_eq!(timestamp2, "2023-01-20 00:00:01.404277");
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(timestamp2, "2023-01-20 00:00:01.404277 UTC");
 
         let query = r#"
         {
@@ -329,8 +330,8 @@ mod tests {
         let timestamp1 = convert_to_utc_timezone(timestamps[0]);
         let timestamp2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
-        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237");
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237 UTC");
 
         let query = r#"
         {
@@ -358,8 +359,8 @@ mod tests {
         let timestamp1 = convert_to_utc_timezone(timestamps[0]);
         let timestamp2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745");
-        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237");
+        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237 UTC");
     }
 
     fn insert_packet(
@@ -387,13 +388,8 @@ mod tests {
     }
 
     fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
-        let offset = chrono::Local::now().offset().fix().local_minus_utc();
-        let offset_duration = Duration::from_secs(offset.abs() as u64);
-        let utc_time = if offset.is_negative() {
-            timestamp + chrono::Duration::from_std(offset_duration).unwrap()
-        } else {
-            timestamp - chrono::Duration::from_std(offset_duration).unwrap()
-        };
+        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
+        let utc_time = local_datetime.with_timezone(&chrono::Utc);
         utc_time.to_string()
     }
 }
