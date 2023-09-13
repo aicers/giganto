@@ -24,7 +24,7 @@ num-traits = "0.2"
 pcap = "1"
 quinn = "0.10"
 rocksdb = "0.21"
-roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.0" }
+roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.1" }
 rustls = "0.21"
 rustls-pemfile = "1.0"
 semver = "1"
