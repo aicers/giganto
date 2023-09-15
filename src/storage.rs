@@ -857,7 +857,7 @@ pub async fn retain_periodically(
 ) -> Result<()> {
     let mut itv = time::interval(duration);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
-    let from_timestamp = DateTime::<Utc>::from_utc(
+    let from_timestamp = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
         Utc,
     )

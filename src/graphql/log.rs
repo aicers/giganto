@@ -230,11 +230,11 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
                         Utc,
                     )),
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -263,7 +263,7 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -298,7 +298,7 @@ mod tests {
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
                         Utc,
                     )),
@@ -331,11 +331,11 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
                         Utc,
                     )),
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -364,7 +364,7 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -399,7 +399,7 @@ mod tests {
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -428,11 +428,11 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
                         Utc,
                     )),
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),
@@ -461,7 +461,7 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 2).expect("valid value"),
                         Utc,
                     )),
@@ -492,7 +492,7 @@ mod tests {
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 5).expect("valid value"),
                         Utc,
                     )),
@@ -525,11 +525,11 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
                         Utc,
                     )),
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
                         Utc,
                     )),
@@ -558,7 +558,7 @@ mod tests {
             &store,
             &LogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 2).expect("valid value"),
                         Utc,
                     )),
@@ -589,7 +589,7 @@ mod tests {
             &LogFilter {
                 time: Some(TimeRange {
                     start: None,
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
                         Utc,
                     )),
@@ -744,11 +744,11 @@ mod tests {
             &store,
             &OpLogFilter {
                 time: Some(TimeRange {
-                    start: Some(DateTime::<Utc>::from_utc(
+                    start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
                         Utc,
                     )),
-                    end: Some(DateTime::<Utc>::from_utc(
+                    end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
                         NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
                         Utc,
                     )),

@@ -709,14 +709,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -770,14 +770,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SOURCE, send_dns_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -834,14 +834,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -895,14 +895,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -959,14 +959,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1023,14 +1023,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1087,14 +1087,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1149,14 +1149,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SOURCE, send_ssh_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1213,14 +1213,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1276,14 +1276,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SOURCE, send_ftp_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1340,14 +1340,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1404,14 +1404,14 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1465,14 +1465,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SOURCE, send_tls_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1526,14 +1526,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SOURCE, send_smb_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1587,14 +1587,14 @@ async fn request_range_data_with_protocol() {
             bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SOURCE, send_nfs_time))
                 .unwrap();
 
-        let start = DateTime::<Utc>::from_utc(
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("valid date")
                 .and_hms_opt(00, 00, 00)
                 .expect("valid time"),
             Utc,
         );
-        let end = DateTime::<Utc>::from_utc(
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(2050, 12, 31)
                 .expect("valid date")
                 .and_hms_opt(23, 59, 59)
@@ -1682,14 +1682,14 @@ async fn request_range_data_with_log() {
     ))
     .unwrap();
 
-    let start = DateTime::<Utc>::from_utc(
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDate::from_ymd_opt(1970, 1, 1)
             .expect("valid date")
             .and_hms_opt(00, 00, 00)
             .expect("valid time"),
         Utc,
     );
-    let end = DateTime::<Utc>::from_utc(
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDate::from_ymd_opt(2050, 12, 31)
             .expect("valid date")
             .and_hms_opt(23, 59, 59)
@@ -1764,14 +1764,14 @@ async fn request_range_data_with_period_time_series() {
         ))
         .unwrap();
 
-    let start = DateTime::<Utc>::from_utc(
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDate::from_ymd_opt(1970, 1, 1)
             .expect("valid date")
             .and_hms_opt(00, 00, 00)
             .expect("valid time"),
         Utc,
     );
-    let end = DateTime::<Utc>::from_utc(
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDate::from_ymd_opt(2050, 12, 31)
             .expect("valid date")
             .and_hms_opt(23, 59, 59)
