@@ -189,9 +189,13 @@ async fn conn() {
     send_record_header(&mut send_conn, RECORD_TYPE_CONN)
         .await
         .unwrap();
-    send_event(&mut send_conn, Utc::now().timestamp_nanos(), conn_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_conn,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        conn_body,
+    )
+    .await
+    .unwrap();
 
     send_conn.finish().await.expect("failed to shutdown stream");
 
@@ -234,9 +238,13 @@ async fn dns() {
     send_record_header(&mut send_dns, RECORD_TYPE_DNS)
         .await
         .unwrap();
-    send_event(&mut send_dns, Utc::now().timestamp_nanos(), dns_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_dns,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        dns_body,
+    )
+    .await
+    .unwrap();
 
     send_dns.finish().await.expect("failed to shutdown stream");
 
@@ -263,9 +271,13 @@ async fn log() {
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
         .unwrap();
-    send_event(&mut send_log, Utc::now().timestamp_nanos(), log_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_log,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        log_body,
+    )
+    .await
+    .unwrap();
 
     send_log.finish().await.expect("failed to shutdown stream");
 
@@ -315,9 +327,13 @@ async fn http() {
     send_record_header(&mut send_http, RECORD_TYPE_HTTP)
         .await
         .unwrap();
-    send_event(&mut send_http, Utc::now().timestamp_nanos(), http_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_http,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        http_body,
+    )
+    .await
+    .unwrap();
 
     send_http.finish().await.expect("failed to shutdown stream");
 
@@ -348,9 +364,13 @@ async fn rdp() {
     send_record_header(&mut send_rdp, RECORD_TYPE_RDP)
         .await
         .unwrap();
-    send_event(&mut send_rdp, Utc::now().timestamp_nanos(), rdp_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_rdp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        rdp_body,
+    )
+    .await
+    .unwrap();
 
     send_rdp.finish().await.expect("failed to shutdown stream");
 
@@ -382,7 +402,7 @@ async fn periodic_time_series() {
     .unwrap();
     send_event(
         &mut send_periodic_time_series,
-        Utc::now().timestamp_nanos(),
+        Utc::now().timestamp_nanos_opt().unwrap(),
         periodic_time_series_body,
     )
     .await
@@ -425,9 +445,13 @@ async fn smtp() {
     send_record_header(&mut send_smtp, RECORD_TYPE_SMTP)
         .await
         .unwrap();
-    send_event(&mut send_smtp, Utc::now().timestamp_nanos(), smtp_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_smtp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        smtp_body,
+    )
+    .await
+    .unwrap();
 
     send_smtp.finish().await.expect("failed to shutdown stream");
 
@@ -464,9 +488,13 @@ async fn ntlm() {
     send_record_header(&mut send_ntlm, RECORD_TYPE_NTLM)
         .await
         .unwrap();
-    send_event(&mut send_ntlm, Utc::now().timestamp_nanos(), ntlm_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_ntlm,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        ntlm_body,
+    )
+    .await
+    .unwrap();
 
     send_ntlm.finish().await.expect("failed to shutdown stream");
 
@@ -510,7 +538,7 @@ async fn kerberos() {
         .unwrap();
     send_event(
         &mut send_kerberos,
-        Utc::now().timestamp_nanos(),
+        Utc::now().timestamp_nanos_opt().unwrap(),
         kerberos_body,
     )
     .await
@@ -559,9 +587,13 @@ async fn ssh() {
     send_record_header(&mut send_ssh, RECORD_TYPE_SSH)
         .await
         .unwrap();
-    send_event(&mut send_ssh, Utc::now().timestamp_nanos(), ssh_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_ssh,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        ssh_body,
+    )
+    .await
+    .unwrap();
 
     send_ssh.finish().await.expect("failed to shutdown stream");
 
@@ -597,7 +629,7 @@ async fn dce_rpc() {
         .unwrap();
     send_event(
         &mut send_dce_rpc,
-        Utc::now().timestamp_nanos(),
+        Utc::now().timestamp_nanos_opt().unwrap(),
         dce_rpc_body,
     )
     .await
@@ -632,9 +664,13 @@ async fn oplog() {
     send_record_header(&mut send_oplog, RECORD_TYPE_OPLOG)
         .await
         .unwrap();
-    send_event(&mut send_oplog, Utc::now().timestamp_nanos(), oplog_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_oplog,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        oplog_body,
+    )
+    .await
+    .unwrap();
 
     send_oplog
         .finish()
@@ -658,16 +694,20 @@ async fn packet() {
 
     let packet: Vec<u8> = vec![0, 1, 0, 1, 0, 1];
     let packet_body = Packet {
-        packet_timestamp: Utc::now().timestamp_nanos(),
+        packet_timestamp: Utc::now().timestamp_nanos_opt().unwrap(),
         packet,
     };
 
     send_record_header(&mut send_packet, RECORD_TYPE_PACKET)
         .await
         .unwrap();
-    send_event(&mut send_packet, Utc::now().timestamp_nanos(), packet_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_packet,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        packet_body,
+    )
+    .await
+    .unwrap();
 
     send_packet
         .finish()
@@ -712,9 +752,13 @@ async fn ftp() {
     send_record_header(&mut send_ftp, RECORD_TYPE_FTP)
         .await
         .unwrap();
-    send_event(&mut send_ftp, Utc::now().timestamp_nanos(), ftp_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_ftp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        ftp_body,
+    )
+    .await
+    .unwrap();
 
     send_ftp.finish().await.expect("failed to shutdown stream");
 
@@ -750,9 +794,13 @@ async fn mqtt() {
     send_record_header(&mut send_mqtt, RECORD_TYPE_MQTT)
         .await
         .unwrap();
-    send_event(&mut send_mqtt, Utc::now().timestamp_nanos(), mqtt_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_mqtt,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        mqtt_body,
+    )
+    .await
+    .unwrap();
 
     send_mqtt.finish().await.expect("failed to shutdown stream");
 
@@ -789,9 +837,13 @@ async fn ldap() {
     send_record_header(&mut send_ldap, RECORD_TYPE_LDAP)
         .await
         .unwrap();
-    send_event(&mut send_ldap, Utc::now().timestamp_nanos(), ldap_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_ldap,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        ldap_body,
+    )
+    .await
+    .unwrap();
 
     send_ldap.finish().await.expect("failed to shutdown stream");
 
@@ -839,9 +891,13 @@ async fn tls() {
     send_record_header(&mut send_tls, RECORD_TYPE_TLS)
         .await
         .unwrap();
-    send_event(&mut send_tls, Utc::now().timestamp_nanos(), tls_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_tls,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        tls_body,
+    )
+    .await
+    .unwrap();
 
     send_tls.finish().await.expect("failed to shutdown stream");
 
@@ -882,9 +938,13 @@ async fn smb() {
     send_record_header(&mut send_smb, RECORD_TYPE_SMB)
         .await
         .unwrap();
-    send_event(&mut send_smb, Utc::now().timestamp_nanos(), smb_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_smb,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        smb_body,
+    )
+    .await
+    .unwrap();
 
     send_smb.finish().await.expect("failed to shutdown stream");
 
@@ -916,9 +976,13 @@ async fn nfs() {
     send_record_header(&mut send_nfs, RECORD_TYPE_NFS)
         .await
         .unwrap();
-    send_event(&mut send_nfs, Utc::now().timestamp_nanos(), nfs_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_nfs,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        nfs_body,
+    )
+    .await
+    .unwrap();
 
     send_nfs.finish().await.expect("failed to shutdown stream");
 
@@ -947,7 +1011,7 @@ async fn statistics() {
         .unwrap();
     send_event(
         &mut send_statistics,
-        Utc::now().timestamp_nanos(),
+        Utc::now().timestamp_nanos_opt().unwrap(),
         statistics_body,
     )
     .await
@@ -981,9 +1045,13 @@ async fn ack_info() {
     send_record_header(&mut send_log, RECORD_TYPE_LOG)
         .await
         .unwrap();
-    send_event(&mut send_log, Utc::now().timestamp_nanos(), log_body)
-        .await
-        .unwrap();
+    send_event(
+        &mut send_log,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        log_body,
+    )
+    .await
+    .unwrap();
 
     let mut last_timestamp: i64 = 0;
     for _ in 0..127 {
@@ -992,7 +1060,7 @@ async fn ack_info() {
             log: vec![0; 10],
         };
 
-        last_timestamp = Utc::now().timestamp_nanos();
+        last_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
         send_event(&mut send_log, last_timestamp, log_body)
             .await
             .unwrap();

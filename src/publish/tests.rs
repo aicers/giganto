@@ -701,7 +701,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let conn_store = db.conn_store().unwrap();
-        let send_conn_time = Utc::now().timestamp_nanos();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
             &conn_store,
             SOURCE,
@@ -726,8 +726,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(CONN_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -765,7 +765,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let dns_store = db.dns_store().unwrap();
-        let send_dns_time = Utc::now().timestamp_nanos();
+        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dns_data =
             bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SOURCE, send_dns_time))
                 .unwrap();
@@ -787,8 +787,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(DNS_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -826,7 +826,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let http_store = db.http_store().unwrap();
-        let send_http_time = Utc::now().timestamp_nanos();
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
             &http_store,
             SOURCE,
@@ -851,8 +851,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(HTTP_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -890,7 +890,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let rdp_store = db.rdp_store().unwrap();
-        let send_rdp_time = Utc::now().timestamp_nanos();
+        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let rdp_data =
             bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time))
                 .unwrap();
@@ -912,8 +912,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(RDP_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -951,7 +951,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let smtp_store = db.smtp_store().unwrap();
-        let send_smtp_time = Utc::now().timestamp_nanos();
+        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
             &smtp_store,
             SOURCE,
@@ -976,8 +976,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(SMTP_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1015,7 +1015,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ntlm_store = db.ntlm_store().unwrap();
-        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
             &ntlm_store,
             SOURCE,
@@ -1040,8 +1040,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(NTLM_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1079,7 +1079,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let kerberos_store = db.kerberos_store().unwrap();
-        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
             &kerberos_store,
             SOURCE,
@@ -1104,8 +1104,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(KERBEROS_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
         send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
@@ -1144,7 +1144,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ssh_store = db.ssh_store().unwrap();
-        let send_ssh_time = Utc::now().timestamp_nanos();
+        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ssh_data =
             bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SOURCE, send_ssh_time))
                 .unwrap();
@@ -1166,8 +1166,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(SSH_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1205,7 +1205,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let dce_rpc_store = db.dce_rpc_store().unwrap();
-        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
             &dce_rpc_store,
             SOURCE,
@@ -1230,8 +1230,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(DCE_RPC_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1271,7 +1271,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ftp_store = db.ftp_store().unwrap();
-        let send_ftp_time = Utc::now().timestamp_nanos();
+        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ftp_data =
             bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SOURCE, send_ftp_time))
                 .unwrap();
@@ -1293,8 +1293,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(FTP_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1332,7 +1332,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let mqtt_store = db.mqtt_store().unwrap();
-        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
             &mqtt_store,
             SOURCE,
@@ -1357,8 +1357,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(MQTT_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1396,7 +1396,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ldap_store = db.ldap_store().unwrap();
-        let send_ldap_time = Utc::now().timestamp_nanos();
+        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ldap_data = bincode::deserialize::<Ldap>(&insert_ldap_raw_event(
             &ldap_store,
             SOURCE,
@@ -1421,8 +1421,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(LDAP_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1460,7 +1460,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let tls_store = db.tls_store().unwrap();
-        let send_tls_time = Utc::now().timestamp_nanos();
+        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let tls_data =
             bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SOURCE, send_tls_time))
                 .unwrap();
@@ -1482,8 +1482,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(TLS_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1521,7 +1521,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let smb_store = db.smb_store().unwrap();
-        let send_smb_time = Utc::now().timestamp_nanos();
+        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smb_data =
             bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SOURCE, send_smb_time))
                 .unwrap();
@@ -1543,8 +1543,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(SMB_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1582,7 +1582,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let nfs_store = db.nfs_store().unwrap();
-        let send_nfs_time = Utc::now().timestamp_nanos();
+        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let nfs_data =
             bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SOURCE, send_nfs_time))
                 .unwrap();
@@ -1604,8 +1604,8 @@ async fn request_range_data_with_protocol() {
         let message = RequestRange {
             source: String::from(SOURCE),
             kind: String::from(NFS_KIND),
-            start: start.timestamp_nanos(),
-            end: end.timestamp_nanos(),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
             count: 5,
         };
 
@@ -1673,7 +1673,7 @@ async fn request_range_data_with_log() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let log_store = db.log_store().unwrap();
-    let send_log_time = Utc::now().timestamp_nanos();
+    let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
     let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
         &log_store,
         SOURCE,
@@ -1699,8 +1699,8 @@ async fn request_range_data_with_log() {
     let message = RequestRange {
         source: String::from(SOURCE),
         kind: String::from(KIND),
-        start: start.timestamp_nanos(),
-        end: end.timestamp_nanos(),
+        start: start.timestamp_nanos_opt().unwrap(),
+        end: end.timestamp_nanos_opt().unwrap(),
         count: 5,
     };
 
@@ -1755,7 +1755,7 @@ async fn request_range_data_with_period_time_series() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let time_series_store = db.periodic_time_series_store().unwrap();
-    let send_time_series_time = Utc::now().timestamp_nanos();
+    let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
     let time_series_data =
         bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
             &time_series_store,
@@ -1781,8 +1781,8 @@ async fn request_range_data_with_period_time_series() {
     let message = RequestRange {
         source: String::from(SAMPLING_POLICY_ID),
         kind: String::from(KIND),
-        start: start.timestamp_nanos(),
-        end: end.timestamp_nanos(),
+        start: start.timestamp_nanos_opt().unwrap(),
+        end: end.timestamp_nanos_opt().unwrap(),
         count: 5,
     };
 
@@ -1894,7 +1894,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
-        let send_conn_time = Utc::now().timestamp_nanos();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
@@ -1912,7 +1912,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
-        let send_conn_time = Utc::now().timestamp_nanos();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
@@ -1930,7 +1930,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_data, recv_data[20..]);
 
         // database conn network event for crusher
-        let send_conn_time = Utc::now().timestamp_nanos();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data = insert_conn_raw_event(&conn_store, SOURCE_CRUSHER_THREE, send_conn_time);
         send_stream_request(
             &mut publish.send,
@@ -1957,7 +1957,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_data, recv_data);
 
         // direct conn network event for crusher
-        let send_conn_time = Utc::now().timestamp_nanos();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "conn");
         let conn_data = gen_conn_raw_event();
 
@@ -1999,7 +1999,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
-        let send_dns_time = Utc::now().timestamp_nanos();
+        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2017,7 +2017,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
-        let send_dns_time = Utc::now().timestamp_nanos();
+        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2036,7 +2036,7 @@ async fn request_network_event_stream() {
         assert_eq!(dns_data, recv_data[20..]);
 
         // database dns network event for crusher
-        let send_dns_time = Utc::now().timestamp_nanos();
+        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dns_data = insert_dns_raw_event(&dns_store, SOURCE_CRUSHER_THREE, send_dns_time);
 
         send_stream_request(
@@ -2064,7 +2064,7 @@ async fn request_network_event_stream() {
         assert_eq!(dns_data, recv_data);
 
         // direct dns network event for crusher
-        let send_dns_time = Utc::now().timestamp_nanos();
+        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dns");
         let dns_data = gen_dns_raw_event();
 
@@ -2106,7 +2106,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
-        let send_rdp_time = Utc::now().timestamp_nanos();
+        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2124,7 +2124,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
-        let send_rdp_time = Utc::now().timestamp_nanos();
+        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2143,7 +2143,7 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_data, recv_data[20..]);
 
         // database rdp network event for crusher
-        let send_rdp_time = Utc::now().timestamp_nanos();
+        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_CRUSHER_THREE, send_rdp_time);
 
         send_stream_request(
@@ -2171,7 +2171,7 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_data, recv_data);
 
         // direct rdp network event for crusher
-        let send_rdp_time = Utc::now().timestamp_nanos();
+        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_stream(
@@ -2213,7 +2213,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
-        let send_http_time = Utc::now().timestamp_nanos();
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "http");
         let http_data = gen_conn_raw_event();
 
@@ -2232,7 +2232,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
-        let send_http_time = Utc::now().timestamp_nanos();
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "http");
         let http_data = gen_conn_raw_event();
 
@@ -2252,7 +2252,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_data, recv_data[20..]);
 
         // database http network event for crusher
-        let send_http_time = Utc::now().timestamp_nanos();
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let http_data = insert_http_raw_event(&http_store, SOURCE_CRUSHER_THREE, send_http_time);
 
         send_stream_request(
@@ -2280,7 +2280,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_data, recv_data);
 
         // direct http network event for crusher
-        let send_http_time = Utc::now().timestamp_nanos();
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "http");
         let http_data = gen_http_raw_event();
         send_direct_stream(
@@ -2322,7 +2322,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
-        let send_smtp_time = Utc::now().timestamp_nanos();
+        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
@@ -2341,7 +2341,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
-        let send_smtp_time = Utc::now().timestamp_nanos();
+        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
@@ -2361,7 +2361,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_data, recv_data[20..]);
 
         // database smtp network event for crusher
-        let send_smtp_time = Utc::now().timestamp_nanos();
+        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smtp_data = insert_smtp_raw_event(&smtp_store, SOURCE_CRUSHER_THREE, send_smtp_time);
 
         send_stream_request(
@@ -2389,7 +2389,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_data, recv_data);
 
         // direct smtp network event for crusher
-        let send_smtp_time = Utc::now().timestamp_nanos();
+        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "smtp");
         let smtp_data = gen_smtp_raw_event();
         send_direct_stream(
@@ -2431,7 +2431,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
-        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
@@ -2450,7 +2450,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
-        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
@@ -2470,7 +2470,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_data, recv_data[20..]);
 
         // database ntlm network event for crusher
-        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ntlm_data = insert_ntlm_raw_event(&ntlm_store, SOURCE_CRUSHER_THREE, send_ntlm_time);
 
         send_stream_request(
@@ -2498,7 +2498,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_data, recv_data);
 
         //direct ntlm network event for crusher
-        let send_ntlm_time = Utc::now().timestamp_nanos();
+        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
         send_direct_stream(
@@ -2539,7 +2539,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
-        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
@@ -2558,7 +2558,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
-        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
@@ -2578,7 +2578,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_data, recv_data[20..]);
 
         // database kerberos network event for crusher
-        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let kerberos_data =
             insert_kerberos_raw_event(&kerberos_store, SOURCE_CRUSHER_THREE, send_kerberos_time);
 
@@ -2607,7 +2607,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_data, recv_data);
 
         //direct kerberos network event for crusher
-        let send_kerberos_time = Utc::now().timestamp_nanos();
+        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
         send_direct_stream(
@@ -2648,7 +2648,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
-        let send_ssh_time = Utc::now().timestamp_nanos();
+        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
@@ -2667,7 +2667,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
-        let send_ssh_time = Utc::now().timestamp_nanos();
+        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
@@ -2687,7 +2687,7 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_data, recv_data[20..]);
 
         // database ssh network event for crusher
-        let send_ssh_time = Utc::now().timestamp_nanos();
+        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ssh_data = insert_ssh_raw_event(&ssh_store, SOURCE_CRUSHER_THREE, send_ssh_time);
 
         send_stream_request(
@@ -2715,7 +2715,7 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_data, recv_data);
 
         //direct ssh network event for crusher
-        let send_ssh_time = Utc::now().timestamp_nanos();
+        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ssh");
         let ssh_data = gen_ssh_raw_event();
         send_direct_stream(
@@ -2757,7 +2757,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
-        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
@@ -2776,7 +2776,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
-        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
@@ -2796,7 +2796,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         // database dce_rpc network event for crusher
-        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dce_rpc_data =
             insert_dce_rpc_raw_event(&dce_rpc_store, SOURCE_CRUSHER_THREE, send_dce_rpc_time);
 
@@ -2825,7 +2825,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_data, recv_data);
 
         //direct dce_rpc network event for crusher
-        let send_dce_rpc_time = Utc::now().timestamp_nanos();
+        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
         send_direct_stream(
@@ -2866,7 +2866,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
 
-        let send_ftp_time = Utc::now().timestamp_nanos();
+        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
@@ -2885,7 +2885,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
-        let send_ftp_time = Utc::now().timestamp_nanos();
+        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
@@ -2905,7 +2905,7 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_data, recv_data[20..]);
 
         // database ftp network event for crusher
-        let send_ftp_time = Utc::now().timestamp_nanos();
+        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ftp_data = insert_ftp_raw_event(&ftp_store, SOURCE_CRUSHER_THREE, send_ftp_time);
 
         send_stream_request(
@@ -2933,7 +2933,7 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_data, recv_data);
 
         //direct ftp network event for crusher
-        let send_ftp_time = Utc::now().timestamp_nanos();
+        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ftp");
         let ftp_data = gen_ftp_raw_event();
         send_direct_stream(
@@ -2975,7 +2975,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
 
-        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
@@ -2994,7 +2994,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
-        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
@@ -3014,7 +3014,7 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_data, recv_data[20..]);
 
         // database mqtt network event for crusher
-        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let mqtt_data = insert_mqtt_raw_event(&mqtt_store, SOURCE_CRUSHER_THREE, send_mqtt_time);
 
         send_stream_request(
@@ -3042,7 +3042,7 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_data, recv_data);
 
         //direct mqtt network event for crusher
-        let send_mqtt_time = Utc::now().timestamp_nanos();
+        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
         send_direct_stream(
@@ -3084,7 +3084,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
 
-        let send_ldap_time = Utc::now().timestamp_nanos();
+        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
@@ -3103,7 +3103,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
-        let send_ldap_time = Utc::now().timestamp_nanos();
+        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
@@ -3123,7 +3123,7 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_data, recv_data[20..]);
 
         // database ldap network event for crusher
-        let send_ldap_time = Utc::now().timestamp_nanos();
+        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ldap_data = insert_ldap_raw_event(&ldap_store, SOURCE_CRUSHER_THREE, send_ldap_time);
 
         send_stream_request(
@@ -3151,7 +3151,7 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_data, recv_data);
 
         //direct ldap network event for crusher
-        let send_ldap_time = Utc::now().timestamp_nanos();
+        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ldap");
         let ldap_data = gen_ldap_raw_event();
         send_direct_stream(
@@ -3192,7 +3192,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
 
-        let send_tls_time = Utc::now().timestamp_nanos();
+        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "tls");
         let tls_data = gen_tls_raw_event();
 
@@ -3211,7 +3211,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
-        let send_tls_time = Utc::now().timestamp_nanos();
+        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "tls");
         let tls_data = gen_tls_raw_event();
 
@@ -3231,7 +3231,7 @@ async fn request_network_event_stream() {
         assert_eq!(tls_data, recv_data[20..]);
 
         // database tls network event for crusher
-        let send_tls_time = Utc::now().timestamp_nanos();
+        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let tls_data = insert_tls_raw_event(&tls_store, SOURCE_CRUSHER_THREE, send_tls_time);
 
         send_stream_request(
@@ -3259,7 +3259,7 @@ async fn request_network_event_stream() {
         assert_eq!(tls_data, recv_data);
 
         //direct tls network event for crusher
-        let send_tls_time = Utc::now().timestamp_nanos();
+        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "tls");
         let tls_data = gen_tls_raw_event();
         send_direct_stream(
@@ -3300,7 +3300,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
 
-        let send_smb_time = Utc::now().timestamp_nanos();
+        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "smb");
         let smb_data = gen_smb_raw_event();
 
@@ -3319,7 +3319,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
-        let send_smb_time = Utc::now().timestamp_nanos();
+        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "smb");
         let smb_data = gen_smb_raw_event();
 
@@ -3339,7 +3339,7 @@ async fn request_network_event_stream() {
         assert_eq!(smb_data, recv_data[20..]);
 
         // database smb network event for crusher
-        let send_smb_time = Utc::now().timestamp_nanos();
+        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smb_data = insert_smb_raw_event(&smb_store, SOURCE_CRUSHER_THREE, send_smb_time);
 
         send_stream_request(
@@ -3367,7 +3367,7 @@ async fn request_network_event_stream() {
         assert_eq!(smb_data, recv_data);
 
         //direct smb network event for crusher
-        let send_smb_time = Utc::now().timestamp_nanos();
+        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "smb");
         let smb_data = gen_smb_raw_event();
         send_direct_stream(
@@ -3408,7 +3408,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
 
-        let send_nfs_time = Utc::now().timestamp_nanos();
+        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_ONE, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
@@ -3427,7 +3427,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
-        let send_nfs_time = Utc::now().timestamp_nanos();
+        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_HOG_TWO, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
@@ -3447,7 +3447,7 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_data, recv_data[20..]);
 
         // database nfs network event for crusher
-        let send_nfs_time = Utc::now().timestamp_nanos();
+        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let nfs_data = insert_nfs_raw_event(&nfs_store, SOURCE_CRUSHER_THREE, send_nfs_time);
 
         send_stream_request(
@@ -3475,7 +3475,7 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_data, recv_data);
 
         //direct nfs network event for crusher
-        let send_nfs_time = Utc::now().timestamp_nanos();
+        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "nfs");
         let nfs_data = gen_nfs_raw_event();
         send_direct_stream(

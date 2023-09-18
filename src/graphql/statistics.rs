@@ -271,7 +271,7 @@ mod tests {
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos();
+        let now = Utc::now().timestamp_nanos_opt().unwrap();
         insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1000000, 300000000);
         insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2000000, 600000000);
         insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3000000, 900000000);

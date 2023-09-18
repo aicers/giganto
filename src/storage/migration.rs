@@ -271,7 +271,7 @@ mod tests {
         let store = db.http_store().unwrap();
 
         // insert old http raw data
-        let timestamp = Utc::now().timestamp_nanos();
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
         let source = "src1";
         let mut key = Vec::with_capacity(source.len() + 1 + std::mem::size_of::<i64>());
         key.extend_from_slice(source.as_bytes());

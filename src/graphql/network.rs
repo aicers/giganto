@@ -1831,8 +1831,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
 
-        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -1928,8 +1928,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.dns_store().unwrap();
 
-        insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2023,8 +2023,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.http_store().unwrap();
 
-        insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2126,8 +2126,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.rdp_store().unwrap();
 
-        insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2182,8 +2182,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.smtp_store().unwrap();
 
-        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2237,8 +2237,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ntlm_store().unwrap();
 
-        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2293,8 +2293,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.kerberos_store().unwrap();
 
-        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2354,8 +2354,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ssh_store().unwrap();
 
-        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2415,8 +2415,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.dce_rpc_store().unwrap();
 
-        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2468,8 +2468,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ftp_store().unwrap();
 
-        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2529,8 +2529,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.mqtt_store().unwrap();
 
-        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2584,8 +2584,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ldap_store().unwrap();
 
-        insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2640,8 +2640,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.tls_store().unwrap();
 
-        insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2707,8 +2707,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.smb_store().unwrap();
 
-        insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2767,8 +2767,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.nfs_store().unwrap();
 
-        insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2818,8 +2818,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
 
-        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
-        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -2872,98 +2872,112 @@ mod tests {
             "src 1",
             Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_dns_raw_event(
             &dns_store,
             "src 1",
             Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_http_raw_event(
             &http_store,
             "src 1",
             Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_rdp_raw_event(
             &rdp_store,
             "src 1",
             Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_ntlm_raw_event(
             &ntlm_store,
             "src 1",
             Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_kerberos_raw_event(
             &kerberos_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_ssh_raw_event(
             &ssh_store,
             "src 1",
             Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_dce_rpc_raw_event(
             &dce_rpc_store,
             "src 1",
             Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_ftp_raw_event(
             &ftp_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_mqtt_raw_event(
             &mqtt_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_ldap_raw_event(
             &ldap_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_tls_raw_event(
             &tls_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_smb_raw_event(
             &smb_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
         insert_nfs_raw_event(
             &nfs_store,
             "src 1",
             Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0)
                 .unwrap()
-                .timestamp_nanos(),
+                .timestamp_nanos_opt()
+                .unwrap(),
         );
 
         // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs
@@ -3060,10 +3074,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_http_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_http_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_http_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_http_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_http_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3096,10 +3110,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_conn_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_conn_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_conn_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_conn_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_conn_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3132,10 +3146,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_dns_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_dns_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_dns_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_dns_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_dns_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3168,10 +3182,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_rdp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_rdp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_rdp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_rdp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_rdp_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3204,10 +3218,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_smtp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_smtp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_smtp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_smtp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_smtp_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3240,10 +3254,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_ntlm_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3276,10 +3290,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_kerberos_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3312,10 +3326,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_ssh_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_ssh_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_ssh_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_ssh_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_ssh_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3348,10 +3362,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_dce_rpc_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3384,10 +3398,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_ftp_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_ftp_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_ftp_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_ftp_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_ftp_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3420,10 +3434,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_mqtt_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_mqtt_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_mqtt_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_mqtt_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3456,10 +3470,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_ldap_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_ldap_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_ldap_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_ldap_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_ldap_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3492,10 +3506,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_tls_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_tls_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_tls_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_tls_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_tls_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3528,10 +3542,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_smb_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_smb_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_smb_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_smb_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_smb_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
@@ -3564,10 +3578,10 @@ mod tests {
         let timestamp3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
         let timestamp4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-        insert_nfs_raw_event(&store, "src 1", timestamp1.timestamp_nanos());
-        insert_nfs_raw_event(&store, "src 1", timestamp2.timestamp_nanos());
-        insert_nfs_raw_event(&store, "src 1", timestamp3.timestamp_nanos());
-        insert_nfs_raw_event(&store, "src 1", timestamp4.timestamp_nanos());
+        insert_nfs_raw_event(&store, "src 1", timestamp1.timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(&store, "src 1", timestamp2.timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(&store, "src 1", timestamp3.timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(&store, "src 1", timestamp4.timestamp_nanos_opt().unwrap());
 
         let query = r#"
         {
