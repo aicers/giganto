@@ -8,6 +8,7 @@ const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
+const DEFAULT_INVALID_INDEX_PERIOD: &str = "invalid index period";
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
@@ -22,6 +23,9 @@ pub struct Settings {
     pub data_dir: PathBuf,   // DB storage path
     #[serde(with = "humantime_serde")]
     pub retention: Duration, // Data retention period
+
+    #[serde(deserialize_with = "deserialize_index_period")]
+    pub index_creation_period: Option<Duration>, // index creation period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_address: SocketAddr, // IP address & port to graphql
     pub log_dir: PathBuf,    //giganto's syslog path
@@ -107,6 +111,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("data dir")
         .set_default("retention", "100d")
         .expect("retention")
+        .set_default("index_creation_period", DEFAULT_INVALID_INDEX_PERIOD)
+        .expect("index period")
         .set_default("log_path", log_path)
         .expect("log dir")
         .set_default("export_path", export_path)
@@ -155,6 +161,38 @@ where
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
                 D::Error::custom(format!("invalid address \"{addr}\": {e}"))
             })?))
+        }
+    })
+}
+
+/// Deserializes a giganto's db index creation period.
+///
+/// `Ok(None)` is returned if there is no `index_creation_period` option in the configuration file.
+///
+/// # Errors
+///
+/// Returns an error if the index period value is invalid.
+fn deserialize_index_period<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |d| {
+        // db index mode is only available if there is a value for 'index_creation_period' in the configuration file.
+        if d == DEFAULT_INVALID_INDEX_PERIOD {
+            Ok(None)
+        } else {
+            let duration = humantime::parse_duration(&d)
+                .map_err(|e| D::Error::custom(format!("invalid humantime format \"{d}\": {e}")))?;
+            if duration == Duration::from_secs(60)
+                || duration == Duration::from_secs(600)
+                || duration == Duration::from_secs(3600)
+            {
+                Ok(Some(duration))
+            } else {
+                Err(D::Error::custom(
+                    "Invalid index period value, can only be 1m/10m/1h".to_string(),
+                ))
+            }
         }
     })
 }

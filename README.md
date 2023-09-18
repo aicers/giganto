@@ -38,6 +38,7 @@ publish_address = "0.0.0.0:38371"          # address to listen for publish QUIC
 graphql_address = "127.0.0.1:8443"         # giganto's graphql address
 data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
+index_creation_period = "1m"               # db's index creation period
 log_dir = "/data/logs/apps"                # path to giganto's syslog file
 export_dir = "tests/export"                # path to giganto's export file
 max_open_files = 8000                      # db options max open files,
@@ -63,6 +64,11 @@ So if it's less than `512`MB, it's recommended to set default value of `512`MB.
 
 If there is no `peer_address` option in the configuration file, it runs in
 `standalone` mode, and if there is, it runs in `cluster` mode for P2P.
+
+If there is no `index_creation_period` option in the configuration file, it will
+not create a separate `index table` in the db, and if there is, it will create an
+`index table` for the incoming `network raw data` and refer to it when querying.
+Possible input values for `index_generation_period` are `1m`/`10m`/`1h`.
 
 ## Test
 

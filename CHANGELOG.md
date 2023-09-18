@@ -7,9 +7,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add functions related to db's `index`.
+  - Set the index storage interval according to the `index_creation_period` in
+    `config` file.
+  - Create an index for the `network raw events` received from `ingest`.
+
 ### Changed
 
 - Modified Kerberos event to support giganto-client.
+- Change the Graphql API for `network events`.
+  - Return results by referencing the index if the query has filtering on
+    `orig_addr`/`orig_port`/`resp_addr`/`resp_port`.
 
 ## [0.13.1] - 2023-09-18
 

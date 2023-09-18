@@ -1,7 +1,7 @@
 use super::Server;
 use crate::{
     storage::{Database, DbOptions},
-    to_cert_chain, to_private_key,
+    to_cert_chain, to_private_key, IndexInfo,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{Duration, Utc};
@@ -29,7 +29,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{
-    sync::{Mutex, Notify, RwLock},
+    sync::{mpsc::unbounded_channel, Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 
@@ -1110,6 +1110,7 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let packet_sources = Arc::new(RwLock::new(HashMap::new()));
     let sources = Arc::new(RwLock::new(HashMap::new()));
     let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let (send, _) = unbounded_channel::<IndexInfo>();
     tokio::spawn(server().run(
         db,
         packet_sources,
@@ -1117,5 +1118,6 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
         stream_direct_channel,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),
+        Some(send),
     ))
 }

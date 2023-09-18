@@ -4,7 +4,7 @@ use super::{
     get_timestamp_from_key, load_connection, Engine, FromKeyValue,
 };
 use crate::{
-    graphql::{RawEventFilter, TimeRange},
+    graphql::{load_index_connection, RawEventFilter, TimeRange},
     storage::{Database, FilteredIter, KeyExtractor},
 };
 use async_graphql::{
@@ -12,11 +12,14 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+use giganto_client::ingest::{
+    network::{
+        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    },
+    RecordType,
 };
 use serde::Serialize;
-use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
+use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr, time::Duration};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
@@ -27,10 +30,10 @@ pub struct NetworkFilter {
     pub time: Option<TimeRange>,
     #[serde(skip)]
     pub source: String,
-    orig_addr: Option<IpRange>,
-    resp_addr: Option<IpRange>,
-    orig_port: Option<PortRange>,
-    resp_port: Option<PortRange>,
+    pub orig_addr: Option<IpRange>,
+    pub resp_addr: Option<IpRange>,
+    pub orig_port: Option<PortRange>,
+    pub resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
 }
@@ -685,6 +688,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, ConnRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.conn_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Conn,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -709,6 +742,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, DnsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.dns_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Dns,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -733,6 +796,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, HttpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.http_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Http,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -757,6 +850,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, RdpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.rdp_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Rdp,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -781,6 +904,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SmtpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.smtp_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Smtp,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -805,6 +958,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, NtlmRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ntlm_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Ntlm,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -829,6 +1012,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, KerberosRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.kerberos_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Kerberos,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -853,6 +1066,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SshRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ssh_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Ssh,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -877,6 +1120,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, DceRpcRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.dce_rpc_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::DceRpc,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -901,6 +1174,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, FtpRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ftp_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Ftp,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -925,6 +1228,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, MqttRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.mqtt_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Mqtt,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -949,6 +1282,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, LdapRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.ldap_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Ldap,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -973,6 +1336,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, TlsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.tls_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Tls,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -997,6 +1390,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, SmbRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.smb_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Smb,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,
@@ -1021,6 +1444,36 @@ impl NetworkQuery {
     ) -> Result<Connection<String, NfsRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.nfs_store()?;
+        let idx_duration = ctx.data::<Option<Duration>>()?;
+
+        if let Some(duration) = idx_duration {
+            if filter.orig_addr.is_some()
+                || filter.orig_port.is_some()
+                || filter.resp_addr.is_some()
+                || filter.resp_port.is_some()
+            {
+                return query(
+                    after,
+                    before,
+                    first,
+                    last,
+                    |after, before, first, last| async move {
+                        load_index_connection(
+                            db,
+                            &store,
+                            &filter,
+                            *duration,
+                            RecordType::Nfs,
+                            after,
+                            before,
+                            first,
+                            last,
+                        )
+                    },
+                )
+                .await;
+            }
+        }
 
         query(
             after,

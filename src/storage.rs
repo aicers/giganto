@@ -5,9 +5,10 @@ mod migration;
 use crate::{
     graphql::{network::NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
     ingest::implement::EventFilter,
+    IndexInfo,
 };
-use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
     network::{
@@ -20,7 +21,7 @@ use giganto_client::ingest::{
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
-    Packet,
+    Packet, RecordType,
 };
 pub use migration::migrate_data_dir;
 #[cfg(debug_assertions)]
@@ -28,8 +29,15 @@ use rocksdb::properties;
 pub use rocksdb::Direction;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
 use serde::de::DeserializeOwned;
-use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
-use tokio::{select, sync::Notify, time};
+use std::{
+    cmp, collections::HashMap, marker::PhantomData, net::IpAddr, path::Path, sync::Arc,
+    time::Duration,
+};
+use tokio::{
+    select,
+    sync::{mpsc::UnboundedReceiver, Notify},
+    time,
+};
 use tracing::error;
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 34] = [
@@ -69,6 +77,14 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 34] = [
     "file delete detected",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+const RAW_DATA_IDX_COLUMN_FAMILY_NAMES: [&str; 4] = [
+    "src addr index",
+    "src port index",
+    "dst addr index",
+    "dst port index",
+];
+const INDEX_PERIOD_OFFSET: i64 = 5; // 5sec
+const LAST_INDEX_THRESHOLD: u8 = 2;
 
 #[cfg(debug_assertions)]
 pub struct CfProperties {
@@ -110,10 +126,13 @@ impl Database {
     pub fn open(path: &Path, db_options: &DbOptions) -> Result<Database> {
         let (db_opts, cf_opts) = rocksdb_options(db_options);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
-            RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
+            RAW_DATA_COLUMN_FAMILY_NAMES.len()
+                + META_DATA_COLUMN_FAMILY_NAMES.len()
+                + RAW_DATA_IDX_COLUMN_FAMILY_NAMES.len(),
         );
         cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(RAW_DATA_IDX_COLUMN_FAMILY_NAMES);
 
         let cfs = cfs_name
             .into_iter()
@@ -495,6 +514,42 @@ impl Database {
             .context("cannot access sysmon #26 column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
+
+    /// Returns the store for `network_raw_event`'s `src_addr` index
+    pub fn src_addr_index(&self) -> Result<RawEventStore<Vec<i64>>> {
+        let cf = self
+            .db
+            .cf_handle("src addr index")
+            .context("cannot access src_addr_index column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for `network_raw_event`'s `src_port` index
+    pub fn src_port_index(&self) -> Result<RawEventStore<Vec<i64>>> {
+        let cf = self
+            .db
+            .cf_handle("src port index")
+            .context("cannot access src_port_index column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for `network_raw_event`'s `dst_addr` index
+    pub fn dst_addr_index(&self) -> Result<RawEventStore<Vec<i64>>> {
+        let cf = self
+            .db
+            .cf_handle("dst addr index")
+            .context("cannot access dst_addr_index column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for `network_raw_event`'s `dst_port` index
+    pub fn dst_port_index(&self) -> Result<RawEventStore<Vec<i64>>> {
+        let cf = self
+            .db
+            .cf_handle("dst port index")
+            .context("cannot access dst_port_index column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
 }
 
 pub struct RawEventStore<'db, T> {
@@ -529,6 +584,19 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn flush(&self) -> Result<()> {
         self.db.flush_wal(true)?;
         Ok(())
+    }
+
+    pub fn get_key_value(&self, source: &str, timestamp: i64) -> Result<(Vec<u8>, Vec<u8>)> {
+        let key = StorageKey::builder()
+            .start_key(source)
+            .end_key(timestamp)
+            .build()
+            .key();
+        if let Some(value) = self.db.get_cf(&self.cf, &key)? {
+            Ok((key, value))
+        } else {
+            bail!("Failed to get rocksdb's value");
+        }
     }
 
     pub fn multi_get_from_ts(
@@ -913,11 +981,247 @@ pub async fn retain_periodically(
                     }
                 }
             }
-            _ = wait_shutdown.notified() => {
+            () = wait_shutdown.notified() => {
                 return Ok(());
             },
         }
     }
+}
+
+#[allow(clippy::too_many_lines)]
+pub async fn index_periodically(
+    duration: Duration,
+    index_period: Duration,
+    db: Database,
+    wait_shutdown: Arc<Notify>,
+    mut recv_idx_channel: UnboundedReceiver<IndexInfo>,
+) -> Result<()> {
+    let mut itv = time::interval(duration);
+    let index_timestamp = i64::try_from(index_period.as_nanos())?;
+    let mut src_addr_idx_hash: HashMap<i64, HashMap<Vec<u8>, Vec<i64>>> = HashMap::new();
+    let mut src_port_idx_hash: HashMap<i64, HashMap<Vec<u8>, Vec<i64>>> = HashMap::new();
+    let mut dst_addr_idx_hash: HashMap<i64, HashMap<Vec<u8>, Vec<i64>>> = HashMap::new();
+    let mut dst_port_idx_hash: HashMap<i64, HashMap<Vec<u8>, Vec<i64>>> = HashMap::new();
+    let mut last_src_addr_idx_target: (i64, u8) = (0, 0);
+    let mut last_src_port_idx_target: (i64, u8) = (0, 0);
+    let mut last_dst_addr_idx_target: (i64, u8) = (0, 0);
+    let mut last_dst_port_idx_target: (i64, u8) = (0, 0);
+
+    itv.tick().await;
+    loop {
+        select! {
+            Some((source, record, raw_event, timestamp)) = recv_idx_channel.recv() => {
+                let mut idx_key: Vec<u8> = Vec::new();
+
+                let (src_addr, src_port, dst_addr, dst_port):(IpAddr, u16, IpAddr, u16) = bincode::deserialize(&raw_event)?;
+                let date_time = truncate_datetime(Utc.timestamp_nanos(timestamp), index_period)?;
+                let date_time_hash_key = date_time.timestamp_nanos_opt().unwrap(); // truncate_datetime's result is always valid.
+
+                start_idx_key(&mut idx_key, &source, record);
+                mid_idx_key(&mut idx_key, &date_time);
+                let mut src_addr_key = idx_key.clone();
+                src_addr_key.extend_from_slice(&addr_to_index_key(src_addr,false));
+                let mut src_port_key = idx_key.clone();
+                src_port_key.extend_from_slice(&src_port.to_be_bytes());
+                let mut dst_addr_key = idx_key.clone();
+                dst_addr_key.extend_from_slice(&addr_to_index_key(dst_addr,false));
+                let mut dst_port_key = idx_key;
+                dst_port_key.extend_from_slice(&dst_port.to_be_bytes());
+
+                upsert_index_hashmap(&mut src_addr_idx_hash, date_time_hash_key, src_addr_key, timestamp);
+                upsert_index_hashmap(&mut src_port_idx_hash, date_time_hash_key, src_port_key, timestamp);
+                upsert_index_hashmap(&mut dst_addr_idx_hash, date_time_hash_key, dst_addr_key, timestamp);
+                upsert_index_hashmap(&mut dst_port_idx_hash ,date_time_hash_key, dst_port_key, timestamp);
+            }
+            _ = itv.tick() => {
+                // configure the index by applying an offset to the piglet transfer time.
+                let current_idx_target = truncate_datetime(Utc::now() - chrono::Duration::seconds(INDEX_PERIOD_OFFSET), index_period)?.timestamp_nanos_opt().unwrap() - index_timestamp; // truncate_datetime's result is always valid.
+
+                let src_addr_idx_db = db.src_addr_index()?;
+                if let Err(e) = append_target_indexes(&src_addr_idx_db, &mut src_addr_idx_hash, &mut last_src_addr_idx_target, current_idx_target){
+                    error!("Failed to append src_addr's index: {e}");
+                }
+
+                let src_port_idx_db = db.src_port_index()?;
+                if let Err(e) = append_target_indexes(&src_port_idx_db, &mut src_port_idx_hash, &mut last_src_port_idx_target, current_idx_target){
+                    error!("Failed to append src_port's index: {e}");
+                }
+
+                let dst_addr_idx_db = db.dst_addr_index()?;
+                if let Err(e) = append_target_indexes(&dst_addr_idx_db, &mut dst_addr_idx_hash, &mut last_dst_addr_idx_target, current_idx_target){
+                    error!("Failed to append dst_addr's index: {e}");
+                }
+
+                let dst_port_idx_db = db.dst_port_index()?;
+                if let Err(e) = append_target_indexes(&dst_port_idx_db, &mut dst_port_idx_hash, &mut last_dst_port_idx_target, current_idx_target){
+                    error!("Failed to append dst_port's index: {e}");
+                }
+            }
+            () = wait_shutdown.notified() => {
+                // Insert the remaining index data into index db.
+                let src_addr_idx_db = db.src_addr_index()?;
+                if let Err(e) = append_remaining_indexes(&src_addr_idx_db, &mut src_addr_idx_hash){
+                    error!("Failed to append src_addr's index: {e}");
+                }
+
+                let src_port_idx_db = db.src_port_index()?;
+                if let Err(e) = append_remaining_indexes(&src_port_idx_db, &mut src_port_idx_hash){
+                    error!("Failed to append src_port's index: {e}");
+                }
+
+                let dst_addr_idx_db = db.dst_addr_index()?;
+                if let Err(e) = append_remaining_indexes(&dst_addr_idx_db, &mut dst_addr_idx_hash){
+                    error!("Failed to append dst_addr's index: {e}");
+                }
+
+                let dst_port_idx_db = db.dst_port_index()?;
+                if let Err(e) = append_remaining_indexes(&dst_port_idx_db, &mut dst_port_idx_hash){
+                    error!("Failed to append dst_port's index: {e}");
+                }
+                return Ok(());
+            },
+        }
+    }
+}
+
+fn append_remaining_indexes(
+    index_cf: &RawEventStore<Vec<i64>>,
+    index_hash: &mut HashMap<i64, HashMap<Vec<u8>, Vec<i64>>>,
+) -> Result<()> {
+    for db_hash in index_hash.values_mut() {
+        for (cf_key, cf_value) in db_hash {
+            index_cf.append(cf_key, &bincode::serialize(&cf_value)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn append_target_indexes(
+    index_cf: &RawEventStore<Vec<i64>>,
+    index_hash: &mut HashMap<i64, HashMap<Vec<u8>, Vec<i64>>>,
+    last_idx_target: &mut (i64, u8),
+    current_idx_target: i64,
+) -> Result<()> {
+    let mut old_raw_data: Vec<i64> = index_hash
+        .keys()
+        .copied()
+        .filter(|x| *x < current_idx_target)
+        .collect();
+    old_raw_data.sort_unstable();
+
+    // Check the last data sent by reproduce.
+    if let Some(last) = old_raw_data.pop() {
+        if last_idx_target.0 == last {
+            last_idx_target.1 += 1;
+        } else {
+            *last_idx_target = (last, 1);
+        }
+        if last_idx_target.1 >= LAST_INDEX_THRESHOLD {
+            if let Some(db_hash) = index_hash.remove(&last_idx_target.0) {
+                for (cf_key, cf_value) in db_hash {
+                    index_cf.append(&cf_key, &bincode::serialize(&cf_value)?)?;
+                }
+            }
+            *last_idx_target = (0, 0);
+        }
+    }
+
+    // Insert an index on an old raw event. (from reproduce)
+    for key in &old_raw_data {
+        if let Some(db_hash) = index_hash.remove(key) {
+            for (cf_key, cf_value) in db_hash {
+                index_cf.append(&cf_key, &bincode::serialize(&cf_value)?)?;
+            }
+        }
+    }
+
+    // Insert an index on an latest raw event. (from piglet)
+    if let Some(db_hash) = index_hash.remove(&current_idx_target) {
+        for (cf_key, cf_value) in db_hash {
+            index_cf.append(&cf_key, &bincode::serialize(&cf_value)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn upsert_index_hashmap(
+    idx_hash: &mut HashMap<i64, HashMap<Vec<u8>, Vec<i64>>>,
+    hash_key: i64,
+    key: Vec<u8>,
+    value: i64,
+) {
+    idx_hash
+        .entry(hash_key)
+        .and_modify(|db_entry| {
+            db_entry
+                .entry(key.clone())
+                .and_modify(|db_value| db_value.push(value))
+                .or_insert(vec![value]);
+        })
+        .or_insert_with(|| {
+            let mut db_hash = HashMap::new();
+            db_hash.insert(key, vec![value]);
+            db_hash
+        });
+}
+
+pub fn addr_to_index_key(ip_addr: IpAddr, is_to_search_key: bool) -> Vec<u8> {
+    match ip_addr {
+        IpAddr::V4(ipv4) => {
+            let ipv4_u32: u32 = ipv4.into();
+            if is_to_search_key && ipv4_u32 > 0 {
+                (ipv4_u32 - 1).to_be_bytes().to_vec()
+            } else {
+                ipv4_u32.to_be_bytes().to_vec()
+            }
+        }
+        IpAddr::V6(ipv6) => {
+            let ipv6_u128: u128 = ipv6.into();
+            if is_to_search_key && ipv6_u128 > 0 {
+                (ipv6_u128 - 1).to_be_bytes().to_vec()
+            } else {
+                ipv6_u128.to_be_bytes().to_vec()
+            }
+        }
+    }
+}
+
+pub fn start_idx_key(idx_key: &mut Vec<u8>, source: &str, proto: RecordType) {
+    idx_key.extend_from_slice(source.as_bytes());
+    idx_key.push(0);
+
+    idx_key.extend_from_slice(format!("{proto:?}").as_bytes());
+    idx_key.push(0);
+}
+
+pub fn mid_idx_key(idx_key: &mut Vec<u8>, date_time: &DateTime<Utc>) {
+    idx_key.extend_from_slice(date_time.format("%Y%m%d%H%M").to_string().as_bytes());
+    idx_key.push(0);
+}
+
+pub fn truncate_datetime(datetime: DateTime<Utc>, duration: Duration) -> Result<DateTime<Utc>> {
+    let seconds = u32::try_from(duration.as_secs())?;
+    let mut trunc_time = datetime
+        .with_second(0)
+        .expect("Failed to truncate DateTime to second")
+        .with_nanosecond(0)
+        .expect("Failed to truncate DateTime to nanos");
+    let period = seconds / 60;
+    trunc_time = if period >= 60 {
+        // if period is 1hour
+        let hour_period = period / 60;
+        trunc_time
+            .with_hour(datetime.hour() / hour_period * hour_period)
+            .expect("Failed to truncate DateTime to hour")
+            .with_minute(0)
+            .expect("Failed to truncate DateTime to minute")
+    } else {
+        // if period is 1min/10min
+        trunc_time
+            .with_minute(datetime.minute() / period * period)
+            .expect("Failed to truncate DateTime to minute")
+    };
+    Ok(trunc_time)
 }
 
 fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {

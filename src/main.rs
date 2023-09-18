@@ -9,7 +9,7 @@ mod web;
 
 use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
 use anyhow::{anyhow, Context, Result};
-use giganto_client::init_tracing;
+use giganto_client::{ingest::RecordType, init_tracing};
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
 use std::{
@@ -21,13 +21,16 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{Notify, RwLock},
+    sync::{mpsc::unbounded_channel, Notify, RwLock},
     task,
     time::{self, sleep},
 };
 use tracing::{error, info, warn};
 
+pub type IndexInfo = (String, RecordType, Vec<u8>, i64); // raw event source, type, data, timestamp
+
 const ONE_DAY: u64 = 60 * 60 * 24;
+const ONE_MIN: u64 = 60;
 const USAGE: &str = "\
 USAGE:
     giganto [CONFIG]
@@ -103,7 +106,9 @@ async fn main() -> Result<()> {
             settings.export_dir.clone(),
             config_reload.clone(),
             settings.cfg_path.clone(),
+            settings.index_creation_period,
         );
+
         task::spawn(web::serve(
             schema,
             settings.graphql_address,
@@ -118,6 +123,21 @@ async fn main() -> Result<()> {
             database.clone(),
             notify_shutdown.clone(),
         ));
+
+        let index_creation_send =
+            if let Some(index_creation_period) = settings.index_creation_period {
+                let (send, recv) = unbounded_channel::<IndexInfo>();
+                task::spawn(storage::index_periodically(
+                    time::Duration::from_secs(ONE_MIN),
+                    index_creation_period,
+                    database.clone(),
+                    notify_shutdown.clone(),
+                    recv,
+                ));
+                Some(send)
+            } else {
+                None
+            };
 
         if let Some(peer_address) = settings.peer_address {
             let peer_server =
@@ -166,11 +186,12 @@ async fn main() -> Result<()> {
             stream_direct_channel,
             notify_shutdown.clone(),
             notify_change_source,
+            index_creation_send,
         ));
 
         loop {
             select! {
-                _ = config_reload.notified() =>{
+                () = config_reload.notified() =>{
                     match Settings::from_file(&settings.cfg_path) {
                         Ok(new_settings) => {
                             settings = new_settings;
@@ -185,7 +206,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 },
-                _ = notify_ctrlc.notified() =>{
+                () = notify_ctrlc.notified() =>{
                     info!("Termination signal: giganto daemon exit");
                     notify_shutdown.notify_waiters();
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;

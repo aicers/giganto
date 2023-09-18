@@ -6,6 +6,7 @@ publish_address = "0.0.0.0:38371"
 graphql_address = "127.0.0.1:8443"
 data_dir = "tests/data"
 retention = "100d"
+index_creation_period = "1m"
 log_dir = "/data/logs/apps"
 export_dir = "tests/export"
 max_open_files = 8000
