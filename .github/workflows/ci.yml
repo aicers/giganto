@@ -60,6 +60,6 @@ jobs:
     - name: Install Tarpaulin
       run: cargo install cargo-tarpaulin
     - name: Generate coverage report
-      run: cargo tarpaulin --out Xml
+      run: cargo tarpaulin --out xml
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
