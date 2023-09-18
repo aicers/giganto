@@ -29,7 +29,12 @@ impl KeyExtractor for PacketFilter {
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        Some(self.request_time.timestamp_nanos().to_be_bytes().to_vec())
+        Some(
+            self.request_time
+                .timestamp_nanos_opt()?
+                .to_be_bytes()
+                .to_vec(),
+        )
     }
 
     fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
@@ -176,9 +181,9 @@ mod tests {
         let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
         let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
 
-        let ts1 = dt1.timestamp_nanos();
-        let ts2 = dt2.timestamp_nanos();
-        let ts3 = dt3.timestamp_nanos();
+        let ts1 = dt1.timestamp_nanos_opt().unwrap();
+        let ts2 = dt2.timestamp_nanos_opt().unwrap();
+        let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -261,9 +266,9 @@ mod tests {
         let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
         let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
 
-        let ts1 = dt1.timestamp_nanos();
-        let ts2 = dt2.timestamp_nanos();
-        let ts3 = dt3.timestamp_nanos();
+        let ts1 = dt1.timestamp_nanos_opt().unwrap();
+        let ts2 = dt2.timestamp_nanos_opt().unwrap();
+        let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);

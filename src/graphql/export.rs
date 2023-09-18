@@ -2204,8 +2204,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.conn_store().unwrap();
 
-        insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_conn_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2274,8 +2274,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.dns_store().unwrap();
 
-        insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_dns_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2350,8 +2350,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.http_store().unwrap();
 
-        insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_http_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2434,8 +2434,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.rdp_store().unwrap();
 
-        insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_rdp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2499,8 +2499,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.smtp_store().unwrap();
 
-        insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_smtp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2569,8 +2569,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ntlm_store().unwrap();
 
-        insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ntlm_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2640,8 +2640,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.kerberos_store().unwrap();
 
-        insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_kerberos_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2716,8 +2716,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ssh_store().unwrap();
 
-        insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ssh_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2791,8 +2791,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.dce_rpc_store().unwrap();
 
-        insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_dce_rpc_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -2861,14 +2861,14 @@ mod tests {
         insert_log_raw_event(
             &store,
             "src1",
-            Utc::now().timestamp_nanos(),
+            Utc::now().timestamp_nanos_opt().unwrap(),
             "kind1",
             b"log1",
         );
         insert_log_raw_event(
             &store,
             "src2",
-            Utc::now().timestamp_nanos(),
+            Utc::now().timestamp_nanos_opt().unwrap(),
             "kind2",
             b"log2",
         );
@@ -2930,8 +2930,18 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store().unwrap();
 
-        insert_time_series(&store, "1", Utc::now().timestamp_nanos(), vec![0.0; 12]);
-        insert_time_series(&store, "2", Utc::now().timestamp_nanos(), vec![0.0; 12]);
+        insert_time_series(
+            &store,
+            "1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+            vec![0.0; 12],
+        );
+        insert_time_series(
+            &store,
+            "2",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+            vec![0.0; 12],
+        );
 
         // export csv file
         let query = r#"
@@ -3038,8 +3048,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ftp_store().unwrap();
 
-        insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ftp_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -3114,8 +3124,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.mqtt_store().unwrap();
 
-        insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_mqtt_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -3184,8 +3194,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.ldap_store().unwrap();
 
-        insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_ldap_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -3255,8 +3265,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.tls_store().unwrap();
 
-        insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_tls_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -3337,8 +3347,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.smb_store().unwrap();
 
-        insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_smb_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"
@@ -3412,8 +3422,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.nfs_store().unwrap();
 
-        insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos());
-        insert_nfs_raw_event(&store, "src2", Utc::now().timestamp_nanos());
+        insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
 
         // export csv file
         let query = r#"

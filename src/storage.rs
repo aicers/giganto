@@ -542,7 +542,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .filter_map(|timestamp| {
                 let key = key_builder
                     .clone()
-                    .end_key(timestamp.timestamp_nanos())
+                    .end_key(timestamp.timestamp_nanos_opt().expect("valid timestamp"))
                     .build();
                 self.db
                     .get_cf(&self.cf, key.key())
@@ -602,8 +602,14 @@ impl<'db> SourceStore<'db> {
     ///
     /// If the source already exists, its last active time is updated.
     pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
-        self.db
-            .put_cf(self.cf, name, last_active.timestamp_nanos().to_be_bytes())?;
+        self.db.put_cf(
+            self.cf,
+            name,
+            last_active
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                .to_be_bytes(),
+        )?;
         Ok(())
     }
 
@@ -675,7 +681,7 @@ impl StorageKeyBuilder {
     pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let end_key = if let Some(time) = time {
-            time.timestamp_nanos()
+            time.timestamp_nanos_opt().expect("valid timestamp")
         } else {
             0
         };
@@ -686,7 +692,7 @@ impl StorageKeyBuilder {
     pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let end_key = if let Some(time) = time {
-            time.timestamp_nanos()
+            time.timestamp_nanos_opt().expect("valid timestamp")
         } else {
             i64::MAX
         };
@@ -697,7 +703,7 @@ impl StorageKeyBuilder {
     pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
-            let ns = time.timestamp_nanos();
+            let ns = time.timestamp_nanos_opt().expect("valid timestamp");
             if let Some(ns) = ns.checked_sub(1) {
                 if ns >= 0 {
                     self.pre_key.extend_from_slice(&ns.to_be_bytes());
@@ -861,12 +867,13 @@ pub async fn retain_periodically(
         NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
         Utc,
     )
-    .timestamp_nanos()
+    .timestamp_nanos_opt()
+    .context("to_timestamp_nanos")?
     .to_be_bytes();
     loop {
         select! {
             _ = itv.tick() => {
-                let standard_duration = Utc::now().timestamp_nanos() - retention_duration;
+                let standard_duration = Utc::now().timestamp_nanos_opt().context("to_timestamp_nanos")? - retention_duration;
                 let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
                 let sources = db.sources_store()?.names();
                 let all_store = db.retain_period_store()?;
