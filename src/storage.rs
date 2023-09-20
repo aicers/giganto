@@ -542,7 +542,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .filter_map(|timestamp| {
                 let key = key_builder
                     .clone()
-                    .end_key(timestamp.timestamp_nanos_opt().expect("valid timestamp"))
+                    .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
                     .build();
                 self.db
                     .get_cf(&self.cf, key.key())
@@ -607,7 +607,7 @@ impl<'db> SourceStore<'db> {
             name,
             last_active
                 .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .unwrap_or(i64::MAX)
                 .to_be_bytes(),
         )?;
         Ok(())
@@ -681,7 +681,7 @@ impl StorageKeyBuilder {
     pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let end_key = if let Some(time) = time {
-            time.timestamp_nanos_opt().expect("valid timestamp")
+            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
         } else {
             0
         };
@@ -692,7 +692,7 @@ impl StorageKeyBuilder {
     pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let end_key = if let Some(time) = time {
-            time.timestamp_nanos_opt().expect("valid timestamp")
+            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
         } else {
             i64::MAX
         };
@@ -703,7 +703,7 @@ impl StorageKeyBuilder {
     pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
-            let ns = time.timestamp_nanos_opt().expect("valid timestamp");
+            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
             if let Some(ns) = ns.checked_sub(1) {
                 if ns >= 0 {
                     self.pre_key.extend_from_slice(&ns.to_be_bytes());
@@ -868,12 +868,12 @@ pub async fn retain_periodically(
         Utc,
     )
     .timestamp_nanos_opt()
-    .context("to_timestamp_nanos")?
+    .unwrap_or(i64::MAX)
     .to_be_bytes();
     loop {
         select! {
             _ = itv.tick() => {
-                let standard_duration = Utc::now().timestamp_nanos_opt().context("to_timestamp_nanos")? - retention_duration;
+                let standard_duration = Utc::now().timestamp_nanos_opt().unwrap_or(i64::MAX) - retention_duration;
                 let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
                 let sources = db.sources_store()?.names();
                 let all_store = db.retain_period_store()?;
