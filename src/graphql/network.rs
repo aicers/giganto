@@ -261,18 +261,15 @@ struct KerberosRawEvent {
     resp_port: u16,
     proto: u8,
     last_time: i64,
-    request_type: String,
-    client: String,
-    service: String,
-    success: String,
-    error_msg: String,
-    from: i64,
-    till: i64,
-    cipher: String,
-    forwardable: String,
-    renewable: String,
-    client_cert_subject: String,
-    server_cert_subject: String,
+    client_time: i64,
+    server_time: i64,
+    error_code: u32,
+    client_realm: String,
+    cname_type: u8,
+    client_name: Vec<String>,
+    realm: String,
+    sname_type: u8,
+    service_name: Vec<String>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -581,18 +578,15 @@ from_key_value!(
 from_key_value!(
     KerberosRawEvent,
     Kerberos,
-    request_type,
-    client,
-    service,
-    success,
-    error_msg,
-    from,
-    till,
-    cipher,
-    forwardable,
-    renewable,
-    client_cert_subject,
-    server_cert_subject
+    client_time,
+    server_time,
+    error_code,
+    client_realm,
+    cname_type,
+    client_name,
+    realm,
+    sname_type,
+    service_name
 );
 
 from_key_value!(
@@ -1838,7 +1832,7 @@ mod tests {
         {
             connRawEvents(
                 filter: {
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
                     source: "src 1"
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2331,18 +2325,15 @@ mod tests {
             resp_port: 80,
             proto: 17,
             last_time: 1,
-            request_type: "req_type".to_string(),
-            client: "client".to_string(),
-            service: "service".to_string(),
-            success: "tf".to_string(),
-            error_msg: "err_msg".to_string(),
-            from: 5454,
-            till: 2345,
-            cipher: "cipher".to_string(),
-            forwardable: "forwardable".to_string(),
-            renewable: "renewable".to_string(),
-            client_cert_subject: "client_cert".to_string(),
-            server_cert_subject: "server_cert".to_string(),
+            client_time: 1,
+            server_time: 1,
+            error_code: 1,
+            client_realm: "client_realm".to_string(),
+            cname_type: 1,
+            client_name: vec!["client_name".to_string()],
+            realm: "realm".to_string(),
+            sname_type: 1,
+            service_name: vec!["service_name".to_string()],
         };
         let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
@@ -2825,7 +2816,7 @@ mod tests {
         {
             connRawEvents(
                 filter: {
-                    time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                    time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
                     source: "src 1"
                     origAddr: { start: "192.168.4.75" }
                     origPort: { end: 46380 }

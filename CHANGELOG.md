@@ -5,6 +5,12 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Modified Kerberos event to support giganto-client.
+
 ## [0.13.1] - 2023-09-18
 
 ### Changed
@@ -283,6 +289,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.13.1...main
 [0.13.1]: https://github.com/aicers/giganto/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/aicers/giganto/compare/0.12.3...0.13.0
 [0.12.3]: https://github.com/aicers/giganto/compare/0.12.2...0.12.3
