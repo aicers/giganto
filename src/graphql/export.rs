@@ -14,7 +14,7 @@ use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::ingest::{
-    log::{Log, Oplog},
+    log::{Log, Oplog, Seculog},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
         Smtp, Ssh, Tls,
@@ -41,7 +41,7 @@ use std::{
 };
 use tracing::{error, info};
 
-const NON_NETWORK: [&str; 19] = [
+const NON_NETWORK: [&str; 20] = [
     "log",
     "periodic time series",
     "oplog",
@@ -61,6 +61,7 @@ const NON_NETWORK: [&str; 19] = [
     "file delete",
     "process tamper",
     "file delete detected",
+    "seculog",
 ];
 
 #[derive(Default)]
@@ -399,6 +400,19 @@ struct OpLogJsonOutput {
     timestamp: String,
     agent_id: String,
     level: String,
+    contents: String,
+}
+
+#[derive(Serialize, Debug)]
+struct SecuLogJsonOutput {
+    timestamp: String,
+    source: String,
+    kind: String,
+    orig_addr: String,
+    orig_port: String,
+    resp_addr: String,
+    resp_port: String,
+    proto: String,
     contents: String,
 }
 
@@ -898,6 +912,22 @@ impl JsonOutput<OpLogJsonOutput> for Oplog {
     }
 }
 
+impl JsonOutput<SecuLogJsonOutput> for Seculog {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<SecuLogJsonOutput> {
+        Ok(SecuLogJsonOutput {
+            timestamp,
+            source,
+            kind: self.kind.clone(),
+            orig_addr: to_string_or_empty(self.orig_addr),
+            orig_port: to_string_or_empty(self.orig_port),
+            resp_addr: to_string_or_empty(self.resp_addr),
+            resp_port: to_string_or_empty(self.resp_port),
+            proto: to_string_or_empty(self.proto),
+            contents: self.contents.clone(),
+        })
+    }
+}
+
 impl JsonOutput<FtpJsonOutput> for Ftp {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<FtpJsonOutput> {
         Ok(FtpJsonOutput {
@@ -1288,6 +1318,13 @@ impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
             hashes: self.hashes.clone(),
             is_executable: self.is_executable,
         })
+    }
+}
+
+fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
+    match option {
+        Some(val) => val.to_string(),
+        None => "-".to_string(),
     }
 }
 
@@ -1896,6 +1933,20 @@ fn export_by_protocol(
         }),
         "netflow9" => tokio::spawn(async move {
             if let Ok(store) = db.netflow9_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "seculog" => tokio::spawn(async move {
+            if let Ok(store) = db.seculog_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
