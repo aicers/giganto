@@ -24,11 +24,12 @@ use giganto_client::{
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
+use std::sync::atomic::AtomicU16;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         Arc,
     },
     time::Duration,
@@ -45,13 +46,13 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
-const ACK_ROTATION_CNT: u8 = 128;
+const ACK_ROTATION_CNT: u16 = 1024;
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.12.0,<0.14.0";
+const INGEST_VERSION_REQ: &str = ">=0.13.1,<0.15.0";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
@@ -734,7 +735,7 @@ async fn handle_data<T>(
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
 
-    let ack_cnt_rotation = Arc::new(AtomicU8::new(0));
+    let ack_cnt_rotation = Arc::new(AtomicU16::new(0));
     let ack_cnt_interval = Arc::clone(&ack_cnt_rotation);
 
     let ack_time_rotation = Arc::new(AtomicI64::new(NO_TIMESTAMP));
@@ -852,6 +853,7 @@ async fn handle_data<T>(
                     send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                     ack_cnt_rotation.store(0, Ordering::SeqCst);
                     ack_time_notify.notify_one();
+                    store.flush()?;
                 }
                 #[cfg(feature = "benchmark")]
                 {
@@ -884,11 +886,13 @@ async fn handle_data<T>(
                 break;
             }
             Err(e) => {
+                store.flush()?;
                 handler.abort();
                 bail!("handle {:?} error: {}", record_type, e)
             }
         }
     }
+    store.flush()?;
 
     Ok(())
 }
