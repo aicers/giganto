@@ -10,6 +10,7 @@ mod web;
 use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::init_tracing;
+use rocksdb::DB;
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
 use std::{
@@ -17,7 +18,7 @@ use std::{
     env, fs,
     process::exit,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     select,
@@ -43,10 +44,10 @@ ARG:
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut settings = if let Some(config_filename) = parse() {
-        Settings::from_file(&config_filename)?
+    let (mut settings, repair) = if let Some((config_filename, repair)) = parse() {
+        (Settings::from_file(&config_filename)?, repair)
     } else {
-        Settings::new()?
+        (Settings::new()?, false)
     };
 
     let cert_pem = fs::read(&settings.cert).with_context(|| {
@@ -65,12 +66,23 @@ async fn main() -> Result<()> {
     })?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
 
+    let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
     let db_path = settings.data_dir.join("db");
     let db_options =
         crate::storage::DbOptions::new(settings.max_open_files, settings.max_mb_of_level_base);
+    if repair {
+        let start = Instant::now();
+        let (db_opts, _) = storage::rocksdb_options(&db_options);
+        info!("repair db start.");
+        match DB::repair(&db_opts, db_path) {
+            Ok(()) => info!("repair ok"),
+            Err(e) => error!("repair error: {e}"),
+        }
+        let dur = start.elapsed();
+        info!("{}", to_hms(dur));
+        exit(0);
+    }
     let database = storage::Database::open(&db_path, &db_options)?;
-
-    let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
 
     let mut files: Vec<Vec<u8>> = Vec::new();
     for root in &settings.roots {
@@ -170,7 +182,7 @@ async fn main() -> Result<()> {
 
         loop {
             select! {
-                _ = config_reload.notified() =>{
+                () = config_reload.notified() =>{
                     match Settings::from_file(&settings.cfg_path) {
                         Ok(new_settings) => {
                             settings = new_settings;
@@ -185,7 +197,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 },
-                _ = notify_ctrlc.notified() =>{
+                () = notify_ctrlc.notified() =>{
                     info!("Termination signal: giganto daemon exit");
                     notify_shutdown.notify_waiters();
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
@@ -199,13 +211,18 @@ async fn main() -> Result<()> {
 }
 
 /// Parses the command line arguments and returns the first argument.
-fn parse() -> Option<String> {
+#[allow(unused_assignments)]
+fn parse() -> Option<(String, bool)> {
     let mut args = env::args();
+    let mut repair = false;
     args.next()?;
     let arg = args.next()?;
-    if args.next().is_some() {
-        eprintln!("Error: too many arguments");
-        exit(1);
+    let repair_opt = args.next();
+    if let Some(str) = repair_opt {
+        match str.as_str() {
+            "--repair" => repair = true,
+            _ => eprintln!("Error: too many arguments"),
+        }
     }
 
     if arg == "--help" || arg == "-h" {
@@ -224,7 +241,7 @@ fn parse() -> Option<String> {
         exit(1);
     }
 
-    Some(arg)
+    Some((arg, repair))
 }
 
 fn version() -> String {
@@ -249,4 +266,13 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
         }
         _ => Err(anyhow!("unknown private key format")),
     }
+}
+
+fn to_hms(dur: Duration) -> String {
+    let total_sec = dur.as_secs();
+    let hours = total_sec / 3600;
+    let minutes = (total_sec % 3600) / 60;
+    let seconds = total_sec % 60;
+
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }

@@ -126,7 +126,7 @@ impl Server {
                         }
                     });
                 },
-                _ = wait_shutdown.notified() => {
+                () = wait_shutdown.notified() => {
                     shutdown_signal.store(true,Ordering::SeqCst); // Setting signal to handle termination on each channel.
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
@@ -208,7 +208,7 @@ async fn handle_connection(
                     }
                 });
             },
-            _ = wait_shutdown.notified() => {
+            () = wait_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
@@ -731,7 +731,7 @@ async fn handle_data<T>(
                     }
                 }
 
-                _ = ack_time_notified.notified() => {
+                () = ack_time_notified.notified() => {
                     itv.reset();
                 }
             }

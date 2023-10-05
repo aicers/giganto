@@ -188,7 +188,7 @@ impl Peer {
                         wait_shutdown.clone(),
                     ));
                 },
-                _ = wait_shutdown.notified() => {
+                () = wait_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
                     server_endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down peer");
@@ -343,7 +343,7 @@ async fn client_connection(
                                 }
                             });
                         },
-                        _ = peer_conn_info.notify_source.notified() => {
+                        () = peer_conn_info.notify_source.notified() => {
                             let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
                             for conn in (*peer_conn_info.peer_conn.write().await).values() {
                                 tokio::spawn(update_peer_info::<HashSet<String>>(
@@ -353,7 +353,7 @@ async fn client_connection(
                                 ));
                             }
                         },
-                        _ = wait_shutdown.notified() => {
+                        () = wait_shutdown.notified() => {
                             // Wait time for channels to be ready for shutdown.
                             sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                             connection.close(0_u32.into(), &[]);
@@ -499,7 +499,7 @@ async fn server_connection(
                     }
                 });
             },
-            _ = peer_conn_info.notify_source.notified() => {
+            () = peer_conn_info.notify_source.notified() => {
                 let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
                 for conn in (*peer_conn_info.peer_conn.read().await).values() {
                     tokio::spawn(update_peer_info::<HashSet<String>>(
@@ -509,7 +509,7 @@ async fn server_connection(
                     ));
                 }
             },
-            _ = wait_shutdown.notified() => {
+            () = wait_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
