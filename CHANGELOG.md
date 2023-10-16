@@ -7,9 +7,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `--repair` option to only fix the database problem then terminated.
+
 ### Changed
 
 - Modified Kerberos event to support giganto-client.
+- Changed `max_background_jobs` to 6 from 2.
 
 ## [0.13.1] - 2023-09-18
 

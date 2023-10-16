@@ -913,14 +913,14 @@ pub async fn retain_periodically(
                     }
                 }
             }
-            _ = wait_shutdown.notified() => {
+            () = wait_shutdown.notified() => {
                 return Ok(());
             },
         }
     }
 }
 
-fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
+pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     let max_bytes = db_options.max_mb_of_level_base * 1024 * 1024;
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
@@ -930,6 +930,7 @@ fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     db_opts.set_stats_dump_period_sec(3600);
     db_opts.set_max_total_wal_size(max_bytes);
     db_opts.set_manual_wal_flush(true);
+    db_opts.set_max_background_jobs(6);
 
     let mut cf_opts = Options::default();
     cf_opts.set_write_buffer_size((max_bytes / 4).try_into().expect("u64 to usize"));

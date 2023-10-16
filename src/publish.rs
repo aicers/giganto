@@ -91,7 +91,7 @@ impl Server {
                         }
                     });
                 },
-                _ = wait_shutdown.notified() => {
+                () = wait_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down publish");
@@ -154,7 +154,7 @@ async fn handle_connection(
                     }
                 });
             },
-            _ = wait_shutdown.notified() => {
+            () = wait_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
@@ -270,7 +270,7 @@ async fn process_pcap_extract(
             if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
                 // send/receive extract request from piglet
                 match pcap_extract_request(source_conn, &filter).await {
-                    Ok(_) => (),
+                    Ok(()) => (),
                     Err(e) => debug!("failed to relay pcap request, {e}"),
                 }
             } else {
