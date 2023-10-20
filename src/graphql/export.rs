@@ -1,3 +1,5 @@
+mod netflow;
+
 use super::{
     check_address, check_port,
     network::{IpRange, PortRange},
@@ -26,6 +28,7 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
     RecordType,
 };
+pub use netflow::{Netflow5RawEvent, NetflowV9RawEvent};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Cow,
@@ -1865,6 +1868,34 @@ fn export_by_protocol(
         }),
         "file_delete_detected" => tokio::spawn(async move {
             if let Ok(store) = db.file_delete_detected_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "netflow5" => tokio::spawn(async move {
+            if let Ok(store) = db.netflow5_store() {
+                match process_export(&store, &filter, &export_type, &export_path) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "netflow9" => tokio::spawn(async move {
+            if let Ok(store) = db.netflow9_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
