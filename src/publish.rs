@@ -1117,6 +1117,26 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                REconvergeKindType::Netflow5 => {
+                    process_range_data(
+                        &mut send,
+                        db.netflow5_store()
+                            .context("Failed to open netflow5 store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
+                REconvergeKindType::Netflow9 => {
+                    process_range_data(
+                        &mut send,
+                        db.netflow9_store()
+                            .context("Failed to open netflow9 store")?,
+                        msg,
+                        false,
+                    )
+                    .await?;
+                }
             }
         }
         MessageCode::Pcap => {
@@ -1224,6 +1244,12 @@ async fn handle_request(
                 REconvergeKindType::FileDeleteDetected => {
                     process_raw_events(&mut send, db.file_delete_detected_store()?, msg.input)
                         .await?;
+                }
+                REconvergeKindType::Netflow5 => {
+                    process_raw_events(&mut send, db.netflow5_store()?, msg.input).await?;
+                }
+                REconvergeKindType::Netflow9 => {
+                    process_raw_events(&mut send, db.netflow9_store()?, msg.input).await?;
                 }
             }
         }

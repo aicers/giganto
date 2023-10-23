@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLogLevel, Oplog},
+    netflow::{Netflow5, Netflow9},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     },
@@ -854,5 +855,53 @@ impl EventFilter for FileDeleteDetected {
     }
     fn log_contents(&self) -> Option<String> {
         None
+    }
+}
+
+impl EventFilter for Netflow5 {
+    fn data_type(&self) -> String {
+        "netflow v5".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.srcaddr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.dstaddr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.srcport)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.dstport)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Netflow9 {
+    fn data_type(&self) -> String {
+        "netflow v9".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.contents.clone())
     }
 }

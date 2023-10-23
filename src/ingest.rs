@@ -673,6 +673,32 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Netflow5 => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Netflow5,
+                None,
+                source,
+                db.netflow5_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
+        RecordType::Netflow9 => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Netflow9,
+                None,
+                source,
+                db.netflow9_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }

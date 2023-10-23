@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, Oplog},
+    netflow::{Netflow5, Netflow9},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     },
@@ -32,7 +33,7 @@ use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 34] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 36] = [
     "conn",
     "dns",
     "log",
@@ -67,6 +68,8 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 34] = [
     "file delete",
     "process tamper",
     "file delete detected",
+    "netflow5",
+    "netflow9",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
@@ -493,6 +496,24 @@ impl Database {
             .db
             .cf_handle("file delete detected")
             .context("cannot access sysmon #26 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for event `netflow5`.
+    pub fn netflow5_store(&self) -> Result<RawEventStore<Netflow5>> {
+        let cf = self
+            .db
+            .cf_handle("netflow5")
+            .context("cannot access netflow5 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for event `netflow9`.
+    pub fn netflow9_store(&self) -> Result<RawEventStore<Netflow9>> {
+        let cf = self
+            .db
+            .cf_handle("netflow9")
+            .context("cannot access netflow9 column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

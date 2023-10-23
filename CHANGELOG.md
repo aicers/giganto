@@ -10,6 +10,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added `--repair` option to only fix the database problem then terminated.
+- Support `NetflowV5`, `NetflowV9` events. These events does not streamed
+  to Hog or Crusher.
 
 ### Changed
 
