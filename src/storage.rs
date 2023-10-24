@@ -950,7 +950,6 @@ pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     db_opts.set_keep_log_file_num(10);
     db_opts.set_stats_dump_period_sec(3600);
     db_opts.set_max_total_wal_size(max_bytes);
-    db_opts.set_manual_wal_flush(true);
     db_opts.set_max_background_jobs(6);
 
     let mut cf_opts = Options::default();

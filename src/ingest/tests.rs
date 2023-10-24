@@ -1051,7 +1051,7 @@ async fn ack_info() {
     .unwrap();
 
     let mut last_timestamp: i64 = 0;
-    for _ in 0..127 {
+    for _ in 0..1023 {
         let log_body: Log = Log {
             kind: String::from("Hello Server I am Log"),
             log: vec![0; 10],
