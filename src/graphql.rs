@@ -563,6 +563,12 @@ fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool
     true
 }
 
+fn check_contents(filter_str: &Option<String>, target_str: Option<String>) -> bool {
+    filter_str.as_ref().map_or(true, |filter_str| {
+        target_str.map_or(false, |contents| contents.contains(filter_str))
+    })
+}
+
 #[cfg(test)]
 struct TestSchema {
     _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running

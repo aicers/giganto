@@ -1,5 +1,5 @@
 use super::{
-    check_address, check_port, get_timestamp_from_key, load_connection,
+    check_address, check_contents, check_port, get_timestamp_from_key, load_connection,
     network::{IpRange, PortRange},
     FromKeyValue,
 };
@@ -21,7 +21,7 @@ pub(super) struct SecurityLogQuery;
 #[derive(InputObject)]
 pub struct SecuLogFilter {
     time: Option<TimeRange>,
-    agent_id: String,
+    source: String,
     kind: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
@@ -32,7 +32,7 @@ pub struct SecuLogFilter {
 
 impl KeyExtractor for SecuLogFilter {
     fn get_start_key(&self) -> &str {
-        &self.agent_id
+        &self.source
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -56,13 +56,14 @@ impl RawEventFilter for SecuLogFilter {
         orig_port: Option<u16>,
         resp_port: Option<u16>,
         _log_level: Option<String>,
-        _log_contents: Option<String>,
+        log_contents: Option<String>,
         _text: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
+            && check_contents(&self.log, log_contents)
         {
             return Ok(true);
         }

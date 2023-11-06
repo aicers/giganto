@@ -19,6 +19,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modified Kerberos event to support giganto-client.
 - Changed `max_background_jobs` to 6 from 2.
 
+### Fixed
+
+- Fix potential bug in `retain_periodically`
+
 ## [0.13.1] - 2023-09-18
 
 ### Changed
