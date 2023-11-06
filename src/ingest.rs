@@ -10,17 +10,18 @@ use crate::server::{
 use crate::storage::{Database, RawEventStore, StorageKey};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
     ingest::{
-        log::{Log, Oplog},
+        log::{Log, OpLog},
         receive_event, receive_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
-        Packet, RecordType,
+        Packet,
     },
+    RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
@@ -232,12 +233,12 @@ async fn handle_request(
     receive_record_header(&mut recv, &mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {}", e))?;
-    match RecordType::try_from(u32::from_le_bytes(buf)).context("unknown record type")? {
-        RecordType::Conn => {
+    match RawEventKind::try_from(u32::from_le_bytes(buf)).context("unknown raw event kind")? {
+        RawEventKind::Conn => {
             handle_data(
                 send,
                 recv,
-                RecordType::Conn,
+                RawEventKind::Conn,
                 Some(NetworkKey::new(&source, "conn")),
                 source,
                 db.conn_store()?,
@@ -246,11 +247,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Dns => {
+        RawEventKind::Dns => {
             handle_data(
                 send,
                 recv,
-                RecordType::Dns,
+                RawEventKind::Dns,
                 Some(NetworkKey::new(&source, "dns")),
                 source,
                 db.dns_store()?,
@@ -259,11 +260,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Log => {
+        RawEventKind::Log => {
             handle_data(
                 send,
                 recv,
-                RecordType::Log,
+                RawEventKind::Log,
                 Some(NetworkKey::new(&source, "log")),
                 source,
                 db.log_store()?,
@@ -272,11 +273,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Http => {
+        RawEventKind::Http => {
             handle_data(
                 send,
                 recv,
-                RecordType::Http,
+                RawEventKind::Http,
                 Some(NetworkKey::new(&source, "http")),
                 source,
                 db.http_store()?,
@@ -285,11 +286,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Rdp => {
+        RawEventKind::Rdp => {
             handle_data(
                 send,
                 recv,
-                RecordType::Rdp,
+                RawEventKind::Rdp,
                 Some(NetworkKey::new(&source, "rdp")),
                 source,
                 db.rdp_store()?,
@@ -298,11 +299,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::PeriodicTimeSeries => {
+        RawEventKind::PeriodicTimeSeries => {
             handle_data(
                 send,
                 recv,
-                RecordType::PeriodicTimeSeries,
+                RawEventKind::PeriodicTimeSeries,
                 None,
                 source,
                 db.periodic_time_series_store()?,
@@ -311,11 +312,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Smtp => {
+        RawEventKind::Smtp => {
             handle_data(
                 send,
                 recv,
-                RecordType::Smtp,
+                RawEventKind::Smtp,
                 Some(NetworkKey::new(&source, "smtp")),
                 source,
                 db.smtp_store()?,
@@ -324,11 +325,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Ntlm => {
+        RawEventKind::Ntlm => {
             handle_data(
                 send,
                 recv,
-                RecordType::Ntlm,
+                RawEventKind::Ntlm,
                 Some(NetworkKey::new(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
@@ -337,11 +338,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Kerberos => {
+        RawEventKind::Kerberos => {
             handle_data(
                 send,
                 recv,
-                RecordType::Kerberos,
+                RawEventKind::Kerberos,
                 Some(NetworkKey::new(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
@@ -350,11 +351,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Ssh => {
+        RawEventKind::Ssh => {
             handle_data(
                 send,
                 recv,
-                RecordType::Ssh,
+                RawEventKind::Ssh,
                 Some(NetworkKey::new(&source, "ssh")),
                 source,
                 db.ssh_store()?,
@@ -363,11 +364,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::DceRpc => {
+        RawEventKind::DceRpc => {
             handle_data(
                 send,
                 recv,
-                RecordType::DceRpc,
+                RawEventKind::DceRpc,
                 Some(NetworkKey::new(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
@@ -376,11 +377,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Statistics => {
+        RawEventKind::Statistics => {
             handle_data(
                 send,
                 recv,
-                RecordType::Statistics,
+                RawEventKind::Statistics,
                 None,
                 source,
                 db.statistics_store()?,
@@ -389,24 +390,24 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Oplog => {
+        RawEventKind::OpLog => {
             handle_data(
                 send,
                 recv,
-                RecordType::Oplog,
+                RawEventKind::OpLog,
                 None,
                 source,
-                db.oplog_store()?,
+                db.op_log_store()?,
                 stream_direct_channel,
                 shutdown_signal,
             )
             .await?;
         }
-        RecordType::Packet => {
+        RawEventKind::Packet => {
             handle_data(
                 send,
                 recv,
-                RecordType::Packet,
+                RawEventKind::Packet,
                 None,
                 source,
                 db.packet_store()?,
@@ -415,11 +416,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Ftp => {
+        RawEventKind::Ftp => {
             handle_data(
                 send,
                 recv,
-                RecordType::Ftp,
+                RawEventKind::Ftp,
                 Some(NetworkKey::new(&source, "ftp")),
                 source,
                 db.ftp_store()?,
@@ -428,11 +429,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Mqtt => {
+        RawEventKind::Mqtt => {
             handle_data(
                 send,
                 recv,
-                RecordType::Mqtt,
+                RawEventKind::Mqtt,
                 Some(NetworkKey::new(&source, "mqtt")),
                 source,
                 db.mqtt_store()?,
@@ -441,11 +442,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Ldap => {
+        RawEventKind::Ldap => {
             handle_data(
                 send,
                 recv,
-                RecordType::Ldap,
+                RawEventKind::Ldap,
                 Some(NetworkKey::new(&source, "ldap")),
                 source,
                 db.ldap_store()?,
@@ -454,11 +455,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Tls => {
+        RawEventKind::Tls => {
             handle_data(
                 send,
                 recv,
-                RecordType::Tls,
+                RawEventKind::Tls,
                 Some(NetworkKey::new(&source, "tls")),
                 source,
                 db.tls_store()?,
@@ -467,11 +468,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Smb => {
+        RawEventKind::Smb => {
             handle_data(
                 send,
                 recv,
-                RecordType::Smb,
+                RawEventKind::Smb,
                 Some(NetworkKey::new(&source, "smb")),
                 source,
                 db.smb_store()?,
@@ -480,11 +481,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Nfs => {
+        RawEventKind::Nfs => {
             handle_data(
                 send,
                 recv,
-                RecordType::Nfs,
+                RawEventKind::Nfs,
                 Some(NetworkKey::new(&source, "nfs")),
                 source,
                 db.nfs_store()?,
@@ -493,11 +494,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::ProcessCreate => {
+        RawEventKind::ProcessCreate => {
             handle_data(
                 send,
                 recv,
-                RecordType::ProcessCreate,
+                RawEventKind::ProcessCreate,
                 None,
                 source,
                 db.process_create_store()?,
@@ -506,11 +507,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::FileCreateTime => {
+        RawEventKind::FileCreateTime => {
             handle_data(
                 send,
                 recv,
-                RecordType::FileCreateTime,
+                RawEventKind::FileCreateTime,
                 None,
                 source,
                 db.file_create_time_store()?,
@@ -519,11 +520,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::NetworkConnect => {
+        RawEventKind::NetworkConnect => {
             handle_data(
                 send,
                 recv,
-                RecordType::NetworkConnect,
+                RawEventKind::NetworkConnect,
                 None,
                 source,
                 db.network_connect_store()?,
@@ -532,11 +533,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::ProcessTerminate => {
+        RawEventKind::ProcessTerminate => {
             handle_data(
                 send,
                 recv,
-                RecordType::ProcessTerminate,
+                RawEventKind::ProcessTerminate,
                 None,
                 source,
                 db.process_terminate_store()?,
@@ -545,11 +546,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::ImageLoad => {
+        RawEventKind::ImageLoad => {
             handle_data(
                 send,
                 recv,
-                RecordType::ImageLoad,
+                RawEventKind::ImageLoad,
                 None,
                 source,
                 db.image_load_store()?,
@@ -558,11 +559,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::FileCreate => {
+        RawEventKind::FileCreate => {
             handle_data(
                 send,
                 recv,
-                RecordType::FileCreate,
+                RawEventKind::FileCreate,
                 None,
                 source,
                 db.file_create_store()?,
@@ -571,11 +572,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::RegistryValueSet => {
+        RawEventKind::RegistryValueSet => {
             handle_data(
                 send,
                 recv,
-                RecordType::RegistryValueSet,
+                RawEventKind::RegistryValueSet,
                 None,
                 source,
                 db.registry_value_set_store()?,
@@ -584,11 +585,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::RegistryKeyRename => {
+        RawEventKind::RegistryKeyRename => {
             handle_data(
                 send,
                 recv,
-                RecordType::RegistryKeyRename,
+                RawEventKind::RegistryKeyRename,
                 None,
                 source,
                 db.registry_key_rename_store()?,
@@ -597,11 +598,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::FileCreateStreamHash => {
+        RawEventKind::FileCreateStreamHash => {
             handle_data(
                 send,
                 recv,
-                RecordType::FileCreateStreamHash,
+                RawEventKind::FileCreateStreamHash,
                 None,
                 source,
                 db.file_create_stream_hash_store()?,
@@ -610,11 +611,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::PipeEvent => {
+        RawEventKind::PipeEvent => {
             handle_data(
                 send,
                 recv,
-                RecordType::PipeEvent,
+                RawEventKind::PipeEvent,
                 None,
                 source,
                 db.pipe_event_store()?,
@@ -623,11 +624,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::DnsQuery => {
+        RawEventKind::DnsQuery => {
             handle_data(
                 send,
                 recv,
-                RecordType::DnsQuery,
+                RawEventKind::DnsQuery,
                 None,
                 source,
                 db.dns_query_store()?,
@@ -636,11 +637,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::FileDelete => {
+        RawEventKind::FileDelete => {
             handle_data(
                 send,
                 recv,
-                RecordType::FileDelete,
+                RawEventKind::FileDelete,
                 None,
                 source,
                 db.file_delete_store()?,
@@ -649,11 +650,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::ProcessTamper => {
+        RawEventKind::ProcessTamper => {
             handle_data(
                 send,
                 recv,
-                RecordType::ProcessTamper,
+                RawEventKind::ProcessTamper,
                 None,
                 source,
                 db.process_tamper_store()?,
@@ -662,11 +663,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::FileDeleteDetected => {
+        RawEventKind::FileDeleteDetected => {
             handle_data(
                 send,
                 recv,
-                RecordType::FileDeleteDetected,
+                RawEventKind::FileDeleteDetected,
                 None,
                 source,
                 db.file_delete_detected_store()?,
@@ -675,11 +676,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Netflow5 => {
+        RawEventKind::Netflow5 => {
             handle_data(
                 send,
                 recv,
-                RecordType::Netflow5,
+                RawEventKind::Netflow5,
                 None,
                 source,
                 db.netflow5_store()?,
@@ -688,11 +689,11 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Netflow9 => {
+        RawEventKind::Netflow9 => {
             handle_data(
                 send,
                 recv,
-                RecordType::Netflow9,
+                RawEventKind::Netflow9,
                 None,
                 source,
                 db.netflow9_store()?,
@@ -701,14 +702,14 @@ async fn handle_request(
             )
             .await?;
         }
-        RecordType::Seculog => {
+        RawEventKind::SecuLog => {
             handle_data(
                 send,
                 recv,
-                RecordType::Seculog,
+                RawEventKind::SecuLog,
                 None,
                 source,
-                db.seculog_store()?,
+                db.secu_log_store()?,
                 stream_direct_channel,
                 shutdown_signal,
             )
@@ -725,7 +726,7 @@ async fn handle_request(
 async fn handle_data<T>(
     send: SendStream,
     mut recv: RecvStream,
-    record_type: RecordType,
+    raw_event_kind: RawEventKind,
     network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
@@ -751,9 +752,9 @@ async fn handle_data<T>(
     #[cfg(feature = "benchmark")]
     let mut size = 0_usize;
     #[cfg(feature = "benchmark")]
-    let mut packetsize = 0_u64;
+    let mut packet_size = 0_u64;
     #[cfg(feature = "benchmark")]
-    let mut packetcount = 0_u64;
+    let mut packet_count = 0_u64;
     #[cfg(feature = "benchmark")]
     let mut start = std::time::Instant::now();
 
@@ -788,37 +789,37 @@ async fn handle_data<T>(
                     continue;
                 }
                 let key_builder = StorageKey::builder().start_key(&source);
-                let key_builder = match record_type {
-                    RecordType::Log => {
+                let key_builder = match raw_event_kind {
+                    RawEventKind::Log => {
                         let log = bincode::deserialize::<Log>(&raw_event)?;
                         key_builder
                             .mid_key(Some(log.kind.as_bytes().to_vec()))
                             .end_key(timestamp)
                     }
-                    RecordType::PeriodicTimeSeries => {
+                    RawEventKind::PeriodicTimeSeries => {
                         let time_series = bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
                         StorageKey::builder()
                             .start_key(&time_series.id)
                             .end_key(timestamp)
                     }
-                    RecordType::Oplog => {
-                        let oplog = bincode::deserialize::<Oplog>(&raw_event)?;
-                        let agent_id = format!("{}@{source}", oplog.agent_name);
+                    RawEventKind::OpLog => {
+                        let op_log = bincode::deserialize::<OpLog>(&raw_event)?;
+                        let agent_id = format!("{}@{source}", op_log.agent_name);
                         StorageKey::builder()
                             .start_key(&agent_id)
                             .end_key(timestamp)
                     }
-                    RecordType::Packet => {
+                    RawEventKind::Packet => {
                         let packet = bincode::deserialize::<Packet>(&raw_event)?;
                         key_builder
                             .mid_key(Some(timestamp.to_be_bytes().to_vec()))
                             .end_key(packet.packet_timestamp)
                     }
-                    RecordType::Statistics => {
+                    RawEventKind::Statistics => {
                         let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
                         #[cfg(feature = "benchmark")]
                         {
-                            (packetcount, packetsize) = statistics
+                            (packet_count, packet_size) = statistics
                                 .stats
                                 .iter()
                                 .fold((0, 0), |(sumc, sums), c| (sumc + c.1, sums + c.2));
@@ -827,10 +828,10 @@ async fn handle_data<T>(
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                             .end_key(timestamp)
                     }
-                    RecordType::Seculog => {
-                        let seculog = bincode::deserialize::<Seculog>(&raw_event)?;
+                    RawEventKind::SecuLog => {
+                        let secu_log = bincode::deserialize::<SecuLog>(&raw_event)?;
                         key_builder
-                            .mid_key(Some(seculog.kind.as_bytes().to_vec()))
+                            .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
@@ -857,16 +858,16 @@ async fn handle_data<T>(
                 }
                 #[cfg(feature = "benchmark")]
                 {
-                    if record_type == RecordType::Statistics {
-                        count += usize::try_from(packetcount).unwrap_or_default();
-                        size += usize::try_from(packetsize).unwrap_or_default();
+                    if raw_event_kind == RawEventKind::Statistics {
+                        count += usize::try_from(packet_count).unwrap_or_default();
+                        size += usize::try_from(packet_size).unwrap_or_default();
                     } else {
                         count += 1;
                         size += raw_event.len();
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(
-                            "Ingest: source = {source} type = {record_type:?} count = {count} size = {size}, duration = {}",
+                            "Ingest: source = {source} type = {raw_event_kind:?} count = {count} size = {size}, duration = {}",
                             start.elapsed().as_secs()
                         );
                         count = 0;
@@ -888,7 +889,7 @@ async fn handle_data<T>(
             Err(e) => {
                 store.flush()?;
                 handler.abort();
-                bail!("handle {:?} error: {}", record_type, e)
+                bail!("handle {:?} error: {}", raw_event_kind, e)
             }
         }
     }

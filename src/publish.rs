@@ -17,23 +17,25 @@ use giganto_client::{
     frame,
     publish::{
         pcap_extract_request,
-        range::{MessageCode, REconvergeKindType, RequestRange, RequestRawData, ResponseRangeData},
+        range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err,
         send_hog_stream_start_message, send_ok, send_range_data, send_raw_events,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
         PcapFilter,
     },
+    RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Serialize};
+use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     select,
     sync::{mpsc::unbounded_channel, Notify},
     time::sleep,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.13.1,<0.15.0";
 
@@ -821,8 +823,8 @@ async fn handle_request(
         MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
-            match REconvergeKindType::convert_type(&msg.kind) {
-                REconvergeKindType::Conn => {
+            match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
+                RawEventKind::Conn => {
                     process_range_data(
                         &mut send,
                         db.conn_store().context("Failed to open conn store")?,
@@ -831,7 +833,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Dns => {
+                RawEventKind::Dns => {
                     process_range_data(
                         &mut send,
                         db.dns_store().context("Failed to open dns store")?,
@@ -840,7 +842,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Rdp => {
+                RawEventKind::Rdp => {
                     process_range_data(
                         &mut send,
                         db.rdp_store().context("Failed to open rdp store")?,
@@ -849,7 +851,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Http => {
+                RawEventKind::Http => {
                     process_range_data(
                         &mut send,
                         db.http_store().context("Failed to open http store")?,
@@ -858,7 +860,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Smtp => {
+                RawEventKind::Smtp => {
                     process_range_data(
                         &mut send,
                         db.smtp_store().context("Failed to open smtp store")?,
@@ -867,7 +869,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Log => {
+                RawEventKind::Log => {
                     process_range_data(
                         &mut send,
                         db.log_store().context("Failed to open log store")?,
@@ -876,7 +878,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Ntlm => {
+                RawEventKind::Ntlm => {
                     process_range_data(
                         &mut send,
                         db.ntlm_store().context("Failed to open ntlm store")?,
@@ -885,7 +887,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Kerberos => {
+                RawEventKind::Kerberos => {
                     process_range_data(
                         &mut send,
                         db.kerberos_store()
@@ -895,7 +897,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Ssh => {
+                RawEventKind::Ssh => {
                     process_range_data(
                         &mut send,
                         db.ssh_store().context("Failed to open ssh store")?,
@@ -904,7 +906,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::DceRpc => {
+                RawEventKind::DceRpc => {
                     process_range_data(
                         &mut send,
                         db.dce_rpc_store().context("Failed to open dce rpc store")?,
@@ -913,7 +915,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Ftp => {
+                RawEventKind::Ftp => {
                     process_range_data(
                         &mut send,
                         db.ftp_store().context("Failed to open ftp store")?,
@@ -922,7 +924,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Mqtt => {
+                RawEventKind::Mqtt => {
                     process_range_data(
                         &mut send,
                         db.mqtt_store().context("Failed to open mqtt store")?,
@@ -931,7 +933,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Timeseries => {
+                RawEventKind::PeriodicTimeSeries => {
                     process_range_data(
                         &mut send,
                         db.periodic_time_series_store()
@@ -941,7 +943,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Ldap => {
+                RawEventKind::Ldap => {
                     process_range_data(
                         &mut send,
                         db.ldap_store().context("Failed to open ldap store")?,
@@ -950,7 +952,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Tls => {
+                RawEventKind::Tls => {
                     process_range_data(
                         &mut send,
                         db.tls_store().context("Failed to open tls store")?,
@@ -959,7 +961,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Smb => {
+                RawEventKind::Smb => {
                     process_range_data(
                         &mut send,
                         db.smb_store().context("Failed to open smb store")?,
@@ -968,7 +970,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Nfs => {
+                RawEventKind::Nfs => {
                     process_range_data(
                         &mut send,
                         db.nfs_store().context("Failed to open nfs store")?,
@@ -977,7 +979,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::ProcessCreate => {
+                RawEventKind::ProcessCreate => {
                     process_range_data(
                         &mut send,
                         db.process_create_store()
@@ -987,7 +989,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::FileCreateTime => {
+                RawEventKind::FileCreateTime => {
                     process_range_data(
                         &mut send,
                         db.file_create_store()
@@ -997,7 +999,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::NetworkConnect => {
+                RawEventKind::NetworkConnect => {
                     process_range_data(
                         &mut send,
                         db.network_connect_store()
@@ -1007,7 +1009,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::ProcessTerminate => {
+                RawEventKind::ProcessTerminate => {
                     process_range_data(
                         &mut send,
                         db.process_terminate_store()
@@ -1017,7 +1019,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::ImageLoad => {
+                RawEventKind::ImageLoad => {
                     process_range_data(
                         &mut send,
                         db.image_load_store()
@@ -1027,7 +1029,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::FileCreate => {
+                RawEventKind::FileCreate => {
                     process_range_data(
                         &mut send,
                         db.file_create_store()
@@ -1037,7 +1039,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::RegistryValueSet => {
+                RawEventKind::RegistryValueSet => {
                     process_range_data(
                         &mut send,
                         db.registry_value_set_store()
@@ -1047,7 +1049,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::RegistryKeyRename => {
+                RawEventKind::RegistryKeyRename => {
                     process_range_data(
                         &mut send,
                         db.registry_key_rename_store()
@@ -1057,7 +1059,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::FileCreateStreamHash => {
+                RawEventKind::FileCreateStreamHash => {
                     process_range_data(
                         &mut send,
                         db.file_create_stream_hash_store()
@@ -1067,7 +1069,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::PipeEvent => {
+                RawEventKind::PipeEvent => {
                     process_range_data(
                         &mut send,
                         db.pipe_event_store()
@@ -1077,7 +1079,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::DnsEvent => {
+                RawEventKind::DnsQuery => {
                     process_range_data(
                         &mut send,
                         db.dns_query_store()
@@ -1087,7 +1089,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::FileDelete => {
+                RawEventKind::FileDelete => {
                     process_range_data(
                         &mut send,
                         db.file_delete_store()
@@ -1097,7 +1099,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::ProcessTamper => {
+                RawEventKind::ProcessTamper => {
                     process_range_data(
                         &mut send,
                         db.process_tamper_store()
@@ -1107,7 +1109,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::FileDeleteDetected => {
+                RawEventKind::FileDeleteDetected => {
                     process_range_data(
                         &mut send,
                         db.file_delete_detected_store()
@@ -1117,7 +1119,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Netflow5 => {
+                RawEventKind::Netflow5 => {
                     process_range_data(
                         &mut send,
                         db.netflow5_store()
@@ -1127,7 +1129,7 @@ async fn handle_request(
                     )
                     .await?;
                 }
-                REconvergeKindType::Netflow9 => {
+                RawEventKind::Netflow9 => {
                     process_range_data(
                         &mut send,
                         db.netflow9_store()
@@ -1137,6 +1139,10 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                _ => {
+                    // do nothing
+                    warn!("Not expected to reach here");
+                }
             }
         }
         MessageCode::Pcap => {
@@ -1145,111 +1151,115 @@ async fn handle_request(
         MessageCode::RawData => {
             let msg = bincode::deserialize::<RequestRawData>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
-            match REconvergeKindType::convert_type(&msg.kind) {
-                REconvergeKindType::Conn => {
+            match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
+                RawEventKind::Conn => {
                     process_raw_events(&mut send, db.conn_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Dns => {
+                RawEventKind::Dns => {
                     process_raw_events(&mut send, db.dns_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Rdp => {
+                RawEventKind::Rdp => {
                     process_raw_events(&mut send, db.rdp_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Http => {
+                RawEventKind::Http => {
                     process_raw_events(&mut send, db.http_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Smtp => {
+                RawEventKind::Smtp => {
                     process_raw_events(&mut send, db.smtp_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Ntlm => {
+                RawEventKind::Ntlm => {
                     process_raw_events(&mut send, db.ntlm_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Kerberos => {
+                RawEventKind::Kerberos => {
                     process_raw_events(&mut send, db.kerberos_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Ssh => {
+                RawEventKind::Ssh => {
                     process_raw_events(&mut send, db.ssh_store()?, msg.input).await?;
                 }
-                REconvergeKindType::DceRpc => {
+                RawEventKind::DceRpc => {
                     process_raw_events(&mut send, db.dce_rpc_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Ftp => {
+                RawEventKind::Ftp => {
                     process_raw_events(&mut send, db.ftp_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Mqtt => {
+                RawEventKind::Mqtt => {
                     process_raw_events(&mut send, db.mqtt_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Ldap => {
+                RawEventKind::Ldap => {
                     process_raw_events(&mut send, db.ldap_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Tls => {
+                RawEventKind::Tls => {
                     process_raw_events(&mut send, db.tls_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Smb => {
+                RawEventKind::Smb => {
                     process_raw_events(&mut send, db.smb_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Nfs => {
+                RawEventKind::Nfs => {
                     process_raw_events(&mut send, db.nfs_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Log => {
-                    // For REconvergeKindType::LOG, the source_kind is required as the source.
+                RawEventKind::Log => {
+                    // For RawEventKind::LOG, the source_kind is required as the source.
                     process_raw_events(&mut send, db.log_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Timeseries => {
+                RawEventKind::PeriodicTimeSeries => {
                     process_raw_events(&mut send, db.periodic_time_series_store()?, msg.input)
                         .await?;
                 }
-                REconvergeKindType::ProcessCreate => {
+                RawEventKind::ProcessCreate => {
                     process_raw_events(&mut send, db.process_create_store()?, msg.input).await?;
                 }
-                REconvergeKindType::FileCreateTime => {
+                RawEventKind::FileCreateTime => {
                     process_raw_events(&mut send, db.file_create_time_store()?, msg.input).await?;
                 }
-                REconvergeKindType::NetworkConnect => {
+                RawEventKind::NetworkConnect => {
                     process_raw_events(&mut send, db.network_connect_store()?, msg.input).await?;
                 }
-                REconvergeKindType::ProcessTerminate => {
+                RawEventKind::ProcessTerminate => {
                     process_raw_events(&mut send, db.process_terminate_store()?, msg.input).await?;
                 }
-                REconvergeKindType::ImageLoad => {
+                RawEventKind::ImageLoad => {
                     process_raw_events(&mut send, db.image_load_store()?, msg.input).await?;
                 }
-                REconvergeKindType::FileCreate => {
+                RawEventKind::FileCreate => {
                     process_raw_events(&mut send, db.file_create_store()?, msg.input).await?;
                 }
-                REconvergeKindType::RegistryValueSet => {
+                RawEventKind::RegistryValueSet => {
                     process_raw_events(&mut send, db.registry_value_set_store()?, msg.input)
                         .await?;
                 }
-                REconvergeKindType::RegistryKeyRename => {
+                RawEventKind::RegistryKeyRename => {
                     process_raw_events(&mut send, db.registry_key_rename_store()?, msg.input)
                         .await?;
                 }
-                REconvergeKindType::FileCreateStreamHash => {
+                RawEventKind::FileCreateStreamHash => {
                     process_raw_events(&mut send, db.file_create_stream_hash_store()?, msg.input)
                         .await?;
                 }
-                REconvergeKindType::PipeEvent => {
+                RawEventKind::PipeEvent => {
                     process_raw_events(&mut send, db.pipe_event_store()?, msg.input).await?;
                 }
-                REconvergeKindType::DnsEvent => {
+                RawEventKind::DnsQuery => {
                     process_raw_events(&mut send, db.dns_query_store()?, msg.input).await?;
                 }
-                REconvergeKindType::FileDelete => {
+                RawEventKind::FileDelete => {
                     process_raw_events(&mut send, db.file_delete_store()?, msg.input).await?;
                 }
-                REconvergeKindType::ProcessTamper => {
+                RawEventKind::ProcessTamper => {
                     process_raw_events(&mut send, db.process_tamper_store()?, msg.input).await?;
                 }
-                REconvergeKindType::FileDeleteDetected => {
+                RawEventKind::FileDeleteDetected => {
                     process_raw_events(&mut send, db.file_delete_detected_store()?, msg.input)
                         .await?;
                 }
-                REconvergeKindType::Netflow5 => {
+                RawEventKind::Netflow5 => {
                     process_raw_events(&mut send, db.netflow5_store()?, msg.input).await?;
                 }
-                REconvergeKindType::Netflow9 => {
+                RawEventKind::Netflow9 => {
                     process_raw_events(&mut send, db.netflow9_store()?, msg.input).await?;
+                }
+                _ => {
+                    // do nothing
+                    warn!("Not expected to reach here");
                 }
             }
         }

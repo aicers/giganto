@@ -14,7 +14,7 @@ use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::ingest::{
-    log::{Log, Oplog, Seculog},
+    log::{Log, OpLog, SecuLog},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
         Smtp, Ssh, Tls,
@@ -26,8 +26,8 @@ use giganto_client::ingest::{
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
-    RecordType,
 };
+use giganto_client::RawEventKind;
 pub use netflow::{Netflow5RawEvent, NetflowV9RawEvent};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -422,7 +422,7 @@ struct StatisticsJsonOutput {
     source: String,
     core: u32,
     period: u16,
-    stats: Vec<(RecordType, u64, u64)>,
+    stats: Vec<(RawEventKind, u64, u64)>,
 }
 
 #[derive(Serialize, Debug)]
@@ -901,7 +901,7 @@ impl JsonOutput<TimeSeriesJsonOutput> for PeriodicTimeSeries {
     }
 }
 
-impl JsonOutput<OpLogJsonOutput> for Oplog {
+impl JsonOutput<OpLogJsonOutput> for OpLog {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<OpLogJsonOutput> {
         Ok(OpLogJsonOutput {
             timestamp,
@@ -912,7 +912,7 @@ impl JsonOutput<OpLogJsonOutput> for Oplog {
     }
 }
 
-impl JsonOutput<SecuLogJsonOutput> for Seculog {
+impl JsonOutput<SecuLogJsonOutput> for SecuLog {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<SecuLogJsonOutput> {
         Ok(SecuLogJsonOutput {
             timestamp,
@@ -1610,7 +1610,7 @@ fn export_by_protocol(
             }
         }),
         "oplog" => tokio::spawn(async move {
-            if let Ok(store) = db.oplog_store() {
+            if let Ok(store) = db.op_log_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
@@ -1946,7 +1946,7 @@ fn export_by_protocol(
             }
         }),
         "seculog" => tokio::spawn(async move {
-            if let Ok(store) = db.seculog_store() {
+            if let Ok(store) = db.secu_log_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
                         info!("{}", result);
@@ -2206,7 +2206,7 @@ mod tests {
     use crate::storage::RawEventStore;
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{
-        log::{Log, OpLogLevel, Oplog},
+        log::{Log, OpLog, OpLogLevel},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
@@ -3066,7 +3066,7 @@ mod tests {
     #[tokio::test]
     async fn export_oplog() {
         let schema = TestSchema::new();
-        let store = schema.db.oplog_store().unwrap();
+        let store = schema.db.op_log_store().unwrap();
 
         insert_oplog_raw_event(&store, "agent1", 1);
         insert_oplog_raw_event(&store, "agent2", 1);
@@ -3098,14 +3098,14 @@ mod tests {
         assert!(res.data.to_string().contains("oplog"));
     }
 
-    fn insert_oplog_raw_event(store: &RawEventStore<Oplog>, agent_name: &str, timestamp: i64) {
+    fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
         let mut key: Vec<u8> = Vec::new();
         let agent_id = format!("{agent_name}@src 1");
         key.extend_from_slice(agent_id.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());
 
-        let oplog_body = Oplog {
+        let oplog_body = OpLog {
             agent_name: agent_id.to_string(),
             log_level: OpLogLevel::Info,
             contents: "oplog".to_string(),

@@ -9,7 +9,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::{Log, Oplog};
+use giganto_client::ingest::log::{Log, OpLog};
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
@@ -140,8 +140,8 @@ struct OpLogRawEvent {
     contents: String,
 }
 
-impl FromKeyValue<Oplog> for OpLogRawEvent {
-    fn from_key_value(key: &[u8], l: Oplog) -> Result<Self> {
+impl FromKeyValue<OpLog> for OpLogRawEvent {
+    fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
             timestamp: get_timestamp_from_key(key)?,
             level: format!("{:?}", l.log_level),
@@ -189,7 +189,7 @@ impl LogQuery {
         last: Option<i32>,
     ) -> Result<Connection<String, OpLogRawEvent>> {
         let db = ctx.data::<Database>()?;
-        let store = db.oplog_store()?;
+        let store = db.op_log_store()?;
 
         query(
             after,
@@ -212,7 +212,7 @@ mod tests {
         storage::RawEventStore,
     };
     use chrono::{DateTime, NaiveDateTime, Utc};
-    use giganto_client::ingest::log::{Log, OpLogLevel, Oplog};
+    use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
     #[test]
     fn load_time_range() {
@@ -707,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn oplog_with_data() {
         let schema = TestSchema::new();
-        let store = schema.db.oplog_store().unwrap();
+        let store = schema.db.op_log_store().unwrap();
 
         insert_oplog_raw_event(&store, "giganto", 1);
 
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn load_oplog() {
         let schema = TestSchema::new();
-        let store = schema.db.oplog_store().unwrap();
+        let store = schema.db.op_log_store().unwrap();
 
         insert_oplog_raw_event(&store, "giganto", 1);
         insert_oplog_raw_event(&store, "giganto", 2);
@@ -789,14 +789,14 @@ mod tests {
         store.append(&key, &value).unwrap();
     }
 
-    fn insert_oplog_raw_event(store: &RawEventStore<Oplog>, agent_name: &str, timestamp: i64) {
+    fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
         let mut key: Vec<u8> = Vec::new();
         let agent_id = format!("{agent_name}@src 1");
         key.extend_from_slice(agent_id.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());
 
-        let oplog_body = Oplog {
+        let oplog_body = OpLog {
             agent_name: agent_id.to_string(),
             log_level: OpLogLevel::Info,
             contents: "oplog".to_string(),

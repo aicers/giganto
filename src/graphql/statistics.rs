@@ -7,35 +7,36 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_graphql::{Context, Object, Result, SimpleObject};
-use giganto_client::ingest::{statistics::Statistics, RecordType};
+use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
 use std::{
     collections::{HashMap, HashSet},
     iter::Peekable,
+    str::FromStr,
 };
 use tracing::error;
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
 const BYTE_TO_BIT: u64 = 8;
-const STATS_ALLOWED_TYPES: [RecordType; 16] = [
-    RecordType::Conn,
-    RecordType::Dns,
-    RecordType::Rdp,
-    RecordType::Http,
-    RecordType::Smtp,
-    RecordType::Ntlm,
-    RecordType::Kerberos,
-    RecordType::Ssh,
-    RecordType::DceRpc,
-    RecordType::Ftp,
-    RecordType::Mqtt,
-    RecordType::Ldap,
-    RecordType::Tls,
-    RecordType::Smb,
-    RecordType::Nfs,
-    RecordType::Statistics,
+const STATS_ALLOWED_KINDS: [RawEventKind; 16] = [
+    RawEventKind::Conn,
+    RawEventKind::Dns,
+    RawEventKind::Rdp,
+    RawEventKind::Http,
+    RawEventKind::Smtp,
+    RawEventKind::Ntlm,
+    RawEventKind::Kerberos,
+    RawEventKind::Ssh,
+    RawEventKind::DceRpc,
+    RawEventKind::Ftp,
+    RawEventKind::Mqtt,
+    RawEventKind::Ldap,
+    RawEventKind::Tls,
+    RawEventKind::Smb,
+    RawEventKind::Nfs,
+    RawEventKind::Statistics,
 ];
 
 #[derive(SimpleObject, Debug)]
@@ -76,14 +77,14 @@ impl StatisticsQuery {
         let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
 
         // Configure the protocol HashSet for which statistics output is allowed.
-        let record_types = if let Some(protocols) = &protocols {
+        let raw_event_kinds = if let Some(protocols) = &protocols {
             let mut records = HashSet::new();
             for proto in protocols {
                 records.insert(convert_to_stats_allowed_type(proto)?);
             }
             records
         } else {
-            STATS_ALLOWED_TYPES.iter().copied().collect()
+            STATS_ALLOWED_KINDS.into_iter().collect()
         };
 
         // Configure statistics results by source.
@@ -95,7 +96,8 @@ impl StatisticsQuery {
                     stats_iters.push(peek_stats_iter);
                 }
             }
-            let stats = gen_statistics(&mut stats_iters, &source, time.is_none(), &record_types)?;
+            let stats =
+                gen_statistics(&mut stats_iters, &source, time.is_none(), &raw_event_kinds)?;
             total_stats.push(stats);
         }
         Ok(total_stats)
@@ -130,7 +132,7 @@ fn gen_statistics(
     stats_iters: &mut Vec<Peekable<StatisticsIter<'_, Statistics>>>,
     source: &str,
     latest_flag: bool,
-    allow_record_type: &HashSet<RecordType>,
+    allowed_raw_event_kinds: &HashSet<RawEventKind>,
 ) -> Result<StatisticsRawEvent> {
     let mut stats_info_vec: Vec<StatisticsInfo> = Vec::new();
     let mut stats_detail_vec: Vec<StatisticsDetail> = Vec::new();
@@ -156,7 +158,7 @@ fn gen_statistics(
 
         let latest_key_timestamp =
             i64::from_be_bytes(latest_key[(latest_key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        let mut total_stats: HashMap<RecordType, (u64, u64)> = HashMap::new();
+        let mut total_stats: HashMap<RawEventKind, (u64, u64)> = HashMap::new();
 
         // Collect statistics formed at the same timestamp as the most recent statistics into a HashMap.
         for (idx, (key, value)) in iter_next_values.clone().iter().enumerate() {
@@ -164,7 +166,7 @@ fn gen_statistics(
                 i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
             if latest_key_timestamp == compare_key_timestamp {
                 for (record, count, size) in &value.stats {
-                    if allow_record_type.contains(record) {
+                    if allowed_raw_event_kinds.contains(record) {
                         total_stats
                             .entry(*record)
                             .and_modify(|(stats_count, stats_size)| {
@@ -199,7 +201,7 @@ fn gen_statistics(
                 protocol: format!("{r_type:?}"),
                 ..Default::default()
             };
-            if r_type == RecordType::Statistics {
+            if r_type == RawEventKind::Statistics {
                 stats_detail.bps = Some(calculate_ps(latest_stats.period, size * BYTE_TO_BIT)); // convert to bit size
                 stats_detail.pps = Some(calculate_ps(latest_stats.period, count));
             } else {
@@ -226,25 +228,12 @@ fn gen_statistics(
     })
 }
 
-fn convert_to_stats_allowed_type(input: &str) -> Result<RecordType> {
-    match input {
-        "conn" => Ok(RecordType::Conn),
-        "dns" => Ok(RecordType::Dns),
-        "rdp" => Ok(RecordType::Rdp),
-        "http" => Ok(RecordType::Http),
-        "smtp" => Ok(RecordType::Smtp),
-        "ntlm" => Ok(RecordType::Ntlm),
-        "kerberos" => Ok(RecordType::Kerberos),
-        "ssh" => Ok(RecordType::Ssh),
-        "dce rpc" => Ok(RecordType::DceRpc),
-        "ftp" => Ok(RecordType::Ftp),
-        "mqtt" => Ok(RecordType::Mqtt),
-        "ldap" => Ok(RecordType::Ldap),
-        "tls" => Ok(RecordType::Tls),
-        "smb" => Ok(RecordType::Smb),
-        "nfs" => Ok(RecordType::Nfs),
-        "statistics" => Ok(RecordType::Statistics),
-        etc => Err(anyhow!("not supported protocol string: {}", etc).into()),
+fn convert_to_stats_allowed_type(input: &str) -> Result<RawEventKind> {
+    let raw_event_kind = RawEventKind::from_str(input).unwrap_or_default();
+    if STATS_ALLOWED_KINDS.contains(&raw_event_kind) {
+        Ok(raw_event_kind)
+    } else {
+        Err(anyhow!("not allowed RawEventKind string: {}", input).into())
     }
 }
 
@@ -265,7 +254,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use crate::{graphql::TestSchema, storage::RawEventStore};
     use chrono::Utc;
-    use giganto_client::ingest::{statistics::Statistics, RecordType};
+    use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 
     #[tokio::test]
     async fn test_statistics() {
@@ -317,7 +306,7 @@ mod tests {
         let msg = Statistics {
             core,
             period,
-            stats: vec![(RecordType::Statistics, count, size)],
+            stats: vec![(RawEventKind::Statistics, count, size)],
         };
         let msg = bincode::serialize(&msg).unwrap();
         store.append(&key, &msg).unwrap();

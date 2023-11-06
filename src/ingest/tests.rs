@@ -9,15 +9,16 @@ use giganto_client::{
     connection::client_handshake,
     frame::recv_bytes,
     ingest::{
-        log::{Log, OpLogLevel, Oplog},
+        log::{Log, OpLog, OpLogLevel},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_event, send_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
-        Packet, RecordType,
+        Packet,
     },
+    RawEventKind,
 };
 use quinn::{Connection, Endpoint};
 use std::{
@@ -162,7 +163,7 @@ fn init_client() -> Endpoint {
 
 #[tokio::test]
 async fn conn() {
-    const RECORD_TYPE_CONN: RecordType = RecordType::Conn;
+    const RAW_EVENT_KIND_CONN: RawEventKind = RawEventKind::Conn;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -186,7 +187,7 @@ async fn conn() {
         resp_pkts: 511,
     };
 
-    send_record_header(&mut send_conn, RECORD_TYPE_CONN)
+    send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
         .await
         .unwrap();
     send_event(
@@ -205,7 +206,7 @@ async fn conn() {
 
 #[tokio::test]
 async fn dns() {
-    const RECORD_TYPE_DNS: RecordType = RecordType::Dns;
+    const RAW_EVENT_KIND_DNS: RawEventKind = RawEventKind::Dns;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -235,7 +236,7 @@ async fn dns() {
         ttl: vec![1; 5],
     };
 
-    send_record_header(&mut send_dns, RECORD_TYPE_DNS)
+    send_record_header(&mut send_dns, RAW_EVENT_KIND_DNS)
         .await
         .unwrap();
     send_event(
@@ -254,7 +255,7 @@ async fn dns() {
 
 #[tokio::test]
 async fn log() {
-    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
+    const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -268,7 +269,7 @@ async fn log() {
         log: base64_engine.decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
 
-    send_record_header(&mut send_log, RECORD_TYPE_LOG)
+    send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
     send_event(
@@ -287,7 +288,7 @@ async fn log() {
 
 #[tokio::test]
 async fn http() {
-    const RECORD_TYPE_HTTP: RecordType = RecordType::Http;
+    const RAW_EVENT_KIND_HTTP: RawEventKind = RawEventKind::Http;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -324,7 +325,7 @@ async fn http() {
         resp_mime_types: Vec::new(),
     };
 
-    send_record_header(&mut send_http, RECORD_TYPE_HTTP)
+    send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
         .await
         .unwrap();
     send_event(
@@ -343,7 +344,7 @@ async fn http() {
 
 #[tokio::test]
 async fn rdp() {
-    const RECORD_TYPE_RDP: RecordType = RecordType::Rdp;
+    const RAW_EVENT_KIND_RDP: RawEventKind = RawEventKind::Rdp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -361,7 +362,7 @@ async fn rdp() {
         cookie: "rdp_test".to_string(),
     };
 
-    send_record_header(&mut send_rdp, RECORD_TYPE_RDP)
+    send_record_header(&mut send_rdp, RAW_EVENT_KIND_RDP)
         .await
         .unwrap();
     send_event(
@@ -380,7 +381,7 @@ async fn rdp() {
 
 #[tokio::test]
 async fn periodic_time_series() {
-    const RECORD_TYPE_PERIOD_TIME_SERIES: RecordType = RecordType::PeriodicTimeSeries;
+    const RAW_EVENT_KIND_PERIOD_TIME_SERIES: RawEventKind = RawEventKind::PeriodicTimeSeries;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -396,7 +397,7 @@ async fn periodic_time_series() {
 
     send_record_header(
         &mut send_periodic_time_series,
-        RECORD_TYPE_PERIOD_TIME_SERIES,
+        RAW_EVENT_KIND_PERIOD_TIME_SERIES,
     )
     .await
     .unwrap();
@@ -419,7 +420,7 @@ async fn periodic_time_series() {
 
 #[tokio::test]
 async fn smtp() {
-    const RECORD_TYPE_SMTP: RecordType = RecordType::Smtp;
+    const RAW_EVENT_KIND_SMTP: RawEventKind = RawEventKind::Smtp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -442,7 +443,7 @@ async fn smtp() {
         agent: "agent".to_string(),
     };
 
-    send_record_header(&mut send_smtp, RECORD_TYPE_SMTP)
+    send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
         .await
         .unwrap();
     send_event(
@@ -461,7 +462,7 @@ async fn smtp() {
 
 #[tokio::test]
 async fn ntlm() {
-    const RECORD_TYPE_NTLM: RecordType = RecordType::Ntlm;
+    const RAW_EVENT_KIND_NTLM: RawEventKind = RawEventKind::Ntlm;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -485,7 +486,7 @@ async fn ntlm() {
         success: "tf".to_string(),
     };
 
-    send_record_header(&mut send_ntlm, RECORD_TYPE_NTLM)
+    send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
         .await
         .unwrap();
     send_event(
@@ -504,7 +505,7 @@ async fn ntlm() {
 
 #[tokio::test]
 async fn kerberos() {
-    const RECORD_TYPE_KERBEROS: RecordType = RecordType::Kerberos;
+    const RAW_EVENT_KIND_KERBEROS: RawEventKind = RawEventKind::Kerberos;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -530,7 +531,7 @@ async fn kerberos() {
         service_name: vec!["service_name".to_string()],
     };
 
-    send_record_header(&mut send_kerberos, RECORD_TYPE_KERBEROS)
+    send_record_header(&mut send_kerberos, RAW_EVENT_KIND_KERBEROS)
         .await
         .unwrap();
     send_event(
@@ -552,7 +553,7 @@ async fn kerberos() {
 
 #[tokio::test]
 async fn ssh() {
-    const RECORD_TYPE_SSH: RecordType = RecordType::Ssh;
+    const RAW_EVENT_KIND_SSH: RawEventKind = RawEventKind::Ssh;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -581,7 +582,7 @@ async fn ssh() {
         host_key: "host_key".to_string(),
     };
 
-    send_record_header(&mut send_ssh, RECORD_TYPE_SSH)
+    send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
         .await
         .unwrap();
     send_event(
@@ -600,7 +601,7 @@ async fn ssh() {
 
 #[tokio::test]
 async fn dce_rpc() {
-    const RECORD_TYPE_DCE_RPC: RecordType = RecordType::DceRpc;
+    const RAW_EVENT_KIND_DCE_RPC: RawEventKind = RawEventKind::DceRpc;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -621,7 +622,7 @@ async fn dce_rpc() {
         operation: "operation".to_string(),
     };
 
-    send_record_header(&mut send_dce_rpc, RECORD_TYPE_DCE_RPC)
+    send_record_header(&mut send_dce_rpc, RAW_EVENT_KIND_DCE_RPC)
         .await
         .unwrap();
     send_event(
@@ -643,7 +644,7 @@ async fn dce_rpc() {
 
 #[tokio::test]
 async fn oplog() {
-    const RECORD_TYPE_OPLOG: RecordType = RecordType::Oplog;
+    const RAW_EVENT_KIND_OPLOG: RawEventKind = RawEventKind::OpLog;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -652,13 +653,13 @@ async fn oplog() {
     let client = TestClient::new().await;
     let (mut send_oplog, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let oplog_body = Oplog {
+    let oplog_body = OpLog {
         agent_name: "giganto".to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };
 
-    send_record_header(&mut send_oplog, RECORD_TYPE_OPLOG)
+    send_record_header(&mut send_oplog, RAW_EVENT_KIND_OPLOG)
         .await
         .unwrap();
     send_event(
@@ -680,7 +681,7 @@ async fn oplog() {
 
 #[tokio::test]
 async fn packet() {
-    const RECORD_TYPE_PACKET: RecordType = RecordType::Packet;
+    const RAW_EVENT_KIND_PACKET: RawEventKind = RawEventKind::Packet;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -695,7 +696,7 @@ async fn packet() {
         packet,
     };
 
-    send_record_header(&mut send_packet, RECORD_TYPE_PACKET)
+    send_record_header(&mut send_packet, RAW_EVENT_KIND_PACKET)
         .await
         .unwrap();
     send_event(
@@ -717,7 +718,7 @@ async fn packet() {
 
 #[tokio::test]
 async fn ftp() {
-    const RECORD_TYPE_FTP: RecordType = RecordType::Ftp;
+    const RAW_EVENT_KIND_FTP: RawEventKind = RawEventKind::Ftp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -746,7 +747,7 @@ async fn ftp() {
         file_id: "1".to_string(),
     };
 
-    send_record_header(&mut send_ftp, RECORD_TYPE_FTP)
+    send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)
         .await
         .unwrap();
     send_event(
@@ -765,7 +766,7 @@ async fn ftp() {
 
 #[tokio::test]
 async fn mqtt() {
-    const RECORD_TYPE_MQTT: RecordType = RecordType::Mqtt;
+    const RAW_EVENT_KIND_MQTT: RawEventKind = RawEventKind::Mqtt;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -788,7 +789,7 @@ async fn mqtt() {
         suback_reason: vec![1],
     };
 
-    send_record_header(&mut send_mqtt, RECORD_TYPE_MQTT)
+    send_record_header(&mut send_mqtt, RAW_EVENT_KIND_MQTT)
         .await
         .unwrap();
     send_event(
@@ -807,7 +808,7 @@ async fn mqtt() {
 
 #[tokio::test]
 async fn ldap() {
-    const RECORD_TYPE_LDAP: RecordType = RecordType::Ldap;
+    const RAW_EVENT_KIND_LDAP: RawEventKind = RawEventKind::Ldap;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -831,7 +832,7 @@ async fn ldap() {
         argument: Vec::new(),
     };
 
-    send_record_header(&mut send_ldap, RECORD_TYPE_LDAP)
+    send_record_header(&mut send_ldap, RAW_EVENT_KIND_LDAP)
         .await
         .unwrap();
     send_event(
@@ -850,7 +851,7 @@ async fn ldap() {
 
 #[tokio::test]
 async fn tls() {
-    const RECORD_TYPE_TLS: RecordType = RecordType::Tls;
+    const RAW_EVENT_KIND_TLS: RawEventKind = RawEventKind::Tls;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -885,7 +886,7 @@ async fn tls() {
         last_alert: 13,
     };
 
-    send_record_header(&mut send_tls, RECORD_TYPE_TLS)
+    send_record_header(&mut send_tls, RAW_EVENT_KIND_TLS)
         .await
         .unwrap();
     send_event(
@@ -904,7 +905,7 @@ async fn tls() {
 
 #[tokio::test]
 async fn smb() {
-    const RECORD_TYPE_SMB: RecordType = RecordType::Smb;
+    const RAW_EVENT_KIND_SMB: RawEventKind = RawEventKind::Smb;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -932,7 +933,7 @@ async fn smb() {
         change_time: 20000000,
     };
 
-    send_record_header(&mut send_smb, RECORD_TYPE_SMB)
+    send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
         .await
         .unwrap();
     send_event(
@@ -951,7 +952,7 @@ async fn smb() {
 
 #[tokio::test]
 async fn nfs() {
-    const RECORD_TYPE_NFS: RecordType = RecordType::Nfs;
+    const RAW_EVENT_KIND_NFS: RawEventKind = RawEventKind::Nfs;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -970,7 +971,7 @@ async fn nfs() {
         write_files: vec![],
     };
 
-    send_record_header(&mut send_nfs, RECORD_TYPE_NFS)
+    send_record_header(&mut send_nfs, RAW_EVENT_KIND_NFS)
         .await
         .unwrap();
     send_event(
@@ -989,7 +990,7 @@ async fn nfs() {
 
 #[tokio::test]
 async fn statistics() {
-    const RECORD_TYPE_STATISTICS: RecordType = RecordType::Statistics;
+    const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     run_server(db_dir);
@@ -1000,10 +1001,10 @@ async fn statistics() {
     let statistics_body = Statistics {
         core: 1,
         period: 600,
-        stats: vec![(RECORD_TYPE_STATISTICS, 1000, 10001000)],
+        stats: vec![(RAW_EVENT_KIND_STATISTICS, 1000, 10001000)],
     };
 
-    send_record_header(&mut send_statistics, RECORD_TYPE_STATISTICS)
+    send_record_header(&mut send_statistics, RAW_EVENT_KIND_STATISTICS)
         .await
         .unwrap();
     send_event(
@@ -1025,7 +1026,7 @@ async fn statistics() {
 
 #[tokio::test]
 async fn ack_info() {
-    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
+    const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1039,7 +1040,7 @@ async fn ack_info() {
         log: vec![0; 10],
     };
 
-    send_record_header(&mut send_log, RECORD_TYPE_LOG)
+    send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
     send_event(
@@ -1073,7 +1074,7 @@ async fn ack_info() {
 
 #[tokio::test]
 async fn one_short_reproduce_channel_close() {
-    const RECORD_TYPE_LOG: RecordType = RecordType::Log;
+    const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
     const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
     const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 
@@ -1084,7 +1085,7 @@ async fn one_short_reproduce_channel_close() {
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
 
-    send_record_header(&mut send_log, RECORD_TYPE_LOG)
+    send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
     send_event(

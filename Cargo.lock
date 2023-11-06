@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.13.2"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.13.2#98031613eb748ac8c35a4e2ec5e29721ccdb2e90"
+version = "0.15.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.0#645f93d8da7ee49ab84e55708b0500d99b91845e"
 dependencies = [
  "anyhow",
  "bincode",
@@ -825,6 +825,8 @@ dependencies = [
  "quinn",
  "semver",
  "serde",
+ "strum",
+ "strum_macros",
  "thiserror",
  "tokio",
  "tracing",

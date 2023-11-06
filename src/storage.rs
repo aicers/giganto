@@ -9,7 +9,7 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
-    log::{Log, Oplog, Seculog},
+    log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
@@ -304,7 +304,7 @@ impl Database {
     }
 
     /// Returns the store for oplog
-    pub fn oplog_store(&self) -> Result<RawEventStore<Oplog>> {
+    pub fn op_log_store(&self) -> Result<RawEventStore<OpLog>> {
         let cf = self
             .db
             .cf_handle("oplog")
@@ -529,7 +529,7 @@ impl Database {
     }
 
     /// Returns the store for security log.
-    pub fn seculog_store(&self) -> Result<RawEventStore<Seculog>> {
+    pub fn secu_log_store(&self) -> Result<RawEventStore<SecuLog>> {
         let cf = self
             .db
             .cf_handle("seculog")
