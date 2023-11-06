@@ -9,7 +9,7 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use giganto_client::ingest::{
-    log::{Log, Oplog},
+    log::{Log, Oplog, Seculog},
     netflow::{Netflow5, Netflow9},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
@@ -33,7 +33,7 @@ use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 36] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "conn",
     "dns",
     "log",
@@ -70,6 +70,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 36] = [
     "file delete detected",
     "netflow5",
     "netflow9",
+    "seculog",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
@@ -514,6 +515,15 @@ impl Database {
             .db
             .cf_handle("netflow9")
             .context("cannot access netflow9 column family")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for security log.
+    pub fn seculog_store(&self) -> Result<RawEventStore<Seculog>> {
+        let cf = self
+            .db
+            .cf_handle("seculog")
+            .context("cannot access security log column family")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

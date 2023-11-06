@@ -2,6 +2,7 @@ mod export;
 mod log;
 pub mod network;
 mod packet;
+mod security;
 mod source;
 pub mod statistics;
 pub mod status;
@@ -55,6 +56,7 @@ pub struct Query(
     source::SourceQuery,
     statistics::StatisticsQuery,
     sysmon::SysmonQuery,
+    security::SecurityLogQuery,
 );
 
 #[derive(Default, MergedObject)]

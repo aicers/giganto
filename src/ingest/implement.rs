@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
-    log::{Log, OpLogLevel, Oplog},
+    log::{Log, OpLogLevel, Oplog, Seculog},
     netflow::{Netflow5, Netflow9},
     network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
@@ -897,6 +897,30 @@ impl EventFilter for Netflow9 {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.contents.clone())
+    }
+}
+
+impl EventFilter for Seculog {
+    fn data_type(&self) -> String {
+        "security log".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        self.orig_addr
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        self.resp_addr
+    }
+    fn orig_port(&self) -> Option<u16> {
+        self.orig_port
+    }
+    fn resp_port(&self) -> Option<u16> {
+        self.resp_port
     }
     fn log_level(&self) -> Option<String> {
         None

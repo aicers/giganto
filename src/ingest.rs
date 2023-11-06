@@ -10,6 +10,7 @@ use crate::server::{
 use crate::storage::{Database, RawEventStore, StorageKey};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::log::Seculog;
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
@@ -699,6 +700,19 @@ async fn handle_request(
             )
             .await?;
         }
+        RecordType::Seculog => {
+            handle_data(
+                send,
+                recv,
+                RecordType::Seculog,
+                None,
+                source,
+                db.seculog_store()?,
+                stream_direct_channel,
+                shutdown_signal,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }
@@ -810,6 +824,12 @@ async fn handle_data<T>(
                         }
                         key_builder
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
+                            .end_key(timestamp)
+                    }
+                    RecordType::Seculog => {
+                        let seculog = bincode::deserialize::<Seculog>(&raw_event)?;
+                        key_builder
+                            .mid_key(Some(seculog.kind.as_bytes().to_vec()))
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
