@@ -12,7 +12,7 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
@@ -84,8 +84,8 @@ struct SecuLogRawEvent {
     contents: String,
 }
 
-impl FromKeyValue<Seculog> for SecuLogRawEvent {
-    fn from_key_value(key: &[u8], sl: Seculog) -> Result<Self> {
+impl FromKeyValue<SecuLog> for SecuLogRawEvent {
+    fn from_key_value(key: &[u8], sl: SecuLog) -> Result<Self> {
         Ok(SecuLogRawEvent {
             timestamp: get_timestamp_from_key(key)?,
             log_type: sl.log_type,
@@ -112,7 +112,7 @@ impl SecurityLogQuery {
         last: Option<i32>,
     ) -> Result<Connection<String, SecuLogRawEvent>> {
         let db = ctx.data::<Database>()?;
-        let store = db.seculog_store()?;
+        let store = db.secu_log_store()?;
 
         query(
             after,
