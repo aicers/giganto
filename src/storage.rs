@@ -74,6 +74,16 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
+// Not a `source`+`timestamp` event.
+const NON_STANDARD_CFS: [&str; 6] = [
+    "log",
+    "periodic time series",
+    "statistics",
+    "oplog",
+    "packet",
+    "seculog",
+];
+
 #[cfg(debug_assertions)]
 pub struct CfProperties {
     pub estimate_live_data_size: u64,
@@ -170,11 +180,11 @@ impl Database {
         })
     }
 
-    /// Returns the raw event store for all type. (exclude log type)
+    /// Returns the raw event store for all type. (exclude non standard key type cfs)
     pub fn retain_period_store(&self) -> Result<Vec<RawEventStore<()>>> {
         let mut stores: Vec<RawEventStore<()>> = Vec::new();
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
-            if !store.eq("log") {
+            if !NON_STANDARD_CFS.contains(&store) {
                 let cf = self
                     .db
                     .cf_handle(store)
@@ -892,6 +902,9 @@ pub async fn retain_periodically(
     db: Database,
     wait_shutdown: Arc<Notify>,
 ) -> Result<()> {
+    // TODO: Add exceptional key column families include log_store.
+    const DEFAULT_FROM: i64 = 61_000_000_000;
+
     let mut itv = time::interval(duration);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
     let from_timestamp = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -899,12 +912,12 @@ pub async fn retain_periodically(
         Utc,
     )
     .timestamp_nanos_opt()
-    .unwrap_or(i64::MAX)
+    .unwrap_or(DEFAULT_FROM)
     .to_be_bytes();
     loop {
         select! {
             _ = itv.tick() => {
-                let standard_duration = Utc::now().timestamp_nanos_opt().unwrap_or(i64::MAX) - retention_duration;
+                let standard_duration = Utc::now().timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
                 let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
                 let sources = db.sources_store()?.names();
                 let all_store = db.retain_period_store()?;
@@ -923,6 +936,7 @@ pub async fn retain_periodically(
                         if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
                             error!("Failed to delete range data");
                         }
+                        store.flush()?;
                     }
 
                     for (key, _) in log_store
@@ -942,6 +956,7 @@ pub async fn retain_periodically(
                             error!("Failed to delete log data");
                         }
                     }
+                    log_store.flush()?;
                 }
             }
             () = wait_shutdown.notified() => {
