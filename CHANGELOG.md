@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.0] - 2023-11-07
 
 ### Added
 
@@ -13,11 +13,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Support `NetflowV5`, `NetflowV9` events. These events does not streamed
   to Hog or Crusher.
 - Support `Seculog` events.
+  - In graphql, `Seculog` requires its kind.
+    `wapples`, `mf2`, `sniper`, `aiwaf`, `tg`, `vforce`, `srx`, `sonicwall`
+    `fgt`, `shadowwall`, `axgate`, `ubuntu`, `nginx`
 
 ### Changed
 
 - Modified Kerberos event to support giganto-client.
 - Changed `max_background_jobs` to 6 from 2.
+- Changed minimum version to 0.13.1.
 
 ### Fixed
 
@@ -301,7 +305,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.13.1...main
+[0.14.0]: https://github.com/aicers/giganto/compare/0.13.1...0.14.0
 [0.13.1]: https://github.com/aicers/giganto/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/aicers/giganto/compare/0.12.3...0.13.0
 [0.12.3]: https://github.com/aicers/giganto/compare/0.12.2...0.12.3

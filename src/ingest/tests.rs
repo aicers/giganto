@@ -44,7 +44,7 @@ const KEY_PATH: &str = "tests/key.pem";
 const CA_CERT_PATH: &str = "tests/root.pem";
 const HOST: &str = "localhost";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.13.0";
+const PROTOCOL_VERSION: &str = "0.14.0";
 
 struct TestClient {
     conn: Connection,
@@ -1051,7 +1051,7 @@ async fn ack_info() {
     .unwrap();
 
     let mut last_timestamp: i64 = 0;
-    for _ in 0..127 {
+    for _ in 0..1023 {
         let log_body: Log = Log {
             kind: String::from("Hello Server I am Log"),
             log: vec![0; 10],
