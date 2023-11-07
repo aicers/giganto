@@ -145,7 +145,7 @@ dependencies = [
  "Inflector",
  "async-graphql-parser",
  "darling",
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "strum",
@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.13.2"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.13.2#98031613eb748ac8c35a4e2ec5e29721ccdb2e90"
+version = "0.15.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.0#645f93d8da7ee49ab84e55708b0500d99b91845e"
 dependencies = [
  "anyhow",
  "bincode",
@@ -825,6 +825,8 @@ dependencies = [
  "quinn",
  "semver",
  "serde",
+ "strum",
+ "strum_macros",
  "thiserror",
  "tokio",
  "tracing",
@@ -1414,7 +1416,7 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c11e44798ad209ccdd91fc192f0526a369a01234f7373e1b141c96d7cee4f0e"
 dependencies = [
- "proc-macro-crate 2.0.0",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.39",
@@ -1699,15 +1701,6 @@ checksum = "7f4c021e1093a56626774e81216a4ce732a735e5bad4868a03f3ed65ca0c3919"
 dependencies = [
  "once_cell",
  "toml_edit 0.19.15",
-]
-
-[[package]]
-name = "proc-macro-crate"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8366a6159044a37876a2b9817124296703c586a5c92e2c53751fa06d8d43e8"
-dependencies = [
- "toml_edit 0.20.7",
 ]
 
 [[package]]
