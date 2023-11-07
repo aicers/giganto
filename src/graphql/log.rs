@@ -51,6 +51,7 @@ impl RawEventFilter for LogFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }
@@ -93,6 +94,7 @@ impl RawEventFilter for OpLogFilter {
         log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         if let Some(filter_level) = &self.log_level {
             let log_level = if let Some(log_level) = log_level {

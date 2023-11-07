@@ -56,6 +56,7 @@ impl RawEventFilter for PacketFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }

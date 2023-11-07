@@ -30,6 +30,9 @@ pub trait EventFilter {
     fn text(&self) -> Option<String> {
         None
     }
+    fn source(&self) -> Option<String> {
+        None
+    }
 }
 
 impl EventFilter for Conn {
@@ -927,5 +930,8 @@ impl EventFilter for SecuLog {
     }
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
+    }
+    fn source(&self) -> Option<String> {
+        Some(self.source.clone())
     }
 }

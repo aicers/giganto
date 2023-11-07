@@ -13,21 +13,23 @@ use crate::{
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
-use giganto_client::ingest::{
-    log::{Log, OpLog, SecuLog},
-    network::{
-        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
-        Smtp, Ssh, Tls,
+use giganto_client::{
+    ingest::{
+        log::{Log, OpLog, SecuLog},
+        network::{
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
+            Smtp, Ssh, Tls,
+        },
+        statistics::Statistics,
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
+        timeseries::PeriodicTimeSeries,
     },
-    statistics::Statistics,
-    sysmon::{
-        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-    },
-    timeseries::PeriodicTimeSeries,
+    RawEventKind,
 };
-use giganto_client::RawEventKind;
 pub use netflow::{Netflow5RawEvent, NetflowV9RawEvent};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -44,7 +46,7 @@ use tracing::{error, info};
 const NON_NETWORK: [&str; 20] = [
     "log",
     "periodic time series",
-    "oplog",
+    "op_log",
     "statistics",
     "sysmon",
     "process create",
@@ -61,7 +63,7 @@ const NON_NETWORK: [&str; 20] = [
     "file delete",
     "process tamper",
     "file delete detected",
-    "seculog",
+    "secu_log",
 ];
 
 #[derive(Default)]
@@ -916,8 +918,8 @@ impl JsonOutput<SecuLogJsonOutput> for SecuLog {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<SecuLogJsonOutput> {
         Ok(SecuLogJsonOutput {
             timestamp,
-            source,
-            kind: self.kind.clone(),
+            source: self.source.clone(),
+            kind: source,
             orig_addr: to_string_or_empty(self.orig_addr),
             orig_port: to_string_or_empty(self.orig_port),
             resp_addr: to_string_or_empty(self.resp_addr),
@@ -1384,6 +1386,7 @@ impl RawEventFilter for ExportFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
@@ -1609,7 +1612,7 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
-        "oplog" => tokio::spawn(async move {
+        "op_log" => tokio::spawn(async move {
             if let Ok(store) = db.op_log_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1945,7 +1948,7 @@ fn export_by_protocol(
                 error!("Failed to open db store");
             }
         }),
-        "seculog" => tokio::spawn(async move {
+        "secu_log" => tokio::spawn(async move {
             if let Ok(store) = db.secu_log_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -2150,6 +2153,7 @@ where
         value.log_level(),
         value.log_contents(),
         value.text(),
+        value.source(),
     ) {
         Ok(true) => {
             let (source, timestamp) = parse_key(key)?;
@@ -3064,54 +3068,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_oplog() {
+    async fn export_op_log() {
         let schema = TestSchema::new();
         let store = schema.db.op_log_store().unwrap();
 
-        insert_oplog_raw_event(&store, "agent1", 1);
-        insert_oplog_raw_event(&store, "agent2", 1);
+        insert_op_log_raw_event(&store, "agent1", 1);
+        insert_op_log_raw_event(&store, "agent2", 1);
 
         // export csv file
         let query = r#"
         {
             export(
                 filter:{
-                    protocol: "oplog",
+                    protocol: "op_log",
                     sourceId: "agent1@src 1",
                 }
                 ,exportType:"csv")
         }"#;
         let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("oplog"));
+        assert!(res.data.to_string().contains("op_log"));
 
         // export json file
         let query = r#"
         {
             export(
                 filter:{
-                    protocol: "oplog",
+                    protocol: "op_log",
                     sourceId: "agent2@src 1",
                 }
                 ,exportType:"json")
         }"#;
         let res = schema.execute(query).await;
-        assert!(res.data.to_string().contains("oplog"));
+        assert!(res.data.to_string().contains("op_log"));
     }
 
-    fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
+    fn insert_op_log_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
         let mut key: Vec<u8> = Vec::new();
         let agent_id = format!("{agent_name}@src 1");
         key.extend_from_slice(agent_id.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());
 
-        let oplog_body = OpLog {
+        let op_log_body = OpLog {
             agent_name: agent_id.to_string(),
             log_level: OpLogLevel::Info,
-            contents: "oplog".to_string(),
+            contents: "op_log".to_string(),
         };
 
-        let value = bincode::serialize(&oplog_body).unwrap();
+        let value = bincode::serialize(&op_log_body).unwrap();
 
         store.append(&key, &value).unwrap();
     }

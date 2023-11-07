@@ -781,7 +781,7 @@ async fn handle_data<T>(
     });
     loop {
         match receive_event(&mut recv).await {
-            Ok((raw_event, timestamp)) => {
+            Ok((mut raw_event, timestamp)) => {
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                 {
@@ -829,9 +829,11 @@ async fn handle_data<T>(
                             .end_key(timestamp)
                     }
                     RawEventKind::SecuLog => {
-                        let secu_log = bincode::deserialize::<SecuLog>(&raw_event)?;
-                        key_builder
-                            .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
+                        let mut secu_log = bincode::deserialize::<SecuLog>(&raw_event)?;
+                        secu_log.source = source.clone();
+                        raw_event = bincode::serialize(&secu_log)?;
+                        StorageKey::builder()
+                            .start_key(&secu_log.kind)
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
