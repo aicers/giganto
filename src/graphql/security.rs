@@ -1,5 +1,6 @@
 use super::{
-    check_address, check_contents, check_port, get_timestamp_from_key, load_connection,
+    check_address, check_contents, check_port, check_source, get_timestamp_from_key,
+    load_connection,
     network::{IpRange, PortRange},
     FromKeyValue,
 };
@@ -21,7 +22,7 @@ pub(super) struct SecurityLogQuery;
 #[derive(InputObject)]
 pub struct SecuLogFilter {
     time: Option<TimeRange>,
-    source: String,
+    source: Option<String>,
     kind: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
@@ -32,11 +33,11 @@ pub struct SecuLogFilter {
 
 impl KeyExtractor for SecuLogFilter {
     fn get_start_key(&self) -> &str {
-        &self.source
+        &self.kind
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        Some(self.kind.as_bytes().to_vec())
+        None
     }
 
     fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
@@ -58,12 +59,14 @@ impl RawEventFilter for SecuLogFilter {
         _log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
+        source: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
             && check_contents(&self.log, log_contents)
+            && check_source(&self.source, &source)
         {
             return Ok(true);
         }
@@ -74,6 +77,7 @@ impl RawEventFilter for SecuLogFilter {
 #[derive(SimpleObject, Debug)]
 struct SecuLogRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -88,6 +92,7 @@ impl FromKeyValue<SecuLog> for SecuLogRawEvent {
     fn from_key_value(key: &[u8], sl: SecuLog) -> Result<Self> {
         Ok(SecuLogRawEvent {
             timestamp: get_timestamp_from_key(key)?,
+            source: sl.source,
             log_type: sl.log_type,
             version: sl.version,
             orig_addr: sl.orig_addr.map(|addr| addr.to_string()),

@@ -97,6 +97,7 @@ impl RawEventFilter for NetworkFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
@@ -119,6 +120,7 @@ impl RawEventFilter for SearchFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         text: Option<String>,
+        _source: Option<String>,
     ) -> Result<bool> {
         if let Some(keyword) = &self.keyword {
             if let Some(text) = text {

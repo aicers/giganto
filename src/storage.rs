@@ -303,7 +303,7 @@ impl Database {
         Ok(RawEventStore::new(&self.db, cf))
     }
 
-    /// Returns the store for oplog
+    /// Returns the store for operation log
     pub fn op_log_store(&self) -> Result<RawEventStore<OpLog>> {
         let cf = self
             .db
@@ -815,6 +815,7 @@ where
                 elem.1.log_level(),
                 elem.1.log_contents(),
                 elem.1.text(),
+                elem.1.source(),
             ) {
                 return Some(elem);
             }

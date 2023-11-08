@@ -643,7 +643,7 @@ async fn dce_rpc() {
 }
 
 #[tokio::test]
-async fn oplog() {
+async fn op_log() {
     const RAW_EVENT_KIND_OPLOG: RawEventKind = RawEventKind::OpLog;
 
     let _lock = get_token().lock().await;
@@ -651,26 +651,26 @@ async fn oplog() {
     run_server(db_dir);
 
     let client = TestClient::new().await;
-    let (mut send_oplog, _) = client.conn.open_bi().await.expect("failed to open stream");
+    let (mut send_op_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let oplog_body = OpLog {
+    let op_log_body = OpLog {
         agent_name: "giganto".to_string(),
         log_level: OpLogLevel::Info,
-        contents: "oplog".to_string(),
+        contents: "op_log".to_string(),
     };
 
-    send_record_header(&mut send_oplog, RAW_EVENT_KIND_OPLOG)
+    send_record_header(&mut send_op_log, RAW_EVENT_KIND_OPLOG)
         .await
         .unwrap();
     send_event(
-        &mut send_oplog,
+        &mut send_op_log,
         Utc::now().timestamp_nanos_opt().unwrap(),
-        oplog_body,
+        op_log_body,
     )
     .await
     .unwrap();
 
-    send_oplog
+    send_op_log
         .finish()
         .await
         .expect("failed to shutdown stream");

@@ -79,6 +79,7 @@ pub trait RawEventFilter {
         log_level: Option<String>,
         log_contents: Option<String>,
         text: Option<String>,
+        source: Option<String>,
     ) -> Result<bool>;
 }
 
@@ -133,6 +134,7 @@ where
                             raw_event.log_level(),
                             raw_event.log_contents(),
                             raw_event.text(),
+                            raw_event.source(),
                         )
                         .map_or(None, |c| c.then_some(*time))
                 } else {
@@ -338,6 +340,7 @@ where
             item.1.log_level(),
             item.1.log_contents(),
             item.1.text(),
+            item.1.source(),
         ) {
             Ok(true) => records.push(item),
             Ok(false) | Err(_) => {}
@@ -566,6 +569,14 @@ fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool
 fn check_contents(filter_str: &Option<String>, target_str: Option<String>) -> bool {
     filter_str.as_ref().map_or(true, |filter_str| {
         target_str.map_or(false, |contents| contents.contains(filter_str))
+    })
+}
+
+fn check_source(filter_src: &Option<String>, target_src: &Option<String>) -> bool {
+    filter_src.as_ref().map_or(true, |filter_src| {
+        target_src
+            .as_ref()
+            .map_or(false, |source| source == filter_src)
     })
 }
 

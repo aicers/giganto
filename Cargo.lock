@@ -764,9 +764,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4136b2a15dd319360be1c07d9933517ccf0be8f16bf62a3bee4f0d618df427"
+checksum = "fe9006bed769170c11f845cf00c7c1e9092aeb3f268e007c3e760ac68008070f"
 dependencies = [
  "cfg-if",
  "libc",
@@ -806,7 +806,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml_edit 0.20.7",
+ "toml_edit 0.21.0",
  "tracing",
  "url",
  "warp",
@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.15.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.0#645f93d8da7ee49ab84e55708b0500d99b91845e"
+version = "0.15.1"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.1#c7d31d9eb71ab8ceb176a5e5288227adfa3e8b31"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2564,6 +2564,17 @@ name = "toml_edit"
 version = "0.20.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70f427fce4d84c72b5b732388bf4a9f4531b53f74e2887e3ecb2481f68f66d81"
+dependencies = [
+ "indexmap 2.1.0",
+ "toml_datetime",
+ "winnow",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d34d383cd00a163b4a5b85053df514d45bc330f6de7737edfe0a93311d1eaa03"
 dependencies = [
  "indexmap 2.1.0",
  "toml_datetime",
