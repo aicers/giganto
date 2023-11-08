@@ -17,8 +17,8 @@ use giganto_client::{
     publish::{
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
-        receive_hog_stream_start_message, receive_range_data, receive_raw_events,
-        send_range_data_request, send_stream_request,
+        receive_hog_stream_start_message, receive_range_data, send_range_data_request,
+        send_stream_request,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
     },
 };
@@ -3499,7 +3499,6 @@ async fn request_network_event_stream() {
 
 #[tokio::test]
 async fn request_raw_events() {
-    const PUBLISH_RAW_DATA_MESSAGE_CODE: MessageCode = MessageCode::RawData;
     const SOURCE: &str = "src 1";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
@@ -3523,19 +3522,35 @@ async fn request_raw_events() {
     let conn_store = db.conn_store().unwrap();
     let send_conn_time = TIMESTAMP;
     let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
+    let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
+    let raw_data = conn_data.response_data(TIMESTAMP, SOURCE).unwrap();
 
     let message = RequestRawData {
         kind: String::from(KIND),
         input: vec![(String::from(SOURCE), vec![TIMESTAMP])],
     };
 
-    send_range_data_request(&mut send_pub_req, PUBLISH_RAW_DATA_MESSAGE_CODE, message)
+    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
         .await
         .unwrap();
 
-    let resp_data = receive_raw_events(&mut recv_pub_resp).await.unwrap();
+    let mut result_data = vec![];
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
 
-    assert_eq!(resp_data[0].0, TIMESTAMP);
-    assert_eq!(&resp_data[0].1, "src 1");
-    assert_eq!(resp_data[0].2, conn_raw_data);
+        if let Some(data) = resp_data {
+            result_data.push(data);
+        } else {
+            break;
+        }
+    }
+    assert_eq!(result_data.len(), 1);
+    assert_eq!(result_data[0].0, TIMESTAMP);
+    assert_eq!(&result_data[0].1, SOURCE);
+    assert_eq!(
+        raw_data,
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()
+    );
 }

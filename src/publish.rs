@@ -19,7 +19,7 @@ use giganto_client::{
         pcap_extract_request,
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err,
-        send_hog_stream_start_message, send_ok, send_range_data, send_raw_events,
+        send_hog_stream_start_message, send_ok, send_range_data,
         stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
         PcapFilter,
     },
@@ -1309,14 +1309,19 @@ async fn process_raw_events<'c, T>(
     msg: Vec<(String, Vec<i64>)>,
 ) -> Result<()>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + ResponseRangeData,
 {
     let mut output: Vec<(i64, String, Vec<u8>)> = Vec::new();
-
     for (source, timestamps) in msg {
         output.extend_from_slice(&store.multi_get_with_source(&source, &timestamps));
     }
-    send_raw_events(send, output).await?;
 
+    for (timestamp, source, value) in output {
+        let val = bincode::deserialize::<T>(&value)?;
+        send_range_data(send, Some((val, timestamp, &source))).await?;
+    }
+
+    send_range_data::<T>(send, None).await?;
+    send.finish().await?;
     Ok(())
 }
