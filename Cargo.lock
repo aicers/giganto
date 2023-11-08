@@ -632,9 +632,9 @@ dependencies = [
 
 [[package]]
 name = "errno"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3e13f66a2f95e32a39eaa81f6b95d42878ca0e1db0c7543723dfe12557e860"
+checksum = "7c18ee0ed65a5f1f81cac6b1d213b69c35fa47d4252ad41f1486dbd8226fe36e"
 dependencies = [
  "libc",
  "windows-sys 0.48.0",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "giganto"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -1740,9 +1740,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c78e758510582acc40acb90458401172d41f1016f8c9dde89e49677afb7eec1"
+checksum = "141bf7dfde2fbc246bfd3fe12f2455aa24b0fbd9af535d8c86c7bd1381ff2b1a"
 dependencies = [
  "bytes",
  "rand",
@@ -1987,7 +1987,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b426b0506e5d50a7d8dafcf2e81471400deb602392c7dd110815afb4eaf02a3"
 dependencies = [
  "bitflags 2.4.1",
- "errno 0.3.5",
+ "errno 0.3.6",
  "libc",
  "linux-raw-sys",
  "windows-sys 0.48.0",
@@ -2110,18 +2110,18 @@ checksum = "836fa6a3e1e547f9a2c4040802ec865b5d85f4014efe00555d7090a3dcaa1090"
 
 [[package]]
 name = "serde"
-version = "1.0.191"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a834c4821019838224821468552240d4d95d14e751986442c816572d39a080c9"
+checksum = "bca2a08484b285dcb282d0f67b26cadc0df8b19f8c12502c13d966bf9482f001"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.191"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46fa52d5646bce91b680189fe5b1c049d2ea38dabb4e2e7c8d00ca12cfbfbcfd"
+checksum = "d6c7207fbec9faa48073f3e3074cbe553af6ea512d7c21ba46e434e70ea9fbc1"
 dependencies = [
  "proc-macro2",
  "quote",
