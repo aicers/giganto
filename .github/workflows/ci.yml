@@ -9,6 +9,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+    - name: Increase ulimit size
+      run: ulimit -n 8096
     - name: Install Rust
       uses: hecrj/setup-rust-action@v1
       with:
@@ -30,6 +32,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest]
     steps:
+    - name: Increase ulimit size
+      run: ulimit -n 8096
     - name: Install Rust
       uses: hecrj/setup-rust-action@v1
       with:
@@ -48,6 +52,8 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
+    - name: Increase ulimit size
+      run: ulimit -n 8096
     - name: Install Rust
       uses: hecrj/setup-rust-action@v1
       with:
