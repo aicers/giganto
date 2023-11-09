@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "giganto"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-graphql",
