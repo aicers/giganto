@@ -526,20 +526,18 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
 fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
     if let Some(ip_range) = filter_addr {
         if let Some(addr) = target_addr {
-            let end = if let Some(end) = &ip_range.end {
-                addr >= end.parse::<IpAddr>()?
-            } else {
-                false
-            };
-
-            let start = if let Some(start) = &ip_range.start {
-                addr < start.parse::<IpAddr>()?
-            } else {
-                false
-            };
-            if end || start {
+            if let Some(start) = ip_range.start.clone() {
+                if let Some(end) = ip_range.end.clone() {
+                    if addr >= start.parse::<IpAddr>()? && addr < end.parse::<IpAddr>()? {
+                        return Ok(true);
+                    }
+                    return Ok(false);
+                }
+                if addr == start.parse::<IpAddr>()? {
+                    return Ok(true);
+                }
                 return Ok(false);
-            };
+            }
         }
     }
     Ok(true)
@@ -548,19 +546,12 @@ fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> 
 fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool {
     if let Some(port_range) = filter_port {
         if let Some(port) = target_port {
-            let end = if let Some(end) = port_range.end {
-                port >= end
-            } else {
-                false
-            };
-            let start = if let Some(start) = port_range.start {
-                port < start
-            } else {
-                false
-            };
-            if end || start {
-                return false;
-            };
+            if let Some(start) = port_range.start {
+                if let Some(end) = port_range.end {
+                    return port >= start && port < end;
+                }
+                return port == start;
+            }
         }
     }
     true

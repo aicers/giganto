@@ -5,6 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2023-11-09
+
+### Changed
+
+- Changed `check_address` and `check_port` to have a close ended search where
+  it will only return the events that contain the address or port for single
+  input
+
 ## [0.15.2] - 2023-11-09
 
 ### Changed
@@ -325,6 +333,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
 [0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>
 [0.15.1]: <https://github.com/aicers/giganto/compare/0.15.0...0.15.1>
 [0.15.0]: <https://github.com/aicers/giganto/compare/0.14.0...0.15.0>
