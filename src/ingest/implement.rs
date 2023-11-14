@@ -866,22 +866,25 @@ impl EventFilter for Netflow5 {
         "netflow v5".to_string()
     }
     fn orig_addr(&self) -> Option<IpAddr> {
-        Some(self.srcaddr)
+        Some(self.src_addr)
     }
     fn resp_addr(&self) -> Option<IpAddr> {
-        Some(self.dstaddr)
+        Some(self.dst_addr)
     }
     fn orig_port(&self) -> Option<u16> {
-        Some(self.srcport)
+        Some(self.src_port)
     }
     fn resp_port(&self) -> Option<u16> {
-        Some(self.dstport)
+        Some(self.dst_port)
     }
     fn log_level(&self) -> Option<String> {
         None
     }
     fn log_contents(&self) -> Option<String> {
         None
+    }
+    fn source(&self) -> Option<String> {
+        Some(self.source.clone())
     }
 }
 
@@ -906,6 +909,9 @@ impl EventFilter for Netflow9 {
     }
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
+    }
+    fn source(&self) -> Option<String> {
+        Some(self.source.clone())
     }
 }
 

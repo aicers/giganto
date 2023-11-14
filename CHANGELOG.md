@@ -22,6 +22,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Supports all column families.
   - The iterator stops processing data once it encounters data that is newer
     than the specified retention period.
+- Moved `netflow` source to value from key.
 
 ## [0.15.3] - 2023-11-09
 

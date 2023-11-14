@@ -528,9 +528,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2e66c9d817f1720209181c316d28635c050fa304f9c79e47a520882661b7308"
+checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
 
 [[package]]
 name = "der-parser"
@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.15.1"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.1#c7d31d9eb71ab8ceb176a5e5288227adfa3e8b31"
+version = "0.15.2"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.2#797e31ad7d06020deb5b4198ab35dc0c1237da96"
 dependencies = [
  "anyhow",
  "bincode",

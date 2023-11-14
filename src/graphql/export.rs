@@ -1,7 +1,6 @@
-mod netflow;
-
 use super::{
     check_address, check_port,
+    netflow::{millis_to_secs, tcp_flags},
     network::{IpRange, PortRange},
     statistics::MAX_CORE_SIZE,
     RawEventFilter, TimeRange, TIMESTAMP_SIZE,
@@ -16,6 +15,7 @@ use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use giganto_client::{
     ingest::{
         log::{Log, OpLog, SecuLog},
+        netflow::{Netflow5, Netflow9},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
             Smtp, Ssh, Tls,
@@ -30,7 +30,6 @@ use giganto_client::{
     },
     RawEventKind,
 };
-pub use netflow::{Netflow5RawEvent, NetflowV9RawEvent};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Cow,
@@ -660,6 +659,50 @@ struct FileDeleteDetectedJsonOutput {
     target_filename: String,
     hashes: Vec<String>,
     is_executable: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Netflow5JsonOutput {
+    timestamp: String,
+    source: String,
+    src_addr: String,
+    dst_addr: String,
+    next_hop: String,
+    input: u16,
+    output: u16,
+    d_pkts: u32,
+    d_octets: u32,
+    first: String, // milliseconds
+    last: String,  // milliseconds
+    src_port: u16,
+    dst_port: u16,
+    tcp_flags: String,
+    prot: u8,
+    tos: String, // Hex
+    src_as: u16,
+    dst_as: u16,
+    src_mask: u8,
+    dst_mask: u8,
+    sequence: u32,
+    engine_type: u8,
+    engine_id: u8,
+    sampling_mode: String,
+    sampling_rate: u16,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Netflow9JsonOutput {
+    timestamp: String,
+    source: String,
+    sequence: u32,
+    source_id: u32,
+    template_id: u16,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    contents: String,
 }
 
 pub trait JsonOutput<T>: Sized {
@@ -1319,6 +1362,56 @@ impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
             target_filename: self.target_filename.clone(),
             hashes: self.hashes.clone(),
             is_executable: self.is_executable,
+        })
+    }
+}
+
+impl JsonOutput<Netflow5JsonOutput> for Netflow5 {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<Netflow5JsonOutput> {
+        Ok(Netflow5JsonOutput {
+            timestamp,
+            source,
+            src_addr: self.src_addr.to_string(),
+            dst_addr: self.dst_addr.to_string(),
+            next_hop: self.next_hop.to_string(),
+            input: self.input,
+            output: self.output,
+            d_pkts: self.d_pkts,
+            d_octets: self.d_octets,
+            first: millis_to_secs(self.first),
+            last: millis_to_secs(self.last), // milliseconds
+            src_port: self.src_port,
+            dst_port: self.dst_port,
+            tcp_flags: tcp_flags(self.tcp_flags),
+            prot: self.prot,
+            tos: format!("{:x}", self.tos),
+            src_as: self.src_as,
+            dst_as: self.dst_as,
+            src_mask: self.src_mask,
+            dst_mask: self.dst_mask,
+            sequence: self.sequence,
+            engine_type: self.engine_type,
+            engine_id: self.engine_id,
+            sampling_mode: format!("{:x}", self.sampling_mode),
+            sampling_rate: self.sampling_rate,
+        })
+    }
+}
+
+impl JsonOutput<Netflow9JsonOutput> for Netflow9 {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<Netflow9JsonOutput> {
+        Ok(Netflow9JsonOutput {
+            timestamp,
+            source,
+            sequence: self.sequence,
+            source_id: self.source_id,
+            template_id: self.template_id,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            contents: self.contents.clone(),
         })
     }
 }
