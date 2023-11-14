@@ -33,7 +33,7 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 use std::{marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
-use tracing::error;
+use tracing::{error, info};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "conn",
@@ -85,6 +85,22 @@ const NON_STANDARD_CFS: [&str; 6] = [
     "packet",
     "seculog",
 ];
+const USAGE_THRESHOLD: u64 = 95;
+const USAGE_LOW: u64 = 85;
+
+pub struct RetentionStores<'db, T> {
+    pub standard_cfs: Vec<RawEventStore<'db, T>>,
+    pub non_standard_cfs: Vec<RawEventStore<'db, T>>,
+}
+
+impl<'db, T> RetentionStores<'db, T> {
+    fn new() -> Self {
+        RetentionStores {
+            standard_cfs: Vec::new(),
+            non_standard_cfs: Vec::new(),
+        }
+    }
+}
 
 #[cfg(debug_assertions)]
 pub struct CfProperties {
@@ -140,36 +156,27 @@ impl Database {
     }
 
     #[cfg(debug_assertions)]
-    pub fn properties_cf(&self, cfname: &str) -> Result<CfProperties> {
-        let stats = if let Some(s) = self.db.property_value_cf(
-            &self
-                .db
-                .cf_handle(cfname)
-                .context("invalid record type name")?,
-            properties::STATS,
-        )? {
+    pub fn properties_cf(&self, cf_name: &str) -> Result<CfProperties> {
+        let stats = if let Some(s) = self
+            .db
+            .property_value_cf(&self.get_cf_handle(cf_name)?, properties::STATS)?
+        {
             s
         } else {
             "invalid".to_string()
         };
         let size = if let Some(u) = self.db.property_int_value_cf(
-            &self
-                .db
-                .cf_handle(cfname)
-                .context("invalid record type name")?,
+            &self.get_cf_handle(cf_name)?,
             properties::ESTIMATE_LIVE_DATA_SIZE,
         )? {
             u
         } else {
             0
         };
-        let num_keys = if let Some(n) = self.db.property_int_value_cf(
-            &self
-                .db
-                .cf_handle(cfname)
-                .context("invalid record type name")?,
-            properties::ESTIMATE_NUM_KEYS,
-        )? {
+        let num_keys = if let Some(n) = self
+            .db
+            .property_int_value_cf(&self.get_cf_handle(cf_name)?, properties::ESTIMATE_NUM_KEYS)?
+        {
             n
         } else {
             0
@@ -182,360 +189,255 @@ impl Database {
         })
     }
 
-    /// Returns the raw event store for all type. (exclude non standard key type cfs)
-    pub fn retain_period_store(&self) -> Result<Vec<RawEventStore<()>>> {
-        let mut stores: Vec<RawEventStore<()>> = Vec::new();
+    /// Returns the raw event store for all type.
+    pub fn retain_period_store(&self) -> Result<RetentionStores<()>> {
+        let mut stores = RetentionStores::new();
+
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
-            if !NON_STANDARD_CFS.contains(&store) {
-                let cf = self
-                    .db
-                    .cf_handle(store)
-                    .context("cannot access column family")?;
-                stores.push(RawEventStore::new(&self.db, cf));
+            if NON_STANDARD_CFS.contains(&store) {
+                let cf = self.get_cf_handle(store)?;
+                stores
+                    .non_standard_cfs
+                    .push(RawEventStore::new(&self.db, cf));
+            } else {
+                let cf = self.get_cf_handle(store)?;
+                stores.standard_cfs.push(RawEventStore::new(&self.db, cf));
             }
         }
         Ok(stores)
     }
 
+    fn get_cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
+        self.db
+            .cf_handle(cf_name)
+            .context("cannot access {cf_name} column family")
+    }
+
     /// Returns the raw event store for connections.
     pub fn conn_store(&self) -> Result<RawEventStore<Conn>> {
-        let cf = self
-            .db
-            .cf_handle("conn")
-            .context("cannot access conn column family")?;
+        let cf = self.get_cf_handle("conn")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for dns.
     pub fn dns_store(&self) -> Result<RawEventStore<Dns>> {
-        let cf = self
-            .db
-            .cf_handle("dns")
-            .context("cannot access dns column family")?;
+        let cf = self.get_cf_handle("dns")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for log.
     pub fn log_store(&self) -> Result<RawEventStore<Log>> {
-        let cf = self
-            .db
-            .cf_handle("log")
-            .context("cannot access log column family")?;
+        let cf = self.get_cf_handle("log")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for http.
     pub fn http_store(&self) -> Result<RawEventStore<Http>> {
-        let cf = self
-            .db
-            .cf_handle("http")
-            .context("cannot access http column family")?;
+        let cf = self.get_cf_handle("http")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for rdp.
     pub fn rdp_store(&self) -> Result<RawEventStore<Rdp>> {
-        let cf = self
-            .db
-            .cf_handle("rdp")
-            .context("cannot access rdp column family")?;
+        let cf = self.get_cf_handle("rdp")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for periodic time series.
     pub fn periodic_time_series_store(&self) -> Result<RawEventStore<PeriodicTimeSeries>> {
-        let cf = self
-            .db
-            .cf_handle("periodic time series")
-            .context("cannot access periodic time series column family")?;
+        let cf = self.get_cf_handle("periodic time series")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for smtp.
     pub fn smtp_store(&self) -> Result<RawEventStore<Smtp>> {
-        let cf = self
-            .db
-            .cf_handle("smtp")
-            .context("cannot access smtp column family")?;
+        let cf = self.get_cf_handle("smtp")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for ntlm.
     pub fn ntlm_store(&self) -> Result<RawEventStore<Ntlm>> {
-        let cf = self
-            .db
-            .cf_handle("ntlm")
-            .context("cannot access ntlm column family")?;
+        let cf = self.get_cf_handle("ntlm")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for kerberos.
     pub fn kerberos_store(&self) -> Result<RawEventStore<Kerberos>> {
-        let cf = self
-            .db
-            .cf_handle("kerberos")
-            .context("cannot access kerberos column family")?;
+        let cf = self.get_cf_handle("kerberos")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for ssh.
     pub fn ssh_store(&self) -> Result<RawEventStore<Ssh>> {
-        let cf = self
-            .db
-            .cf_handle("ssh")
-            .context("cannot access ssh column family")?;
+        let cf = self.get_cf_handle("ssh")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the raw event store for dce rpc.
     pub fn dce_rpc_store(&self) -> Result<RawEventStore<DceRpc>> {
-        let cf = self
-            .db
-            .cf_handle("dce rpc")
-            .context("cannot access dce rpc column family")?;
+        let cf = self.get_cf_handle("dce rpc")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for statistics
     pub fn statistics_store(&self) -> Result<RawEventStore<Statistics>> {
-        let cf = self
-            .db
-            .cf_handle("statistics")
-            .context("cannot access statistics column family")?;
+        let cf = self.get_cf_handle("statistics")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for operation log
     pub fn op_log_store(&self) -> Result<RawEventStore<OpLog>> {
-        let cf = self
-            .db
-            .cf_handle("oplog")
-            .context("cannot access operation log column family")?;
+        let cf = self.get_cf_handle("oplog")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for packet
     pub fn packet_store(&self) -> Result<RawEventStore<Packet>> {
-        let cf = self
-            .db
-            .cf_handle("packet")
-            .context("cannot access packet column family")?;
+        let cf = self.get_cf_handle("packet")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for connection sources
     pub fn sources_store(&self) -> Result<SourceStore> {
-        let cf = self
-            .db
-            .cf_handle("sources")
-            .context("cannot access sources column family")?;
+        let cf = self.get_cf_handle("sources")?;
         Ok(SourceStore { db: &self.db, cf })
     }
 
     /// Returns the store for Ftp
     pub fn ftp_store(&self) -> Result<RawEventStore<Ftp>> {
-        let cf = self
-            .db
-            .cf_handle("ftp")
-            .context("cannot access ftp column family")?;
+        let cf = self.get_cf_handle("ftp")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for Mqtt
     pub fn mqtt_store(&self) -> Result<RawEventStore<Mqtt>> {
-        let cf = self
-            .db
-            .cf_handle("mqtt")
-            .context("cannot access mqtt column family")?;
+        let cf = self.get_cf_handle("mqtt")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for ldap
     pub fn ldap_store(&self) -> Result<RawEventStore<Ldap>> {
-        let cf = self
-            .db
-            .cf_handle("ldap")
-            .context("cannot access ldap column family")?;
+        let cf = self.get_cf_handle("ldap")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for tls
     pub fn tls_store(&self) -> Result<RawEventStore<Tls>> {
-        let cf = self
-            .db
-            .cf_handle("tls")
-            .context("cannot access tls column family")?;
+        let cf = self.get_cf_handle("tls")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for smb
     pub fn smb_store(&self) -> Result<RawEventStore<Smb>> {
-        let cf = self
-            .db
-            .cf_handle("smb")
-            .context("cannot access smb column family")?;
+        let cf = self.get_cf_handle("smb")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for nfs
     pub fn nfs_store(&self) -> Result<RawEventStore<Nfs>> {
-        let cf = self
-            .db
-            .cf_handle("nfs")
-            .context("cannot access nfs column family")?;
+        let cf = self.get_cf_handle("nfs")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `ProcessCreate` (#1).
     pub fn process_create_store(&self) -> Result<RawEventStore<ProcessCreate>> {
-        let cf = self
-            .db
-            .cf_handle("process create")
-            .context("cannot access sysmon #1 column family")?;
+        let cf = self.get_cf_handle("process create")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `FileCreateTime` (#2).
     pub fn file_create_time_store(&self) -> Result<RawEventStore<FileCreationTimeChanged>> {
-        let cf = self
-            .db
-            .cf_handle("file create time")
-            .context("cannot access sysmon #2 column family")?;
+        let cf = self.get_cf_handle("file create time")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `NetworkConnect` (#3).
     pub fn network_connect_store(&self) -> Result<RawEventStore<NetworkConnection>> {
-        let cf = self
-            .db
-            .cf_handle("network connect")
-            .context("cannot access sysmon #3 column family")?;
+        let cf = self.get_cf_handle("network connect")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `ProcessTerminate` (#5).
     pub fn process_terminate_store(&self) -> Result<RawEventStore<ProcessTerminated>> {
-        let cf = self
-            .db
-            .cf_handle("process terminate")
-            .context("cannot access sysmon #5 column family")?;
+        let cf = self.get_cf_handle("process terminate")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `ImageLoad` (#7).
     pub fn image_load_store(&self) -> Result<RawEventStore<ImageLoaded>> {
-        let cf = self
-            .db
-            .cf_handle("image load")
-            .context("cannot access sysmon #7 column family")?;
+        let cf = self.get_cf_handle("image load")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `FileCreate` (#11).
     pub fn file_create_store(&self) -> Result<RawEventStore<FileCreate>> {
-        let cf = self
-            .db
-            .cf_handle("file create")
-            .context("cannot access sysmon #11 column family")?;
+        let cf = self.get_cf_handle("file create")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `RegistryValueSet` (#13).
     pub fn registry_value_set_store(&self) -> Result<RawEventStore<RegistryValueSet>> {
-        let cf = self
-            .db
-            .cf_handle("registry value set")
-            .context("cannot access sysmon #13 column family")?;
+        let cf = self.get_cf_handle("registry value set")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `RegistryKeyRename` (#14).
     pub fn registry_key_rename_store(&self) -> Result<RawEventStore<RegistryKeyValueRename>> {
-        let cf = self
-            .db
-            .cf_handle("registry key rename")
-            .context("cannot access sysmon #14 column family")?;
+        let cf = self.get_cf_handle("registry key rename")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `FileCreateStreamHash` (#15).
     pub fn file_create_stream_hash_store(&self) -> Result<RawEventStore<FileCreateStreamHash>> {
-        let cf = self
-            .db
-            .cf_handle("file create stream hash")
-            .context("cannot access sysmon #15 column family")?;
+        let cf = self.get_cf_handle("file create stream hash")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `PipeEvent` (#17).
     pub fn pipe_event_store(&self) -> Result<RawEventStore<PipeEvent>> {
-        let cf = self
-            .db
-            .cf_handle("pipe event")
-            .context("cannot access sysmon #17 column family")?;
+        let cf = self.get_cf_handle("pipe event")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `DnsQuery` (#22).
     pub fn dns_query_store(&self) -> Result<RawEventStore<DnsEvent>> {
-        let cf = self
-            .db
-            .cf_handle("dns query")
-            .context("cannot access sysmon #22 column family")?;
+        let cf = self.get_cf_handle("dns query")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `FileDelete` (#23).
     pub fn file_delete_store(&self) -> Result<RawEventStore<FileDelete>> {
-        let cf = self
-            .db
-            .cf_handle("file delete")
-            .context("cannot access sysmon #23 column family")?;
+        let cf = self.get_cf_handle("file delete")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `ProcessTamper` (#25).
     pub fn process_tamper_store(&self) -> Result<RawEventStore<ProcessTampering>> {
-        let cf = self
-            .db
-            .cf_handle("process tamper")
-            .context("cannot access sysmon #25 column family")?;
+        let cf = self.get_cf_handle("process tamper")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for sysmon event `FileDeleteDetected` (#26).
     pub fn file_delete_detected_store(&self) -> Result<RawEventStore<FileDeleteDetected>> {
-        let cf = self
-            .db
-            .cf_handle("file delete detected")
-            .context("cannot access sysmon #26 column family")?;
+        let cf = self.get_cf_handle("file delete detected")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for event `netflow5`.
     pub fn netflow5_store(&self) -> Result<RawEventStore<Netflow5>> {
-        let cf = self
-            .db
-            .cf_handle("netflow5")
-            .context("cannot access netflow5 column family")?;
+        let cf = self.get_cf_handle("netflow5")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for event `netflow9`.
     pub fn netflow9_store(&self) -> Result<RawEventStore<Netflow9>> {
-        let cf = self
-            .db
-            .cf_handle("netflow9")
-            .context("cannot access netflow9 column family")?;
+        let cf = self.get_cf_handle("netflow9")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
     /// Returns the store for security log.
     pub fn secu_log_store(&self) -> Result<RawEventStore<SecuLog>> {
-        let cf = self
-            .db
-            .cf_handle("seculog")
-            .context("cannot access security log column family")?;
+        let cf = self.get_cf_handle("seculog")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }
@@ -888,15 +790,15 @@ impl<'d> Iterator for Iter<'d> {
 }
 
 pub async fn retain_periodically(
-    duration: Duration,
+    interval: Duration,
     retention_period: Duration,
     db: Database,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
-    // TODO: Add exceptional key column families include log_store.
     const DEFAULT_FROM: i64 = 61_000_000_000;
+    const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
 
-    let mut itv = time::interval(duration);
+    let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
     let from_timestamp = DateTime::<Utc>::from_naive_utc_and_offset(
         NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
@@ -908,53 +810,91 @@ pub async fn retain_periodically(
     loop {
         select! {
             _ = itv.tick() => {
-                let standard_duration = Utc::now().timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
-                let standard_duration_vec = standard_duration.to_be_bytes().to_vec();
-                let sources = db.sources_store()?.names();
-                let all_store = db.retain_period_store()?;
-                let log_store = db.log_store()?;
+                let mut retention_timestamp = Utc::now()
+                    .timestamp_nanos_opt()
+                    .unwrap_or(retention_duration)
+                    - retention_duration;
+                let mut usage_flag = false;
 
-                for source in sources {
-                    let mut from: Vec<u8> = source.clone();
-                    from.push(0x00);
-                    from.extend_from_slice(&from_timestamp);
-
-                    let mut to: Vec<u8> = source.clone();
-                    to.push(0x00);
-                    to.extend_from_slice(&standard_duration_vec);
-
-                    for store in &all_store {
-                        if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
-                            error!("Failed to delete range data");
-                        }
-                        store.flush()?;
-                    }
-
-                    for (key, _) in log_store
-                        .db
-                        .prefix_iterator_cf(log_store.cf, source.clone())
-                        .flatten()
-                        .filter(|(key, _)| {
-                            let store_duration = i64::from_be_bytes(
-                                key[(key.len() - TIMESTAMP_SIZE)..]
-                                    .try_into()
-                                    .expect("valid key"),
-                            );
-                            standard_duration > store_duration
-                        })
-                    {
-                        if log_store.delete(&key).is_err() {
-                            error!("Failed to delete log data");
-                        }
-                    }
-                    log_store.flush()?;
+                if check_db_usage().await.0 {
+                    info!("Disk usage is over {USAGE_THRESHOLD}%.");
+                    retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+                    usage_flag = true;
                 }
-            }
+
+                loop {
+                    let retention_timestamp_vec = retention_timestamp.to_be_bytes().to_vec();
+                    let sources = db.sources_store()?.names();
+                    let all_store = db.retain_period_store()?;
+
+                    for source in sources {
+                        let mut from: Vec<u8> = source.clone();
+                        from.push(0x00);
+                        from.extend_from_slice(&from_timestamp);
+
+                        let mut to: Vec<u8> = source.clone();
+                        to.push(0x00);
+                        to.extend_from_slice(&retention_timestamp_vec);
+
+                        for store in &all_store.standard_cfs {
+                            store.flush()?;
+                            if store
+                                .db
+                                .delete_file_in_range_cf(store.cf, &from, &to)
+                                .is_ok()
+                            {
+                                store.flush()?;
+                                if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
+                                    store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
+                                }
+                            } else {
+                                error!("Failed to delete file in range");
+                            }
+                        }
+
+                        for store in &all_store.non_standard_cfs {
+                            let iterator = store
+                                .db
+                                .prefix_iterator_cf(store.cf, source.clone())
+                                .flatten();
+
+                            for (key, _) in iterator {
+                                let data_timestamp =
+                                    i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+
+                                if retention_timestamp > data_timestamp {
+                                    if store.delete(&key).is_err() {
+                                        error!("Failed to delete data");
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            store.flush()?;
+                        }
+                    }
+                    if check_db_usage().await.1 && usage_flag {
+                        retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+                    } else if usage_flag {
+                        info!("Disk usage is under {USAGE_LOW}%");
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+            },
             () = notify_shutdown.notified() => {
                 return Ok(());
             },
         }
     }
+}
+
+/// Returns the boolean of the disk usages over `USAGE_THRESHOLD` and `USAGE_LOW`.
+async fn check_db_usage() -> (bool, bool) {
+    let resource_usage = roxy::resource_usage().await;
+    let usage = (resource_usage.used_disk_space * 100) / resource_usage.total_disk_space;
+    (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
 }
 
 pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {

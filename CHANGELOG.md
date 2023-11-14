@@ -13,6 +13,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Rename type aliases `PacketSources` to `PcapSources`, `Sources` to
   `IngestSources`, and `StreamDirectChannel` to `StreamDirectChannels`;
   And move their definition location from `ingest.rs` to `main.rs`.
+- Modified `retain_periodically`
+  - When disk usage exceeds `USAGE_THRESHOLD` delete old data until disk usage
+    is reduced to `USAGE_LOW`.
+  - Supports all column families.
+  - The iterator stops processing data once it encounters data that is newer
+    than the specified retention period.
 
 ## [0.15.3] - 2023-11-09
 
@@ -342,6 +348,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: <https://github.com/aicers/giganto/compare/0.15.3...main>
 [0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
 [0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>
 [0.15.1]: <https://github.com/aicers/giganto/compare/0.15.0...0.15.1>
