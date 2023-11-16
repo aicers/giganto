@@ -122,7 +122,7 @@ where
     let key_builder = StorageKey::builder()
         .start_key(source)
         .mid_key(Some(core_id.to_be_bytes().to_vec()));
-    let from_key = key_builder.clone().upper_open_bound_end_key(end).build();
+    let from_key = key_builder.clone().upper_closed_bound_end_key(end).build();
     let to_key = key_builder.lower_closed_bound_end_key(start).build();
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
     StatisticsIter::new(iter)
