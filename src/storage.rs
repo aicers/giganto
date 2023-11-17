@@ -891,7 +891,7 @@ pub async fn retain_periodically(
     duration: Duration,
     retention_period: Duration,
     db: Database,
-    wait_shutdown: Arc<Notify>,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     // TODO: Add exceptional key column families include log_store.
     const DEFAULT_FROM: i64 = 61_000_000_000;
@@ -950,7 +950,7 @@ pub async fn retain_periodically(
                     log_store.flush()?;
                 }
             }
-            () = wait_shutdown.notified() => {
+            () = notify_shutdown.notified() => {
                 return Ok(());
             },
         }

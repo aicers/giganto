@@ -15,7 +15,7 @@ pub async fn serve(
     addr: SocketAddr,
     cert: Vec<u8>,
     key: Vec<u8>,
-    wait_shutdown: Arc<Notify>,
+    notify_shutdown: Arc<Notify>,
 ) {
     let filter = async_graphql_warp::graphql(schema).and_then(
         |(schema, request): (Schema, async_graphql::Request)| async move {
@@ -39,7 +39,7 @@ pub async fn serve(
         .tls()
         .cert(cert)
         .key(key)
-        .bind_with_graceful_shutdown(addr, async move { wait_shutdown.notified().await });
+        .bind_with_graceful_shutdown(addr, async move { notify_shutdown.notified().await });
 
     // start Graphql Server
     info!("listening on https://{addr:?}");

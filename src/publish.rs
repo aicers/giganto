@@ -4,12 +4,13 @@ mod tests;
 
 use self::implement::RequestStreamMessage;
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::ingest::{implement::EventFilter, NetworkKey, PacketSources, StreamDirectChannel};
+use crate::ingest::{implement::EventFilter, NetworkKey};
 use crate::server::{
     certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
     SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
+use crate::{PcapSources, StreamDirectChannels};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use giganto_client::{
@@ -62,9 +63,9 @@ impl Server {
     pub async fn run(
         self,
         db: Database,
-        packet_sources: PacketSources,
-        stream_direct_channel: StreamDirectChannel,
-        wait_shutdown: Arc<Notify>,
+        pcap_sources: PcapSources,
+        stream_direct_channels: StreamDirectChannels,
+        notify_shutdown: Arc<Notify>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -76,16 +77,16 @@ impl Server {
             select! {
                 Some(conn) = endpoint.accept()  => {
                     let db = db.clone();
-                    let packet_sources = packet_sources.clone();
-                    let stream_direct_channel = stream_direct_channel.clone();
-                    let shutdown_notify = wait_shutdown.clone();
+                    let pcap_sources = pcap_sources.clone();
+                    let stream_direct_channels = stream_direct_channels.clone();
+                    let notify_shutdown = notify_shutdown.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
                             conn,
                             db,
-                            packet_sources,
-                            stream_direct_channel,
-                            shutdown_notify
+                            pcap_sources,
+                            stream_direct_channels,
+                            notify_shutdown
                         )
                         .await
                         {
@@ -93,7 +94,7 @@ impl Server {
                         }
                     });
                 },
-                () = wait_shutdown.notified() => {
+                () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down publish");
@@ -107,9 +108,9 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
-    packet_sources: PacketSources,
-    stream_direct_channel: StreamDirectChannel,
-    wait_shutdown: Arc<Notify>,
+    pcap_sources: PcapSources,
+    stream_direct_channels: StreamDirectChannels,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -131,8 +132,8 @@ async fn handle_connection(
         send,
         recv,
         source,
-        packet_sources.clone(),
-        stream_direct_channel.clone(),
+        pcap_sources.clone(),
+        stream_direct_channels.clone(),
     ));
 
     loop {
@@ -149,14 +150,14 @@ async fn handle_connection(
                 };
 
                 let db = db.clone();
-                let packet_sources = packet_sources.clone();
+                let pcap_sources = pcap_sources.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, db, packet_sources).await {
+                    if let Err(e) = handle_request(stream, db, pcap_sources).await {
                         error!("failed: {}", e);
                     }
                 });
             },
-            () = wait_shutdown.notified() => {
+            () = notify_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
@@ -172,8 +173,8 @@ async fn request_stream(
     mut send: SendStream,
     mut recv: RecvStream,
     conn_source: String,
-    packet_sources: PacketSources,
-    stream_direct_channel: StreamDirectChannel,
+    pcap_sources: PcapSources,
+    stream_direct_channels: StreamDirectChannels,
 ) -> Result<()> {
     loop {
         match receive_stream_request(&mut recv).await {
@@ -181,9 +182,9 @@ async fn request_stream(
                 let db = stream_db.clone();
                 let conn = connection.clone();
                 let source = conn_source.clone();
-                let stream_direct_channel = stream_direct_channel.clone();
+                let stream_direct_channels = stream_direct_channels.clone();
                 if record_type == RequestStreamRecord::Pcap {
-                    process_pcap_extract(&raw_data, packet_sources.clone(), &mut send).await?;
+                    process_pcap_extract(&raw_data, pcap_sources.clone(), &mut send).await?;
                 } else {
                     tokio::spawn(async move {
                         match node_type {
@@ -198,7 +199,7 @@ async fn request_stream(
                                             node_type,
                                             record_type,
                                             msg,
-                                            stream_direct_channel,
+                                            stream_direct_channels,
                                         )
                                         .await
                                         {
@@ -221,7 +222,7 @@ async fn request_stream(
                                             node_type,
                                             record_type,
                                             msg,
-                                            stream_direct_channel,
+                                            stream_direct_channels,
                                         )
                                         .await
                                         {
@@ -248,7 +249,7 @@ async fn request_stream(
 
 async fn process_pcap_extract(
     filter_data: &[u8],
-    packet_sources: PacketSources,
+    pcap_sources: PcapSources,
     resp_send: &mut SendStream,
 ) -> Result<()> {
     let mut buf = Vec::new();
@@ -269,7 +270,7 @@ async fn process_pcap_extract(
 
     tokio::spawn(async move {
         for filter in filters {
-            if let Some(source_conn) = packet_sources.read().await.get(&filter.source) {
+            if let Some(source_conn) = pcap_sources.read().await.get(&filter.source) {
                 // send/receive extract request from piglet
                 match pcap_extract_request(source_conn, &filter).await {
                     Ok(()) => (),
@@ -292,7 +293,7 @@ async fn process_stream<T>(
     node_type: NodeType,
     record_type: RequestStreamRecord,
     request_msg: T,
-    stream_direct_channel: StreamDirectChannel,
+    stream_direct_channels: StreamDirectChannels,
 ) -> Result<()>
 where
     T: RequestStreamMessage,
@@ -308,7 +309,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -328,7 +329,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -348,7 +349,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -368,7 +369,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -388,7 +389,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -408,7 +409,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -428,7 +429,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -448,7 +449,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -468,7 +469,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -488,7 +489,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -508,7 +509,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -528,7 +529,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -548,7 +549,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -568,7 +569,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -588,7 +589,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -608,7 +609,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -628,7 +629,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -648,7 +649,7 @@ where
                     source,
                     kind,
                     node_type,
-                    stream_direct_channel,
+                    stream_direct_channels,
                 )
                 .await
                 {
@@ -668,9 +669,9 @@ pub async fn send_direct_stream(
     raw_event: &[u8],
     timestamp: i64,
     source: &str,
-    stream_direct_channel: StreamDirectChannel,
+    stream_direct_channels: StreamDirectChannels,
 ) -> Result<()> {
-    for (req_key, sender) in &*stream_direct_channel.read().await {
+    for (req_key, sender) in &*stream_direct_channels.read().await {
         if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
@@ -700,7 +701,7 @@ async fn send_stream<T, N>(
     source: Option<String>,
     kind: Option<String>,
     node_type: NodeType,
-    stream_direct_channel: StreamDirectChannel,
+    stream_direct_channels: StreamDirectChannels,
 ) -> Result<()>
 where
     T: EventFilter + Serialize + DeserializeOwned,
@@ -712,7 +713,7 @@ where
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let channel_remove_keys = channel_keys.clone();
     for c_key in channel_keys {
-        stream_direct_channel
+        stream_direct_channels
             .write()
             .await
             .insert(c_key, send.clone());
@@ -772,7 +773,7 @@ where
                     }
                     if frame::send_bytes(&mut sender, &buf).await.is_err(){
                         for r_key in channel_remove_keys{
-                            stream_direct_channel
+                            stream_direct_channels
                             .write()
                             .await
                             .remove(&r_key);
@@ -816,7 +817,7 @@ where
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
-    packet_sources: PacketSources,
+    pcap_sources: PcapSources,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
@@ -1146,7 +1147,7 @@ async fn handle_request(
             }
         }
         MessageCode::Pcap => {
-            process_pcap_extract(&msg_buf, packet_sources.clone(), &mut send).await?;
+            process_pcap_extract(&msg_buf, pcap_sources.clone(), &mut send).await?;
         }
         MessageCode::RawData => {
             let msg = bincode::deserialize::<RequestRawData>(&msg_buf)

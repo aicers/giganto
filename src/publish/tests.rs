@@ -1,5 +1,6 @@
 use super::Server;
 use crate::{
+    new_pcap_sources, new_stream_direct_channels,
     storage::{Database, DbOptions, RawEventStore},
     to_cert_chain, to_private_key,
 };
@@ -26,13 +27,12 @@ use quinn::{Connection, Endpoint, SendStream};
 use serde::Serialize;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::{Arc, OnceLock},
 };
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify};
 
 fn get_token() -> &'static Mutex<u32> {
     static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
@@ -683,12 +683,12 @@ async fn request_range_data_with_protocol() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db.clone(),
-        packet_sources,
-        stream_direct_channel,
+        pcap_sources,
+        stream_direct_channels,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1657,12 +1657,12 @@ async fn request_range_data_with_log() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db.clone(),
-        packet_sources,
-        stream_direct_channel,
+        pcap_sources,
+        stream_direct_channels,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1739,12 +1739,12 @@ async fn request_range_data_with_period_time_series() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db.clone(),
-        packet_sources,
-        stream_direct_channel,
+        pcap_sources,
+        stream_direct_channels,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1860,12 +1860,12 @@ async fn request_network_event_stream() {
         dst_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
         source: Some(String::from(SOURCE_CRUSHER_THREE)),
     };
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db.clone(),
-        packet_sources,
-        stream_direct_channel.clone(),
+        pcap_sources,
+        stream_direct_channels.clone(),
         Arc::new(Notify::new()),
     ));
     let mut publish = TestClient::new().await;
@@ -1899,7 +1899,7 @@ async fn request_network_event_stream() {
             &conn_data,
             send_conn_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -1917,7 +1917,7 @@ async fn request_network_event_stream() {
             &conn_data,
             send_conn_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -1963,7 +1963,7 @@ async fn request_network_event_stream() {
             &conn_data,
             send_conn_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2004,7 +2004,7 @@ async fn request_network_event_stream() {
             &dns_data,
             send_dns_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2022,7 +2022,7 @@ async fn request_network_event_stream() {
             &dns_data,
             send_dns_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2070,7 +2070,7 @@ async fn request_network_event_stream() {
             &dns_data,
             send_dns_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2111,7 +2111,7 @@ async fn request_network_event_stream() {
             &rdp_data,
             send_rdp_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2129,7 +2129,7 @@ async fn request_network_event_stream() {
             &rdp_data,
             send_rdp_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2176,7 +2176,7 @@ async fn request_network_event_stream() {
             &rdp_data,
             send_rdp_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2219,7 +2219,7 @@ async fn request_network_event_stream() {
             &http_data,
             send_http_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2238,7 +2238,7 @@ async fn request_network_event_stream() {
             &http_data,
             send_http_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2285,7 +2285,7 @@ async fn request_network_event_stream() {
             &http_data,
             send_http_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2328,7 +2328,7 @@ async fn request_network_event_stream() {
             &smtp_data,
             send_smtp_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2347,7 +2347,7 @@ async fn request_network_event_stream() {
             &smtp_data,
             send_smtp_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2394,7 +2394,7 @@ async fn request_network_event_stream() {
             &smtp_data,
             send_smtp_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2437,7 +2437,7 @@ async fn request_network_event_stream() {
             &ntlm_data,
             send_ntlm_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2456,7 +2456,7 @@ async fn request_network_event_stream() {
             &ntlm_data,
             send_ntlm_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2503,7 +2503,7 @@ async fn request_network_event_stream() {
             &ntlm_data,
             send_ntlm_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2545,7 +2545,7 @@ async fn request_network_event_stream() {
             &kerberos_data,
             send_kerberos_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2564,7 +2564,7 @@ async fn request_network_event_stream() {
             &kerberos_data,
             send_kerberos_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2612,7 +2612,7 @@ async fn request_network_event_stream() {
             &kerberos_data,
             send_kerberos_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2654,7 +2654,7 @@ async fn request_network_event_stream() {
             &ssh_data,
             send_ssh_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2673,7 +2673,7 @@ async fn request_network_event_stream() {
             &ssh_data,
             send_ssh_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2720,7 +2720,7 @@ async fn request_network_event_stream() {
             &ssh_data,
             send_ssh_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2763,7 +2763,7 @@ async fn request_network_event_stream() {
             &dce_rpc_data,
             send_dce_rpc_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2782,7 +2782,7 @@ async fn request_network_event_stream() {
             &dce_rpc_data,
             send_dce_rpc_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2830,7 +2830,7 @@ async fn request_network_event_stream() {
             &dce_rpc_data,
             send_dce_rpc_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2872,7 +2872,7 @@ async fn request_network_event_stream() {
             &ftp_data,
             send_ftp_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2891,7 +2891,7 @@ async fn request_network_event_stream() {
             &ftp_data,
             send_ftp_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2938,7 +2938,7 @@ async fn request_network_event_stream() {
             &ftp_data,
             send_ftp_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -2981,7 +2981,7 @@ async fn request_network_event_stream() {
             &mqtt_data,
             send_mqtt_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3000,7 +3000,7 @@ async fn request_network_event_stream() {
             &mqtt_data,
             send_mqtt_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3047,7 +3047,7 @@ async fn request_network_event_stream() {
             &mqtt_data,
             send_mqtt_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3090,7 +3090,7 @@ async fn request_network_event_stream() {
             &ldap_data,
             send_ldap_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3109,7 +3109,7 @@ async fn request_network_event_stream() {
             &ldap_data,
             send_ldap_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3156,7 +3156,7 @@ async fn request_network_event_stream() {
             &ldap_data,
             send_ldap_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3198,7 +3198,7 @@ async fn request_network_event_stream() {
             &tls_data,
             send_tls_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3217,7 +3217,7 @@ async fn request_network_event_stream() {
             &tls_data,
             send_tls_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3264,7 +3264,7 @@ async fn request_network_event_stream() {
             &tls_data,
             send_tls_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3306,7 +3306,7 @@ async fn request_network_event_stream() {
             &smb_data,
             send_smb_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3325,7 +3325,7 @@ async fn request_network_event_stream() {
             &smb_data,
             send_smb_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3372,7 +3372,7 @@ async fn request_network_event_stream() {
             &smb_data,
             send_smb_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3414,7 +3414,7 @@ async fn request_network_event_stream() {
             &nfs_data,
             send_nfs_time,
             SOURCE_HOG_ONE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3433,7 +3433,7 @@ async fn request_network_event_stream() {
             &nfs_data,
             send_nfs_time,
             SOURCE_HOG_TWO,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3480,7 +3480,7 @@ async fn request_network_event_stream() {
             &nfs_data,
             send_nfs_time,
             SOURCE_CRUSHER_THREE,
-            stream_direct_channel.clone(),
+            stream_direct_channels.clone(),
         )
         .await
         .unwrap();
@@ -3506,12 +3506,12 @@ async fn request_raw_events() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db.clone(),
-        packet_sources,
-        stream_direct_channel,
+        pcap_sources,
+        stream_direct_channels,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;

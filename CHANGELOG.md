@@ -10,6 +10,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Changed manual boundary check to boundary checking via `iterator_cf_opt`.
+- Rename type aliases `PacketSources` to `PcapSources`, `Sources` to
+  `IngestSources`, and `StreamDirectChannel` to `StreamDirectChannels`;
+  And move their definition location from `ingest.rs` to `main.rs`.
 
 ## [0.15.3] - 2023-11-09
 
