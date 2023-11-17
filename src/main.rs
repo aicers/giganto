@@ -9,7 +9,9 @@ mod web;
 
 use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use giganto_client::init_tracing;
+use quinn::Connection;
 use rocksdb::DB;
 use rustls::{Certificate, PrivateKey};
 use settings::Settings;
@@ -22,7 +24,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{Notify, RwLock},
+    sync::{mpsc::UnboundedSender, Notify, RwLock},
     task,
     time::{self, sleep},
 };
@@ -40,6 +42,10 @@ FLAGS:
 ARG:
     <CONFIG>    A TOML config file
 ";
+
+pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
+pub type IngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
@@ -102,18 +108,18 @@ async fn main() -> Result<()> {
     }
 
     loop {
-        let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-        let sources = Arc::new(RwLock::new(HashMap::new()));
-        let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
-        let config_reload = Arc::new(Notify::new());
+        let pcap_sources = new_pcap_sources();
+        let ingest_sources = new_ingest_sources();
+        let stream_direct_channels = new_stream_direct_channels();
+        let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
-        let mut notify_change_source = None;
+        let mut notify_source_change = None;
 
         let schema = graphql::schema(
             database.clone(),
-            packet_sources.clone(),
+            pcap_sources.clone(),
             settings.export_dir.clone(),
-            config_reload.clone(),
+            notify_config_reload.clone(),
             settings.cfg_path.clone(),
         );
         task::spawn(web::serve(
@@ -143,13 +149,13 @@ async fn main() -> Result<()> {
             };
             task::spawn(peer_server.run(
                 peers,
-                sources.clone(),
+                ingest_sources.clone(),
                 peer_sources,
                 notify_source.clone(),
                 notify_shutdown.clone(),
                 settings.cfg_path.clone(),
             ));
-            notify_change_source = Some(notify_source);
+            notify_source_change = Some(notify_source);
         }
 
         let publish_server = publish::Server::new(
@@ -160,8 +166,8 @@ async fn main() -> Result<()> {
         );
         task::spawn(publish_server.run(
             database.clone(),
-            packet_sources.clone(),
-            stream_direct_channel.clone(),
+            pcap_sources.clone(),
+            stream_direct_channels.clone(),
             notify_shutdown.clone(),
         ));
 
@@ -173,16 +179,16 @@ async fn main() -> Result<()> {
         );
         task::spawn(ingest_server.run(
             database.clone(),
-            packet_sources,
-            sources,
-            stream_direct_channel,
+            pcap_sources,
+            ingest_sources,
+            stream_direct_channels,
             notify_shutdown.clone(),
-            notify_change_source,
+            notify_source_change,
         ));
 
         loop {
             select! {
-                () = config_reload.notified() =>{
+                () = notify_config_reload.notified() =>{
                     match Settings::from_file(&settings.cfg_path) {
                         Ok(new_settings) => {
                             settings = new_settings;
@@ -275,4 +281,18 @@ fn to_hms(dur: Duration) -> String {
     let seconds = total_sec % 60;
 
     format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn new_pcap_sources() -> PcapSources {
+    Arc::new(RwLock::new(HashMap::<String, Connection>::new()))
+}
+
+fn new_ingest_sources() -> IngestSources {
+    Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
+}
+
+fn new_stream_direct_channels() -> StreamDirectChannels {
+    Arc::new(RwLock::new(
+        HashMap::<String, UnboundedSender<Vec<u8>>>::new(),
+    ))
 }

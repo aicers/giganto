@@ -1,5 +1,6 @@
 use super::Server;
 use crate::{
+    new_ingest_sources, new_pcap_sources, new_stream_direct_channels,
     storage::{Database, DbOptions},
     to_cert_chain, to_private_key,
 };
@@ -22,7 +23,6 @@ use giganto_client::{
 };
 use quinn::{Connection, Endpoint};
 use std::{
-    collections::HashMap,
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::Path,
@@ -30,7 +30,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{
-    sync::{Mutex, Notify, RwLock},
+    sync::{Mutex, Notify},
     task::JoinHandle,
 };
 
@@ -1108,14 +1108,14 @@ async fn one_short_reproduce_channel_close() {
 
 fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let packet_sources = Arc::new(RwLock::new(HashMap::new()));
-    let sources = Arc::new(RwLock::new(HashMap::new()));
-    let stream_direct_channel = Arc::new(RwLock::new(HashMap::new()));
+    let pcap_sources = new_pcap_sources();
+    let ingest_sources = new_ingest_sources();
+    let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db,
-        packet_sources,
-        sources,
-        stream_direct_channel,
+        pcap_sources,
+        ingest_sources,
+        stream_direct_channels,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),
     ))

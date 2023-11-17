@@ -11,10 +11,11 @@ mod timeseries;
 
 use self::network::{IpRange, NetworkFilter, PortRange, SearchFilter};
 use crate::{
-    ingest::{implement::EventFilter, PacketSources},
+    ingest::implement::EventFilter,
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
+    PcapSources,
 };
 use anyhow::anyhow;
 use async_graphql::{
@@ -92,14 +93,14 @@ type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub fn schema(
     database: Database,
-    packet_sources: PacketSources,
+    pcap_sources: PcapSources,
     export_path: PathBuf,
     config_reload: Arc<Notify>,
     config_file_path: String,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
-        .data(packet_sources)
+        .data(pcap_sources)
         .data(export_path)
         .data(config_reload)
         .data(config_file_path)
@@ -581,18 +582,17 @@ struct TestSchema {
 #[cfg(test)]
 impl TestSchema {
     fn new() -> Self {
+        use crate::new_pcap_sources;
         use crate::storage::DbOptions;
-        use std::collections::HashMap;
-        use tokio::sync::RwLock;
 
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let packet_sources = Arc::new(RwLock::new(HashMap::new()));
+        let pcap_sources = new_pcap_sources();
         let export_dir = tempfile::tempdir().unwrap();
         let config_reload = Arc::new(Notify::new());
         let schema = schema(
             db.clone(),
-            packet_sources,
+            pcap_sources,
             export_dir.path().to_path_buf(),
             config_reload,
             "file_path".to_string(),

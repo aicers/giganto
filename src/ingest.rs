@@ -8,6 +8,7 @@ use crate::server::{
     SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
+use crate::{IngestSources, PcapSources, StreamDirectChannels};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
@@ -23,11 +24,10 @@ use giganto_client::{
     },
     RawEventKind,
 };
-use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
+use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use std::sync::atomic::AtomicU16;
 use std::{
-    collections::HashMap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicBool, AtomicI64, Ordering},
@@ -38,8 +38,8 @@ use std::{
 use tokio::{
     select,
     sync::{
-        mpsc::{channel, Receiver, Sender, UnboundedSender},
-        Mutex, Notify, RwLock,
+        mpsc::{channel, Receiver, Sender},
+        Mutex, Notify,
     },
     task, time,
     time::sleep,
@@ -56,9 +56,6 @@ const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = ">=0.15.0,<0.16.0";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
-pub type PacketSources = Arc<RwLock<HashMap<String, Connection>>>;
-pub type Sources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
-pub type StreamDirectChannel = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 enum ConnState {
     Connected,
@@ -88,10 +85,10 @@ impl Server {
     pub async fn run(
         self,
         db: Database,
-        packet_sources: PacketSources,
-        sources: Sources,
-        stream_direct_channel: StreamDirectChannel,
-        wait_shutdown: Arc<Notify>,
+        pcap_sources: PcapSources,
+        ingest_sources: IngestSources,
+        stream_direct_channels: StreamDirectChannels,
+        notify_shutdown: Arc<Notify>,
         notify_source: Option<Arc<Notify>>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
@@ -104,8 +101,8 @@ impl Server {
         let source_db = db.clone();
         task::spawn(check_sources_conn(
             source_db,
-            packet_sources.clone(),
-            sources,
+            pcap_sources.clone(),
+            ingest_sources,
             rx,
             notify_source,
         ));
@@ -117,24 +114,24 @@ impl Server {
                 Some(conn) = endpoint.accept()  => {
                     let sender = tx.clone();
                     let db = db.clone();
-                    let packet_sources = packet_sources.clone();
-                    let stream_direct_channel = stream_direct_channel.clone();
-                    let shutdown_notify = wait_shutdown.clone();
+                    let pcap_sources = pcap_sources.clone();
+                    let stream_direct_channels = stream_direct_channels.clone();
+                    let notify_shutdown = notify_shutdown.clone();
                     let shutdown_sig = shutdown_signal.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            handle_connection(conn, db, packet_sources, sender, stream_direct_channel,shutdown_notify,shutdown_sig).await
+                            handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig).await
                         {
                             error!("connection failed: {}", e);
                         }
                     });
                 },
-                () = wait_shutdown.notified() => {
+                () = notify_shutdown.notified() => {
                     shutdown_signal.store(true,Ordering::SeqCst); // Setting signal to handle termination on each channel.
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down ingest");
-                    wait_shutdown.notify_one();
+                    notify_shutdown.notify_one();
                     break;
                 },
             }
@@ -145,10 +142,10 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
-    packet_sources: PacketSources,
+    pcap_sources: PcapSources,
     sender: Sender<SourceInfo>,
-    stream_direct_channel: StreamDirectChannel,
-    wait_shutdown: Arc<Notify>,
+    stream_direct_channels: StreamDirectChannels,
+    notify_shutdown: Arc<Notify>,
     shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let connection = conn.await?;
@@ -168,7 +165,7 @@ async fn handle_connection(
     let rep = agent.contains("reproduce");
 
     if !rep {
-        packet_sources
+        pcap_sources
             .write()
             .await
             .insert(source.clone(), connection.clone());
@@ -203,15 +200,15 @@ async fn handle_connection(
                 };
                 let source = source.clone();
                 let db = db.clone();
-                let stream_direct_channel = stream_direct_channel.clone();
+                let stream_direct_channels = stream_direct_channels.clone();
                 let shutdown_signal = shutdown_signal.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(source, stream, db, stream_direct_channel,shutdown_signal).await {
+                    if let Err(e) = handle_request(source, stream, db, stream_direct_channels,shutdown_signal).await {
                         error!("failed: {}", e);
                     }
                 });
             },
-            () = wait_shutdown.notified() => {
+            () = notify_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
@@ -226,7 +223,7 @@ async fn handle_request(
     source: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
-    stream_direct_channel: StreamDirectChannel,
+    stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut buf = [0; 4];
@@ -242,7 +239,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "conn")),
                 source,
                 db.conn_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -255,7 +252,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "dns")),
                 source,
                 db.dns_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -268,7 +265,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "log")),
                 source,
                 db.log_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -281,7 +278,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "http")),
                 source,
                 db.http_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -294,7 +291,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "rdp")),
                 source,
                 db.rdp_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -307,7 +304,7 @@ async fn handle_request(
                 None,
                 source,
                 db.periodic_time_series_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -320,7 +317,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "smtp")),
                 source,
                 db.smtp_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -333,7 +330,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "ntlm")),
                 source,
                 db.ntlm_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -346,7 +343,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "kerberos")),
                 source,
                 db.kerberos_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -359,7 +356,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "ssh")),
                 source,
                 db.ssh_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -372,7 +369,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "dce rpc")),
                 source,
                 db.dce_rpc_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -385,7 +382,7 @@ async fn handle_request(
                 None,
                 source,
                 db.statistics_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -398,7 +395,7 @@ async fn handle_request(
                 None,
                 source,
                 db.op_log_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -411,7 +408,7 @@ async fn handle_request(
                 None,
                 source,
                 db.packet_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -424,7 +421,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "ftp")),
                 source,
                 db.ftp_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -437,7 +434,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "mqtt")),
                 source,
                 db.mqtt_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -450,7 +447,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "ldap")),
                 source,
                 db.ldap_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -463,7 +460,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "tls")),
                 source,
                 db.tls_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -476,7 +473,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "smb")),
                 source,
                 db.smb_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -489,7 +486,7 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "nfs")),
                 source,
                 db.nfs_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -502,7 +499,7 @@ async fn handle_request(
                 None,
                 source,
                 db.process_create_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -515,7 +512,7 @@ async fn handle_request(
                 None,
                 source,
                 db.file_create_time_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -528,7 +525,7 @@ async fn handle_request(
                 None,
                 source,
                 db.network_connect_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -541,7 +538,7 @@ async fn handle_request(
                 None,
                 source,
                 db.process_terminate_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -554,7 +551,7 @@ async fn handle_request(
                 None,
                 source,
                 db.image_load_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -567,7 +564,7 @@ async fn handle_request(
                 None,
                 source,
                 db.file_create_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -580,7 +577,7 @@ async fn handle_request(
                 None,
                 source,
                 db.registry_value_set_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -593,7 +590,7 @@ async fn handle_request(
                 None,
                 source,
                 db.registry_key_rename_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -606,7 +603,7 @@ async fn handle_request(
                 None,
                 source,
                 db.file_create_stream_hash_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -619,7 +616,7 @@ async fn handle_request(
                 None,
                 source,
                 db.pipe_event_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -632,7 +629,7 @@ async fn handle_request(
                 None,
                 source,
                 db.dns_query_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -645,7 +642,7 @@ async fn handle_request(
                 None,
                 source,
                 db.file_delete_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -658,7 +655,7 @@ async fn handle_request(
                 None,
                 source,
                 db.process_tamper_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -671,7 +668,7 @@ async fn handle_request(
                 None,
                 source,
                 db.file_delete_detected_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -684,7 +681,7 @@ async fn handle_request(
                 None,
                 source,
                 db.netflow5_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -697,7 +694,7 @@ async fn handle_request(
                 None,
                 source,
                 db.netflow9_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -710,7 +707,7 @@ async fn handle_request(
                 None,
                 source,
                 db.secu_log_store()?,
-                stream_direct_channel,
+                stream_direct_channels,
                 shutdown_signal,
             )
             .await?;
@@ -730,7 +727,7 @@ async fn handle_data<T>(
     network_key: Option<NetworkKey>,
     source: String,
     store: RawEventStore<'_, T>,
-    stream_direct_channel: StreamDirectChannel,
+    stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
@@ -846,7 +843,7 @@ async fn handle_data<T>(
                         &raw_event,
                         timestamp,
                         &source,
-                        stream_direct_channel.clone(),
+                        stream_direct_channels.clone(),
                     )
                     .await?;
                 }
@@ -913,8 +910,8 @@ async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result<(),
 
 async fn check_sources_conn(
     source_db: Database,
-    packet_sources: PacketSources,
-    sources: Sources,
+    pcap_sources: PcapSources,
+    ingest_sources: IngestSources,
     mut rx: Receiver<SourceInfo>,
     notify_source: Option<Arc<Notify>>,
 ) -> Result<()> {
@@ -926,7 +923,7 @@ async fn check_sources_conn(
     loop {
         select! {
             _ = itv.tick() => {
-                let mut sources = sources.write().await;
+                let mut sources = ingest_sources.write().await;
                 let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for source_key in keys {
@@ -945,7 +942,7 @@ async fn check_sources_conn(
                             error!("Failed to append source store");
                         }
                         if !rep {
-                            sources.write().await.insert(source_key, timestamp_val);
+                            ingest_sources.write().await.insert(source_key, timestamp_val);
                             if let Some(ref notify) = notify_source {
                                 notify.notify_one();
                             }
@@ -956,8 +953,8 @@ async fn check_sources_conn(
                             error!("Failed to append source store");
                         }
                         if !rep {
-                            sources.write().await.remove(&source_key);
-                            packet_sources.write().await.remove(&source_key);
+                            ingest_sources.write().await.remove(&source_key);
+                            pcap_sources.write().await.remove(&source_key);
                             if let Some(ref notify) = notify_source {
                                 notify.notify_one();
                             }

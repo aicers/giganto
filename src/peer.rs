@@ -2,11 +2,11 @@
 
 use crate::{
     graphql::status::{insert_toml_peers, read_toml_file, write_toml_file, TomlPeers},
-    ingest::Sources,
     server::{
         certificate_info, config_client, config_server, extract_cert_from_conn,
         SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
+    IngestSources,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use giganto_client::{
@@ -72,7 +72,7 @@ impl TomlPeers for PeerInfo {
 pub struct PeerConnInfo {
     peer_conn: Arc<RwLock<HashMap<String, Connection>>>, //key: hostname, value: connection
     peer_list: Arc<RwLock<HashSet<PeerInfo>>>,
-    sources: Sources,
+    ingest_sources: IngestSources,
     peer_sources: PeerSources, //key: address(for request graphql/publish), value: peer's collect sources(hash set)
     peer_sender: Sender<PeerInfo>,
     local_address: SocketAddr,
@@ -114,10 +114,10 @@ impl Peer {
     pub async fn run(
         self,
         peers: HashSet<PeerInfo>,
-        sources: Sources,
+        ingest_sources: IngestSources,
         peer_sources: PeerSources,
         notify_source: Arc<Notify>,
-        wait_shutdown: Arc<Notify>,
+        notify_shutdown: Arc<Notify>,
         config_path: String,
     ) -> Result<()> {
         let server_endpoint =
@@ -147,7 +147,7 @@ impl Peer {
             peer_conn: Arc::new(RwLock::new(HashMap::new())),
             peer_list: Arc::new(RwLock::new(peers)),
             peer_sources,
-            sources,
+            ingest_sources,
             peer_sender: sender,
             local_address: self.local_address,
             notify_source,
@@ -159,19 +159,19 @@ impl Peer {
             client_endpoint.clone(),
             peer_conn_info.clone(),
             self.local_host_name.clone(),
-            wait_shutdown.clone(),
+            notify_shutdown.clone(),
         ));
 
         loop {
             select! {
                 Some(conn) = server_endpoint.accept()  => {
                     let peer_conn_info = peer_conn_info.clone();
-                    let wait_shutdown = wait_shutdown.clone();
+                    let notify_shutdown = notify_shutdown.clone();
                     tokio::spawn(async move {
                         if let Err(e) = server_connection(
                             conn,
                             peer_conn_info,
-                            wait_shutdown,
+                            notify_shutdown,
                         )
                         .await
                         {
@@ -185,10 +185,10 @@ impl Peer {
                         peer,
                         peer_conn_info.clone(),
                         self.local_host_name.clone(),
-                        wait_shutdown.clone(),
+                        notify_shutdown.clone(),
                     ));
                 },
-                () = wait_shutdown.notified() => {
+                () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
                     server_endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down peer");
@@ -204,7 +204,7 @@ async fn client_run(
     client_endpoint: Endpoint,
     peer_conn_info: PeerConnInfo,
     local_host_name: String,
-    wait_shutdown: Arc<Notify>,
+    notify_shutdown: Arc<Notify>,
 ) {
     for peer in &*peer_conn_info.peer_list.read().await {
         tokio::spawn(client_connection(
@@ -212,7 +212,7 @@ async fn client_run(
             peer.clone(),
             peer_conn_info.clone(),
             local_host_name.clone(),
-            wait_shutdown.clone(),
+            notify_shutdown.clone(),
         ));
     }
 }
@@ -234,7 +234,7 @@ async fn client_connection(
     peer_info: PeerInfo,
     peer_conn_info: PeerConnInfo,
     local_host_name: String,
-    wait_shutdown: Arc<Notify>,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     'connection: loop {
         match connect(&client_endpoint, &peer_info).await {
@@ -256,7 +256,7 @@ async fn client_connection(
                 };
 
                 let send_source_list: HashSet<String> = peer_conn_info
-                    .sources
+                    .ingest_sources
                     .read()
                     .await
                     .keys()
@@ -344,7 +344,7 @@ async fn client_connection(
                             });
                         },
                         () = peer_conn_info.notify_source.notified() => {
-                            let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
+                            let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.keys().cloned().collect();
                             for conn in (*peer_conn_info.peer_conn.write().await).values() {
                                 tokio::spawn(update_peer_info::<HashSet<String>>(
                                     conn.clone(),
@@ -353,7 +353,7 @@ async fn client_connection(
                                 ));
                             }
                         },
-                        () = wait_shutdown.notified() => {
+                        () = notify_shutdown.notified() => {
                             // Wait time for channels to be ready for shutdown.
                             sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                             connection.close(0_u32.into(), &[]);
@@ -390,7 +390,7 @@ async fn client_connection(
 async fn server_connection(
     conn: quinn::Connecting,
     peer_conn_info: PeerConnInfo,
-    wait_shutdown: Arc<Notify>,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -419,7 +419,7 @@ async fn server_connection(
     };
 
     let source_list: HashSet<String> = peer_conn_info
-        .sources
+        .ingest_sources
         .read()
         .await
         .keys()
@@ -500,7 +500,7 @@ async fn server_connection(
                 });
             },
             () = peer_conn_info.notify_source.notified() => {
-                let source_list: HashSet<String> = peer_conn_info.sources.read().await.keys().cloned().collect();
+                let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.keys().cloned().collect();
                 for conn in (*peer_conn_info.peer_conn.read().await).values() {
                     tokio::spawn(update_peer_info::<HashSet<String>>(
                         conn.clone(),
@@ -509,7 +509,7 @@ async fn server_connection(
                     ));
                 }
             },
-            () = wait_shutdown.notified() => {
+            () = notify_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
                 sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
