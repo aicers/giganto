@@ -186,7 +186,7 @@ where
             .mid_key(filter.get_mid_key());
         let from_key = key_builder
             .clone()
-            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
             .build();
         let to_key = key_builder
             .lower_closed_bound_end_key(filter.get_range_end_key().0)
@@ -253,7 +253,7 @@ where
             .mid_key(filter.get_mid_key());
         let from_key = key_builder
             .clone()
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
             .build();
         let to_key = key_builder
             .lower_closed_bound_end_key(filter.get_range_end_key().0)
@@ -392,7 +392,7 @@ where
         let key_builder = StorageKey::builder().start_key(filter.get_start_key());
         let from_key = key_builder
             .clone()
-            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
             .build();
         let to_key = key_builder
             .lower_closed_bound_end_key(filter.get_range_end_key().0)
@@ -441,7 +441,7 @@ where
         let key_builder = StorageKey::builder().start_key(filter.get_start_key());
         let from_key = key_builder
             .clone()
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
             .build();
         let to_key = key_builder
             .lower_closed_bound_end_key(filter.get_range_end_key().0)

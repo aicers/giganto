@@ -27,9 +27,11 @@ pub use migration::migrate_data_dir;
 #[cfg(debug_assertions)]
 use rocksdb::properties;
 pub use rocksdb::Direction;
-use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, DB};
+use rocksdb::{
+    ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, ReadOptions, DB,
+};
 use serde::de::DeserializeOwned;
-use std::{cmp, marker::PhantomData, path::Path, sync::Arc, time::Duration};
+use std::{marker::PhantomData, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
@@ -620,12 +622,20 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
         to: &[u8],
         direction: Direction,
     ) -> BoundaryIter<'db, T> {
-        BoundaryIter::new(
-            self.db
-                .iterator_cf(self.cf, rocksdb::IteratorMode::From(from, direction)),
-            to.to_vec(),
-            direction,
-        )
+        let mut read_options = ReadOptions::default();
+        match direction {
+            Direction::Forward => {
+                read_options.set_iterate_upper_bound(to);
+            }
+            Direction::Reverse => {
+                read_options.set_iterate_lower_bound(to);
+            }
+        }
+        BoundaryIter::new(self.db.iterator_cf_opt(
+            self.cf,
+            read_options,
+            rocksdb::IteratorMode::From(from, direction),
+        ))
     }
 
     pub fn iter_forward(&self) -> Iter<'db> {
@@ -721,27 +731,27 @@ impl StorageKeyBuilder {
 
     pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let end_key = if let Some(time) = time {
+        let ns = if let Some(time) = time {
             time.timestamp_nanos_opt().unwrap_or(i64::MAX)
         } else {
             0
         };
-        self.pre_key.extend_from_slice(&end_key.to_be_bytes());
-        self
-    }
-
-    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        let end_key = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
-        } else {
-            i64::MAX
-        };
-        self.pre_key.extend_from_slice(&end_key.to_be_bytes());
+        self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        let ns = if let Some(time) = time {
+            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        } else {
+            i64::MAX
+        };
+        self.pre_key.extend_from_slice(&ns.to_be_bytes());
+        self
+    }
+
+    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
@@ -826,26 +836,13 @@ where
 
 pub struct BoundaryIter<'d, T> {
     inner: DBIteratorWithThreadMode<'d, DB>,
-    boundary: Vec<u8>,
-    cond: cmp::Ordering,
     phantom: PhantomData<T>,
 }
 
 impl<'d, T> BoundaryIter<'d, T> {
-    pub fn new(
-        inner: DBIteratorWithThreadMode<'d, DB>,
-        boundary: Vec<u8>,
-        direction: Direction,
-    ) -> Self {
-        let cond = match direction {
-            Direction::Forward => cmp::Ordering::Greater,
-            Direction::Reverse => cmp::Ordering::Less,
-        };
-
+    pub fn new(inner: DBIteratorWithThreadMode<'d, DB>) -> Self {
         Self {
             inner,
-            boundary,
-            cond,
             phantom: PhantomData,
         }
     }
@@ -858,19 +855,12 @@ where
     type Item = anyhow::Result<KeyValue<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().and_then(|item| match item {
-            Ok((key, value)) => {
-                if key.as_ref().cmp(&self.boundary) == self.cond {
-                    None
-                } else {
-                    Some(
-                        bincode::deserialize::<T>(&value)
-                            .map(|value| (key, value))
-                            .map_err(Into::into),
-                    )
-                }
-            }
-            Err(e) => Some(Err(e.into())),
+        self.inner.next().map(|item| match item {
+            Ok((key, value)) => bincode::deserialize::<T>(&value)
+                .map(|value| (key, value))
+                .map_err(Into::into),
+
+            Err(e) => Err(e.into()),
         })
     }
 }
