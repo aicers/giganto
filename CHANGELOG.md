@@ -9,6 +9,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Change to use the `batched_multi_get_cf` provided by rocksdb for multi get search.
+  - Since `batched_multi_get_cf` is used, add the prefix `batched` to the
+    `multi_get_from_ts`/`multi_get_with_source` functions respectively.
 - Changed manual boundary check to boundary checking via `iterator_cf_opt`.
 - Rename type aliases `PacketSources` to `PcapSources`, `Sources` to
   `IngestSources`, and `StreamDirectChannel` to `StreamDirectChannels`;

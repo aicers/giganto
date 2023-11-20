@@ -1314,7 +1314,7 @@ where
 {
     let mut output: Vec<(i64, String, Vec<u8>)> = Vec::new();
     for (source, timestamps) in msg {
-        output.extend_from_slice(&store.multi_get_with_source(&source, &timestamps));
+        output.extend_from_slice(&store.batched_multi_get_with_source(&source, &timestamps));
     }
 
     for (timestamp, source, value) in output {

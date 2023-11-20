@@ -774,7 +774,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.process_create_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<ProcessCreate>(
@@ -791,7 +791,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.file_create_time_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
@@ -808,7 +808,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.network_connect_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<NetworkConnection>(
@@ -825,7 +825,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.process_terminate_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<ProcessTerminated>(
@@ -842,7 +842,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.image_load_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, &filter))
@@ -856,7 +856,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.file_create_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<FileCreate>(&exist_data, &filter))
@@ -870,7 +870,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.registry_value_set_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<RegistryValueSet>(
@@ -887,7 +887,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.registry_key_rename_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
@@ -904,7 +904,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.file_create_stream_hash_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<FileCreateStreamHash>(
@@ -921,7 +921,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.pipe_event_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, &filter))
@@ -935,7 +935,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.dns_query_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, &filter))
@@ -949,7 +949,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.file_delete_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<FileDelete>(&exist_data, &filter))
@@ -963,7 +963,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.process_tamper_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<ProcessTampering>(
@@ -980,7 +980,7 @@ impl SysmonQuery {
         let db = ctx.data::<Database>()?;
         let store = db.file_delete_detected_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<FileDeleteDetected>(
