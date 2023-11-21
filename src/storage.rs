@@ -31,7 +31,7 @@ use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, ReadOptions, DB,
 };
 use serde::de::DeserializeOwned;
-use std::{marker::PhantomData, path::Path, sync::Arc, time::Duration};
+use std::{marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
 use tracing::error;
 
@@ -574,44 +574,60 @@ impl<'db, T> RawEventStore<'db, T> {
         Ok(())
     }
 
-    pub fn multi_get_from_ts(
+    pub fn batched_multi_get_from_ts(
         &self,
         source: &str,
         timestamps: &[DateTime<Utc>],
     ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
-        let key_builder = StorageKey::builder().start_key(source);
-        timestamps
+        let mut timestamps = timestamps.to_vec();
+        timestamps.sort_unstable();
+        let keys = timestamps.iter().map(|timestamp| {
+            StorageKey::builder()
+                .start_key(source)
+                .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                .build()
+                .key()
+        });
+
+        let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = timestamps
             .iter()
-            .filter_map(|timestamp| {
-                let key = key_builder
-                    .clone()
-                    .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
-                    .build();
-                self.db
-                    .get_cf(&self.cf, key.key())
+            .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
+            .filter_map(|(timestamp, result_value)| {
+                result_value
                     .ok()
-                    .and_then(|val| Some(*timestamp).zip(val))
+                    .and_then(|val| val.map(|inner_val| (*timestamp, inner_val.deref().to_vec())))
             })
-            .collect::<Vec<_>>()
+            .collect();
+        result_vector
     }
 
-    pub fn multi_get_with_source(
+    pub fn batched_multi_get_with_source(
         &self,
         source: &str,
         timestamps: &[i64],
     ) -> Vec<(i64, String, Vec<u8>)> {
-        let key_builder = StorageKey::builder().start_key(source);
-        let values_with_source: Vec<(i64, String, Vec<u8>)> = timestamps
+        let mut timestamps = timestamps.to_vec();
+        timestamps.sort_unstable();
+        let keys = timestamps.iter().map(|timestamp| {
+            StorageKey::builder()
+                .start_key(source)
+                .end_key(*timestamp)
+                .build()
+                .key()
+        });
+
+        let result_vector: Vec<(i64, String, Vec<u8>)> = timestamps
             .iter()
-            .filter_map(|timestamp| {
-                let key = key_builder.clone().end_key(*timestamp).build();
-                self.db
-                    .get_cf(&self.cf, key.key())
-                    .ok()
-                    .and_then(|value| value.map(|val| (*timestamp, source.to_string(), val)))
+            .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
+            .filter_map(|(timestamp, result_value)| {
+                result_value.ok().and_then(|val| {
+                    val.map(|inner_val| {
+                        (*timestamp, source.to_string(), inner_val.deref().to_vec())
+                    })
+                })
             })
             .collect();
-        values_with_source
+        result_vector
     }
 }
 

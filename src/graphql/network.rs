@@ -1341,7 +1341,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.conn_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Conn>(&exist_data, &filter))
@@ -1355,7 +1355,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.dns_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Dns>(&exist_data, &filter))
@@ -1369,7 +1369,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.http_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Http>(&exist_data, &filter))
@@ -1383,7 +1383,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.rdp_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Rdp>(&exist_data, &filter))
@@ -1397,7 +1397,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.smtp_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Smtp>(&exist_data, &filter))
@@ -1411,7 +1411,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.ntlm_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Ntlm>(&exist_data, &filter))
@@ -1425,7 +1425,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.kerberos_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Kerberos>(&exist_data, &filter))
@@ -1439,7 +1439,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.ssh_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Ssh>(&exist_data, &filter))
@@ -1453,7 +1453,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.dce_rpc_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<DceRpc>(&exist_data, &filter))
@@ -1467,7 +1467,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.ftp_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Ftp>(&exist_data, &filter))
@@ -1481,7 +1481,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.mqtt_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Mqtt>(&exist_data, &filter))
@@ -1495,7 +1495,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.ldap_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Ldap>(&exist_data, &filter))
@@ -1509,7 +1509,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.tls_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Tls>(&exist_data, &filter))
@@ -1523,7 +1523,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.smb_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Smb>(&exist_data, &filter))
@@ -1537,7 +1537,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.nfs_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Nfs>(&exist_data, &filter))
@@ -1551,7 +1551,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.netflow5_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Netflow5>(&exist_data, &filter))
@@ -1565,7 +1565,7 @@ impl NetworkQuery {
         let db = ctx.data::<Database>()?;
         let store = db.netflow9_store()?;
         let exist_data = store
-            .multi_get_from_ts(&filter.source, &filter.timestamps)
+            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
             .into_iter()
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Netflow9>(&exist_data, &filter))
