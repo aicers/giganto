@@ -1,13 +1,14 @@
 #![allow(clippy::unused_async)]
 use super::{
-    collect_exist_timestamp, get_timestamp_from_key, load_connection,
+    base64_engine, collect_exist_timestamp, get_peekable_iter, get_timestamp_from_key,
+    load_connection, min_max_time,
     network::{NetworkFilter, SearchFilter},
-    FromKeyValue,
+    Engine, FromKeyValue,
 };
-use crate::storage::Database;
+use crate::storage::{Database, FilteredIter};
 use async_graphql::{
-    connection::{query, Connection},
-    Context, Object, Result, SimpleObject,
+    connection::{query, Connection, Edge},
+    Context, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::sysmon::{
@@ -15,7 +16,7 @@ use giganto_client::ingest::sysmon::{
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, iter::Peekable};
 
 #[derive(Default)]
 pub(super) struct SysmonQuery;
@@ -239,6 +240,25 @@ struct FileDeleteDetectedEvent {
     target_filename: String,
     hashes: Vec<String>,
     is_executable: bool,
+}
+
+#[allow(clippy::enum_variant_names)]
+#[derive(Union)]
+enum SysmonEvents {
+    ProcessCreateEvent(ProcessCreateEvent),
+    FileCreationTimeChangedEvent(FileCreationTimeChangedEvent),
+    NetworkConnectionEvent(NetworkConnectionEvent),
+    ProcessTerminatedEvent(ProcessTerminatedEvent),
+    ImageLoadedEvent(ImageLoadedEvent),
+    FileCreateEvent(FileCreateEvent),
+    RegistryValueSetEvent(RegistryValueSetEvent),
+    RegistryKeyValueRenameEvent(RegistryKeyValueRenameEvent),
+    FileCreateStreamHashEvent(FileCreateStreamHashEvent),
+    PipeEventEvent(PipeEventEvent),
+    DnsEventEvent(DnsEventEvent),
+    FileDeleteEvent(FileDeleteEvent),
+    ProcessTamperingEvent(ProcessTamperingEvent),
+    FileDeleteDetectedEvent(FileDeleteDetectedEvent),
 }
 
 macro_rules! from_key_value {
@@ -988,4 +1008,525 @@ impl SysmonQuery {
             &filter,
         ))
     }
+
+    #[allow(clippy::too_many_lines)]
+    async fn sysmon_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, SysmonEvents>> {
+        let db = ctx.data::<Database>()?;
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                let (process_create_iter, size) = get_peekable_iter(
+                    &db.process_create_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (file_create_time_iter, _) = get_peekable_iter(
+                    &db.file_create_time_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (network_connect_iter, _) = get_peekable_iter(
+                    &db.network_connect_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (process_terminate_iter, _) = get_peekable_iter(
+                    &db.process_terminate_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (image_load_iter, _) = get_peekable_iter(
+                    &db.image_load_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (file_create_iter, _) = get_peekable_iter(
+                    &db.file_create_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (registry_value_set_iter, _) = get_peekable_iter(
+                    &db.registry_value_set_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (registry_key_rename_iter, _) = get_peekable_iter(
+                    &db.registry_key_rename_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (file_create_stream_hash_iter, _) = get_peekable_iter(
+                    &db.file_create_stream_hash_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (pipe_event_iter, _) = get_peekable_iter(
+                    &db.pipe_event_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (dns_query_iter, _) = get_peekable_iter(
+                    &db.dns_query_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (file_delete_iter, _) = get_peekable_iter(
+                    &db.file_delete_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (process_tamper_iter, _) = get_peekable_iter(
+                    &db.process_tamper_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let (file_delete_detected_iter, _) = get_peekable_iter(
+                    &db.file_delete_detected_store()?,
+                    &filter,
+                    &after,
+                    &before,
+                    first,
+                    last,
+                )?;
+
+                let mut is_forward: bool = true;
+                if before.is_some() || last.is_some() {
+                    is_forward = false;
+                }
+
+                sysmon_connection(
+                    process_create_iter,
+                    file_create_time_iter,
+                    network_connect_iter,
+                    process_terminate_iter,
+                    image_load_iter,
+                    file_create_iter,
+                    registry_value_set_iter,
+                    registry_key_rename_iter,
+                    file_create_stream_hash_iter,
+                    pipe_event_iter,
+                    dns_query_iter,
+                    file_delete_iter,
+                    process_tamper_iter,
+                    file_delete_detected_iter,
+                    size,
+                    is_forward,
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn sysmon_connection(
+    mut process_create_iter: Peekable<FilteredIter<ProcessCreate>>,
+    mut file_create_time_iter: Peekable<FilteredIter<FileCreationTimeChanged>>,
+    mut network_connect_iter: Peekable<FilteredIter<NetworkConnection>>,
+    mut process_terminate_iter: Peekable<FilteredIter<ProcessTerminated>>,
+    mut image_load_iter: Peekable<FilteredIter<ImageLoaded>>,
+    mut file_create_iter: Peekable<FilteredIter<FileCreate>>,
+    mut registry_value_set_iter: Peekable<FilteredIter<RegistryValueSet>>,
+    mut registry_key_rename_iter: Peekable<FilteredIter<RegistryKeyValueRename>>,
+    mut file_create_stream_hash_iter: Peekable<FilteredIter<FileCreateStreamHash>>,
+    mut pipe_event_iter: Peekable<FilteredIter<PipeEvent>>,
+    mut dns_query_iter: Peekable<FilteredIter<DnsEvent>>,
+    mut file_delete_iter: Peekable<FilteredIter<FileDelete>>,
+    mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering>>,
+    mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected>>,
+    size: usize,
+    is_forward: bool,
+) -> Result<Connection<String, SysmonEvents>> {
+    let timestamp = min_max_time(is_forward);
+    let mut result_vec: Vec<Edge<String, SysmonEvents, _>> = Vec::new();
+    let mut has_previous_page: bool = false;
+    let mut has_next_page: bool = false;
+    let mut has_next_value: bool = false;
+
+    let mut process_create_data = process_create_iter.next();
+    let mut file_create_time_data = file_create_time_iter.next();
+    let mut network_connect_data = network_connect_iter.next();
+    let mut process_terminate_data = process_terminate_iter.next();
+    let mut image_load_data = image_load_iter.next();
+    let mut file_create_data = file_create_iter.next();
+    let mut registry_value_set_data = registry_value_set_iter.next();
+    let mut registry_key_rename_data = registry_key_rename_iter.next();
+    let mut file_create_stream_hash_data = file_create_stream_hash_iter.next();
+    let mut pipe_event_data = pipe_event_iter.next();
+    let mut dns_query_data = dns_query_iter.next();
+    let mut file_delete_data = file_delete_iter.next();
+    let mut process_tamper_data = process_tamper_iter.next();
+    let mut file_delete_detected_data = file_delete_detected_iter.next();
+
+    loop {
+        let process_create_ts = if let Some((ref key, _)) = process_create_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let file_create_time_ts = if let Some((ref key, _)) = file_create_time_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let network_connect_ts = if let Some((ref key, _)) = network_connect_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let process_terminate_ts = if let Some((ref key, _)) = process_terminate_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let image_load_ts = if let Some((ref key, _)) = image_load_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let file_create_ts = if let Some((ref key, _)) = file_create_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let registry_value_set_ts = if let Some((ref key, _)) = registry_value_set_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let registry_key_rename_ts = if let Some((ref key, _)) = registry_key_rename_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let file_create_stream_hash_ts = if let Some((ref key, _)) = file_create_stream_hash_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let pipe_event_ts = if let Some((ref key, _)) = pipe_event_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let dns_query_ts = if let Some((ref key, _)) = dns_query_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let file_delete_ts = if let Some((ref key, _)) = file_delete_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let process_tamper_ts = if let Some((ref key, _)) = process_tamper_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let file_delete_detected_ts = if let Some((ref key, _)) = file_delete_detected_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let selected =
+            if is_forward {
+                timestamp.min(file_create_time_ts.min(process_create_ts.min(
+                    network_connect_ts.min(process_terminate_ts.min(image_load_ts.min(
+                        file_create_ts.min(registry_value_set_ts.min(registry_key_rename_ts.min(
+                            file_create_stream_hash_ts.min(pipe_event_ts.min(dns_query_ts.min(
+                                file_delete_ts.min(process_tamper_ts.min(file_delete_detected_ts)),
+                            ))),
+                        ))),
+                    ))),
+                )))
+            } else {
+                timestamp.max(file_create_time_ts.max(process_create_ts.max(
+                    network_connect_ts.max(process_terminate_ts.max(image_load_ts.max(
+                        file_create_ts.max(registry_value_set_ts.max(registry_key_rename_ts.max(
+                            file_create_stream_hash_ts.max(pipe_event_ts.max(dns_query_ts.max(
+                                file_delete_ts.max(process_tamper_ts.max(file_delete_detected_ts)),
+                            ))),
+                        ))),
+                    ))),
+                )))
+            };
+
+        match selected {
+            _ if selected == process_create_ts => {
+                if let Some((key, value)) = process_create_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::ProcessCreateEvent(ProcessCreateEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    process_create_data = process_create_iter.next();
+                };
+            }
+            _ if selected == file_create_time_ts => {
+                if let Some((key, value)) = file_create_time_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::FileCreationTimeChangedEvent(
+                            FileCreationTimeChangedEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    file_create_time_data = file_create_time_iter.next();
+                };
+            }
+            _ if selected == network_connect_ts => {
+                if let Some((key, value)) = network_connect_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::NetworkConnectionEvent(
+                            NetworkConnectionEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    network_connect_data = network_connect_iter.next();
+                };
+            }
+            _ if selected == process_terminate_ts => {
+                if let Some((key, value)) = process_terminate_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::ProcessTerminatedEvent(
+                            ProcessTerminatedEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    process_terminate_data = process_terminate_iter.next();
+                };
+            }
+            _ if selected == image_load_ts => {
+                if let Some((key, value)) = image_load_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::ImageLoadedEvent(ImageLoadedEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    image_load_data = image_load_iter.next();
+                };
+            }
+            _ if selected == file_create_ts => {
+                if let Some((key, value)) = file_create_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::FileCreateEvent(FileCreateEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    file_create_data = file_create_iter.next();
+                };
+            }
+            _ if selected == registry_value_set_ts => {
+                if let Some((key, value)) = registry_value_set_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::RegistryValueSetEvent(RegistryValueSetEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    registry_value_set_data = registry_value_set_iter.next();
+                };
+            }
+            _ if selected == registry_key_rename_ts => {
+                if let Some((key, value)) = registry_key_rename_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::RegistryKeyValueRenameEvent(
+                            RegistryKeyValueRenameEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    registry_key_rename_data = registry_key_rename_iter.next();
+                };
+            }
+            _ if selected == file_create_stream_hash_ts => {
+                if let Some((key, value)) = file_create_stream_hash_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::FileCreateStreamHashEvent(
+                            FileCreateStreamHashEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    file_create_stream_hash_data = file_create_stream_hash_iter.next();
+                };
+            }
+            _ if selected == pipe_event_ts => {
+                if let Some((key, value)) = pipe_event_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::PipeEventEvent(PipeEventEvent::from_key_value(&key, value)?),
+                    ));
+                    pipe_event_data = pipe_event_iter.next();
+                };
+            }
+            _ if selected == dns_query_ts => {
+                if let Some((key, value)) = dns_query_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::DnsEventEvent(DnsEventEvent::from_key_value(&key, value)?),
+                    ));
+                    dns_query_data = dns_query_iter.next();
+                };
+            }
+            _ if selected == file_delete_ts => {
+                if let Some((key, value)) = file_delete_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::FileDeleteEvent(FileDeleteEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    file_delete_data = file_delete_iter.next();
+                };
+            }
+            _ if selected == process_tamper_ts => {
+                if let Some((key, value)) = process_tamper_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::ProcessTamperingEvent(ProcessTamperingEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    process_tamper_data = process_tamper_iter.next();
+                };
+            }
+            _ if selected == file_delete_detected_ts => {
+                if let Some((key, value)) = file_delete_detected_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::FileDeleteDetectedEvent(
+                            FileDeleteDetectedEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    file_delete_detected_data = file_delete_detected_iter.next();
+                };
+            }
+            _ => {}
+        }
+        if (result_vec.len() >= size)
+            || (process_create_data.is_none()
+                && file_create_time_data.is_none()
+                && network_connect_data.is_none()
+                && process_terminate_data.is_none()
+                && image_load_data.is_none()
+                && file_create_data.is_none()
+                && registry_value_set_data.is_none()
+                && registry_key_rename_data.is_none()
+                && file_create_stream_hash_data.is_none()
+                && pipe_event_data.is_none()
+                && dns_query_data.is_none()
+                && file_delete_data.is_none()
+                && process_tamper_data.is_none()
+                && file_delete_detected_data.is_none())
+        {
+            if process_create_data.is_some()
+                || file_create_time_data.is_some()
+                || network_connect_data.is_some()
+                || process_terminate_data.is_some()
+                || image_load_data.is_some()
+                || file_create_data.is_some()
+                || registry_value_set_data.is_some()
+                || registry_key_rename_data.is_some()
+                || file_create_stream_hash_data.is_some()
+                || pipe_event_data.is_some()
+                || dns_query_data.is_some()
+                || file_delete_data.is_some()
+                || process_tamper_data.is_some()
+                || file_delete_detected_data.is_some()
+            {
+                has_next_value = true;
+            }
+            if is_forward {
+                has_next_page = has_next_value;
+            } else {
+                result_vec.reverse();
+                has_previous_page = has_next_value;
+            }
+            break;
+        }
+    }
+    let mut connection: Connection<String, SysmonEvents> =
+        Connection::new(has_previous_page, has_next_page);
+    connection.edges.extend(result_vec);
+
+    Ok(connection)
 }
