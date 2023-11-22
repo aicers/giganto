@@ -12,6 +12,7 @@ use crate::{IngestSources, PcapSources, StreamDirectChannels};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
+use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
@@ -823,6 +824,22 @@ async fn handle_data<T>(
                         }
                         key_builder
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
+                            .end_key(timestamp)
+                    }
+                    RawEventKind::Netflow5 => {
+                        let mut netflow5 = bincode::deserialize::<Netflow5>(&raw_event)?;
+                        netflow5.source = source.clone();
+                        raw_event = bincode::serialize(&netflow5)?;
+                        StorageKey::builder()
+                            .start_key("netflow5")
+                            .end_key(timestamp)
+                    }
+                    RawEventKind::Netflow9 => {
+                        let mut netflow9 = bincode::deserialize::<Netflow9>(&raw_event)?;
+                        netflow9.source = source.clone();
+                        raw_event = bincode::serialize(&netflow9)?;
+                        StorageKey::builder()
+                            .start_key("netflow9")
                             .end_key(timestamp)
                     }
                     RawEventKind::SecuLog => {

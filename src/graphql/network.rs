@@ -4,10 +4,7 @@ use super::{
     get_timestamp_from_key, load_connection, Engine, FromKeyValue,
 };
 use crate::{
-    graphql::{
-        export::{Netflow5RawEvent, NetflowV9RawEvent},
-        RawEventFilter, TimeRange,
-    },
+    graphql::{RawEventFilter, TimeRange},
     storage::{Database, FilteredIter, KeyExtractor},
 };
 use async_graphql::{
@@ -15,11 +12,8 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::{
-    netflow::{Netflow5, Netflow9},
-    network::{
-        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
-    },
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use serde::Serialize;
 use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
@@ -457,8 +451,6 @@ enum NetworkRawEvents {
     TlsRawEvent(TlsRawEvent),
     SmbRawEvent(SmbRawEvent),
     NfsRawEvent(NfsRawEvent),
-    NetflowV5RawEvent(Netflow5RawEvent),
-    NetflowV9RawEvent(NetflowV9RawEvent),
 }
 
 macro_rules! from_key_value {
@@ -1044,54 +1036,6 @@ impl NetworkQuery {
         .await
     }
 
-    async fn netflow5_raw_events<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: NetworkFilter,
-        after: Option<String>,
-        before: Option<String>,
-        first: Option<i32>,
-        last: Option<i32>,
-    ) -> Result<Connection<String, Netflow5RawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow5_store()?;
-
-        query(
-            after,
-            before,
-            first,
-            last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
-        )
-        .await
-    }
-
-    async fn netflow9_raw_events<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: NetworkFilter,
-        after: Option<String>,
-        before: Option<String>,
-        first: Option<i32>,
-        last: Option<i32>,
-    ) -> Result<Connection<String, NetflowV9RawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow9_store()?;
-
-        query(
-            after,
-            before,
-            first,
-            last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
-        )
-        .await
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn network_raw_events<'ctx>(
         &self,
@@ -1269,40 +1213,6 @@ impl NetworkQuery {
                     }
                 }
 
-                let (netflow5_iter, cursor, _) = get_filtered_iter(
-                    &db.netflow5_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-                let mut netflow5_iter = netflow5_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = netflow5_iter.peek() {
-                        if key.as_ref() == cursor {
-                            netflow5_iter.next();
-                        }
-                    }
-                }
-
-                let (netflow9_iter, cursor, _) = get_filtered_iter(
-                    &db.netflow9_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-                let mut netflow9_iter = netflow9_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = netflow9_iter.peek() {
-                        if key.as_ref() == cursor {
-                            netflow9_iter.next();
-                        }
-                    }
-                }
-
                 let mut is_forward: bool = true;
                 if before.is_some() || last.is_some() {
                     is_forward = false;
@@ -1323,8 +1233,6 @@ impl NetworkQuery {
                     tls_iter,
                     smb_iter,
                     nfs_iter,
-                    netflow5_iter,
-                    netflow9_iter,
                     size,
                     is_forward,
                 )
@@ -1542,34 +1450,6 @@ impl NetworkQuery {
             .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
         Ok(collect_exist_timestamp::<Nfs>(&exist_data, &filter))
     }
-
-    async fn search_netflow5_raw_events<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow5_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Netflow5>(&exist_data, &filter))
-    }
-
-    async fn search_netflow9_raw_events<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow9_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Netflow9>(&exist_data, &filter))
-    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1588,8 +1468,6 @@ fn network_connection(
     mut tls_iter: Peekable<FilteredIter<Tls>>,
     mut smb_iter: Peekable<FilteredIter<Smb>>,
     mut nfs_iter: Peekable<FilteredIter<Nfs>>,
-    mut netflow5_iter: Peekable<FilteredIter<Netflow5>>,
-    mut netflow9_iter: Peekable<FilteredIter<Netflow9>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -1613,8 +1491,6 @@ fn network_connection(
     let mut tls_data = tls_iter.next();
     let mut smb_data = smb_iter.next();
     let mut nfs_data = nfs_iter.next();
-    let mut netflow5_data = netflow5_iter.next();
-    let mut netflow9_data = netflow9_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -1701,31 +1577,20 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
-        let netflow5_ts = if let Some((ref key, _)) = netflow5_data {
-            get_timestamp_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let netflow9_ts = if let Some((ref key, _)) = netflow9_data {
-            get_timestamp_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let selected = if is_forward {
-            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
-                kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(mqtt_ts.min(
-                    ldap_ts.min(tls_ts.min(smb_ts.min(nfs_ts.min(netflow5_ts.min(netflow9_ts))))),
-                ))))),
-            ))))))
-        } else {
-            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
-                kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(mqtt_ts.max(
-                    ldap_ts.max(tls_ts.max(smb_ts.max(nfs_ts.max(netflow5_ts.max(netflow9_ts))))),
-                ))))),
-            ))))))
-        };
+        let selected =
+            if is_forward {
+                timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
+                    kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(
+                        ftp_ts.min(mqtt_ts.min(ldap_ts.min(tls_ts.min(smb_ts.min(nfs_ts))))),
+                    ))),
+                ))))))
+            } else {
+                timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
+                    kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(
+                        ftp_ts.max(mqtt_ts.max(ldap_ts.max(tls_ts.max(smb_ts.max(nfs_ts))))),
+                    ))),
+                ))))))
+            };
 
         match selected {
             _ if selected == conn_ts => {
@@ -1858,28 +1723,6 @@ fn network_connection(
                     nfs_data = nfs_iter.next();
                 };
             }
-            _ if selected == netflow5_ts => {
-                if let Some((key, value)) = netflow5_data {
-                    result_vec.push(Edge::new(
-                        base64_engine.encode(&key),
-                        NetworkRawEvents::NetflowV5RawEvent(Netflow5RawEvent::from_key_value(
-                            &key, value,
-                        )?),
-                    ));
-                    netflow5_data = netflow5_iter.next();
-                };
-            }
-            _ if selected == netflow9_ts => {
-                if let Some((key, value)) = netflow9_data {
-                    result_vec.push(Edge::new(
-                        base64_engine.encode(&key),
-                        NetworkRawEvents::NetflowV9RawEvent(NetflowV9RawEvent::from_key_value(
-                            &key, value,
-                        )?),
-                    ));
-                    netflow9_data = netflow9_iter.next();
-                };
-            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -1896,9 +1739,7 @@ fn network_connection(
                 && ldap_data.is_none()
                 && tls_data.is_none()
                 && smb_data.is_none()
-                && nfs_data.is_none()
-                && netflow5_data.is_none()
-                && netflow9_data.is_none())
+                && nfs_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -1914,8 +1755,6 @@ fn network_connection(
                 || tls_data.is_some()
                 || smb_data.is_some()
                 || nfs_data.is_some()
-                || netflow5_data.is_some()
-                || netflow9_data.is_some()
             {
                 has_next_value = true;
             }

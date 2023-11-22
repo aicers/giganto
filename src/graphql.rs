@@ -1,5 +1,6 @@
 mod export;
 mod log;
+mod netflow;
 pub mod network;
 mod packet;
 mod security;
@@ -58,6 +59,7 @@ pub struct Query(
     statistics::StatisticsQuery,
     sysmon::SysmonQuery,
     security::SecurityLogQuery,
+    netflow::NetflowQuery,
 );
 
 #[derive(Default, MergedObject)]
