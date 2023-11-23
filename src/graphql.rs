@@ -369,6 +369,30 @@ pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error
     Err(anyhow!("invalid database key length"))
 }
 
+fn get_peekable_iter<'c, T>(
+    store: &RawEventStore<'c, T>,
+    filter: &'c NetworkFilter,
+    after: &Option<String>,
+    before: &Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<(std::iter::Peekable<FilteredIter<'c, T>>, usize)>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let (filterd_iter, cursor, size) =
+        get_filtered_iter(store, filter, after, before, first, last)?;
+    let mut filterd_iter = filterd_iter.peekable();
+    if let Some(cursor) = cursor {
+        if let Some((key, _)) = filterd_iter.peek() {
+            if key.as_ref() == cursor {
+                filterd_iter.next();
+            }
+        }
+    }
+    Ok((filterd_iter, size))
+}
+
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
@@ -572,6 +596,14 @@ fn check_source(filter_src: &Option<String>, target_src: &Option<String>) -> boo
             .as_ref()
             .map_or(false, |source| source == filter_src)
     })
+}
+
+fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+    if is_forward {
+        DateTime::<Utc>::MAX_UTC
+    } else {
+        DateTime::<Utc>::MIN_UTC
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, check_address, check_port, collect_exist_timestamp, get_filtered_iter,
-    get_timestamp_from_key, load_connection, Engine, FromKeyValue,
+    base64_engine, check_address, check_port, collect_exist_timestamp, get_peekable_iter,
+    get_timestamp_from_key, load_connection, min_max_time, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
@@ -1036,7 +1036,6 @@ impl NetworkQuery {
         .await
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn network_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -1053,62 +1052,22 @@ impl NetworkQuery {
             first,
             last,
             |after, before, first, last| async move {
-                let (conn_iter, cursor, size) =
-                    get_filtered_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
-                let mut conn_iter = conn_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = conn_iter.peek() {
-                        if key.as_ref() == cursor {
-                            conn_iter.next();
-                        }
-                    }
-                }
+                let (conn_iter, size) =
+                    get_peekable_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
 
-                let (dns_iter, cursor, _) =
-                    get_filtered_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
-                let mut dns_iter = dns_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = dns_iter.peek() {
-                        if key.as_ref() == cursor {
-                            dns_iter.next();
-                        }
-                    }
-                }
+                let (dns_iter, _) =
+                    get_peekable_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
 
-                let (http_iter, cursor, _) =
-                    get_filtered_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
-                let mut http_iter = http_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = http_iter.peek() {
-                        if key.as_ref() == cursor {
-                            http_iter.next();
-                        }
-                    }
-                }
+                let (http_iter, _) =
+                    get_peekable_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
 
-                let (rdp_iter, cursor, _) =
-                    get_filtered_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
-                let mut rdp_iter = rdp_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = rdp_iter.peek() {
-                        if key.as_ref() == cursor {
-                            rdp_iter.next();
-                        }
-                    }
-                }
+                let (rdp_iter, _) =
+                    get_peekable_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
 
-                let (ntlm_iter, cursor, _) =
-                    get_filtered_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
-                let mut ntlm_iter = ntlm_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = ntlm_iter.peek() {
-                        if key.as_ref() == cursor {
-                            ntlm_iter.next();
-                        }
-                    }
-                }
+                let (ntlm_iter, _) =
+                    get_peekable_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
 
-                let (kerberos_iter, cursor, _) = get_filtered_iter(
+                let (kerberos_iter, _) = get_peekable_iter(
                     &db.kerberos_store()?,
                     &filter,
                     &after,
@@ -1116,102 +1075,30 @@ impl NetworkQuery {
                     first,
                     last,
                 )?;
-                let mut kerberos_iter = kerberos_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = kerberos_iter.peek() {
-                        if key.as_ref() == cursor {
-                            kerberos_iter.next();
-                        }
-                    }
-                }
 
-                let (ssh_iter, cursor, _) =
-                    get_filtered_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
-                let mut ssh_iter = ssh_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = ssh_iter.peek() {
-                        if key.as_ref() == cursor {
-                            ssh_iter.next();
-                        }
-                    }
-                }
+                let (ssh_iter, _) =
+                    get_peekable_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
 
-                let (dce_rpc_iter, cursor, _) =
-                    get_filtered_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
-                let mut dce_rpc_iter = dce_rpc_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = dce_rpc_iter.peek() {
-                        if key.as_ref() == cursor {
-                            dce_rpc_iter.next();
-                        }
-                    }
-                }
+                let (dce_rpc_iter, _) =
+                    get_peekable_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
 
-                let (ftp_iter, cursor, _) =
-                    get_filtered_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
-                let mut ftp_iter = ftp_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = ftp_iter.peek() {
-                        if key.as_ref() == cursor {
-                            ftp_iter.next();
-                        }
-                    }
-                }
+                let (ftp_iter, _) =
+                    get_peekable_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
 
-                let (mqtt_iter, cursor, _) =
-                    get_filtered_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
-                let mut mqtt_iter = mqtt_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = mqtt_iter.peek() {
-                        if key.as_ref() == cursor {
-                            mqtt_iter.next();
-                        }
-                    }
-                }
+                let (mqtt_iter, _) =
+                    get_peekable_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
 
-                let (ldap_iter, cursor, _) =
-                    get_filtered_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
-                let mut ldap_iter = ldap_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = ldap_iter.peek() {
-                        if key.as_ref() == cursor {
-                            ldap_iter.next();
-                        }
-                    }
-                }
+                let (ldap_iter, _) =
+                    get_peekable_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
 
-                let (tls_iter, cursor, _) =
-                    get_filtered_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
-                let mut tls_iter = tls_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = tls_iter.peek() {
-                        if key.as_ref() == cursor {
-                            tls_iter.next();
-                        }
-                    }
-                }
+                let (tls_iter, _) =
+                    get_peekable_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
 
-                let (smb_iter, cursor, _) =
-                    get_filtered_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
-                let mut smb_iter = smb_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = smb_iter.peek() {
-                        if key.as_ref() == cursor {
-                            smb_iter.next();
-                        }
-                    }
-                }
+                let (smb_iter, _) =
+                    get_peekable_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
 
-                let (nfs_iter, cursor, _) =
-                    get_filtered_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
-                let mut nfs_iter = nfs_iter.peekable();
-                if let Some(cursor) = cursor {
-                    if let Some((key, _)) = nfs_iter.peek() {
-                        if key.as_ref() == cursor {
-                            nfs_iter.next();
-                        }
-                    }
-                }
+                let (nfs_iter, _) =
+                    get_peekable_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
 
                 let mut is_forward: bool = true;
                 if before.is_some() || last.is_some() {
@@ -1772,14 +1659,6 @@ fn network_connection(
     connection.edges.extend(result_vec);
 
     Ok(connection)
-}
-
-fn min_max_time(is_forward: bool) -> DateTime<Utc> {
-    if is_forward {
-        DateTime::<Utc>::MAX_UTC
-    } else {
-        DateTime::<Utc>::MIN_UTC
-    }
 }
 
 #[cfg(test)]
