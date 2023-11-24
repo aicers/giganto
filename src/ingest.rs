@@ -1057,11 +1057,9 @@ async fn check_sources_conn(
                         if source_store.insert(&source_key, timestamp_val).is_err() {
                             error!("Failed to append source store");
                         }
-                        if !rep {
-                            ingest_sources.write().await.insert(source_key, timestamp_val);
-                            if let Some(ref notify) = notify_source {
-                                notify.notify_one();
-                            }
+                        ingest_sources.write().await.insert(source_key, timestamp_val);
+                        if let Some(ref notify) = notify_source {
+                            notify.notify_one();
                         }
                     }
                     ConnState::Disconnected => {
@@ -1071,9 +1069,6 @@ async fn check_sources_conn(
                         if !rep {
                             ingest_sources.write().await.remove(&source_key);
                             pcap_sources.write().await.remove(&source_key);
-                            if let Some(ref notify) = notify_source {
-                                notify.notify_one();
-                            }
                         }
                     }
                 }

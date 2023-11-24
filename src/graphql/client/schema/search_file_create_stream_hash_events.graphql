@@ -1,0 +1,3 @@
+query SearchFileCreateStreamHashEvents($filter: SearchFilter!){
+    searchFileCreateStreamHashEvents(filter: $filter)
+}

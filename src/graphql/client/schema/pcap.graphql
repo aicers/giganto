@@ -1,0 +1,6 @@
+query Pcap($filter: PacketFilter!) {
+    pcap(filter: $filter) {
+        requestTime
+        parsedPcap
+    }
+}

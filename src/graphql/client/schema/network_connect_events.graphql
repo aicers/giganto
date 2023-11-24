@@ -1,0 +1,34 @@
+query NetworkConnectEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    networkConnectEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                processGuid
+                processId
+                image
+                user
+                protocol
+                initiated
+                sourceIsIpv6
+                sourceIp
+                sourceHostname
+                sourcePort
+                sourcePortName
+                destinationIsIpv6
+                destinationIp
+                destinationHostname
+                destinationPort
+                destinationPortName
+            }
+        }
+    }
+}

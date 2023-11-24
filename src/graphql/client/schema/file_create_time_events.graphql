@@ -1,0 +1,25 @@
+query FileCreateTimeEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    fileCreateTimeEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                processGuid
+                processId
+                image
+                targetFilename
+                creationUtcTime
+                previousCreationUtcTime
+                user
+            }
+        }
+    }
+}

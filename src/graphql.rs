@@ -1,3 +1,4 @@
+mod client;
 mod export;
 mod log;
 mod netflow;
@@ -10,24 +11,26 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-use self::network::{IpRange, NetworkFilter, PortRange, SearchFilter};
 use crate::{
     ingest::implement::EventFilter,
+    peer::Peers,
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
-    AckTransmissionCount, PcapSources,
+    AckTransmissionCount, IngestSources, PcapSources,
 };
 use anyhow::anyhow;
 use async_graphql::{
-    connection::{Connection, Edge},
-    EmptySubscription, InputObject, MergedObject, OutputType, Result,
+    connection::{query, Connection, Edge},
+    Context, EmptySubscription, Error, InputObject, MergedObject, OutputType, Result,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
+use graphql_client::Response as GraphQlResponse;
 use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
+use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
 #[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
@@ -37,6 +40,7 @@ use std::{
     collections::BTreeSet,
     io::{Read, Seek, SeekFrom, Write},
     net::IpAddr,
+    net::SocketAddr,
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
@@ -70,6 +74,46 @@ pub struct TimeRange {
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 }
+#[derive(InputObject, Serialize)]
+pub struct IpRange {
+    pub start: Option<String>,
+    pub end: Option<String>,
+}
+
+#[derive(InputObject, Serialize)]
+pub struct PortRange {
+    pub start: Option<u16>,
+    pub end: Option<u16>,
+}
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject, Serialize)]
+pub struct NetworkFilter {
+    pub time: Option<TimeRange>,
+    #[serde(skip)]
+    pub source: String,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
+    log_level: Option<String>,
+    log_contents: Option<String>,
+}
+
+#[derive(InputObject, Serialize)]
+pub struct SearchFilter {
+    pub time: Option<TimeRange>,
+    #[serde(skip)]
+    pub source: String,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
+    log_level: Option<String>,
+    log_contents: Option<String>,
+    pub timestamps: Vec<DateTime<Utc>>,
+    keyword: Option<String>,
+}
 
 pub trait RawEventFilter {
     #[allow(clippy::too_many_arguments)]
@@ -93,9 +137,13 @@ pub trait FromKeyValue<T>: Sized {
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
+#[allow(clippy::too_many_arguments)]
 pub fn schema(
     database: Database,
     pcap_sources: PcapSources,
+    ingest_sources: IngestSources,
+    peers: Peers,
+    request_client_pool: reqwest::Client,
     export_path: PathBuf,
     config_reload: Arc<Notify>,
     config_file_path: String,
@@ -104,6 +152,9 @@ pub fn schema(
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
         .data(pcap_sources)
+        .data(ingest_sources)
+        .data(peers)
+        .data(request_client_pool)
         .data(export_path)
         .data(config_reload)
         .data(config_file_path)
@@ -608,41 +659,421 @@ fn min_max_time(is_forward: bool) -> DateTime<Utc> {
     }
 }
 
-#[cfg(test)]
-struct TestSchema {
-    _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
-    db: Database,
-    schema: Schema,
+async fn handle_paged_events<N, T>(
+    store: RawEventStore<'_, T>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned + EventFilter,
+{
+    query(
+        after,
+        before,
+        first,
+        last,
+        |after, before, first, last| async move {
+            load_connection::<N, T>(&store, &filter, after, before, first, last)
+        },
+    )
+    .await
 }
 
-#[cfg(test)]
-impl TestSchema {
-    fn new() -> Self {
-        use crate::new_pcap_sources;
-        use crate::storage::DbOptions;
-        use tokio::sync::RwLock;
+// This macro helps to reduce boilerplate for handling
+// `search_[something]_events` APIs in giganto cluster. If the current giganto
+// is in charge of the given `filter.source`, it will execute the handler
+// locally. Otherwise, it will forward the request to a peer giganto in charge
+// of the given `filter.source`. Peer giganto's response will be converted to
+// the return type of the current giganto.
+//
+// Below is detailed explanation of arguments:
+// * `$ctx` - The context of the GraphQL query.
+// * `$filter` - The filter of the query.
+// * `$handler` - The handler to be carried out by the current giganto if it
+//   is in charge.
+// * `$graphql_query_type` - Name of the struct that derives `GraphQLQuery`.
+// * `$variables_type` - Query variable type generated by `graphql_client`. For
+//   example, `search_conn_raw_events::Variables`.
+// * `$response_data_type` - Response data type generated by `graphql_client`.
+//   For example, `search_conn_raw_events::ResponseData`.
+// * `$field_name` - Name of the field in the response data that contains the
+//   result. For example, `search_conn_raw_events`.
+//
+// For your information, `$variables_type`, `$response_data_type`, `$field_name`
+// are generated by `graphql_client` macro. You can `cargo expand` to see the
+// generated code.
+macro_rules! events_in_cluster {
+    ($ctx:expr, $filter:expr, $handler:ident, $graphql_query_type:ident, $variables_type:ty, $response_data_type:path, $field_name:ident) => {{
+        type QueryVariables = $variables_type;
+        if is_current_giganto_in_charge($ctx, &$filter.source).await {
+            $handler($ctx, &$filter)
+        } else {
+            let peer_addr = peer_in_charge_graphql_addr($ctx, &$filter.source).await;
 
-        let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let pcap_sources = new_pcap_sources();
-        let export_dir = tempfile::tempdir().unwrap();
-        let config_reload = Arc::new(Notify::new());
-        let schema = schema(
-            db.clone(),
-            pcap_sources,
-            export_dir.path().to_path_buf(),
-            config_reload,
-            "file_path".to_string(),
-            Arc::new(RwLock::new(1024)),
-        );
-        Self {
-            _dir: db_dir,
-            db,
-            schema,
+            match peer_addr {
+                Some(peer_addr) => {
+                    let request_body = $graphql_query_type::build_query(QueryVariables {
+                        filter: $filter.into(),
+                    });
+                    let response_to_result_converter = |resp_data: Option<$response_data_type>| {
+                        resp_data.map_or_else(Vec::new, |data| data.$field_name)
+                    };
+
+                    request_peer($ctx, &peer_addr, request_body, response_to_result_converter).await
+                }
+                None => Ok(Vec::new()),
+            }
+        }
+    }};
+}
+pub(crate) use events_in_cluster;
+
+// This macro helps to reduce boilerplate for handling
+// `[something]_events_connection` APIs in giganto cluster. If the current
+// giganto is in charge of the given `filter.source`, it will execute the
+// handler locally. Otherwise, it will forward the request to a peer giganto
+// in charge of the given `filter.source`. Peer giganto's response will be
+// converted to the return type of the current giganto.
+//
+// Below is detailed explanation of arguments:
+// * `$ctx` - The context of the GraphQL query.
+// * `$filter` - The filter of the query.
+// * `$after` - The cursor of the last edge of the previous page.
+// * `$before` - The cursor of the first edge of the next page.
+// * `$first` - The number of edges to be returned from the first edge of the
+//   next page.
+// * `$last` - The number of edges to be returned from the last edge of the
+//   previous page.
+// * `$handler` - The handler to be carried out by the current giganto if it
+//   is in charge.
+// * `$graphql_query_type` - Name of the struct that derives `GraphQLQuery`.
+// * `$variables_type` - Query variable type generated by `graphql_client`. For
+//   example, `conn_raw_events::Variables`.
+// * `$response_data_type` - Response data type generated by `graphql_client`.
+//   For example, `conn_raw_events::ResponseData`.
+// * `$field_name` - Name of the field in the response data that contains the
+//   result. For example, `conn_raw_events`.
+//
+// For your information, `$variables_type`, `$response_data_type`, `$field_name`
+// are generated by `graphql_client` macro. You can `cargo expand` to see the
+// generated code.
+macro_rules! paged_events_in_cluster {
+    ($ctx:expr, $filter:expr, $after:expr, $before:expr, $first:expr, $last:expr, $handler:expr, $graphql_query_type:ident, $variables_type:ty, $response_data_type:path, $field_name:ident) => {{
+        if is_current_giganto_in_charge($ctx, &$filter.source).await {
+            $handler($ctx, $filter, $after, $before, $first, $last).await
+        } else {
+            let peer_addr = peer_in_charge_graphql_addr($ctx, &$filter.source).await;
+
+            match peer_addr {
+                Some(peer_addr) => {
+                    type QueryVariables = $variables_type;
+                    let request_body = $graphql_query_type::build_query(QueryVariables {
+                        filter: $filter.into(),
+                        after: $after,
+                        before: $before,
+                        first: $first.map(std::convert::Into::into),
+                        last: $last.map(std::convert::Into::into),
+                    });
+
+                    let response_to_result_converter = |resp_data: Option<$response_data_type>| {
+                        if let Some(data) = resp_data {
+                            let page_info = data.$field_name.page_info;
+
+                            let mut connection = async_graphql::connection::Connection::new(
+                                page_info.has_previous_page,
+                                page_info.has_next_page,
+                            );
+
+                            connection.edges = data
+                                .$field_name
+                                .edges
+                                .into_iter()
+                                .map(|e| Edge::new(e.cursor, e.node.into()))
+                                .collect();
+
+                            connection
+                        } else {
+                            async_graphql::connection::Connection::new(false, false)
+                        }
+                    };
+
+                    request_peer($ctx, &peer_addr, request_body, response_to_result_converter).await
+                }
+                None => Ok(Connection::new(false, false)),
+            }
+        }
+    }};
+}
+pub(crate) use paged_events_in_cluster;
+
+async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, source_filter: &str) -> bool {
+    let ingest_sources = ctx.data_opt::<IngestSources>();
+    match ingest_sources {
+        Some(ingest_sources) => ingest_sources
+            .read()
+            .await
+            .iter()
+            .any(|(ingest_source_name, _last_conn_time)| ingest_source_name == source_filter),
+        None => false,
+    }
+}
+
+async fn peer_in_charge_graphql_addr<'ctx>(
+    ctx: &Context<'ctx>,
+    source_filter: &str,
+) -> Option<SocketAddr> {
+    let peers = ctx.data_opt::<Peers>();
+    match peers {
+        Some(peers) => {
+            peers
+                .read()
+                .await
+                .iter()
+                .find_map(|(peer_address, peer_info)| {
+                    peer_info
+                        .ingest_sources
+                        .contains(source_filter)
+                        .then(|| {
+                            SocketAddr::new(
+                                peer_address.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                                peer_info.graphql_port.expect("Peer's graphql port must be valid, because it is validated when peer giganto started."),
+                            )
+                        })
+                })
+        }
+        None => None,
+    }
+}
+
+async fn request_peer<'ctx, QueryBodyType, ResponseDataType, ResultDataType, F>(
+    ctx: &Context<'ctx>,
+    peer_graphql_addr: &SocketAddr,
+    req_body: graphql_client::QueryBody<QueryBodyType>,
+    response_to_result_converter: F,
+) -> Result<ResultDataType>
+where
+    QueryBodyType: Serialize,
+    ResponseDataType: for<'a> Deserialize<'a>,
+    F: 'static + FnOnce(Option<ResponseDataType>) -> ResultDataType,
+{
+    let client: &reqwest::Client = ctx.data::<reqwest::Client>()?;
+    let req = client
+        .post(format!(
+            "{}://{}/graphql",
+            if cfg!(test) { "http" } else { "https" },
+            peer_graphql_addr
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&req_body);
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| Error::new(format!("Peer giganto did not respond {e}")))?;
+
+    match resp.error_for_status() {
+        Ok(resp_ok) => {
+            if let Ok(graphql_resp) = resp_ok.json::<GraphQlResponse<ResponseDataType>>().await {
+                Ok(response_to_result_converter(graphql_resp.data))
+            } else {
+                Err(Error::new("Peer giganto's response failed to deserialize."))
+            }
+        }
+        Err(e) => Err(Error::new(format!(
+            "Peer giganto's response status is not success. {e}"
+        ))),
+    }
+}
+
+macro_rules! impl_from_giganto_range_structs_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<crate::graphql::TimeRange> for $autogen_mod::TimeRange {
+                fn from(range: crate::graphql::TimeRange) -> Self {
+                    Self {
+                        start: range.start,
+                        end: range.end,
+                    }
+                }
+            }
+
+            impl From<crate::graphql::IpRange> for $autogen_mod::IpRange {
+                fn from(range: crate::graphql::IpRange) -> Self {
+                    Self {
+                        start: range.start,
+                        end: range.end,
+                    }
+                }
+            }
+            impl From<crate::graphql::PortRange> for $autogen_mod::PortRange {
+                fn from(range: crate::graphql::PortRange) -> Self {
+                    Self {
+                        start: range.start.map(Into::into),
+                        end: range.end.map(Into::into),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! impl_from_giganto_network_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<NetworkFilter> for $autogen_mod::NetworkFilter {
+                fn from(filter: NetworkFilter) -> Self {
+                    Self {
+                        time: filter.time.map(Into::into),
+                        source: filter.source,
+                        orig_addr: filter.orig_addr.map(Into::into),
+                        resp_addr: filter.resp_addr.map(Into::into),
+                        orig_port: filter.orig_port.map(Into::into),
+                        resp_port: filter.resp_port.map(Into::into),
+                        log_level: filter.log_level,
+                        log_contents: filter.log_contents,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! impl_from_giganto_search_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<SearchFilter> for $autogen_mod::SearchFilter {
+                fn from(filter: SearchFilter) -> Self {
+                    Self {
+                        time: filter.time.map(Into::into),
+                        source: filter.source,
+                        orig_addr: filter.orig_addr.map(Into::into),
+                        resp_addr: filter.resp_addr.map(Into::into),
+                        orig_port: filter.orig_port.map(Into::into),
+                        resp_port: filter.resp_port.map(Into::into),
+                        log_level: filter.log_level,
+                        log_contents: filter.log_contents,
+                        timestamps: filter.timestamps,
+                        keyword: filter.keyword,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+pub(crate) use impl_from_giganto_network_filter_for_graphql_client;
+pub(crate) use impl_from_giganto_range_structs_for_graphql_client;
+pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
+
+#[cfg(test)]
+mod tests {
+    use super::schema;
+    use crate::graphql::{Mutation, Query};
+    use crate::peer::{PeerInfo, Peers};
+    use crate::storage::{Database, DbOptions};
+    use crate::{new_pcap_sources, IngestSources};
+    use async_graphql::EmptySubscription;
+    use chrono::{DateTime, Utc};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use tokio::sync::{Notify, RwLock};
+
+    type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
+
+    const CURRENT_GIGANTO_INGEST_SOURCES: [&str; 2] = ["src 1", "ingest src 1"];
+    const PEER_GIGANTO_INGEST_SOURCES: [&str; 2] = ["src 2", "ingest src 2"];
+
+    pub struct TestSchema {
+        pub _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
+        pub db: Database,
+        pub schema: Schema,
+    }
+
+    impl TestSchema {
+        fn setup(ingest_sources: IngestSources, peers: Peers) -> Self {
+            let db_dir = tempfile::tempdir().unwrap();
+            let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+            let pcap_sources = new_pcap_sources();
+            let request_client_pool = reqwest::Client::new();
+            let export_dir = tempfile::tempdir().unwrap();
+            let config_reload = Arc::new(Notify::new());
+            let schema = schema(
+                db.clone(),
+                pcap_sources,
+                ingest_sources,
+                peers,
+                request_client_pool,
+                export_dir.path().to_path_buf(),
+                config_reload,
+                "file_path".to_string(),
+                Arc::new(RwLock::new(1024)),
+            );
+
+            Self {
+                _dir: db_dir,
+                db,
+                schema,
+            }
+        }
+
+        pub fn new() -> Self {
+            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string(), Utc::now()))
+                    .collect::<HashMap<String, DateTime<Utc>>>(),
+            ));
+
+            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+            Self::setup(ingest_sources, peers)
+        }
+
+        pub fn new_with_graphql_peer(port: u16) -> Self {
+            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string(), Utc::now()))
+                    .collect::<HashMap<String, DateTime<Utc>>>(),
+            ));
+
+            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+                "127.0.0.1".to_string(),
+                PeerInfo {
+                    ingest_sources: PEER_GIGANTO_INGEST_SOURCES
+                        .into_iter()
+                        .map(|source| (source.to_string()))
+                        .collect::<HashSet<String>>(),
+                    graphql_port: Some(port),
+                    publish_port: None,
+                },
+            )])));
+
+            Self::setup(ingest_sources, peers)
+        }
+
+        pub async fn execute(&self, query: &str) -> async_graphql::Response {
+            let request: async_graphql::Request = query.into();
+            self.schema.execute(request).await
         }
     }
-    async fn execute(&self, query: &str) -> async_graphql::Response {
-        let request: async_graphql::Request = query.into();
-        self.schema.execute(request).await
+
+    #[test]
+    fn test_check_source() {
+        use super::check_source;
+        assert!(check_source(
+            &Some("test".to_string()),
+            &Some("test".to_string())
+        ));
+        assert!(!check_source(
+            &Some("test".to_string()),
+            &Some("test1".to_string())
+        ));
+        assert!(!check_source(&Some("test".to_string()), &None));
+        assert!(check_source(&None, &Some("test".to_string()),));
+        assert!(check_source(&None, &None));
     }
 }

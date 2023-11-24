@@ -1,0 +1,18 @@
+query OpLogRawEvents($filter: OpLogFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    opLogRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                level
+                contents
+            }
+        }
+    }
+}

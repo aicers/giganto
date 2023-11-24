@@ -1,0 +1,3 @@
+query SearchImageLoadEvents($filter: SearchFilter!){
+    searchImageLoadEvents(filter: $filter)
+}

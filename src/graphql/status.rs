@@ -15,8 +15,8 @@ use toml_edit::{value, Document, InlineTable};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
 const CONFIG_INGEST_ADDRESS: &str = "ingest_address";
-const CONFIG_PUBLISH_ADDRESS: &str = "publish_address";
-const CONFIG_GRAPHQL_ADDRESS: &str = "graphql_address";
+pub const CONFIG_PUBLISH_ADDRESS: &str = "publish_address";
+pub const CONFIG_GRAPHQL_ADDRESS: &str = "graphql_address";
 const CONFIG_RETENTION: &str = "retention";
 const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
 const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
@@ -204,15 +204,13 @@ impl GigantoConfigMutation {
         insert_toml_element(CONFIG_PUBLISH_ADDRESS, &mut doc, field.publish_address);
         insert_toml_element(CONFIG_GRAPHQL_ADDRESS, &mut doc, field.graphql_address);
         insert_toml_element(CONFIG_RETENTION, &mut doc, field.retention);
-        let convert_open_file = field.max_open_files.and_then(|x| i64::try_from(x).ok());
+        let convert_open_file = field.max_open_files.map(i64::from);
         insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, convert_open_file);
         let convert_level_base = field
             .max_mb_of_level_base
             .and_then(|x| i64::try_from(x).ok());
         insert_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &mut doc, convert_level_base);
-        let convert_ack_trans_cnt = field
-            .ack_transmission_cnt
-            .and_then(|x| i64::try_from(x).ok());
+        let convert_ack_trans_cnt = field.ack_transmission_cnt.map(i64::from);
         insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
         insert_toml_element(CONFIG_PEER_ADDRESS, &mut doc, field.peer_address);
         insert_toml_peers(&mut doc, field.peer_list)?;
@@ -236,7 +234,7 @@ impl GigantoConfigMutation {
     ) -> Result<String> {
         let cfg_path = ctx.data::<String>()?;
         let mut doc = read_toml_file(cfg_path)?;
-        let convert_ack_trans_cnt = i64::try_from(count).ok();
+        let convert_ack_trans_cnt = Some(i64::from(count));
         insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
         write_toml_file(&doc, cfg_path)?;
 
@@ -260,7 +258,7 @@ pub fn write_toml_file(doc: &Document, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_toml_element_to_string(key: &str, doc: &Document) -> Result<String> {
+pub fn parse_toml_element_to_string(key: &str, doc: &Document) -> Result<String> {
     let Some(item) = doc.get(key) else {
         return Err(anyhow!("{} not found.", key).into());
     };

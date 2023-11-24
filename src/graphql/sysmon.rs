@@ -1,9 +1,31 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, collect_exist_timestamp, get_peekable_iter, get_timestamp_from_key,
-    load_connection, min_max_time,
-    network::{NetworkFilter, SearchFilter},
-    Engine, FromKeyValue,
+    base64_engine, collect_exist_timestamp, events_in_cluster, get_peekable_iter,
+    get_timestamp_from_key, handle_paged_events,
+    impl_from_giganto_network_filter_for_graphql_client,
+    impl_from_giganto_range_structs_for_graphql_client,
+    impl_from_giganto_search_filter_for_graphql_client, is_current_giganto_in_charge, min_max_time,
+    paged_events_in_cluster, peer_in_charge_graphql_addr, request_peer, Engine, FromKeyValue,
+    NetworkFilter, SearchFilter,
+};
+use crate::graphql::client::derives::{
+    dns_query_events, file_create_events, file_create_stream_hash_events, file_create_time_events,
+    file_delete_detected_events, file_delete_events, image_load_events, network_connect_events,
+    pipe_event_events, process_create_events, process_tamper_events, process_terminate_events,
+    registry_key_rename_events, registry_value_set_events, search_dns_query_events,
+    search_file_create_events, search_file_create_stream_hash_events,
+    search_file_create_time_events, search_file_delete_detected_events, search_file_delete_events,
+    search_image_load_events, search_network_connect_events, search_pipe_event_events,
+    search_process_create_events, search_process_tamper_events, search_process_terminate_events,
+    search_registry_key_rename_events, search_registry_value_set_events, DnsQueryEvents,
+    FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents, FileDeleteDetectedEvents,
+    FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents, PipeEventEvents, ProcessCreateEvents,
+    ProcessTamperEvents, ProcessTerminateEvents, RegistryKeyRenameEvents, RegistryValueSetEvents,
+    SearchDnsQueryEvents, SearchFileCreateEvents, SearchFileCreateStreamHashEvents,
+    SearchFileCreateTimeEvents, SearchFileDeleteDetectedEvents, SearchFileDeleteEvents,
+    SearchImageLoadEvents, SearchNetworkConnectEvents, SearchPipeEventEvents,
+    SearchProcessCreateEvents, SearchProcessTamperEvents, SearchProcessTerminateEvents,
+    SearchRegistryKeyRenameEvents, SearchRegistryValueSetEvents,
 };
 use crate::storage::{Database, FilteredIter};
 use async_graphql::{
@@ -16,12 +38,15 @@ use giganto_client::ingest::sysmon::{
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use std::{collections::BTreeSet, iter::Peekable};
 
 #[derive(Default)]
 pub(super) struct SysmonQuery;
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode)]
 struct ProcessCreateEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -49,7 +74,8 @@ struct ProcessCreateEvent {
     parent_user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode)]
 struct FileCreationTimeChangedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -63,7 +89,8 @@ struct FileCreationTimeChangedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode)]
 struct NetworkConnectionEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -86,7 +113,8 @@ struct NetworkConnectionEvent {
     destination_port_name: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode)]
 struct ProcessTerminatedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -97,7 +125,8 @@ struct ProcessTerminatedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = image_load_events::ImageLoadEventsImageLoadEventsEdgesNode)]
 struct ImageLoadedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -118,7 +147,8 @@ struct ImageLoadedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = file_create_events::FileCreateEventsFileCreateEventsEdgesNode)]
 struct FileCreateEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -131,7 +161,8 @@ struct FileCreateEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode)]
 struct RegistryValueSetEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -145,7 +176,8 @@ struct RegistryValueSetEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode)]
 struct RegistryKeyValueRenameEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -159,7 +191,8 @@ struct RegistryKeyValueRenameEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode)]
 struct FileCreateStreamHashEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -174,7 +207,8 @@ struct FileCreateStreamHashEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode)]
 struct PipeEventEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -187,7 +221,8 @@ struct PipeEventEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode)]
 struct DnsEventEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -201,7 +236,8 @@ struct DnsEventEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode)]
 struct FileDeleteEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -216,7 +252,8 @@ struct FileDeleteEvent {
     archived: bool,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode)]
 struct ProcessTamperingEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -228,7 +265,8 @@ struct ProcessTamperingEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode)]
 struct FileDeleteDetectedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -448,6 +486,202 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     }
 }
 
+async fn handle_process_create_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ProcessCreateEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.process_create_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_file_create_time_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FileCreationTimeChangedEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.file_create_time_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_network_connect_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, NetworkConnectionEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.network_connect_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_process_terminate_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ProcessTerminatedEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.process_terminate_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_image_load_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ImageLoadedEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.image_load_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_file_create_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FileCreateEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.file_create_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_registry_value_set_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, RegistryValueSetEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.registry_value_set_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_registry_key_rename_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, RegistryKeyValueRenameEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.registry_key_rename_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_file_create_stream_hash_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FileCreateStreamHashEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.file_create_stream_hash_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_pipe_event_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, PipeEventEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.pipe_event_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_dns_query_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, DnsEventEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.dns_query_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_file_delete_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FileDeleteEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.file_delete_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_process_tamper_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ProcessTamperingEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.process_tamper_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_file_delete_detected_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FileDeleteDetectedEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.file_delete_detected_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 #[Object]
 impl SysmonQuery {
     async fn process_create_events<'ctx>(
@@ -459,19 +693,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ProcessCreateEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_create_store()?;
+        let handler = handle_process_create_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            ProcessCreateEvents,
+            process_create_events::Variables,
+            process_create_events::ResponseData,
+            process_create_events
         )
-        .await
     }
 
     async fn file_create_time_events<'ctx>(
@@ -483,19 +719,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FileCreationTimeChangedEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_time_store()?;
+        let handler = handle_file_create_time_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FileCreateTimeEvents,
+            file_create_time_events::Variables,
+            file_create_time_events::ResponseData,
+            file_create_time_events
         )
-        .await
     }
 
     async fn network_connect_events<'ctx>(
@@ -507,19 +745,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, NetworkConnectionEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.network_connect_store()?;
+        let handler = handle_network_connect_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            NetworkConnectEvents,
+            network_connect_events::Variables,
+            network_connect_events::ResponseData,
+            network_connect_events
         )
-        .await
     }
 
     async fn process_terminate_events<'ctx>(
@@ -531,19 +771,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ProcessTerminatedEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_terminate_store()?;
+        let handler = handle_process_terminate_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            ProcessTerminateEvents,
+            process_terminate_events::Variables,
+            process_terminate_events::ResponseData,
+            process_terminate_events
         )
-        .await
     }
 
     async fn image_load_events<'ctx>(
@@ -555,19 +797,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ImageLoadedEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.image_load_store()?;
+        let opertation = handle_image_load_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            opertation,
+            ImageLoadEvents,
+            image_load_events::Variables,
+            image_load_events::ResponseData,
+            image_load_events
         )
-        .await
     }
 
     async fn file_create_events<'ctx>(
@@ -579,19 +823,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FileCreateEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_store()?;
+        let handler = handle_file_create_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FileCreateEvents,
+            file_create_events::Variables,
+            file_create_events::ResponseData,
+            file_create_events
         )
-        .await
     }
 
     async fn registry_value_set_events<'ctx>(
@@ -603,19 +849,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, RegistryValueSetEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.registry_value_set_store()?;
+        let handler = handle_registry_value_set_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            RegistryValueSetEvents,
+            registry_value_set_events::Variables,
+            registry_value_set_events::ResponseData,
+            registry_value_set_events
         )
-        .await
     }
 
     async fn registry_key_rename_events<'ctx>(
@@ -627,19 +875,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, RegistryKeyValueRenameEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.registry_key_rename_store()?;
+        let handler = handle_registry_key_rename_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            RegistryKeyRenameEvents,
+            registry_key_rename_events::Variables,
+            registry_key_rename_events::ResponseData,
+            registry_key_rename_events
         )
-        .await
     }
 
     async fn file_create_stream_hash_events<'ctx>(
@@ -651,19 +901,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FileCreateStreamHashEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_stream_hash_store()?;
+        let handler = handle_file_create_stream_hash_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FileCreateStreamHashEvents,
+            file_create_stream_hash_events::Variables,
+            file_create_stream_hash_events::ResponseData,
+            file_create_stream_hash_events
         )
-        .await
     }
 
     async fn pipe_event_events<'ctx>(
@@ -675,19 +927,21 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, PipeEventEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.pipe_event_store()?;
+        let handler = handle_pipe_event_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            PipeEventEvents,
+            pipe_event_events::Variables,
+            pipe_event_events::ResponseData,
+            pipe_event_events
         )
-        .await
     }
 
     async fn dns_query_events<'ctx>(
@@ -699,19 +953,20 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, DnsEventEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dns_query_store()?;
-
-        query(
+        let handler = handle_dns_query_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            DnsQueryEvents,
+            dns_query_events::Variables,
+            dns_query_events::ResponseData,
+            dns_query_events
         )
-        .await
     }
 
     async fn file_delete_events<'ctx>(
@@ -723,19 +978,20 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FileDeleteEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_delete_store()?;
-
-        query(
+        let handler = handle_file_delete_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FileDeleteEvents,
+            file_delete_events::Variables,
+            file_delete_events::ResponseData,
+            file_delete_events
         )
-        .await
     }
 
     async fn process_tamper_events<'ctx>(
@@ -747,19 +1003,20 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ProcessTamperingEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_tamper_store()?;
-
-        query(
+        let handler = handle_process_tamper_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            ProcessTamperEvents,
+            process_tamper_events::Variables,
+            process_tamper_events::ResponseData,
+            process_tamper_events
         )
-        .await
     }
 
     async fn file_delete_detected_events<'ctx>(
@@ -771,19 +1028,20 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FileDeleteDetectedEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_delete_detected_store()?;
-
-        query(
+        let handler = handle_file_delete_detected_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FileDeleteDetectedEvents,
+            file_delete_detected_events::Variables,
+            file_delete_detected_events::ResponseData,
+            file_delete_detected_events
         )
-        .await
     }
 
     async fn search_process_create_events<'ctx>(
@@ -791,16 +1049,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_create_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<ProcessCreate>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.process_create_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<ProcessCreate>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchProcessCreateEvents,
+            search_process_create_events::Variables,
+            search_process_create_events::ResponseData,
+            search_process_create_events
+        )
     }
 
     async fn search_file_create_time_events<'ctx>(
@@ -808,16 +1077,28 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_time_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.file_create_time_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
+                &exist_data,
+                filter,
+            ))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFileCreateTimeEvents,
+            search_file_create_time_events::Variables,
+            search_file_create_time_events::ResponseData,
+            search_file_create_time_events
+        )
     }
 
     async fn search_network_connect_events<'ctx>(
@@ -825,16 +1106,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.network_connect_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<NetworkConnection>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.network_connect_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<NetworkConnection>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchNetworkConnectEvents,
+            search_network_connect_events::Variables,
+            search_network_connect_events::ResponseData,
+            search_network_connect_events
+        )
     }
 
     async fn search_process_terminate_events<'ctx>(
@@ -842,16 +1134,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_terminate_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<ProcessTerminated>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.process_terminate_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<ProcessTerminated>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchProcessTerminateEvents,
+            search_process_terminate_events::Variables,
+            search_process_terminate_events::ResponseData,
+            search_process_terminate_events
+        )
     }
 
     async fn search_image_load_events<'ctx>(
@@ -859,13 +1162,24 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.image_load_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.image_load_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, filter))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchImageLoadEvents,
+            search_image_load_events::Variables,
+            search_image_load_events::ResponseData,
+            search_image_load_events
+        )
     }
 
     async fn search_file_create_events<'ctx>(
@@ -873,13 +1187,25 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<FileCreate>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.file_create_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<FileCreate>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFileCreateEvents,
+            search_file_create_events::Variables,
+            search_file_create_events::ResponseData,
+            search_file_create_events
+        )
     }
 
     async fn search_registry_value_set_events<'ctx>(
@@ -887,16 +1213,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.registry_value_set_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<RegistryValueSet>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.registry_value_set_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<RegistryValueSet>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchRegistryValueSetEvents,
+            search_registry_value_set_events::Variables,
+            search_registry_value_set_events::ResponseData,
+            search_registry_value_set_events
+        )
     }
 
     async fn search_registry_key_rename_events<'ctx>(
@@ -904,16 +1241,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.registry_key_rename_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.registry_key_rename_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchRegistryKeyRenameEvents,
+            search_registry_key_rename_events::Variables,
+            search_registry_key_rename_events::ResponseData,
+            search_registry_key_rename_events
+        )
     }
 
     async fn search_file_create_stream_hash_events<'ctx>(
@@ -921,16 +1269,28 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_create_stream_hash_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<FileCreateStreamHash>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.file_create_stream_hash_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<FileCreateStreamHash>(
+                &exist_data,
+                filter,
+            ))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFileCreateStreamHashEvents,
+            search_file_create_stream_hash_events::Variables,
+            search_file_create_stream_hash_events::ResponseData,
+            search_file_create_stream_hash_events
+        )
     }
 
     async fn search_pipe_event_events<'ctx>(
@@ -938,13 +1298,24 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.pipe_event_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.pipe_event_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, filter))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchPipeEventEvents,
+            search_pipe_event_events::Variables,
+            search_pipe_event_events::ResponseData,
+            search_pipe_event_events
+        )
     }
 
     async fn search_dns_query_events<'ctx>(
@@ -952,13 +1323,24 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dns_query_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.dns_query_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, filter))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchDnsQueryEvents,
+            search_dns_query_events::Variables,
+            search_dns_query_events::ResponseData,
+            search_dns_query_events
+        )
     }
 
     async fn search_file_delete_events<'ctx>(
@@ -966,13 +1348,25 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_delete_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<FileDelete>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.file_delete_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<FileDelete>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFileDeleteEvents,
+            search_file_delete_events::Variables,
+            search_file_delete_events::ResponseData,
+            search_file_delete_events
+        )
     }
 
     async fn search_process_tamper_events<'ctx>(
@@ -980,16 +1374,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.process_tamper_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<ProcessTampering>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.process_tamper_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<ProcessTampering>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchProcessTamperEvents,
+            search_process_tamper_events::Variables,
+            search_process_tamper_events::ResponseData,
+            search_process_tamper_events
+        )
     }
 
     async fn search_file_delete_detected_events<'ctx>(
@@ -997,16 +1402,27 @@ impl SysmonQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.file_delete_detected_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<FileDeleteDetected>(
-            &exist_data,
-            &filter,
-        ))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.file_delete_detected_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<FileDeleteDetected>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFileDeleteDetectedEvents,
+            search_file_delete_detected_events::Variables,
+            search_file_delete_detected_events::ResponseData,
+            search_file_delete_detected_events
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1530,3 +1946,68 @@ fn sysmon_connection(
 
     Ok(connection)
 }
+
+impl_from_giganto_range_structs_for_graphql_client!(
+    dns_query_events,
+    file_create_events,
+    file_create_stream_hash_events,
+    file_create_time_events,
+    file_delete_detected_events,
+    file_delete_events,
+    image_load_events,
+    network_connect_events,
+    pipe_event_events,
+    process_create_events,
+    process_tamper_events,
+    process_terminate_events,
+    registry_key_rename_events,
+    registry_value_set_events,
+    search_dns_query_events,
+    search_file_create_events,
+    search_file_create_stream_hash_events,
+    search_file_create_time_events,
+    search_file_delete_detected_events,
+    search_file_delete_events,
+    search_image_load_events,
+    search_network_connect_events,
+    search_pipe_event_events,
+    search_process_create_events,
+    search_process_tamper_events,
+    search_process_terminate_events,
+    search_registry_key_rename_events,
+    search_registry_value_set_events
+);
+
+impl_from_giganto_network_filter_for_graphql_client!(
+    dns_query_events,
+    file_create_events,
+    file_create_stream_hash_events,
+    file_create_time_events,
+    file_delete_detected_events,
+    file_delete_events,
+    image_load_events,
+    network_connect_events,
+    pipe_event_events,
+    process_create_events,
+    process_tamper_events,
+    process_terminate_events,
+    registry_key_rename_events,
+    registry_value_set_events
+);
+
+impl_from_giganto_search_filter_for_graphql_client!(
+    search_dns_query_events,
+    search_file_create_events,
+    search_file_create_stream_hash_events,
+    search_file_create_time_events,
+    search_file_delete_detected_events,
+    search_file_delete_events,
+    search_image_load_events,
+    search_network_connect_events,
+    search_pipe_event_events,
+    search_process_create_events,
+    search_process_tamper_events,
+    search_process_terminate_events,
+    search_registry_key_rename_events,
+    search_registry_value_set_events
+);

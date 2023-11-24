@@ -210,14 +210,14 @@ impl LogQuery {
 mod tests {
     use super::{base64_engine, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
     use crate::{
-        graphql::{TestSchema, TimeRange},
+        graphql::{tests::TestSchema, TimeRange},
         storage::RawEventStore,
     };
     use chrono::{DateTime, NaiveDateTime, Utc};
     use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
-    #[test]
-    fn load_time_range() {
+    #[tokio::test]
+    async fn load_time_range() {
         let schema = TestSchema::new();
         let store = schema.db.log_store().unwrap();
 
@@ -731,8 +731,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_oplog() {
+    #[tokio::test]
+    async fn load_oplog() {
         let schema = TestSchema::new();
         let store = schema.db.op_log_store().unwrap();
 

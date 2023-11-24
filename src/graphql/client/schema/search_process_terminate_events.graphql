@@ -1,0 +1,3 @@
+query SearchProcessTerminateEvents($filter: SearchFilter!){
+    searchProcessTerminateEvents(filter: $filter)
+}

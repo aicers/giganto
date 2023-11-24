@@ -1,0 +1,3 @@
+query SearchRegistryValueSetEvents($filter: SearchFilter!){
+    searchRegistryValueSetEvents(filter: $filter)
+}

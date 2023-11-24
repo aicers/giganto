@@ -1,0 +1,17 @@
+query LogRawEvents($filter: LogFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    logRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                log
+            }
+        }
+    }
+}

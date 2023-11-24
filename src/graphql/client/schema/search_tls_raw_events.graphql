@@ -1,0 +1,3 @@
+query SearchTlsRawEvents($filter: SearchFilter!){
+    searchTlsRawEvents(filter: $filter)
+}

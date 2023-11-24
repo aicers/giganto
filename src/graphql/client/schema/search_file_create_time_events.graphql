@@ -1,0 +1,3 @@
+query SearchFileCreateTimeEvents($filter: SearchFilter!){
+    searchFileCreateTimeEvents(filter: $filter)
+}

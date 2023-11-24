@@ -1,0 +1,32 @@
+query ImageLoadEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    imageLoadEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                processGuid
+                processId
+                image
+                imageLoaded
+                fileVersion
+                description
+                product
+                company
+                originalFileName
+                hashes
+                signed
+                signature
+                signatureStatus
+                user
+            }
+        }
+    }
+}

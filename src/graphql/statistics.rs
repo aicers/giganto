@@ -252,7 +252,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{graphql::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
     use chrono::Utc;
     use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 

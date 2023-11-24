@@ -1,9 +1,8 @@
 use super::{
     check_address, check_port,
     netflow::{millis_to_secs, tcp_flags},
-    network::{IpRange, PortRange},
     statistics::MAX_CORE_SIZE,
-    RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    IpRange, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::{
     ingest::implement::EventFilter,
@@ -2299,7 +2298,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::TestSchema;
+    use crate::graphql::tests::TestSchema;
     use crate::storage::RawEventStore;
     use chrono::{Duration, Utc};
     use giganto_client::ingest::{

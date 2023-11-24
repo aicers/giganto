@@ -1,0 +1,3 @@
+query SearchSmtpRawEvents($filter: SearchFilter!){
+    searchSmtpRawEvents(filter: $filter)
+}

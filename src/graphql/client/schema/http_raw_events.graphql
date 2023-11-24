@@ -1,0 +1,42 @@
+query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    httpRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                origAddr
+                respAddr
+                origPort
+                respPort
+                proto
+                lastTime
+                method
+                host
+                uri
+                referrer
+                version
+                userAgent
+                requestLen
+                responseLen
+                statusCode
+                statusMsg
+                username
+                password
+                cookie
+                contentEncoding
+                contentType
+                cacheControl
+                origFilenames
+                origMimeTypes
+                respFilenames
+                respMimeTypes
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+query ProcessTamperEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    processTamperEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                processGuid
+                processId
+                image
+                tamperType
+                user
+            }
+        }
+    }
+}

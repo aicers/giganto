@@ -1,66 +1,44 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, check_address, check_port, collect_exist_timestamp, get_peekable_iter,
-    get_timestamp_from_key, load_connection, min_max_time, Engine, FromKeyValue,
+    base64_engine, check_address, check_port, collect_exist_timestamp, events_in_cluster,
+    get_peekable_iter, get_timestamp_from_key, handle_paged_events,
+    impl_from_giganto_network_filter_for_graphql_client,
+    impl_from_giganto_range_structs_for_graphql_client,
+    impl_from_giganto_search_filter_for_graphql_client, is_current_giganto_in_charge, min_max_time,
+    paged_events_in_cluster, peer_in_charge_graphql_addr, request_peer, Engine, FromKeyValue,
+    NetworkFilter, RawEventFilter, SearchFilter,
 };
-use crate::{
-    graphql::{RawEventFilter, TimeRange},
-    storage::{Database, FilteredIter, KeyExtractor},
+use crate::graphql::client::derives::{
+    conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
+    kerberos_raw_events, ldap_raw_events, mqtt_raw_events, nfs_raw_events, ntlm_raw_events,
+    rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events, search_dns_raw_events,
+    search_ftp_raw_events, search_http_raw_events, search_kerberos_raw_events,
+    search_ldap_raw_events, search_mqtt_raw_events, search_nfs_raw_events, search_ntlm_raw_events,
+    search_rdp_raw_events, search_smb_raw_events, search_smtp_raw_events, search_ssh_raw_events,
+    search_tls_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events, tls_raw_events,
+    ConnRawEvents, DceRpcRawEvents, DnsRawEvents, FtpRawEvents, HttpRawEvents, KerberosRawEvents,
+    LdapRawEvents, MqttRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents, SearchConnRawEvents,
+    SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents,
+    SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents,
+    SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents,
+    SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents,
+    TlsRawEvents,
 };
+use crate::storage::{Database, FilteredIter, KeyExtractor};
 use async_graphql::{
     connection::{query, Connection, Edge},
-    Context, InputObject, Object, Result, SimpleObject, Union,
+    Context, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
-use serde::Serialize;
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
-
-#[allow(clippy::module_name_repetitions)]
-#[derive(InputObject, Serialize)]
-pub struct NetworkFilter {
-    pub time: Option<TimeRange>,
-    #[serde(skip)]
-    pub source: String,
-    orig_addr: Option<IpRange>,
-    resp_addr: Option<IpRange>,
-    orig_port: Option<PortRange>,
-    resp_port: Option<PortRange>,
-    log_level: Option<String>,
-    log_contents: Option<String>,
-}
-
-#[derive(InputObject, Serialize)]
-pub struct SearchFilter {
-    pub time: Option<TimeRange>,
-    #[serde(skip)]
-    pub source: String,
-    orig_addr: Option<IpRange>,
-    resp_addr: Option<IpRange>,
-    orig_port: Option<PortRange>,
-    resp_port: Option<PortRange>,
-    log_level: Option<String>,
-    log_contents: Option<String>,
-    pub timestamps: Vec<DateTime<Utc>>,
-    keyword: Option<String>,
-}
-
-#[derive(InputObject, Serialize)]
-pub struct IpRange {
-    pub start: Option<String>,
-    pub end: Option<String>,
-}
-
-#[derive(InputObject, Serialize)]
-pub struct PortRange {
-    pub start: Option<u16>,
-    pub end: Option<u16>,
-}
 
 impl KeyExtractor for NetworkFilter {
     fn get_start_key(&self) -> &str {
@@ -136,7 +114,8 @@ impl RawEventFilter for SearchFilter {
     }
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = conn_raw_events::ConnRawEventsConnRawEventsEdgesNode)]
 struct ConnRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -151,9 +130,9 @@ struct ConnRawEvent {
     orig_pkts: u64,
     resp_pkts: u64,
 }
-
 #[allow(clippy::struct_excessive_bools)]
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode)]
 struct DnsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -176,7 +155,8 @@ struct DnsRawEvent {
     ttl: Vec<i32>,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = http_raw_events::HttpRawEventsHttpRawEventsEdgesNode)]
 struct HttpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -207,7 +187,8 @@ struct HttpRawEvent {
     resp_mime_types: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode)]
 struct RdpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -219,7 +200,8 @@ struct RdpRawEvent {
     cookie: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode)]
 struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -236,7 +218,8 @@ struct SmtpRawEvent {
     agent: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode)]
 struct NtlmRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -254,7 +237,8 @@ struct NtlmRawEvent {
     success: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode)]
 struct KerberosRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -274,7 +258,8 @@ struct KerberosRawEvent {
     service_name: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = ssh_raw_events::SshRawEventsSshRawEventsEdgesNode)]
 struct SshRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -297,7 +282,8 @@ struct SshRawEvent {
     host_key: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode)]
 struct DceRpcRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -312,7 +298,8 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode)]
 struct FtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -335,7 +322,8 @@ struct FtpRawEvent {
     file_id: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode)]
 struct MqttRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -352,7 +340,8 @@ struct MqttRawEvent {
     suback_reason: Vec<u8>,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode)]
 struct LdapRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -370,7 +359,8 @@ struct LdapRawEvent {
     argument: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode)]
 struct TlsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -384,6 +374,7 @@ struct TlsRawEvent {
     ja3: String,
     version: String,
     cipher: u16,
+    #[graphql_client_type(from_name = "ja3_s")]
     ja3s: String,
     serial: String,
     subject_country: String,
@@ -399,7 +390,8 @@ struct TlsRawEvent {
     last_alert: u8,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode)]
 struct SmbRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -421,7 +413,8 @@ struct SmbRawEvent {
     change_time: i64,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(name = nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode)]
 struct NfsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -674,6 +667,214 @@ from_key_value!(
 
 from_key_value!(NfsRawEvent, Nfs, read_files, write_files);
 
+async fn handle_paged_conn_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ConnRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.conn_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_dns_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, DnsRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.dns_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_http_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, HttpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.http_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_rdp_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, RdpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.rdp_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_smtp_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, SmtpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.smtp_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_ntlm_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, NtlmRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.ntlm_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_kerberos_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, KerberosRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.kerberos_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_ssh_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, SshRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.ssh_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_dce_rpc_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, DceRpcRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.dce_rpc_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+async fn handle_paged_ftp_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, FtpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.ftp_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_mqtt_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>, // TODO: fix this
+    last: Option<i32>,
+) -> Result<Connection<String, MqttRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.mqtt_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_ldap_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>, // TODO: fix this
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, LdapRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.ldap_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_tls_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, TlsRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.tls_store()?;
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_smb_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, SmbRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.smb_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_nfs_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, NfsRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.nfs_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 #[Object]
 impl NetworkQuery {
     async fn conn_raw_events<'ctx>(
@@ -685,19 +886,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ConnRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.conn_store()?;
+        let handler = handle_paged_conn_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            ConnRawEvents,
+            conn_raw_events::Variables,
+            conn_raw_events::ResponseData,
+            conn_raw_events
         )
-        .await
     }
 
     async fn dns_raw_events<'ctx>(
@@ -709,19 +912,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, DnsRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dns_store()?;
+        let handler = handle_paged_dns_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            DnsRawEvents,
+            dns_raw_events::Variables,
+            dns_raw_events::ResponseData,
+            dns_raw_events
         )
-        .await
     }
 
     async fn http_raw_events<'ctx>(
@@ -733,19 +938,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, HttpRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.http_store()?;
+        let handler = handle_paged_http_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            HttpRawEvents,
+            http_raw_events::Variables,
+            http_raw_events::ResponseData,
+            http_raw_events
         )
-        .await
     }
 
     async fn rdp_raw_events<'ctx>(
@@ -757,19 +964,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, RdpRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.rdp_store()?;
+        let handler = handle_paged_rdp_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            RdpRawEvents,
+            rdp_raw_events::Variables,
+            rdp_raw_events::ResponseData,
+            rdp_raw_events
         )
-        .await
     }
 
     async fn smtp_raw_events<'ctx>(
@@ -781,19 +990,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, SmtpRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.smtp_store()?;
+        let handler = handle_paged_smtp_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            SmtpRawEvents,
+            smtp_raw_events::Variables,
+            smtp_raw_events::ResponseData,
+            smtp_raw_events
         )
-        .await
     }
 
     async fn ntlm_raw_events<'ctx>(
@@ -805,19 +1016,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, NtlmRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ntlm_store()?;
+        let handler = handle_paged_ntlm_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            NtlmRawEvents,
+            ntlm_raw_events::Variables,
+            ntlm_raw_events::ResponseData,
+            ntlm_raw_events
         )
-        .await
     }
 
     async fn kerberos_raw_events<'ctx>(
@@ -829,19 +1042,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, KerberosRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.kerberos_store()?;
+        let handler = handle_paged_kerberos_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            KerberosRawEvents,
+            kerberos_raw_events::Variables,
+            kerberos_raw_events::ResponseData,
+            kerberos_raw_events
         )
-        .await
     }
 
     async fn ssh_raw_events<'ctx>(
@@ -853,19 +1068,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, SshRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ssh_store()?;
+        let handler = handle_paged_ssh_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            SshRawEvents,
+            ssh_raw_events::Variables,
+            ssh_raw_events::ResponseData,
+            ssh_raw_events
         )
-        .await
     }
 
     async fn dce_rpc_raw_events<'ctx>(
@@ -877,19 +1094,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, DceRpcRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dce_rpc_store()?;
+        let handler = handle_paged_dce_rpc_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            DceRpcRawEvents,
+            dce_rpc_raw_events::Variables,
+            dce_rpc_raw_events::ResponseData,
+            dce_rpc_raw_events
         )
-        .await
     }
 
     async fn ftp_raw_events<'ctx>(
@@ -901,19 +1120,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, FtpRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ftp_store()?;
+        let handler = handle_paged_ftp_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            FtpRawEvents,
+            ftp_raw_events::Variables,
+            ftp_raw_events::ResponseData,
+            ftp_raw_events
         )
-        .await
     }
 
     async fn mqtt_raw_events<'ctx>(
@@ -925,19 +1146,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, MqttRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.mqtt_store()?;
+        let handler = handle_paged_mqtt_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            MqttRawEvents,
+            mqtt_raw_events::Variables,
+            mqtt_raw_events::ResponseData,
+            mqtt_raw_events
         )
-        .await
     }
 
     async fn ldap_raw_events<'ctx>(
@@ -949,19 +1172,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, LdapRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ldap_store()?;
+        let handler = handle_paged_ldap_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            LdapRawEvents,
+            ldap_raw_events::Variables,
+            ldap_raw_events::ResponseData,
+            ldap_raw_events
         )
-        .await
     }
 
     async fn tls_raw_events<'ctx>(
@@ -973,19 +1198,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, TlsRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.tls_store()?;
+        let handler = handle_paged_tls_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            TlsRawEvents,
+            tls_raw_events::Variables,
+            tls_raw_events::ResponseData,
+            tls_raw_events
         )
-        .await
     }
 
     async fn smb_raw_events<'ctx>(
@@ -997,19 +1224,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, SmbRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.smb_store()?;
+        let handler = handle_paged_smb_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            SmbRawEvents,
+            smb_raw_events::Variables,
+            smb_raw_events::ResponseData,
+            smb_raw_events
         )
-        .await
     }
 
     async fn nfs_raw_events<'ctx>(
@@ -1021,19 +1250,20 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, NfsRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.nfs_store()?;
-
-        query(
+        let handler = handle_paged_nfs_raw_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            NfsRawEvents,
+            nfs_raw_events::Variables,
+            nfs_raw_events::ResponseData,
+            nfs_raw_events
         )
-        .await
     }
 
     async fn network_raw_events<'ctx>(
@@ -1133,27 +1363,50 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.conn_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Conn>(&exist_data, &filter))
-    }
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.conn_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Conn>(&exist_data, filter))
+        };
 
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchConnRawEvents,
+            search_conn_raw_events::Variables,
+            search_conn_raw_events::ResponseData,
+            search_conn_raw_events
+        )
+    }
     async fn search_dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dns_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Dns>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.dns_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Dns>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchDnsRawEvents,
+            search_dns_raw_events::Variables,
+            search_dns_raw_events::ResponseData,
+            search_dns_raw_events
+        )
     }
 
     async fn search_http_raw_events<'ctx>(
@@ -1161,13 +1414,24 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.http_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Http>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.http_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Http>(&exist_data, filter))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchHttpRawEvents,
+            search_http_raw_events::Variables,
+            search_http_raw_events::ResponseData,
+            search_http_raw_events
+        )
     }
 
     async fn search_rdp_raw_events<'ctx>(
@@ -1175,13 +1439,25 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.rdp_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Rdp>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.rdp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Rdp>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchRdpRawEvents,
+            search_rdp_raw_events::Variables,
+            search_rdp_raw_events::ResponseData,
+            search_rdp_raw_events
+        )
     }
 
     async fn search_smtp_raw_events<'ctx>(
@@ -1189,13 +1465,25 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.smtp_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Smtp>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.smtp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Smtp>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchSmtpRawEvents,
+            search_smtp_raw_events::Variables,
+            search_smtp_raw_events::ResponseData,
+            search_smtp_raw_events
+        )
     }
 
     async fn search_ntlm_raw_events<'ctx>(
@@ -1203,13 +1491,25 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ntlm_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Ntlm>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.ntlm_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_timestamp::<Ntlm>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchNtlmRawEvents,
+            search_ntlm_raw_events::Variables,
+            search_ntlm_raw_events::ResponseData,
+            search_ntlm_raw_events
+        )
     }
 
     async fn search_kerberos_raw_events<'ctx>(
@@ -1217,13 +1517,25 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.kerberos_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Kerberos>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.kerberos_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Kerberos>(&exist_data, filter))
+        };
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchKerberosRawEvents,
+            search_kerberos_raw_events::Variables,
+            search_kerberos_raw_events::ResponseData,
+            search_kerberos_raw_events
+        )
     }
 
     async fn search_ssh_raw_events<'ctx>(
@@ -1231,13 +1543,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ssh_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Ssh>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.ssh_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Ssh>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchSshRawEvents,
+            search_ssh_raw_events::Variables,
+            search_ssh_raw_events::ResponseData,
+            search_ssh_raw_events
+        )
     }
 
     async fn search_dce_rpc_raw_events<'ctx>(
@@ -1245,13 +1570,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.dce_rpc_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<DceRpc>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.dce_rpc_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<DceRpc>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchDceRpcRawEvents,
+            search_dce_rpc_raw_events::Variables,
+            search_dce_rpc_raw_events::ResponseData,
+            search_dce_rpc_raw_events
+        )
     }
 
     async fn search_ftp_raw_events<'ctx>(
@@ -1259,13 +1597,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ftp_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Ftp>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.ftp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Ftp>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchFtpRawEvents,
+            search_ftp_raw_events::Variables,
+            search_ftp_raw_events::ResponseData,
+            search_ftp_raw_events
+        )
     }
 
     async fn search_mqtt_raw_events<'ctx>(
@@ -1273,13 +1624,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.mqtt_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Mqtt>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.mqtt_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Mqtt>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchMqttRawEvents,
+            search_mqtt_raw_events::Variables,
+            search_mqtt_raw_events::ResponseData,
+            search_mqtt_raw_events
+        )
     }
 
     async fn search_ldap_raw_events<'ctx>(
@@ -1287,13 +1651,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.ldap_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Ldap>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.ldap_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Ldap>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchLdapRawEvents,
+            search_ldap_raw_events::Variables,
+            search_ldap_raw_events::ResponseData,
+            search_ldap_raw_events
+        )
     }
 
     async fn search_tls_raw_events<'ctx>(
@@ -1301,13 +1678,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.tls_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Tls>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.tls_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Tls>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchTlsRawEvents,
+            search_tls_raw_events::Variables,
+            search_tls_raw_events::ResponseData,
+            search_tls_raw_events
+        )
     }
 
     async fn search_smb_raw_events<'ctx>(
@@ -1315,13 +1705,27 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.smb_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Smb>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+
+            let store = db.smb_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Smb>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchSmbRawEvents,
+            search_smb_raw_events::Variables,
+            search_smb_raw_events::ResponseData,
+            search_smb_raw_events
+        )
     }
 
     async fn search_nfs_raw_events<'ctx>(
@@ -1329,13 +1733,26 @@ impl NetworkQuery {
         ctx: &Context<'ctx>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.nfs_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-        Ok(collect_exist_timestamp::<Nfs>(&exist_data, &filter))
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.nfs_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Nfs>(&exist_data, filter))
+        };
+
+        events_in_cluster!(
+            ctx,
+            filter,
+            handler,
+            SearchNfsRawEvents,
+            search_nfs_raw_events::Variables,
+            search_nfs_raw_events::ResponseData,
+            search_nfs_raw_events
+        )
     }
 }
 
@@ -1661,16 +2078,86 @@ fn network_connection(
     Ok(connection)
 }
 
+impl_from_giganto_range_structs_for_graphql_client!(
+    conn_raw_events,
+    dns_raw_events,
+    http_raw_events,
+    rdp_raw_events,
+    smtp_raw_events,
+    ntlm_raw_events,
+    kerberos_raw_events,
+    ssh_raw_events,
+    dce_rpc_raw_events,
+    ftp_raw_events,
+    mqtt_raw_events,
+    ldap_raw_events,
+    tls_raw_events,
+    nfs_raw_events,
+    smb_raw_events,
+    search_conn_raw_events,
+    search_dce_rpc_raw_events,
+    search_dns_raw_events,
+    search_ftp_raw_events,
+    search_http_raw_events,
+    search_kerberos_raw_events,
+    search_ldap_raw_events,
+    search_mqtt_raw_events,
+    search_nfs_raw_events,
+    search_ntlm_raw_events,
+    search_rdp_raw_events,
+    search_smb_raw_events,
+    search_smtp_raw_events,
+    search_ssh_raw_events,
+    search_tls_raw_events
+);
+
+impl_from_giganto_network_filter_for_graphql_client!(
+    conn_raw_events,
+    dns_raw_events,
+    http_raw_events,
+    rdp_raw_events,
+    smtp_raw_events,
+    ntlm_raw_events,
+    kerberos_raw_events,
+    ssh_raw_events,
+    dce_rpc_raw_events,
+    ftp_raw_events,
+    mqtt_raw_events,
+    ldap_raw_events,
+    tls_raw_events,
+    nfs_raw_events,
+    smb_raw_events
+);
+
+impl_from_giganto_search_filter_for_graphql_client!(
+    search_conn_raw_events,
+    search_dce_rpc_raw_events,
+    search_dns_raw_events,
+    search_ftp_raw_events,
+    search_http_raw_events,
+    search_kerberos_raw_events,
+    search_ldap_raw_events,
+    search_mqtt_raw_events,
+    search_nfs_raw_events,
+    search_ntlm_raw_events,
+    search_rdp_raw_events,
+    search_smb_raw_events,
+    search_smtp_raw_events,
+    search_ssh_raw_events,
+    search_tls_raw_events
+);
+
 #[cfg(test)]
 mod tests {
-    use crate::graphql::TestSchema;
+    use crate::graphql::tests::TestSchema;
     use crate::storage::RawEventStore;
     use chrono::{Duration, TimeZone, Utc};
     use giganto_client::ingest::network::{
         Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
     };
+    use mockito;
     use std::mem;
-    use std::net::IpAddr;
+    use std::net::{IpAddr, SocketAddr};
 
     #[tokio::test]
     async fn conn_empty() {
@@ -1680,7 +2167,7 @@ mod tests {
             connRawEvents(
                 filter: {
                     time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                    source: "a"
+                    source: "ingest_source_1"
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     origPort: { start: 46377, end: 46380 }
@@ -1699,6 +2186,69 @@ mod tests {
         }"#;
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{connRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn conn_empty_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            connRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    source: "ingest src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 50, end: 200 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "connRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(res.data.to_string(), "{connRawEvents: {edges: []}}");
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1764,6 +2314,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conn_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            connRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                    source: "ingest src 2"
+                    origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46378, end: 46379 }
+                    respPort: { start: 50, end: 200 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "connRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 46378,
+                                "respPort": 443,
+                                "proto": 6,
+                                "service": "-",
+                                "duration": 324234,
+                                "origBytes": 0,
+                                "respBytes": 0,
+                                "origPkts": 6,
+                                "respPkts": 0
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn dns_empty() {
         let schema = TestSchema::new();
         let query = r#"
@@ -1796,6 +2430,74 @@ mod tests {
             res.data.to_string(),
             "{dnsRawEvents: {edges: [],pageInfo: {hasPreviousPage: false}}}"
         );
+    }
+
+    #[tokio::test]
+    async fn dns_empty_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            dnsRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 100, end: 200 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+                pageInfo {
+                    hasPreviousPage
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "dnsRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{dnsRawEvents: {edges: [],pageInfo: {hasPreviousPage: false}}}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1866,6 +2568,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dns_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            dnsRawEvents(
+                filter: {
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                    respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+                last: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "dnsRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "31.3.245.133",
+                                "origPort": 46378,
+                                "respPort": 443,
+                                "lastTime": 123456789,
+                                "proto": 6,
+                                "query": "example.com",
+                                "answer": [
+                                    "192.168.1.1"
+                                ],
+                                "transId": 12345,
+                                "rtt": 567,
+                                "qclass": 1,
+                                "qtype": 1,
+                                "rcode": 0,
+                                "aaFlag": true,
+                                "tcFlag": false,
+                                "rdFlag": true,
+                                "raFlag": false,
+                                "ttl": [
+                                    3600,
+                                    1800,
+                                    900
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"31.3.245.133\",origPort: 46378}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn http_empty() {
         let schema = TestSchema::new();
         let query = r#"
@@ -1891,6 +2688,68 @@ mod tests {
         }"#;
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{httpRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn http_empty_giganto_cluster() {
+        // given
+        let query = r#"
+    {
+        httpRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2024-09-22T00:00:00Z" }
+                source: "src 2"
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    origPort,
+                }
+            }
+        }
+    }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+    {
+        "data": {
+            "httpRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": false,
+                    "hasNextPage": false
+                },
+                "edges": [
+                ]
+            }
+        }
+    }
+    "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(res.data.to_string(), "{httpRawEvents: {edges: []}}");
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1969,6 +2828,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            httpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "httpRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 46378,
+                                "respPort": 443,
+                                "proto": 6,
+                                "lastTime": 123456789,
+                                "method": "GET",
+                                "host": "example.com",
+                                "uri": "/path/to/resource",
+                                "referrer": "http://referrer.com",
+                                "version": "HTTP/1.1",
+                                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                                "requestLen": 1024,
+                                "responseLen": 2048,
+                                "statusCode": 200,
+                                "statusMsg": "OK",
+                                "username": "user123",
+                                "password": "pass456",
+                                "cookie": "session=abc123",
+                                "contentEncoding": "gzip",
+                                "contentType": "text/html",
+                                "cacheControl": "no-cache",
+                                "origFilenames": [
+                                    "file1.txt",
+                                    "file2.txt"
+                                ],
+                                "origMimeTypes": [
+                                    "text/plain",
+                                    "text/plain"
+                                ],
+                                "respFilenames": [
+                                    "response1.txt",
+                                    "response2.txt"
+                                ],
+                                "respMimeTypes": [
+                                    "text/plain",
+                                    "text/plain"
+                                    ]
+                                }
+                            }
+                        ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn rdp_empty() {
         let schema = TestSchema::new();
         let query = r#"
@@ -1994,6 +2964,68 @@ mod tests {
         }"#;
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{rdpRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
+    async fn rdp_empty_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            rdpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "ingest src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respPort: { start: 0, end: 200 }
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "rdpRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(res.data.to_string(), "{rdpRawEvents: {edges: []}}");
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2053,6 +3085,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rdp_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            rdpRawEvents(
+                filter: {
+                    time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 0, end: 200 }
+                }
+            first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                        respAddr,
+                        origPort,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "rdpRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 46378,
+                                "respPort": 54321,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "cookie": "session=xyz789"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\",respAddr: \"192.168.4.76\",origPort: 46378}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn smtp_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.smtp_store().unwrap();
@@ -2105,6 +3216,84 @@ mod tests {
         let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
 
         store.append(&key, &ser_smtp_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn smtp_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            smtpRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "smtpRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 25,
+                                "respPort": 587,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "mailfrom": "sender@example.com",
+                                "date": "2023-11-16T15:03:45+00:00",
+                                "from": "sender@example.com",
+                                "to": "recipient@example.com",
+                                "subject": "Test Email",
+                                "agent": "SMTP Client 1.0"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2164,6 +3353,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ntlm_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            ntlmRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "ntlmRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.1.200",
+                                "origPort": 12345,
+                                "respPort": 6789,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "username": "john_doe",
+                                "hostname": "client_machine",
+                                "domainname": "example.com",
+                                "serverNbComputerName": "server_nb_computer",
+                                "serverDnsComputerName": "server_dns_computer",
+                                "serverTreeName": "server_tree",
+                                "success": "true"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn kerberos_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.kerberos_store().unwrap();
@@ -2219,6 +3487,92 @@ mod tests {
         let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
         store.append(&key, &ser_kerberos_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn kerberos_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            kerberosRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "kerberosRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.1.200",
+                                "origPort": 12345,
+                                "respPort": 6789,
+                                "proto": 17,
+                                "lastTime": 987654321,
+                                "clientTime": 123456789,
+                                "serverTime": 987654321,
+                                "errorCode": 0,
+                                "clientRealm": "client_realm",
+                                "cnameType": 1,
+                                "clientName": [
+                                    "john_doe"
+                                ],
+                                "realm": "example.com",
+                                "snameType": 2,
+                                "serviceName": [
+                                    "service_name_1",
+                                    "service_name_2"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2283,6 +3637,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ssh_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            sshRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "sshRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 22,
+                                "respPort": 54321,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "version": 2,
+                                "authSuccess": "true",
+                                "authAttempts": 3,
+                                "direction": "inbound",
+                                "client": "ssh_client",
+                                "server": "ssh_server",
+                                "cipherAlg": "aes256-ctr",
+                                "macAlg": "hmac-sha2-256",
+                                "compressionAlg": "none",
+                                "kexAlg": "diffie-hellman-group14-sha1",
+                                "hostKeyAlg": "ssh-rsa",
+                                "hostKey": "ssh_host_key"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn dce_rpc_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.dce_rpc_store().unwrap();
@@ -2333,6 +3771,81 @@ mod tests {
         let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
 
         store.append(&key, &ser_dce_rpc_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dce_rpc_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            dceRpcRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "dceRpcRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 135,
+                                "respPort": 54321,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "rtt": 123456,
+                                "namedPipe": "example_pipe",
+                                "endpoint": "rpc_endpoint",
+                                "operation": "rpc_operation"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2397,6 +3910,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ftp_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            ftpRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "ftpRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 21,
+                                "respPort": 12345,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "user": "example_user",
+                                "password": "example_password",
+                                "command": "example_command",
+                                "replyCode": "200",
+                                "replyMsg": "Command OK",
+                                "dataPassive": true,
+                                "dataOrigAddr": "192.168.4.76",
+                                "dataRespAddr": "192.168.4.76",
+                                "dataRespPort": 54321,
+                                "file": "example_file.txt",
+                                "fileSize": 1024,
+                                "fileId": "123456789"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn mqtt_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.mqtt_store().unwrap();
@@ -2449,6 +4046,89 @@ mod tests {
         let ser_mqtt_body = bincode::serialize(&mqtt_body).unwrap();
 
         store.append(&key, &ser_mqtt_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mqtt_with_data_giganto_cluster() {
+        // given
+
+        let query = r#"
+        {
+            mqttRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "mqttRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 1883,
+                                "respPort": 5678,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "protocol": "MQTT",
+                                "version": 4,
+                                "clientId": "example_client_id",
+                                "connackReason": 0,
+                                "subscribe": [
+                                    "topic/example"
+                                ],
+                                "subackReason": [
+                                    0
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2505,6 +4185,100 @@ mod tests {
         let ser_ldap_body = bincode::serialize(&ldap_body).unwrap();
 
         store.append(&key, &ser_ldap_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ldap_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            ldapRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "ldapRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 389,
+                                "respPort": 636,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "messageId": 123,
+                                "version": 3,
+                                "opcode": [
+                                    "bind",
+                                    "search"
+                                ],
+                                "result": [
+                                    "success",
+                                    "noSuchObject"
+                                ],
+                                "diagnosticMessage": [
+                                    "",
+                                    "Object not found"
+                                ],
+                                "object": [
+                                    "CN=John Doe",
+                                    "OU=Users"
+                                ],
+                                "argument": [
+                                    "username",
+                                    "(&(objectClass=user)(sAMAccountName=jdoe))"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2575,6 +4349,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tls_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            tlsRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "tlsRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 443,
+                                "respPort": 54321,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "serverName": "example.com",
+                                "alpnProtocol": "h2",
+                                "ja3": "aabbccddeeff",
+                                "version": "TLSv1.2",
+                                "cipher": 256,
+                                "ja3S": "1122334455",
+                                "serial": "1234567890",
+                                "subjectCountry": "US",
+                                "subjectOrgName": "Organization",
+                                "subjectCommonName": "CommonName",
+                                "validityNotBefore": 1637076000,
+                                "validityNotAfter": 1668612000,
+                                "subjectAltName": "www.example.com",
+                                "issuerCountry": "CA",
+                                "issuerOrgName": "IssuerOrg",
+                                "issuerOrgUnitName": "IssuerUnit",
+                                "issuerCommonName": "IssuerCommon",
+                                "lastAlert": 789012345
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn smb_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.smb_store().unwrap();
@@ -2635,6 +4499,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn smb_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            smbRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "smbRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.77",
+                                "origPort": 445,
+                                "respPort": 12345,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "command": 1,
+                                "path": "\\share\\folder\\file.txt",
+                                "service": "IPC",
+                                "fileName": "file.txt",
+                                "fileSize": 1024,
+                                "resourceType": 1,
+                                "fid": 123,
+                                "createTime": 1609459200,
+                                "accessTime": 1637076000,
+                                "writeTime": 1668612000,
+                                "changeTime": 1700148000
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn nfs_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.nfs_store().unwrap();
@@ -2683,6 +4629,84 @@ mod tests {
         let ser_nfs_body = bincode::serialize(&nfs_body).unwrap();
 
         store.append(&key, &ser_nfs_body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn nfs_with_data_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            nfsRawEvents(
+                filter: {
+                    source: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        origAddr,
+                    }
+                }
+            }
+        }"#;
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "nfsRawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "origAddr": "192.168.4.76",
+                                "respAddr": "192.168.4.76",
+                                "origPort": 2049,
+                                "respPort": 54321,
+                                "proto": 6,
+                                "lastTime": 987654321,
+                                "readFiles": [
+                                    "file1.txt",
+                                    "file2.txt"
+                                ],
+                                "writeFiles": [
+                                    "file3.txt",
+                                    "file4.txt"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -3009,6 +5033,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_conn_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchConnRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchConnRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchConnRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn search_dns_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.dns_store().unwrap();
@@ -3042,6 +5116,56 @@ mod tests {
             res.data.to_string(),
             "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_dns_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchDnsRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                    origPort: { start: 70, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchDnsRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -3081,6 +5205,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_rdp_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchRdpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchRdpRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchRdpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn search_smtp_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.smtp_store().unwrap();
@@ -3114,6 +5288,56 @@ mod tests {
             res.data.to_string(),
             "{searchSmtpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_smtp_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchSmtpRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchSmtpRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchSmtpRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -3153,6 +5377,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_ntlm_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchNtlmRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchNtlmRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchNtlmRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn search_kerberos_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.kerberos_store().unwrap();
@@ -3186,6 +5460,55 @@ mod tests {
             res.data.to_string(),
             "{searchKerberosRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_kerberos_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            searchKerberosRawEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    source: "src 2"
+                    origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                    origPort: { start: 46377, end: 46380 }
+                    respPort: { start: 75, end: 85 }
+                    timestamps:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#;
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "searchKerberosRawEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{searchKerberosRawEvents: [\"2020-01-01T00:01:01+00:00\",\"2020-01-01T01:01:01+00:00\"]}"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
