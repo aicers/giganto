@@ -745,6 +745,8 @@ async fn handle_data<T>(
     let ack_time_notify = Arc::new(Notify::new());
     let ack_time_notified = ack_time_notify.clone();
 
+    let mut err_msg = None;
+
     #[cfg(feature = "benchmark")]
     let mut count = 0_usize;
     #[cfg(feature = "benchmark")]
@@ -783,38 +785,60 @@ async fn handle_data<T>(
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                 {
-                    send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
+                    if let Err(e) =
+                        send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await
+                    {
+                        err_msg = Some(format!("Failed to send ack timestamp: {e}"));
+                        break;
+                    }
                     continue;
                 }
                 let key_builder = StorageKey::builder().start_key(&source);
                 let key_builder = match raw_event_kind {
                     RawEventKind::Log => {
-                        let log = bincode::deserialize::<Log>(&raw_event)?;
+                        let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize Log".to_string());
+                            break;
+                        };
                         key_builder
                             .mid_key(Some(log.kind.as_bytes().to_vec()))
                             .end_key(timestamp)
                     }
                     RawEventKind::PeriodicTimeSeries => {
-                        let time_series = bincode::deserialize::<PeriodicTimeSeries>(&raw_event)?;
+                        let Ok(time_series) =
+                            bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
+                        else {
+                            err_msg = Some("Failed to deserialize PeriodicTimeSeries".to_string());
+                            break;
+                        };
                         StorageKey::builder()
                             .start_key(&time_series.id)
                             .end_key(timestamp)
                     }
                     RawEventKind::OpLog => {
-                        let op_log = bincode::deserialize::<OpLog>(&raw_event)?;
+                        let Ok(op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize OpLog".to_string());
+                            break;
+                        };
                         let agent_id = format!("{}@{source}", op_log.agent_name);
                         StorageKey::builder()
                             .start_key(&agent_id)
                             .end_key(timestamp)
                     }
                     RawEventKind::Packet => {
-                        let packet = bincode::deserialize::<Packet>(&raw_event)?;
+                        let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize Packet".to_string());
+                            break;
+                        };
                         key_builder
                             .mid_key(Some(timestamp.to_be_bytes().to_vec()))
                             .end_key(packet.packet_timestamp)
                     }
                     RawEventKind::Statistics => {
-                        let statistics = bincode::deserialize::<Statistics>(&raw_event)?;
+                        let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize Statistics".to_string());
+                            break;
+                        };
                         #[cfg(feature = "benchmark")]
                         {
                             (packet_count, packet_size) = statistics
@@ -827,25 +851,49 @@ async fn handle_data<T>(
                             .end_key(timestamp)
                     }
                     RawEventKind::Netflow5 => {
-                        let mut netflow5 = bincode::deserialize::<Netflow5>(&raw_event)?;
+                        let Ok(mut netflow5) = bincode::deserialize::<Netflow5>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize Netflow5".to_string());
+                            break;
+                        };
+
                         netflow5.source = source.clone();
-                        raw_event = bincode::serialize(&netflow5)?;
+                        let Ok(serde_data) = bincode::serialize(&netflow5) else {
+                            err_msg = Some("Failed to serialize Netflow5".to_string());
+                            break;
+                        };
+                        raw_event = serde_data;
                         StorageKey::builder()
                             .start_key("netflow5")
                             .end_key(timestamp)
                     }
                     RawEventKind::Netflow9 => {
-                        let mut netflow9 = bincode::deserialize::<Netflow9>(&raw_event)?;
+                        let Ok(mut netflow9) = bincode::deserialize::<Netflow9>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize Netflow9".to_string());
+                            break;
+                        };
+
                         netflow9.source = source.clone();
-                        raw_event = bincode::serialize(&netflow9)?;
+                        let Ok(serde_data) = bincode::serialize(&netflow9) else {
+                            err_msg = Some("Failed to serialize Netflow9".to_string());
+                            break;
+                        };
+                        raw_event = serde_data;
                         StorageKey::builder()
                             .start_key("netflow9")
                             .end_key(timestamp)
                     }
                     RawEventKind::SecuLog => {
-                        let mut secu_log = bincode::deserialize::<SecuLog>(&raw_event)?;
+                        let Ok(mut secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
+                            err_msg = Some("Failed to deserialize SecuLog".to_string());
+                            break;
+                        };
+
                         secu_log.source = source.clone();
-                        raw_event = bincode::serialize(&secu_log)?;
+                        let Ok(serde_data) = bincode::serialize(&secu_log) else {
+                            err_msg = Some("Failed to serialize SecuLog".to_string());
+                            break;
+                        };
+                        raw_event = serde_data;
                         StorageKey::builder()
                             .start_key(&secu_log.kind)
                             .end_key(timestamp)
@@ -855,14 +903,18 @@ async fn handle_data<T>(
                 let storage_key = key_builder.build();
                 store.append(&storage_key.key(), &raw_event)?;
                 if let Some(network_key) = network_key.as_ref() {
-                    send_direct_stream(
+                    if let Err(e) = send_direct_stream(
                         network_key,
                         &raw_event,
                         timestamp,
                         &source,
                         stream_direct_channels.clone(),
                     )
-                    .await?;
+                    .await
+                    {
+                        err_msg = Some(format!("Failed to send stream events: {e}"));
+                        break;
+                    }
                 }
                 ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                 ack_time_rotation.store(timestamp, Ordering::SeqCst);
@@ -899,6 +951,7 @@ async fn handle_data<T>(
                 }
             }
             Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
+                store.flush()?;
                 handler.abort();
                 break;
             }
@@ -910,7 +963,9 @@ async fn handle_data<T>(
         }
     }
     store.flush()?;
-
+    if let Some(msg) = err_msg {
+        bail!(msg);
+    }
     Ok(())
 }
 
