@@ -8,7 +8,7 @@ use crate::server::{
     SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
-use crate::{IngestSources, PcapSources, StreamDirectChannels};
+use crate::{AckTransmissionCount, IngestSources, PcapSources, StreamDirectChannels};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
@@ -48,7 +48,6 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
-const ACK_ROTATION_CNT: u16 = 1024;
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
@@ -83,6 +82,7 @@ impl Server {
         }
     }
 
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub async fn run(
         self,
         db: Database,
@@ -91,6 +91,7 @@ impl Server {
         stream_direct_channels: StreamDirectChannels,
         notify_shutdown: Arc<Notify>,
         notify_source: Option<Arc<Notify>>,
+        ack_transmission_cnt: AckTransmissionCount,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -119,9 +120,10 @@ impl Server {
                     let stream_direct_channels = stream_direct_channels.clone();
                     let notify_shutdown = notify_shutdown.clone();
                     let shutdown_sig = shutdown_signal.clone();
+                    let ack_trans_cnt= ack_transmission_cnt.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig).await
+                            handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
                         {
                             error!("connection failed: {}", e);
                         }
@@ -140,6 +142,7 @@ impl Server {
     }
 }
 
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn handle_connection(
     conn: quinn::Connecting,
     db: Database,
@@ -148,6 +151,7 @@ async fn handle_connection(
     stream_direct_channels: StreamDirectChannels,
     notify_shutdown: Arc<Notify>,
     shutdown_signal: Arc<AtomicBool>,
+    ack_trans_cnt: AckTransmissionCount,
 ) -> Result<()> {
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
@@ -203,8 +207,9 @@ async fn handle_connection(
                 let db = db.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
                 let shutdown_signal = shutdown_signal.clone();
+                let ack_trans_cnt = ack_trans_cnt.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(source, stream, db, stream_direct_channels,shutdown_signal).await {
+                    if let Err(e) = handle_request(source, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
                         error!("failed: {}", e);
                     }
                 });
@@ -226,6 +231,7 @@ async fn handle_request(
     db: Database,
     stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
+    ack_trans_cnt: AckTransmissionCount,
 ) -> Result<()> {
     let mut buf = [0; 4];
     receive_record_header(&mut recv, &mut buf)
@@ -242,6 +248,7 @@ async fn handle_request(
                 db.conn_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -255,6 +262,7 @@ async fn handle_request(
                 db.dns_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -268,6 +276,7 @@ async fn handle_request(
                 db.log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -281,6 +290,7 @@ async fn handle_request(
                 db.http_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -294,6 +304,7 @@ async fn handle_request(
                 db.rdp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -307,6 +318,7 @@ async fn handle_request(
                 db.periodic_time_series_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -320,6 +332,7 @@ async fn handle_request(
                 db.smtp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -333,6 +346,7 @@ async fn handle_request(
                 db.ntlm_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -346,6 +360,7 @@ async fn handle_request(
                 db.kerberos_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -359,6 +374,7 @@ async fn handle_request(
                 db.ssh_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -372,6 +388,7 @@ async fn handle_request(
                 db.dce_rpc_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -385,6 +402,7 @@ async fn handle_request(
                 db.statistics_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -398,6 +416,7 @@ async fn handle_request(
                 db.op_log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -411,6 +430,7 @@ async fn handle_request(
                 db.packet_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -424,6 +444,7 @@ async fn handle_request(
                 db.ftp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -437,6 +458,7 @@ async fn handle_request(
                 db.mqtt_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -450,6 +472,7 @@ async fn handle_request(
                 db.ldap_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -463,6 +486,7 @@ async fn handle_request(
                 db.tls_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -476,6 +500,7 @@ async fn handle_request(
                 db.smb_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -489,6 +514,7 @@ async fn handle_request(
                 db.nfs_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -502,6 +528,7 @@ async fn handle_request(
                 db.process_create_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -515,6 +542,7 @@ async fn handle_request(
                 db.file_create_time_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -528,6 +556,7 @@ async fn handle_request(
                 db.network_connect_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -541,6 +570,7 @@ async fn handle_request(
                 db.process_terminate_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -554,6 +584,7 @@ async fn handle_request(
                 db.image_load_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -567,6 +598,7 @@ async fn handle_request(
                 db.file_create_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -580,6 +612,7 @@ async fn handle_request(
                 db.registry_value_set_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -593,6 +626,7 @@ async fn handle_request(
                 db.registry_key_rename_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -606,6 +640,7 @@ async fn handle_request(
                 db.file_create_stream_hash_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -619,6 +654,7 @@ async fn handle_request(
                 db.pipe_event_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -632,6 +668,7 @@ async fn handle_request(
                 db.dns_query_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -645,6 +682,7 @@ async fn handle_request(
                 db.file_delete_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -658,6 +696,7 @@ async fn handle_request(
                 db.process_tamper_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -671,6 +710,7 @@ async fn handle_request(
                 db.file_delete_detected_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -684,6 +724,7 @@ async fn handle_request(
                 db.netflow5_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -697,6 +738,7 @@ async fn handle_request(
                 db.netflow9_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -710,6 +752,7 @@ async fn handle_request(
                 db.secu_log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
+                ack_trans_cnt,
             )
             .await?;
         }
@@ -730,6 +773,7 @@ async fn handle_data<T>(
     store: RawEventStore<'_, T>,
     stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
+    ack_trans_cnt: AckTransmissionCount,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -918,7 +962,7 @@ async fn handle_data<T>(
                 }
                 ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
                 ack_time_rotation.store(timestamp, Ordering::SeqCst);
-                if ACK_ROTATION_CNT <= ack_cnt_rotation.load(Ordering::SeqCst) {
+                if *ack_trans_cnt.read().await <= ack_cnt_rotation.load(Ordering::SeqCst) {
                     send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
                     ack_cnt_rotation.store(0, Ordering::SeqCst);
                     ack_time_notify.notify_one();

@@ -12,6 +12,23 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added to call more flushes within the `handle_data` function of `ingest` that
   receive raw events. This change ensures that data is saved in all cases where the
   `handle_data` function terminates, such as when an `error` occurs.
+- Added functionality to control the sending of acknowledgments.
+  - Set the `ack transmission count` by reading from the config file.
+  - Changed the type of ack transmission count checked in `ingest` from `const u16`
+    to `AckTransmissionCount`(`Arc<RwLock<u16>>`).
+  - Added `set_ack_transmission_count` GraphQL query to set the ack transmission
+    count.This query changes the `AckTransmissionCount` used in ingest and
+    `ack_transmission` in the config file to the input `count` value.
+
+### Changed
+
+- Modify the `set_giganto_config` and `giganto_config` GraphQL queries to
+  read/write the ack transmission count.
+- Modify the `set_giganto_config` and `giganto_config` GraphQL queries so that
+  the fields that take integers read/write the config file for their respective
+  types.
+- Modify the `giganto_config` query so that config files that work in
+  `standalone mode` can also be read correctly.
 
 ## [0.15.4] - 2023-11-22
 

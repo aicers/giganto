@@ -30,7 +30,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 
@@ -1118,5 +1118,6 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
         stream_direct_channels,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),
+        Arc::new(RwLock::new(1024)),
     ))
 }
