@@ -46,6 +46,7 @@ ARG:
 pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type IngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
+pub type AckTransmissionCount = Arc<RwLock<u16>>;
 
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
@@ -114,6 +115,7 @@ async fn main() -> Result<()> {
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
         let mut notify_source_change = None;
+        let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
 
         let schema = graphql::schema(
             database.clone(),
@@ -121,6 +123,7 @@ async fn main() -> Result<()> {
             settings.export_dir.clone(),
             notify_config_reload.clone(),
             settings.cfg_path.clone(),
+            ack_transmission_cnt.clone(),
         );
         task::spawn(web::serve(
             schema,
@@ -184,6 +187,7 @@ async fn main() -> Result<()> {
             stream_direct_channels,
             notify_shutdown.clone(),
             notify_source_change,
+            ack_transmission_cnt,
         ));
 
         loop {
@@ -295,4 +299,8 @@ fn new_stream_direct_channels() -> StreamDirectChannels {
     Arc::new(RwLock::new(
         HashMap::<String, UnboundedSender<Vec<u8>>>::new(),
     ))
+}
+
+fn new_ack_transmission_count(count: u16) -> AckTransmissionCount {
+    Arc::new(RwLock::new(count))
 }

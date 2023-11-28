@@ -1,5 +1,6 @@
 #[cfg(debug_assertions)]
 use crate::storage::Database;
+use crate::AckTransmissionCount;
 use anyhow::{anyhow, Context as ct};
 use async_graphql::Context;
 use async_graphql::{InputObject, Object, Result, SimpleObject};
@@ -20,6 +21,8 @@ const CONFIG_RETENTION: &str = "retention";
 const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
 const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
 const CONFIG_PEER_ADDRESS: &str = "peer_address";
+const CONFIG_PEER_LIST: &str = "peers";
+const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
 
 pub trait TomlPeers {
     fn get_host_name(&self) -> String;
@@ -70,10 +73,11 @@ struct GigantoConfig {
     publish_address: String,
     graphql_address: String,
     retention: String,
-    max_open_files: String,
-    max_mb_of_level_base: String,
+    max_open_files: i32,
+    max_mb_of_level_base: u64,
     peer_address: String,
     peer_list: Vec<PeerList>,
+    ack_transmission_cnt: u16,
 }
 
 #[derive(InputObject)]
@@ -82,10 +86,11 @@ struct UserConfig {
     publish_address: Option<String>,
     graphql_address: Option<String>,
     retention: Option<String>,
-    max_open_files: Option<String>,
-    max_mb_of_level_base: Option<String>,
+    max_open_files: Option<i32>,
+    max_mb_of_level_base: Option<u64>,
     peer_address: Option<String>,
     peer_list: Option<Vec<PeerList>>,
+    ack_transmission_cnt: Option<u16>,
 }
 
 #[derive(Default)]
@@ -133,37 +138,44 @@ impl GigantoStatusQuery {
     async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
         let cfg_path = ctx.data::<String>()?;
         let doc = read_toml_file(cfg_path)?;
-        let ingest_address = parse_toml_element(CONFIG_INGEST_ADDRESS, &doc)?;
-        let publish_address = parse_toml_element(CONFIG_PUBLISH_ADDRESS, &doc)?;
-        let graphql_address = parse_toml_element(CONFIG_GRAPHQL_ADDRESS, &doc)?;
-        let retention = parse_toml_element(CONFIG_RETENTION, &doc)?;
-        let max_open_files = parse_toml_element(CONFIG_MAX_OPEN_FILES, &doc)?;
-        let max_mb_of_level_base = parse_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &doc)?;
-        let peer_address = parse_toml_element(CONFIG_PEER_ADDRESS, &doc)?;
-        let peers_value = doc
-            .get("peers")
-            .context("peers not found")?
-            .as_array()
-            .context("invalid peers format")?;
+        let ingest_address = parse_toml_element_to_string(CONFIG_INGEST_ADDRESS, &doc)?;
+        let publish_address = parse_toml_element_to_string(CONFIG_PUBLISH_ADDRESS, &doc)?;
+        let graphql_address = parse_toml_element_to_string(CONFIG_GRAPHQL_ADDRESS, &doc)?;
+        let retention = parse_toml_element_to_string(CONFIG_RETENTION, &doc)?;
+        let max_open_files = parse_toml_element_to_integer(CONFIG_MAX_OPEN_FILES, &doc)?;
+        let max_mb_of_level_base =
+            parse_toml_element_to_integer(CONFIG_MAX_MB_OF_LEVEL_BASE, &doc)?;
+        let ack_transmission_cnt = parse_toml_element_to_integer(CONFIG_ACK_TRANSMISSION, &doc)?;
         let mut peer_list = Vec::new();
-        for peer in peers_value {
-            if let Some(peer_data) = peer.as_inline_table() {
-                let (Some(address_val), Some(host_name_val)) =
-                    (peer_data.get("address"), peer_data.get("host_name"))
-                else {
-                    return Err(anyhow!("Invalid address/hostname Value format").into());
-                };
-                let (Some(address), Some(host_name)) =
-                    (address_val.as_str(), host_name_val.as_str())
-                else {
-                    return Err(anyhow!("Invalid address/hostname String format").into());
-                };
-                peer_list.push(PeerList {
-                    address: address.to_string(),
-                    host_name: host_name.to_string(),
-                });
+        let peer_address = if doc.get(CONFIG_PEER_ADDRESS).is_some() {
+            let peers_value = doc
+                .get(CONFIG_PEER_LIST)
+                .context("peers not found")?
+                .as_array()
+                .context("invalid peers format")?;
+            for peer in peers_value {
+                if let Some(peer_data) = peer.as_inline_table() {
+                    let (Some(address_val), Some(host_name_val)) =
+                        (peer_data.get("address"), peer_data.get("host_name"))
+                    else {
+                        return Err(anyhow!("Invalid address/hostname Value format").into());
+                    };
+                    let (Some(address), Some(host_name)) =
+                        (address_val.as_str(), host_name_val.as_str())
+                    else {
+                        return Err(anyhow!("Invalid address/hostname String format").into());
+                    };
+                    peer_list.push(PeerList {
+                        address: address.to_string(),
+                        host_name: host_name.to_string(),
+                    });
+                }
             }
-        }
+            parse_toml_element_to_string(CONFIG_PEER_ADDRESS, &doc)?
+        } else {
+            String::new()
+        };
+
         Ok(GigantoConfig {
             ingest_address,
             publish_address,
@@ -173,6 +185,7 @@ impl GigantoStatusQuery {
             max_mb_of_level_base,
             peer_address,
             peer_list,
+            ack_transmission_cnt,
         })
     }
 }
@@ -191,12 +204,16 @@ impl GigantoConfigMutation {
         insert_toml_element(CONFIG_PUBLISH_ADDRESS, &mut doc, field.publish_address);
         insert_toml_element(CONFIG_GRAPHQL_ADDRESS, &mut doc, field.graphql_address);
         insert_toml_element(CONFIG_RETENTION, &mut doc, field.retention);
-        insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, field.max_open_files);
-        insert_toml_element(
-            CONFIG_MAX_MB_OF_LEVEL_BASE,
-            &mut doc,
-            field.max_mb_of_level_base,
-        );
+        let convert_open_file = field.max_open_files.and_then(|x| i64::try_from(x).ok());
+        insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, convert_open_file);
+        let convert_level_base = field
+            .max_mb_of_level_base
+            .and_then(|x| i64::try_from(x).ok());
+        insert_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &mut doc, convert_level_base);
+        let convert_ack_trans_cnt = field
+            .ack_transmission_cnt
+            .and_then(|x| i64::try_from(x).ok());
+        insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
         insert_toml_element(CONFIG_PEER_ADDRESS, &mut doc, field.peer_address);
         insert_toml_peers(&mut doc, field.peer_list)?;
         write_toml_file(&doc, cfg_path)?;
@@ -207,6 +224,24 @@ impl GigantoConfigMutation {
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
             config_reload.notify_one();
         });
+
+        Ok("Done".to_string())
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn set_ack_transmission_count<'ctx>(
+        &self,
+        ctx: &async_graphql::Context<'ctx>,
+        count: u16,
+    ) -> Result<String> {
+        let cfg_path = ctx.data::<String>()?;
+        let mut doc = read_toml_file(cfg_path)?;
+        let convert_ack_trans_cnt = i64::try_from(count).ok();
+        insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
+        write_toml_file(&doc, cfg_path)?;
+
+        let ack_cnt = ctx.data::<AckTransmissionCount>()?;
+        *ack_cnt.write().await = count;
 
         Ok("Done".to_string())
     }
@@ -225,17 +260,36 @@ pub fn write_toml_file(doc: &Document, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_toml_element(key: &str, doc: &Document) -> Result<String> {
+fn parse_toml_element_to_string(key: &str, doc: &Document) -> Result<String> {
     let Some(item) = doc.get(key) else {
         return Err(anyhow!("{} not found.", key).into());
     };
     let Some(value) = item.as_str() else {
-        return Err(anyhow!("parse failed: {}'s format is not available.", key).into());
+        return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
     };
     Ok(value.to_string())
 }
 
-fn insert_toml_element(key: &str, doc: &mut Document, input: Option<String>) {
+fn parse_toml_element_to_integer<T>(key: &str, doc: &Document) -> Result<T>
+where
+    T: std::convert::TryFrom<i64>,
+{
+    let Some(item) = doc.get(key) else {
+        return Err(anyhow!("{} not found.", key).into());
+    };
+    let Some(value) = item.as_integer() else {
+        return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
+    };
+    let Ok(value) = T::try_from(value) else {
+        return Err(anyhow!("parse failed: {}'s value format is not available.", key).into());
+    };
+    Ok(value)
+}
+
+fn insert_toml_element<T>(key: &str, doc: &mut Document, input: Option<T>)
+where
+    T: std::convert::Into<toml_edit::Value>,
+{
     if let Some(element) = input {
         doc[key] = value(element);
     };

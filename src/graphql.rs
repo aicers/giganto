@@ -16,7 +16,7 @@ use crate::{
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
-    PcapSources,
+    AckTransmissionCount, PcapSources,
 };
 use anyhow::anyhow;
 use async_graphql::{
@@ -99,6 +99,7 @@ pub fn schema(
     export_path: PathBuf,
     config_reload: Arc<Notify>,
     config_file_path: String,
+    ack_transmission_cnt: AckTransmissionCount,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(database)
@@ -106,6 +107,7 @@ pub fn schema(
         .data(export_path)
         .data(config_reload)
         .data(config_file_path)
+        .data(ack_transmission_cnt)
         .finish()
 }
 
@@ -618,6 +620,7 @@ impl TestSchema {
     fn new() -> Self {
         use crate::new_pcap_sources;
         use crate::storage::DbOptions;
+        use tokio::sync::RwLock;
 
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
@@ -630,6 +633,7 @@ impl TestSchema {
             export_dir.path().to_path_buf(),
             config_reload,
             "file_path".to_string(),
+            Arc::new(RwLock::new(1024)),
         );
         Self {
             _dir: db_dir,

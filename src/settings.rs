@@ -8,6 +8,7 @@ const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
+const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
@@ -38,6 +39,9 @@ pub struct Settings {
     #[serde(deserialize_with = "deserialize_peer_addr")]
     pub peer_address: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerInfo>>,
+
+    //ack transmission interval
+    pub ack_transmission: u16,
 }
 
 impl Settings {
@@ -118,7 +122,9 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
         .expect("default config dir")
         .set_default("peer_address", DEFAULT_INVALID_PEER_ADDRESS)
-        .expect("peer address")
+        .expect("default ack transmission")
+        .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)
+        .expect("ack_transmission")
 }
 
 /// Deserializes a socket address.
