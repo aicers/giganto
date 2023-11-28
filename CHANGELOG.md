@@ -5,6 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added to call more flushes within the `handle_data` function of `ingest` that
+  receive raw events. This change ensures that data is saved in all cases where the
+  `handle_data` function terminates, such as when an `error` occurs.
+
 ## [0.15.4] - 2023-11-22
 
 ### Added
@@ -356,6 +364,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.15.4...main
 [0.15.4]: <https://github.com/aicers/giganto/compare/0.15.3...0.15.4>
 [0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
 [0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>
