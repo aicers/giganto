@@ -1,7 +1,7 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, check_address, check_port, collect_exist_timestamp, get_peekable_iter,
-    get_timestamp_from_key, load_connection, min_max_time, Engine, FromKeyValue,
+    base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
+    get_peekable_iter, get_timestamp_from_key, load_connection, min_max_time, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
@@ -89,7 +89,7 @@ impl RawEventFilter for NetworkFilter {
         orig_port: Option<u16>,
         resp_port: Option<u16>,
         _log_level: Option<String>,
-        _log_contents: Option<String>,
+        log_contents: Option<String>,
         _text: Option<String>,
         _source: Option<String>,
     ) -> Result<bool> {
@@ -97,6 +97,7 @@ impl RawEventFilter for NetworkFilter {
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
+            && check_agent_id(&self.log_contents, log_contents)
         {
             return Ok(true);
         }
