@@ -1,0 +1,14 @@
+query Statistics($sources: [String!]!, $time: TimeRange, $protocols: [String!], $requestFromPeer: Boolean){
+    statistics(sources: $sources, time: $time, protocols: $protocols, requestFromPeer: $requestFromPeer) {
+        source
+        stats {
+            timestamp
+            detail {
+                protocol
+                bps
+                pps
+                eps
+            }
+        }
+    }
+}

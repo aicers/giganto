@@ -373,10 +373,11 @@ type GigantoConfig {
   publishAddress: String!
   graphqlAddress: String!
   retention: String!
-  maxOpenFiles: String!
-  maxMbOfLevelBase: String!
+  maxOpenFiles: Int!
+  maxMbOfLevelBase: Int!
   peerAddress: String!
   peerList: [PeerList!]!
+  ackTransmissionCnt: Int!
 }
 
 type GigantoStatus {
@@ -633,6 +634,100 @@ type MqttRawEventEdge {
 
 type Mutation {
   setGigantoConfig(field: UserConfig!): String!
+  setAckTransmissionCount(count: Int!): String!
+}
+
+type Netflow5RawEvent {
+  timestamp: DateTime!
+  source: String!
+  srcAddr: String!
+  dstAddr: String!
+  nextHop: String!
+  input: Int!
+  output: Int!
+  dPkts: Int!
+  dOctets: Int!
+  first: String!
+  last: String!
+  srcPort: Int!
+  dstPort: Int!
+  tcpFlags: String!
+  prot: Int!
+  tos: String!
+  srcAs: Int!
+  dstAs: Int!
+  srcMask: Int!
+  dstMask: Int!
+  sequence: Int!
+  engineType: Int!
+  engineId: Int!
+  samplingMode: String!
+  samplingRate: Int!
+}
+
+type Netflow5RawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [Netflow5RawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [Netflow5RawEvent!]!
+}
+
+# An edge in a connection.
+type Netflow5RawEventEdge {
+  # The item at the end of the edge
+  node: Netflow5RawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input NetflowFilter {
+  time: TimeRange
+  source: String
+  kind: String
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+  contents: String
+}
+
+type NetflowV9RawEvent {
+  timestamp: DateTime!
+  source: String!
+  sequence: Int!
+  sourceId: Int!
+  templateId: Int!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  contents: String!
+}
+
+type NetflowV9RawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [NetflowV9RawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [NetflowV9RawEvent!]!
+}
+
+# An edge in a connection.
+type NetflowV9RawEventEdge {
+  # The item at the end of the edge
+  node: NetflowV9RawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
 }
 
 type NetworkConnectionEvent {
@@ -1201,12 +1296,10 @@ type Query {
   gigantoConfig: GigantoConfig!
   sources: [String!]!
   statistics(
-    filter: StatisticsFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): StatisticsRawEventConnection!
+    time: TimeRange
+    sources: [String!]!
+    protocols: [String!]
+  ): [StatisticsRawEvent!]!
   processCreateEvents(
     filter: NetworkFilter!
     after: String
@@ -1319,6 +1412,37 @@ type Query {
   searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
   searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
   searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
+  sysmonEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): SysmonEventsConnection!
+  secuLogRawEvents(
+    filter: SecuLogFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+    requestFromPeer: Boolean
+  ): SecuLogRawEventConnection!
+  netflow5RawEvents(
+    filter: NetflowFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+    requestFromPeer: Boolean
+  ): Netflow5RawEventConnection!
+  netflow9RawEvents(
+    filter: NetflowFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+    requestFromPeer: Boolean
+  ): NetflowV9RawEventConnection!
 }
 
 type RdpRawEvent {
@@ -1429,6 +1553,50 @@ input SearchFilter {
   logContents: String
   timestamps: [DateTime!]!
   keyword: String
+}
+
+input SecuLogFilter {
+  time: TimeRange
+  source: String
+  kind: String!
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+  log: String
+}
+
+type SecuLogRawEvent {
+  timestamp: DateTime!
+  source: String!
+  logType: String!
+  version: String!
+  origAddr: String
+  origPort: Int
+  respAddr: String
+  respPort: Int
+  proto: Int
+  contents: String!
+}
+
+type SecuLogRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [SecuLogRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [SecuLogRawEvent!]!
+}
+
+# An edge in a connection.
+type SecuLogRawEventEdge {
+  # The item at the end of the edge
+  node: SecuLogRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
 }
 
 type SmbRawEvent {
@@ -1550,34 +1718,54 @@ type SshRawEventEdge {
   cursor: String!
 }
 
-input StatisticsFilter {
-  time: TimeRange
-  source: String!
-  core: Int!
+type StatisticsDetail {
+  protocol: String!
+  bps: Float
+  pps: Float
+  eps: Float
+}
+
+type StatisticsInfo {
+  timestamp: Int!
+  detail: [StatisticsDetail!]!
 }
 
 type StatisticsRawEvent {
-  timestamp: DateTime!
-  core: Int!
-  period: Int!
-  stats: [String!]!
+  source: String!
+  stats: [StatisticsInfo!]!
 }
 
-type StatisticsRawEventConnection {
+union SysmonEvents =
+    ProcessCreateEvent
+  | FileCreationTimeChangedEvent
+  | NetworkConnectionEvent
+  | ProcessTerminatedEvent
+  | ImageLoadedEvent
+  | FileCreateEvent
+  | RegistryValueSetEvent
+  | RegistryKeyValueRenameEvent
+  | FileCreateStreamHashEvent
+  | PipeEventEvent
+  | DnsEventEvent
+  | FileDeleteEvent
+  | ProcessTamperingEvent
+  | FileDeleteDetectedEvent
+
+type SysmonEventsConnection {
   # Information to aid in pagination.
   pageInfo: PageInfo!
 
   # A list of edges.
-  edges: [StatisticsRawEventEdge!]!
+  edges: [SysmonEventsEdge!]!
 
   # A list of nodes.
-  nodes: [StatisticsRawEvent!]!
+  nodes: [SysmonEvents!]!
 }
 
 # An edge in a connection.
-type StatisticsRawEventEdge {
+type SysmonEventsEdge {
   # The item at the end of the edge
-  node: StatisticsRawEvent!
+  node: SysmonEvents!
 
   # A cursor for use in pagination
   cursor: String!
@@ -1672,8 +1860,9 @@ input UserConfig {
   publishAddress: String
   graphqlAddress: String
   retention: String
-  maxOpenFiles: String
-  maxMbOfLevelBase: String
+  maxOpenFiles: Int
+  maxMbOfLevelBase: Int
   peerAddress: String
   peerList: [InputPeerList!]
+  ackTransmissionCnt: Int
 }

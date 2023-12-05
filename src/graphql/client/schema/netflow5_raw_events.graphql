@@ -1,0 +1,40 @@
+query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean ){
+    netflow5RawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                source
+                srcAddr
+                dstAddr
+                nextHop
+                input
+                output
+                dPkts
+                dOctets
+                first
+                last
+                srcPort
+                dstPort
+                tcpFlags
+                prot
+                tos
+                srcAs
+                dstAs
+                srcMask
+                dstMask
+                sequence
+                engineType
+                engineId
+                samplingMode
+                samplingRate
+            }
+        }
+    }
+}

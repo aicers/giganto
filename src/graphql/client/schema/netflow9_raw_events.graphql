@@ -1,0 +1,26 @@
+query Netflow9RawEvents($filter: NetflowFilter!, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean ){
+    netflow9RawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                source
+                sequence
+                sourceId
+                templateId
+                origAddr
+                origPort
+                respAddr
+                respPort
+                proto
+                contents
+            }
+        }
+    }
+}

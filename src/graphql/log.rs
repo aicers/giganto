@@ -1,4 +1,10 @@
-use super::{base64_engine, get_timestamp_from_key, load_connection, Engine, FromKeyValue};
+use super::{
+    base64_engine,
+    client::derives::{log_raw_events, LogRawEvents},
+    get_timestamp_from_key, handle_paged_events,
+    impl_from_giganto_time_range_struct_for_graphql_client, load_connection,
+    paged_events_in_cluster, Engine, FromKeyValue,
+};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -10,6 +16,8 @@ use async_graphql::{
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{Log, OpLog};
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
@@ -120,7 +128,8 @@ impl RawEventFilter for OpLogFilter {
     }
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [log_raw_events::LogRawEventsLogRawEventsEdgesNode, ])]
 struct LogRawEvent {
     timestamp: DateTime<Utc>,
     log: String,
@@ -152,6 +161,20 @@ impl FromKeyValue<OpLog> for OpLogRawEvent {
     }
 }
 
+async fn handle_log_raw_events<'ctx>(
+    ctx: &Context<'_>,
+    filter: LogFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, LogRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.log_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 #[Object]
 impl LogQuery {
     async fn log_raw_events<'ctx>(
@@ -166,19 +189,23 @@ impl LogQuery {
         if filter.kind.is_none() {
             return Err(anyhow!("log query failed: kind is required").into());
         }
-        let db = ctx.data::<Database>()?;
-        let store = db.log_store()?;
 
-        query(
+        let handler = handle_log_raw_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            LogRawEvents,
+            log_raw_events::Variables,
+            log_raw_events::ResponseData,
+            log_raw_events
         )
-        .await
     }
 
     async fn op_log_raw_events<'ctx>(
@@ -205,6 +232,25 @@ impl LogQuery {
         .await
     }
 }
+
+macro_rules! impl_from_giganto_log_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<LogFilter> for $autogen_mod::LogFilter {
+                fn from(filter: LogFilter) -> Self {
+                    Self {
+                        time:   filter.time.map(Into::into),
+                        source: filter.source,
+                        kind:   filter.kind,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_from_giganto_time_range_struct_for_graphql_client!(log_raw_events);
+impl_from_giganto_log_filter_for_graphql_client!(log_raw_events);
 
 #[cfg(test)]
 mod tests {

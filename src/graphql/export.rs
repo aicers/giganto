@@ -2,9 +2,13 @@ use super::{
     check_address, check_port,
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
-    IpRange, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    IpRange, NodeName, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::{
+    graphql::{
+        client::derives::{export as exports, Export as Exports},
+        events_in_cluster, impl_from_giganto_range_structs_for_graphql_client,
+    },
     ingest::implement::EventFilter,
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
@@ -29,6 +33,7 @@ use giganto_client::{
     },
     RawEventKind,
 };
+use graphql_client::GraphQLQuery;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Cow,
@@ -1423,7 +1428,7 @@ fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
 }
 
 #[allow(clippy::module_name_repetitions)]
-#[derive(InputObject, Serialize)]
+#[derive(InputObject, Serialize, Clone)]
 pub struct ExportFilter {
     protocol: String,
     source_id: String,
@@ -1491,6 +1496,28 @@ impl RawEventFilter for ExportFilter {
     }
 }
 
+fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
+    let db = ctx.data::<Database>()?;
+    let path = ctx.data::<PathBuf>()?;
+    let node_name = ctx.data::<NodeName>()?;
+
+    // set export file path
+    if !path.exists() {
+        fs::create_dir_all(path)?;
+    }
+    let filename = format!(
+        "{}_{}.dump",
+        filter.protocol,
+        Local::now().format("%Y%m%d_%H%M%S"),
+    );
+    let export_path = path.join(filename.replace(' ', ""));
+    let download_path = format!("{}@{}", export_path.display(), node_name.0);
+
+    export_by_protocol(db.clone(), filter, export_type, export_path)?;
+
+    Ok(download_path)
+}
+
 #[Object]
 impl ExportQuery {
     #[allow(clippy::unused_async)]
@@ -1521,34 +1548,32 @@ impl ExportQuery {
             return Err(anyhow!("Invalid export file format").into());
         }
 
-        let db = ctx.data::<Database>()?;
-        let path = ctx.data::<PathBuf>()?;
+        let handler = handle_export;
 
-        // set export file path
-        if !path.exists() {
-            fs::create_dir_all(path)?;
-        }
-        let filename = format!(
-            "{}_{}.dump",
-            &filter.protocol,
-            Local::now().format("%Y%m%d_%H%M%S"),
-        );
-        let export_path = path.join(filename.replace(' ', ""));
-        let download_path = export_path.display().to_string();
-
-        export_by_protocol(db.clone(), filter, export_type, export_path)?;
-
-        Ok(download_path)
+        events_in_cluster!(
+            ctx,
+            filter,
+            filter.source_id,
+            handler,
+            Exports,
+            exports::Variables,
+            exports::ResponseData,
+            export,
+            String,
+            with_extra_handler_args (export_type),
+            with_extra_query_args (export_type := export_type)
+        )
     }
 }
 
 #[allow(clippy::too_many_lines)]
 fn export_by_protocol(
     db: Database,
-    filter: ExportFilter,
+    filter: &ExportFilter,
     export_type: String,
     export_path: PathBuf,
 ) -> Result<()> {
+    let filter = filter.clone();
     match filter.protocol.as_str() {
         "conn" => tokio::spawn(async move {
             if let Ok(store) = db.conn_store() {
@@ -2296,6 +2321,32 @@ where
     }
 }
 
+macro_rules! impl_from_giganto_export_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<ExportFilter> for $autogen_mod::ExportFilter {
+                fn from(filter: ExportFilter) -> Self {
+                    Self {
+                        protocol: filter.protocol,
+                        source_id: filter.source_id,
+                        agent_name: filter.agent_name,
+                        agent_id: filter.agent_id,
+                        kind: filter.kind,
+                        time: filter.time.map(Into::into),
+                        orig_addr: filter.orig_addr.map(Into::into),
+                        resp_addr: filter.resp_addr.map(Into::into),
+                        orig_port: filter.orig_port.map(Into::into),
+                        resp_port: filter.resp_port.map(Into::into),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_from_giganto_range_structs_for_graphql_client!(exports);
+impl_from_giganto_export_filter_for_graphql_client!(exports);
+
 #[cfg(test)]
 mod tests {
     use crate::graphql::tests::TestSchema;
@@ -2321,7 +2372,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "log",
-                    sourceId: "src3",
+                    sourceId: "src1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 }
@@ -2336,7 +2387,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "conn",
-                    sourceId: "src3",
+                    sourceId: "src1",
                     kind: "log1"
                 }
                 ,exportType:"json")
@@ -2350,7 +2401,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "conn",
-                    sourceId: "src3",
+                    sourceId: "src1",
                 }
                 ,exportType:"ppt")
         }"#;
@@ -2363,7 +2414,7 @@ mod tests {
              export(
                  filter:{
                      protocol: "invalid_proto",
-                     sourceId: "src3",
+                     sourceId: "src1",
                  }
                  ,exportType:"json")
          }"#;
@@ -2377,7 +2428,11 @@ mod tests {
         let store = schema.db.conn_store().unwrap();
 
         insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_conn_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_conn_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2403,7 +2458,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "conn",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2447,7 +2502,11 @@ mod tests {
         let store = schema.db.dns_store().unwrap();
 
         insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_dns_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dns_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2473,7 +2532,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "dns",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
@@ -2523,7 +2582,11 @@ mod tests {
         let store = schema.db.http_store().unwrap();
 
         insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_http_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_http_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2549,7 +2612,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "http",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2607,7 +2670,11 @@ mod tests {
         let store = schema.db.rdp_store().unwrap();
 
         insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_rdp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_rdp_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2633,7 +2700,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "rdp",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2672,7 +2739,11 @@ mod tests {
         let store = schema.db.smtp_store().unwrap();
 
         insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_smtp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smtp_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2698,7 +2769,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "smtp",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.70", end: "192.168.4.78" }
@@ -2742,7 +2813,11 @@ mod tests {
         let store = schema.db.ntlm_store().unwrap();
 
         insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_ntlm_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ntlm_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2768,7 +2843,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "ntlm",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2813,7 +2888,11 @@ mod tests {
         let store = schema.db.kerberos_store().unwrap();
 
         insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_kerberos_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_kerberos_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2839,7 +2918,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "kerberos",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2886,7 +2965,11 @@ mod tests {
         let store = schema.db.ssh_store().unwrap();
 
         insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_ssh_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ssh_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2912,7 +2995,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "ssh",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -2961,7 +3044,11 @@ mod tests {
         let store = schema.db.dce_rpc_store().unwrap();
 
         insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_dce_rpc_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_dce_rpc_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -2987,7 +3074,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "dce rpc",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3036,7 +3123,7 @@ mod tests {
         );
         insert_log_raw_event(
             &store,
-            "src2",
+            "ingest src 1",
             Utc::now().timestamp_nanos_opt().unwrap(),
             "kind2",
             b"log2",
@@ -3063,7 +3150,7 @@ mod tests {
                     export(
                         filter:{
                             protocol: "log",
-                            sourceId: "src2",
+                            sourceId: "ingest src 1",
                             kind: "kind2",
                             time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                         }
@@ -3101,13 +3188,13 @@ mod tests {
 
         insert_time_series(
             &store,
-            "1",
+            "src1",
             Utc::now().timestamp_nanos_opt().unwrap(),
             vec![0.0; 12],
         );
         insert_time_series(
             &store,
-            "2",
+            "ingest src 1",
             Utc::now().timestamp_nanos_opt().unwrap(),
             vec![0.0; 12],
         );
@@ -3118,7 +3205,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "periodic time series",
-                    sourceId: "1",
+                    sourceId: "src1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 }
                 ,exportType:"csv")
@@ -3132,7 +3219,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "periodic time series",
-                    sourceId: "2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 }
                 ,exportType:"json")
@@ -3173,7 +3260,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "op_log",
-                    sourceId: "agent1@src 1",
+                    sourceId: "src1",
                 }
                 ,exportType:"csv")
         }"#;
@@ -3186,7 +3273,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "op_log",
-                    sourceId: "agent2@src 1",
+                    sourceId: "src1",
                 }
                 ,exportType:"json")
         }"#;
@@ -3196,7 +3283,7 @@ mod tests {
 
     fn insert_op_log_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
         let mut key: Vec<u8> = Vec::new();
-        let agent_id = format!("{agent_name}@src 1");
+        let agent_id = format!("{agent_name}@src1");
         key.extend_from_slice(agent_id.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());
@@ -3218,7 +3305,11 @@ mod tests {
         let store = schema.db.ftp_store().unwrap();
 
         insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_ftp_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ftp_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3244,7 +3335,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "ftp",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3294,7 +3385,11 @@ mod tests {
         let store = schema.db.mqtt_store().unwrap();
 
         insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_mqtt_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_mqtt_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3320,7 +3415,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "mqtt",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3364,7 +3459,11 @@ mod tests {
         let store = schema.db.ldap_store().unwrap();
 
         insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_ldap_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_ldap_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3390,7 +3489,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "ldap",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3435,7 +3534,11 @@ mod tests {
         let store = schema.db.tls_store().unwrap();
 
         insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_tls_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_tls_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3461,7 +3564,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "tls",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3517,7 +3620,11 @@ mod tests {
         let store = schema.db.smb_store().unwrap();
 
         insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_smb_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_smb_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3543,7 +3650,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "smb",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -3592,7 +3699,11 @@ mod tests {
         let store = schema.db.nfs_store().unwrap();
 
         insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-        insert_nfs_raw_event(&store, "src2", Utc::now().timestamp_nanos_opt().unwrap());
+        insert_nfs_raw_event(
+            &store,
+            "ingest src 1",
+            Utc::now().timestamp_nanos_opt().unwrap(),
+        );
 
         // export csv file
         let query = r#"
@@ -3618,7 +3729,7 @@ mod tests {
             export(
                 filter:{
                     protocol: "nfs",
-                    sourceId: "src2",
+                    sourceId: "ingest src 1",
                     time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                     respAddr: { start: "192.168.4.75", end: "192.168.4.79" }

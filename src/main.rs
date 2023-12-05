@@ -7,7 +7,11 @@ mod settings;
 mod storage;
 mod web;
 
-use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
+use crate::{
+    graphql::NodeName,
+    server::{certificate_info, SERVER_REBOOT_DELAY},
+    storage::migrate_data_dir,
+};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::init_tracing;
@@ -126,6 +130,7 @@ async fn main() -> Result<()> {
         let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
 
         let schema = graphql::schema(
+            NodeName(certificate_info(&cert)?.1),
             database.clone(),
             pcap_sources.clone(),
             ingest_sources.clone(),

@@ -9,6 +9,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
         edges {
             cursor
             node {
+                __typename
                 ... on ConnRawEvent {
                     timestamp
                     origAddr
@@ -107,18 +108,15 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     respPort
                     proto
                     lastTime
-                    requestType
-                    client
-                    service
-                    success
-                    errorMsg
-                    from
-                    till
-                    cipher
-                    forwardable
-                    renewable
-                    clientCertSubject
-                    serverCertSubject
+                    clientTime
+                    serverTime
+                    errorCode
+                    clientRealm
+                    cnameType
+                    clientName
+                    realm
+                    snameType
+                    serviceName
                 }
                 ... on SshRawEvent {
                     timestamp
@@ -173,7 +171,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     dataRespPort
                     file
                     fileSize
-                    field
+                    fileId
                 }
                 ... on MqttRawEvent {
                     timestamp
