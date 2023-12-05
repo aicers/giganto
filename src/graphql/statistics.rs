@@ -2,12 +2,17 @@
 
 use super::TIMESTAMP_SIZE;
 use crate::{
-    graphql::TimeRange,
+    graphql::{
+        client::derives::{statistics as stats, Statistics as Stats},
+        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client, TimeRange,
+    },
     storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
 use anyhow::anyhow;
-use async_graphql::{Context, Object, Result, SimpleObject};
+use async_graphql::{Context, Error, Object, Result, SimpleObject};
 use giganto_client::{ingest::statistics::Statistics, RawEventKind};
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
@@ -39,19 +44,24 @@ const STATS_ALLOWED_KINDS: [RawEventKind; 16] = [
     RawEventKind::Statistics,
 ];
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [stats::StatisticsStatistics, ])]
 pub struct StatisticsRawEvent {
     pub source: String,
+    #[graphql_client_type(recursive_into = true)]
     pub stats: Vec<StatisticsInfo>,
 }
 
-#[derive(SimpleObject, Debug, Clone)]
+#[derive(SimpleObject, Debug, Clone, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [stats::StatisticsStatisticsStats, ])]
 pub struct StatisticsInfo {
     pub timestamp: i64,
+    #[graphql_client_type(recursive_into = true)]
     pub detail: Vec<StatisticsDetail>,
 }
 
-#[derive(SimpleObject, Debug, Default, Clone)]
+#[derive(SimpleObject, Debug, Default, Clone, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [stats::StatisticsStatisticsStatsDetail, ])]
 pub struct StatisticsDetail {
     pub protocol: String,
     pub bps: Option<f64>,
@@ -62,47 +72,73 @@ pub struct StatisticsDetail {
 #[derive(Default)]
 pub(super) struct StatisticsQuery;
 
+async fn handle_statistics(
+    ctx: &Context<'_>,
+    sources: &Vec<String>,
+    time: &Option<TimeRange>,
+    protocols: &Option<Vec<String>>,
+) -> Result<Vec<StatisticsRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let mut total_stats: Vec<StatisticsRawEvent> = Vec::new();
+    let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
+
+    // Configure the protocol HashSet for which statistics output is allowed.
+    let raw_event_kinds = if let Some(protocols) = &protocols {
+        let mut records = HashSet::new();
+        for proto in protocols {
+            records.insert(convert_to_stats_allowed_type(proto)?);
+        }
+        records
+    } else {
+        STATS_ALLOWED_KINDS.into_iter().collect()
+    };
+
+    // Configure statistics results by source.
+    for source in sources {
+        for core in 0..MAX_CORE_SIZE {
+            let stats_iter = get_statistics_iter(&db.statistics_store()?, core, source, time);
+            let mut peek_stats_iter = stats_iter.peekable();
+            if peek_stats_iter.peek().is_some() {
+                stats_iters.push(peek_stats_iter);
+            }
+        }
+        let stats = gen_statistics(&mut stats_iters, source, time.is_none(), &raw_event_kinds)?;
+        total_stats.push(stats);
+    }
+    Ok(total_stats)
+}
+
 #[Object]
 impl StatisticsQuery {
     #[allow(clippy::unused_async)]
     async fn statistics<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        time: Option<TimeRange>,
         sources: Vec<String>,
+        time: Option<TimeRange>,
         protocols: Option<Vec<String>>,
+        request_from_peer: Option<bool>,
     ) -> Result<Vec<StatisticsRawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let mut total_stats: Vec<StatisticsRawEvent> = Vec::new();
-        let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
+        let handler = handle_statistics;
 
-        // Configure the protocol HashSet for which statistics output is allowed.
-        let raw_event_kinds = if let Some(protocols) = &protocols {
-            let mut records = HashSet::new();
-            for proto in protocols {
-                records.insert(convert_to_stats_allowed_type(proto)?);
-            }
-            records
-        } else {
-            STATS_ALLOWED_KINDS.into_iter().collect()
-        };
-
-        // Configure statistics results by source.
-        for source in sources {
-            for core in 0..MAX_CORE_SIZE {
-                let stats_iter = get_statistics_iter(&db.statistics_store()?, core, &source, &time);
-                let mut peek_stats_iter = stats_iter.peekable();
-                if peek_stats_iter.peek().is_some() {
-                    stats_iters.push(peek_stats_iter);
-                }
-            }
-            let stats =
-                gen_statistics(&mut stats_iters, &source, time.is_none(), &raw_event_kinds)?;
-            total_stats.push(stats);
-        }
-        Ok(total_stats)
+        events_in_cluster!(
+            multiple_sources
+            ctx,
+            sources,
+            request_from_peer,
+            handler,
+            Stats,
+            stats::Variables,
+            stats::ResponseData,
+            statistics,
+            Vec<StatisticsRawEvent>,
+            with_extra_handler_args (&time, &protocols),
+            with_extra_query_args (time := time.clone().map(Into::into), protocols := protocols.clone() )
+        )
     }
 }
+
+impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 
 fn get_statistics_iter<'c, T>(
     store: &RawEventStore<'c, T>,
@@ -255,6 +291,7 @@ mod tests {
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
     use chrono::Utc;
     use giganto_client::{ingest::statistics::Statistics, RawEventKind};
+    use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_statistics() {
@@ -310,5 +347,183 @@ mod tests {
         };
         let msg = bincode::serialize(&msg).unwrap();
         store.append(&key, &msg).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_statistics_giganto_cluster() {
+        // given
+        let query = r#"
+        {
+            statistics(
+                sources: ["src 2"]
+            ) {
+                source,
+                stats {
+                    detail {
+                        protocol,
+                        bps,
+                        pps,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "statistics": [
+                    {
+                        "source": "src 2",
+                        "stats": [
+                            {
+                                "timestamp": 1702272566,
+                                "detail": [
+                                    {
+                                        "protocol": "Statistics",
+                                        "bps": 24000000.0,
+                                        "pps": 10000.0,
+                                        "eps": 12413.1
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{statistics: [{source: \"src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_statistics_giganto_cluster_combined() {
+        // given
+        let query = r#"
+        {
+            statistics(
+                sources: ["src 2", "src2", "ingest src 2", "src 1"]
+            ) {
+                source,
+                stats {
+                    detail {
+                        protocol,
+                        bps,
+                        pps,
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "statistics": [
+                    {
+                        "source": "src2",
+                        "stats": [
+                            {
+                                "timestamp": 1702272560,
+                                "detail": [
+                                    {
+                                        "protocol": "Statistics",
+                                        "bps": 24000000.0,
+                                        "pps": 10000.0,
+                                        "eps": 12413.1
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "source": "ingest src 2",
+                        "stats": [
+                            {
+                                "timestamp": 1702272560,
+                                "detail": [
+                                    {
+                                        "protocol": "Statistics",
+                                        "bps": 24000000.0,
+                                        "pps": 10000.0,
+                                        "eps": 12413.1
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "source": "src 2",
+                        "stats": [
+                            {
+                                "timestamp": 1702272560,
+                                "detail": [
+                                    {
+                                        "protocol": "Statistics",
+                                        "bps": 24000000.0,
+                                        "pps": 10000.0,
+                                        "eps": 12413.1
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let store = schema.db.statistics_store().unwrap();
+        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1000000, 300000000);
+        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2000000, 600000000);
+        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3000000, 900000000);
+
+        // when
+        let res = schema.execute(query).await;
+
+        // then
+        assert_eq!(
+            res.data.to_string(),
+            "{statistics: [{source: \"src2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"ingest src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"src 1\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
+        );
+
+        mock.assert_async().await;
     }
 }

@@ -1,15 +1,21 @@
 use super::{
-    collect_records, get_timestamp_from_key, load_connection, write_run_tcpdump, Direction,
+    collect_records, get_timestamp_from_key, handle_paged_events, write_run_tcpdump, Direction,
     FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
-use crate::storage::{Database, KeyExtractor, StorageKey};
-use async_graphql::{
-    connection::{query, Connection},
-    Context, InputObject, Object, Result, SimpleObject,
+use crate::{
+    graphql::{
+        client::derives::{packets, pcap as pcaps, Packets, Pcap as Pcaps},
+        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
+        paged_events_in_cluster,
+    },
+    storage::{Database, KeyExtractor, StorageKey},
 };
+use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
 use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use std::net::IpAddr;
 
 #[derive(Default)]
@@ -62,17 +68,25 @@ impl RawEventFilter for PacketFilter {
     }
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
 struct Packet {
     request_time: DateTime<Utc>,
     packet_time: DateTime<Utc>,
     packet: String,
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, Default, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [pcaps::PcapPcap, ])]
 struct Pcap {
     request_time: DateTime<Utc>,
     parsed_pcap: String,
+}
+
+impl Pcap {
+    fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl FromKeyValue<pk> for Packet {
@@ -83,6 +97,49 @@ impl FromKeyValue<pk> for Packet {
             packet: BASE64.encode(&pk.packet),
         })
     }
+}
+
+async fn handle_packets<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: PacketFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, Packet>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.packet_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
+    let db = ctx.data::<Database>()?;
+    let store = db.packet_store()?;
+
+    // generate storage search key
+    let key_builder = StorageKey::builder()
+        .start_key(filter.get_start_key())
+        .mid_key(filter.get_mid_key());
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_end_key(filter.get_range_end_key().0)
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_end_key(filter.get_range_end_key().1)
+        .build();
+
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+    let (records, _) = collect_records(iter, 1000, filter);
+
+    let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
+
+    let pcap = write_run_tcpdump(&packet_vector)?;
+
+    Ok(Pcap {
+        request_time: filter.request_time,
+        parsed_pcap: pcap,
+    })
 }
 
 #[Object]
@@ -96,51 +153,60 @@ impl PacketQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, Packet>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.packet_store()?;
+        let handler = handle_packets;
 
-        query(
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            handler,
+            Packets,
+            packets::Variables,
+            packets::ResponseData,
+            packets
         )
-        .await
     }
 
     #[allow(clippy::unused_async)]
     async fn pcap<'ctx>(&self, ctx: &Context<'ctx>, filter: PacketFilter) -> Result<Pcap> {
-        let db = ctx.data::<Database>()?;
-        let store = db.packet_store()?;
+        let handler = handle_pcap;
 
-        // generate storage search key
-        let key_builder = StorageKey::builder()
-            .start_key(filter.get_start_key())
-            .mid_key(filter.get_mid_key());
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-        let (records, _) = collect_records(iter, 1000, &filter);
-
-        let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
-
-        let pcap = write_run_tcpdump(&packet_vector)?;
-
-        Ok(Pcap {
-            request_time: filter.request_time,
-            parsed_pcap: pcap,
-        })
+        events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
+            handler,
+            Pcaps,
+            pcaps::Variables,
+            pcaps::ResponseData,
+            pcap,
+            Pcap
+        )
     }
 }
+
+macro_rules! impl_from_giganto_packet_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<PacketFilter> for $autogen_mod::PacketFilter {
+                fn from(filter: PacketFilter) -> Self {
+                    Self {
+                        source: filter.source,
+                        request_time: filter.request_time,
+                        packet_time: filter.packet_time.map(Into::into),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_from_giganto_time_range_struct_for_graphql_client!(packets, pcaps);
+impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 
 #[cfg(test)]
 mod tests {
@@ -189,8 +255,8 @@ mod tests {
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
 
-        insert_packet(&store, "src 2", ts1, ts1);
-        insert_packet(&store, "src 2", ts1, ts3);
+        insert_packet(&store, "ingest src 1", ts1, ts1);
+        insert_packet(&store, "ingest src 1", ts1, ts3);
 
         insert_packet(&store, "src 1", ts2, ts1);
         insert_packet(&store, "src 1", ts2, ts3);
@@ -220,7 +286,7 @@ mod tests {
         {
             packets(
                 filter: {
-                    source: "src 2"
+                    source: "ingest src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
                 first: 10
@@ -274,8 +340,8 @@ mod tests {
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
 
-        insert_packet(&store, "src 2", ts1, ts1);
-        insert_packet(&store, "src 2", ts1, ts3);
+        insert_packet(&store, "ingest src 1", ts1, ts1);
+        insert_packet(&store, "ingest src 1", ts1, ts3);
 
         insert_packet(&store, "src 1", ts2, ts1);
         insert_packet(&store, "src 1", ts2, ts3);
@@ -314,7 +380,7 @@ mod tests {
         {
             pcap(
                 filter: {
-                    source: "src 2"
+                    source: "ingest src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {

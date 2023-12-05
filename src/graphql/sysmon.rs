@@ -1,12 +1,11 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, collect_exist_timestamp, events_in_cluster, get_peekable_iter,
+    base64_engine, collect_exist_timestamp, events_vec_in_cluster, get_peekable_iter,
     get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
-    impl_from_giganto_search_filter_for_graphql_client, is_current_giganto_in_charge, min_max_time,
-    paged_events_in_cluster, peer_in_charge_graphql_addr, request_peer, Engine, FromKeyValue,
-    NetworkFilter, SearchFilter,
+    impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
+    Engine, FromKeyValue, NetworkFilter, SearchFilter,
 };
 use crate::graphql::client::derives::{
     dns_query_events, file_create_events, file_create_stream_hash_events, file_create_time_events,
@@ -17,15 +16,17 @@ use crate::graphql::client::derives::{
     search_file_create_time_events, search_file_delete_detected_events, search_file_delete_events,
     search_image_load_events, search_network_connect_events, search_pipe_event_events,
     search_process_create_events, search_process_tamper_events, search_process_terminate_events,
-    search_registry_key_rename_events, search_registry_value_set_events, DnsQueryEvents,
-    FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents, FileDeleteDetectedEvents,
-    FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents, PipeEventEvents, ProcessCreateEvents,
+    search_registry_key_rename_events, search_registry_value_set_events,
+    sysmon_events as sysmon_events_module, DnsQueryEvents, FileCreateEvents,
+    FileCreateStreamHashEvents, FileCreateTimeEvents, FileDeleteDetectedEvents, FileDeleteEvents,
+    ImageLoadEvents, NetworkConnectEvents, PipeEventEvents, ProcessCreateEvents,
     ProcessTamperEvents, ProcessTerminateEvents, RegistryKeyRenameEvents, RegistryValueSetEvents,
     SearchDnsQueryEvents, SearchFileCreateEvents, SearchFileCreateStreamHashEvents,
     SearchFileCreateTimeEvents, SearchFileDeleteDetectedEvents, SearchFileDeleteEvents,
     SearchImageLoadEvents, SearchNetworkConnectEvents, SearchPipeEventEvents,
     SearchProcessCreateEvents, SearchProcessTamperEvents, SearchProcessTerminateEvents,
     SearchRegistryKeyRenameEvents, SearchRegistryValueSetEvents,
+    SysmonEvents as SysmonEventsDerive,
 };
 use crate::storage::{Database, FilteredIter};
 use async_graphql::{
@@ -46,7 +47,7 @@ use std::{collections::BTreeSet, iter::Peekable};
 pub(super) struct SysmonQuery;
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode)]
+#[graphql_client_type(names = [process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent])]
 struct ProcessCreateEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -75,7 +76,7 @@ struct ProcessCreateEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode)]
+#[graphql_client_type(names = [file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent])]
 struct FileCreationTimeChangedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -90,7 +91,7 @@ struct FileCreationTimeChangedEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode)]
+#[graphql_client_type(names = [network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent])]
 struct NetworkConnectionEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -114,7 +115,7 @@ struct NetworkConnectionEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode)]
+#[graphql_client_type(names = [process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent])]
 struct ProcessTerminatedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -126,7 +127,7 @@ struct ProcessTerminatedEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = image_load_events::ImageLoadEventsImageLoadEventsEdgesNode)]
+#[graphql_client_type(names = [image_load_events::ImageLoadEventsImageLoadEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent])]
 struct ImageLoadedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -148,7 +149,7 @@ struct ImageLoadedEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = file_create_events::FileCreateEventsFileCreateEventsEdgesNode)]
+#[graphql_client_type(names = [file_create_events::FileCreateEventsFileCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent])]
 struct FileCreateEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -162,7 +163,7 @@ struct FileCreateEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode)]
+#[graphql_client_type(names = [registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent])]
 struct RegistryValueSetEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -177,7 +178,7 @@ struct RegistryValueSetEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode)]
+#[graphql_client_type(names = [registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent])]
 struct RegistryKeyValueRenameEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -192,7 +193,7 @@ struct RegistryKeyValueRenameEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode)]
+#[graphql_client_type(names = [file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent])]
 struct FileCreateStreamHashEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -208,7 +209,7 @@ struct FileCreateStreamHashEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode)]
+#[graphql_client_type(names = [pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent])]
 struct PipeEventEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -222,7 +223,7 @@ struct PipeEventEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode)]
+#[graphql_client_type(names = [dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent])]
 struct DnsEventEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -237,7 +238,7 @@ struct DnsEventEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode)]
+#[graphql_client_type(names = [file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent])]
 struct FileDeleteEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -253,7 +254,7 @@ struct FileDeleteEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode)]
+#[graphql_client_type(names = [process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent])]
 struct ProcessTamperingEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -266,7 +267,7 @@ struct ProcessTamperingEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode)]
+#[graphql_client_type(names = [file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent])]
 struct FileDeleteDetectedEvent {
     timestamp: DateTime<Utc>,
     agent_name: String,
@@ -297,6 +298,27 @@ enum SysmonEvents {
     FileDeleteEvent(FileDeleteEvent),
     ProcessTamperingEvent(ProcessTamperingEvent),
     FileDeleteDetectedEvent(FileDeleteDetectedEvent),
+}
+
+impl From<sysmon_events_module::SysmonEventsSysmonEventsEdgesNode> for SysmonEvents {
+    fn from(node: sysmon_events_module::SysmonEventsSysmonEventsEdgesNode) -> Self {
+        match node {
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ProcessCreateEvent(event) => SysmonEvents::ProcessCreateEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileCreationTimeChangedEvent(event) => SysmonEvents::FileCreationTimeChangedEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::NetworkConnectionEvent(event) => SysmonEvents::NetworkConnectionEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ProcessTerminatedEvent(event) => SysmonEvents::ProcessTerminatedEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ImageLoadedEvent(event) => SysmonEvents::ImageLoadedEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileCreateEvent(event) => SysmonEvents::FileCreateEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::RegistryValueSetEvent(event) => SysmonEvents::RegistryValueSetEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::RegistryKeyValueRenameEvent(event) => SysmonEvents::RegistryKeyValueRenameEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileCreateStreamHashEvent(event) => SysmonEvents::FileCreateStreamHashEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::PipeEventEvent(event) => SysmonEvents::PipeEventEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::DnsEventEvent(event) => SysmonEvents::DnsEventEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileDeleteEvent(event) => SysmonEvents::FileDeleteEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ProcessTamperingEvent(event) => SysmonEvents::ProcessTamperingEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileDeleteDetectedEvent(event) => SysmonEvents::FileDeleteDetectedEvent(event.into()),
+        }
+    }
 }
 
 macro_rules! from_key_value {
@@ -698,6 +720,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -724,6 +747,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -750,6 +774,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -776,6 +801,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -802,6 +828,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -828,6 +855,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -854,6 +882,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -880,6 +909,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -906,6 +936,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -932,6 +963,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -957,6 +989,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -982,6 +1015,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1007,6 +1041,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1032,6 +1067,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1061,9 +1097,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchProcessCreateEvents,
             search_process_create_events::Variables,
@@ -1090,9 +1127,10 @@ impl SysmonQuery {
             ))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFileCreateTimeEvents,
             search_file_create_time_events::Variables,
@@ -1118,9 +1156,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchNetworkConnectEvents,
             search_network_connect_events::Variables,
@@ -1146,9 +1185,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchProcessTerminateEvents,
             search_process_terminate_events::Variables,
@@ -1171,9 +1211,10 @@ impl SysmonQuery {
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, filter))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchImageLoadEvents,
             search_image_load_events::Variables,
@@ -1197,9 +1238,10 @@ impl SysmonQuery {
             Ok(collect_exist_timestamp::<FileCreate>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFileCreateEvents,
             search_file_create_events::Variables,
@@ -1225,9 +1267,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchRegistryValueSetEvents,
             search_registry_value_set_events::Variables,
@@ -1253,9 +1296,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchRegistryKeyRenameEvents,
             search_registry_key_rename_events::Variables,
@@ -1282,9 +1326,10 @@ impl SysmonQuery {
             ))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFileCreateStreamHashEvents,
             search_file_create_stream_hash_events::Variables,
@@ -1307,9 +1352,10 @@ impl SysmonQuery {
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, filter))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchPipeEventEvents,
             search_pipe_event_events::Variables,
@@ -1332,9 +1378,10 @@ impl SysmonQuery {
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, filter))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchDnsQueryEvents,
             search_dns_query_events::Variables,
@@ -1358,9 +1405,10 @@ impl SysmonQuery {
             Ok(collect_exist_timestamp::<FileDelete>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFileDeleteEvents,
             search_file_delete_events::Variables,
@@ -1386,9 +1434,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchProcessTamperEvents,
             search_process_tamper_events::Variables,
@@ -1414,9 +1463,10 @@ impl SysmonQuery {
                 filter,
             ))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFileDeleteDetectedEvents,
             search_file_delete_detected_events::Variables,
@@ -1425,7 +1475,6 @@ impl SysmonQuery {
         )
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn sysmon_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -1435,166 +1484,193 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, SysmonEvents>> {
-        let db = ctx.data::<Database>()?;
-        query(
+        let handler = handle_sysmon_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                let (process_create_iter, size) = get_peekable_iter(
-                    &db.process_create_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (file_create_time_iter, _) = get_peekable_iter(
-                    &db.file_create_time_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (network_connect_iter, _) = get_peekable_iter(
-                    &db.network_connect_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (process_terminate_iter, _) = get_peekable_iter(
-                    &db.process_terminate_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (image_load_iter, _) = get_peekable_iter(
-                    &db.image_load_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (file_create_iter, _) = get_peekable_iter(
-                    &db.file_create_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (registry_value_set_iter, _) = get_peekable_iter(
-                    &db.registry_value_set_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (registry_key_rename_iter, _) = get_peekable_iter(
-                    &db.registry_key_rename_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (file_create_stream_hash_iter, _) = get_peekable_iter(
-                    &db.file_create_stream_hash_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (pipe_event_iter, _) = get_peekable_iter(
-                    &db.pipe_event_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (dns_query_iter, _) = get_peekable_iter(
-                    &db.dns_query_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (file_delete_iter, _) = get_peekable_iter(
-                    &db.file_delete_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (process_tamper_iter, _) = get_peekable_iter(
-                    &db.process_tamper_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (file_delete_detected_iter, _) = get_peekable_iter(
-                    &db.file_delete_detected_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let mut is_forward: bool = true;
-                if before.is_some() || last.is_some() {
-                    is_forward = false;
-                }
-
-                sysmon_connection(
-                    process_create_iter,
-                    file_create_time_iter,
-                    network_connect_iter,
-                    process_terminate_iter,
-                    image_load_iter,
-                    file_create_iter,
-                    registry_value_set_iter,
-                    registry_key_rename_iter,
-                    file_create_stream_hash_iter,
-                    pipe_event_iter,
-                    dns_query_iter,
-                    file_delete_iter,
-                    process_tamper_iter,
-                    file_delete_detected_iter,
-                    size,
-                    is_forward,
-                )
-            },
+            handler,
+            SysmonEventsDerive,
+            sysmon_events_module::Variables,
+            sysmon_events_module::ResponseData,
+            sysmon_events
         )
-        .await
     }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn handle_sysmon_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, SysmonEvents>> {
+    let db = ctx.data::<Database>()?;
+    query(
+        after,
+        before,
+        first,
+        last,
+        |after, before, first, last| async move {
+            let (process_create_iter, size) = get_peekable_iter(
+                &db.process_create_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (file_create_time_iter, _) = get_peekable_iter(
+                &db.file_create_time_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (network_connect_iter, _) = get_peekable_iter(
+                &db.network_connect_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (process_terminate_iter, _) = get_peekable_iter(
+                &db.process_terminate_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (image_load_iter, _) = get_peekable_iter(
+                &db.image_load_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (file_create_iter, _) = get_peekable_iter(
+                &db.file_create_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (registry_value_set_iter, _) = get_peekable_iter(
+                &db.registry_value_set_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (registry_key_rename_iter, _) = get_peekable_iter(
+                &db.registry_key_rename_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (file_create_stream_hash_iter, _) = get_peekable_iter(
+                &db.file_create_stream_hash_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (pipe_event_iter, _) = get_peekable_iter(
+                &db.pipe_event_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (dns_query_iter, _) = get_peekable_iter(
+                &db.dns_query_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (file_delete_iter, _) = get_peekable_iter(
+                &db.file_delete_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (process_tamper_iter, _) = get_peekable_iter(
+                &db.process_tamper_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let (file_delete_detected_iter, _) = get_peekable_iter(
+                &db.file_delete_detected_store()?,
+                &filter,
+                &after,
+                &before,
+                first,
+                last,
+            )?;
+
+            let mut is_forward: bool = true;
+            if before.is_some() || last.is_some() {
+                is_forward = false;
+            }
+
+            sysmon_connection(
+                process_create_iter,
+                file_create_time_iter,
+                network_connect_iter,
+                process_terminate_iter,
+                image_load_iter,
+                file_create_iter,
+                registry_value_set_iter,
+                registry_key_rename_iter,
+                file_create_stream_hash_iter,
+                pipe_event_iter,
+                dns_query_iter,
+                file_delete_iter,
+                process_tamper_iter,
+                file_delete_detected_iter,
+                size,
+                is_forward,
+            )
+        },
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1948,6 +2024,7 @@ fn sysmon_connection(
 }
 
 impl_from_giganto_range_structs_for_graphql_client!(
+    sysmon_events_module,
     dns_query_events,
     file_create_events,
     file_create_stream_hash_events,
@@ -1979,6 +2056,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
 );
 
 impl_from_giganto_network_filter_for_graphql_client!(
+    sysmon_events_module,
     dns_query_events,
     file_create_events,
     file_create_stream_hash_events,

@@ -1,0 +1,3 @@
+query Export($exportType:String!, $filter: ExportFilter!) {
+    export(exportType: $exportType, filter: $filter)
+}

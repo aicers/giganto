@@ -6,6 +6,7 @@ query Packets($filter: PacketFilter!, $first: Int, $after: String, $last: Int, $
                 packetTime
                 packet
             }
+            cursor
         }
         pageInfo {
             hasPreviousPage

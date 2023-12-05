@@ -1,28 +1,28 @@
 #![allow(clippy::unused_async)]
 use super::{
-    base64_engine, check_address, check_port, collect_exist_timestamp, events_in_cluster,
+    base64_engine, check_address, check_port, collect_exist_timestamp, events_vec_in_cluster,
     get_peekable_iter, get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
-    impl_from_giganto_search_filter_for_graphql_client, is_current_giganto_in_charge, min_max_time,
-    paged_events_in_cluster, peer_in_charge_graphql_addr, request_peer, Engine, FromKeyValue,
-    NetworkFilter, RawEventFilter, SearchFilter,
+    impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
+    Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter,
 };
 use crate::graphql::client::derives::{
     conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
-    kerberos_raw_events, ldap_raw_events, mqtt_raw_events, nfs_raw_events, ntlm_raw_events,
-    rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events, search_dns_raw_events,
-    search_ftp_raw_events, search_http_raw_events, search_kerberos_raw_events,
-    search_ldap_raw_events, search_mqtt_raw_events, search_nfs_raw_events, search_ntlm_raw_events,
-    search_rdp_raw_events, search_smb_raw_events, search_smtp_raw_events, search_ssh_raw_events,
-    search_tls_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events, tls_raw_events,
-    ConnRawEvents, DceRpcRawEvents, DnsRawEvents, FtpRawEvents, HttpRawEvents, KerberosRawEvents,
-    LdapRawEvents, MqttRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents, SearchConnRawEvents,
-    SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents,
-    SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents,
-    SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents,
-    SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents,
-    TlsRawEvents,
+    kerberos_raw_events, ldap_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
+    ntlm_raw_events, rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
+    search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
+    search_kerberos_raw_events, search_ldap_raw_events, search_mqtt_raw_events,
+    search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events, search_smb_raw_events,
+    search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
+    smtp_raw_events, ssh_raw_events, tls_raw_events, ConnRawEvents, DceRpcRawEvents, DnsRawEvents,
+    FtpRawEvents, HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+    NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
+    SearchConnRawEvents, SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
+    SearchHttpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents,
+    SearchNfsRawEvents, SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
+    SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
+    SshRawEvents, TlsRawEvents,
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
 use async_graphql::{
@@ -115,7 +115,7 @@ impl RawEventFilter for SearchFilter {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = conn_raw_events::ConnRawEventsConnRawEventsEdgesNode)]
+#[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 struct ConnRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -132,7 +132,7 @@ struct ConnRawEvent {
 }
 #[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode)]
+#[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
 struct DnsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -156,7 +156,7 @@ struct DnsRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = http_raw_events::HttpRawEventsHttpRawEventsEdgesNode)]
+#[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
 struct HttpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -188,7 +188,7 @@ struct HttpRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode)]
+#[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
 struct RdpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -201,7 +201,7 @@ struct RdpRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode)]
+#[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, ])]
 struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -219,7 +219,7 @@ struct SmtpRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode)]
+#[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
 struct NtlmRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -238,7 +238,7 @@ struct NtlmRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode)]
+#[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
 struct KerberosRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -259,7 +259,7 @@ struct KerberosRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = ssh_raw_events::SshRawEventsSshRawEventsEdgesNode)]
+#[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
 struct SshRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -283,7 +283,7 @@ struct SshRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode)]
+#[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
 struct DceRpcRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -299,7 +299,7 @@ struct DceRpcRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode)]
+#[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
 struct FtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -323,7 +323,7 @@ struct FtpRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode)]
+#[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
 struct MqttRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -341,7 +341,7 @@ struct MqttRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode)]
+#[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
 struct LdapRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -360,7 +360,7 @@ struct LdapRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode)]
+#[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
 struct TlsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -391,7 +391,7 @@ struct TlsRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode)]
+#[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
 struct SmbRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -414,7 +414,7 @@ struct SmbRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(name = nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode)]
+#[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
 struct NfsRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -444,6 +444,55 @@ enum NetworkRawEvents {
     TlsRawEvent(TlsRawEvent),
     SmbRawEvent(SmbRawEvent),
     NfsRawEvent(NfsRawEvent),
+}
+
+impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for NetworkRawEvents {
+    fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode) -> Self {
+        match node {
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::ConnRawEvent(event) => {
+                NetworkRawEvents::ConnRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::DnsRawEvent(event) => {
+                NetworkRawEvents::DnsRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::HttpRawEvent(event) => {
+                NetworkRawEvents::HttpRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::RdpRawEvent(event) => {
+                NetworkRawEvents::RdpRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::NtlmRawEvent(event) => {
+                NetworkRawEvents::NtlmRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::KerberosRawEvent(
+                event,
+            ) => NetworkRawEvents::KerberosRawEvent(event.into()),
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::SshRawEvent(event) => {
+                NetworkRawEvents::SshRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::DceRpcRawEvent(
+                event,
+            ) => NetworkRawEvents::DceRpcRawEvent(event.into()),
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::FtpRawEvent(event) => {
+                NetworkRawEvents::FtpRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::MqttRawEvent(event) => {
+                NetworkRawEvents::MqttRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::LdapRawEvent(event) => {
+                NetworkRawEvents::LdapRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::TlsRawEvent(event) => {
+                NetworkRawEvents::TlsRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::SmbRawEvent(event) => {
+                NetworkRawEvents::SmbRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::NfsRawEvent(event) => {
+                NetworkRawEvents::NfsRawEvent(event.into())
+            }
+        }
+    }
 }
 
 macro_rules! from_key_value {
@@ -875,6 +924,91 @@ async fn handle_paged_nfs_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
+async fn handle_network_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, NetworkRawEvents>> {
+    let db = ctx.data::<Database>()?;
+    query(
+        after,
+        before,
+        first,
+        last,
+        |after, before, first, last| async move {
+            let (conn_iter, size) =
+                get_peekable_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
+
+            let (dns_iter, _) =
+                get_peekable_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
+
+            let (http_iter, _) =
+                get_peekable_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
+
+            let (rdp_iter, _) =
+                get_peekable_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
+
+            let (ntlm_iter, _) =
+                get_peekable_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
+
+            let (kerberos_iter, _) =
+                get_peekable_iter(&db.kerberos_store()?, &filter, &after, &before, first, last)?;
+
+            let (ssh_iter, _) =
+                get_peekable_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
+
+            let (dce_rpc_iter, _) =
+                get_peekable_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
+
+            let (ftp_iter, _) =
+                get_peekable_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
+
+            let (mqtt_iter, _) =
+                get_peekable_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
+
+            let (ldap_iter, _) =
+                get_peekable_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
+
+            let (tls_iter, _) =
+                get_peekable_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
+
+            let (smb_iter, _) =
+                get_peekable_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
+
+            let (nfs_iter, _) =
+                get_peekable_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
+
+            let mut is_forward: bool = true;
+            if before.is_some() || last.is_some() {
+                is_forward = false;
+            }
+
+            network_connection(
+                conn_iter,
+                dns_iter,
+                http_iter,
+                rdp_iter,
+                ntlm_iter,
+                kerberos_iter,
+                ssh_iter,
+                dce_rpc_iter,
+                ftp_iter,
+                mqtt_iter,
+                ldap_iter,
+                tls_iter,
+                smb_iter,
+                nfs_iter,
+                size,
+                is_forward,
+            )
+        },
+    )
+    .await
+}
+
 #[Object]
 impl NetworkQuery {
     async fn conn_raw_events<'ctx>(
@@ -891,6 +1025,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -917,6 +1052,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -943,6 +1079,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -969,6 +1106,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -995,6 +1133,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1021,6 +1160,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1047,6 +1187,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1073,6 +1214,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1099,6 +1241,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1125,6 +1268,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1151,6 +1295,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1177,6 +1322,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1203,6 +1349,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1229,6 +1376,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1254,6 +1402,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
@@ -1275,87 +1424,22 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, NetworkRawEvents>> {
-        let db = ctx.data::<Database>()?;
-        query(
+        let handler = handle_network_raw_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                let (conn_iter, size) =
-                    get_peekable_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
-
-                let (dns_iter, _) =
-                    get_peekable_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
-
-                let (http_iter, _) =
-                    get_peekable_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
-
-                let (rdp_iter, _) =
-                    get_peekable_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
-
-                let (ntlm_iter, _) =
-                    get_peekable_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
-
-                let (kerberos_iter, _) = get_peekable_iter(
-                    &db.kerberos_store()?,
-                    &filter,
-                    &after,
-                    &before,
-                    first,
-                    last,
-                )?;
-
-                let (ssh_iter, _) =
-                    get_peekable_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
-
-                let (dce_rpc_iter, _) =
-                    get_peekable_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
-
-                let (ftp_iter, _) =
-                    get_peekable_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
-
-                let (mqtt_iter, _) =
-                    get_peekable_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
-
-                let (ldap_iter, _) =
-                    get_peekable_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
-
-                let (tls_iter, _) =
-                    get_peekable_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
-
-                let (smb_iter, _) =
-                    get_peekable_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
-
-                let (nfs_iter, _) =
-                    get_peekable_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
-
-                let mut is_forward: bool = true;
-                if before.is_some() || last.is_some() {
-                    is_forward = false;
-                }
-
-                network_connection(
-                    conn_iter,
-                    dns_iter,
-                    http_iter,
-                    rdp_iter,
-                    ntlm_iter,
-                    kerberos_iter,
-                    ssh_iter,
-                    dce_rpc_iter,
-                    ftp_iter,
-                    mqtt_iter,
-                    ldap_iter,
-                    tls_iter,
-                    smb_iter,
-                    nfs_iter,
-                    size,
-                    is_forward,
-                )
-            },
+            handler,
+            GraphQlNetworkRawEvents,
+            network_raw_events::Variables,
+            network_raw_events::ResponseData,
+            network_raw_events
         )
-        .await
     }
 
     async fn search_conn_raw_events<'ctx>(
@@ -1373,9 +1457,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Conn>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchConnRawEvents,
             search_conn_raw_events::Variables,
@@ -1398,9 +1483,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Dns>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchDnsRawEvents,
             search_dns_raw_events::Variables,
@@ -1423,9 +1509,10 @@ impl NetworkQuery {
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Http>(&exist_data, filter))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchHttpRawEvents,
             search_http_raw_events::Variables,
@@ -1449,9 +1536,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Rdp>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchRdpRawEvents,
             search_rdp_raw_events::Variables,
@@ -1475,9 +1563,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Smtp>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchSmtpRawEvents,
             search_smtp_raw_events::Variables,
@@ -1501,9 +1590,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Ntlm>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchNtlmRawEvents,
             search_ntlm_raw_events::Variables,
@@ -1527,9 +1617,10 @@ impl NetworkQuery {
 
             Ok(collect_exist_timestamp::<Kerberos>(&exist_data, filter))
         };
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchKerberosRawEvents,
             search_kerberos_raw_events::Variables,
@@ -1554,9 +1645,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Ssh>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchSshRawEvents,
             search_ssh_raw_events::Variables,
@@ -1581,9 +1673,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<DceRpc>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchDceRpcRawEvents,
             search_dce_rpc_raw_events::Variables,
@@ -1608,9 +1701,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Ftp>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchFtpRawEvents,
             search_ftp_raw_events::Variables,
@@ -1635,9 +1729,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Mqtt>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchMqttRawEvents,
             search_mqtt_raw_events::Variables,
@@ -1662,9 +1757,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Ldap>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchLdapRawEvents,
             search_ldap_raw_events::Variables,
@@ -1689,9 +1785,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Tls>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchTlsRawEvents,
             search_tls_raw_events::Variables,
@@ -1717,9 +1814,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Smb>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchSmbRawEvents,
             search_smb_raw_events::Variables,
@@ -1744,9 +1842,10 @@ impl NetworkQuery {
             Ok(collect_exist_timestamp::<Nfs>(&exist_data, filter))
         };
 
-        events_in_cluster!(
+        events_vec_in_cluster!(
             ctx,
             filter,
+            filter.source,
             handler,
             SearchNfsRawEvents,
             search_nfs_raw_events::Variables,
@@ -2079,6 +2178,7 @@ fn network_connection(
 }
 
 impl_from_giganto_range_structs_for_graphql_client!(
+    network_raw_events,
     conn_raw_events,
     dns_raw_events,
     http_raw_events,
@@ -2112,6 +2212,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
 );
 
 impl_from_giganto_network_filter_for_graphql_client!(
+    network_raw_events,
     conn_raw_events,
     dns_raw_events,
     http_raw_events,

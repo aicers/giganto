@@ -1,0 +1,25 @@
+query SecuLogRawEvents($filter: SecuLogFilter!, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean){
+    secuLogRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                source
+                logType
+                version
+                origAddr
+                origPort
+                respAddr
+                respPort
+                proto
+                contents
+            }
+        }
+    }
+}

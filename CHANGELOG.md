@@ -19,6 +19,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Added `set_ack_transmission_count` GraphQL query to set the ack transmission
     count.This query changes the `AckTransmissionCount` used in ingest and
     `ack_transmission` in the config file to the input `count` value.
+- Added giganto cluster support for GraphQL requests.
+- Added documentation for implementing cluster-supported GraphQL APIs in
+  `docs/guide-giganto-cluster-graphql.md`.
+- Added `ConvertGraphQLEdgesNode` derive macro that implements `From` trait from
+  GraphQL client structs to project structs.
+- Added `request_from_peer: Option<bool>` argument to GraphQL endpoints:
+  `netflow5_raw_events`, `netflow9_raw_events`, `secu_log_raw_events`,
+  `statistics`.
 
 ### Changed
 
@@ -27,8 +35,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify the `set_giganto_config` and `giganto_config` GraphQL queries so that
   the fields that take integers read/write the config file for their respective
   types.
-- Modify the `giganto_config` query so that config files that work in
-  `standalone mode` can also be read correctly.
+- Modify the `giganto_config` query so that config files that work in standalone
+  mode can also be read correctly.
+- Changed `export` GraphQL query's response value format from `{export_path}` to
+`{export_path}@{giganto_node_name}`
+- Changed `PEER_VERSION_REQ` to ">=0.16.0-alpha.1,<0.17.0"
 
 ### Fixed
 
@@ -385,7 +396,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.15.4...main
+[Unreleased]: <https://github.com/aicers/giganto/compare/0.15.4...main>
 [0.15.4]: <https://github.com/aicers/giganto/compare/0.15.3...0.15.4>
 [0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
 [0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>

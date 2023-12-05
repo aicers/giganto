@@ -62,7 +62,7 @@ change if you want to grow your data further at the level base.
 So if it's less than `512`MB, it's recommended to set default value of `512`MB.
 
 If there is no `peer_address` option in the configuration file, it runs in
-`standalone` mode, and if there is, it runs in `cluster` mode for P2P.
+standalone mode, and if there is, it runs in cluster mode for P2P.
 
 ## Test
 

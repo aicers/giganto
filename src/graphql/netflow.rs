@@ -1,17 +1,24 @@
 use super::{
     check_address, check_contents, check_port, check_source, get_timestamp_from_key,
-    load_connection, FromKeyValue, IpRange, PortRange,
+    handle_paged_events, impl_from_giganto_range_structs_for_graphql_client,
+    paged_events_in_cluster, FromKeyValue, IpRange, NodeSource, PortRange,
 };
 use crate::{
-    graphql::{RawEventFilter, TimeRange},
+    graphql::{
+        client::derives::{
+            netflow5_raw_events, netflow9_raw_events, Netflow5RawEvents, Netflow9RawEvents,
+        },
+        RawEventFilter, TimeRange,
+    },
     storage::{Database, KeyExtractor},
 };
 use async_graphql::{
-    connection::{query, Connection},
-    Context, InputObject, Object, Result, SimpleObject,
+    connection::Connection, Context, Error, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
 use std::{fmt::Debug, net::IpAddr};
 
 static TCP_FLAGS: [(u8, &str); 8] = [
@@ -28,7 +35,7 @@ static TCP_FLAGS: [(u8, &str); 8] = [
 #[derive(Default)]
 pub(super) struct NetflowQuery;
 
-#[derive(InputObject)]
+#[derive(InputObject, Clone)]
 #[allow(clippy::module_name_repetitions)]
 pub struct NetflowFilter {
     time: Option<TimeRange>,
@@ -84,7 +91,8 @@ impl RawEventFilter for NetflowFilter {
     }
 }
 
-#[derive(SimpleObject, Debug)]
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [netflow5_raw_events::Netflow5RawEventsNetflow5RawEventsEdgesNode, ])]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
     timestamp: DateTime<Utc>,
@@ -146,9 +154,16 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
     }
 }
 
-#[derive(SimpleObject, Debug)]
+impl NodeSource for Netflow5RawEvent {
+    fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [netflow9_raw_events::Netflow9RawEventsNetflow9RawEventsEdgesNode, ])]
 #[allow(clippy::module_name_repetitions)]
-pub struct NetflowV9RawEvent {
+pub struct Netflow9RawEvent {
     timestamp: DateTime<Utc>,
     source: String,
     sequence: u32,
@@ -162,9 +177,9 @@ pub struct NetflowV9RawEvent {
     contents: String,
 }
 
-impl FromKeyValue<Netflow9> for NetflowV9RawEvent {
+impl FromKeyValue<Netflow9> for Netflow9RawEvent {
     fn from_key_value(key: &[u8], val: Netflow9) -> Result<Self> {
-        Ok(NetflowV9RawEvent {
+        Ok(Netflow9RawEvent {
             timestamp: get_timestamp_from_key(key)?,
             source: val.source,
             sequence: val.sequence,
@@ -177,6 +192,12 @@ impl FromKeyValue<Netflow9> for NetflowV9RawEvent {
             proto: val.proto,
             contents: val.contents,
         })
+    }
+}
+
+impl NodeSource for Netflow9RawEvent {
+    fn source(&self) -> &str {
+        &self.source
     }
 }
 
@@ -202,8 +223,37 @@ pub(crate) fn tcp_flags(b: u8) -> String {
     res
 }
 
+async fn handle_netflow5_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetflowFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, Netflow5RawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.netflow5_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_netflow9_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetflowFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, Netflow9RawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.netflow9_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 #[Object]
 impl NetflowQuery {
+    #[allow(clippy::too_many_arguments)]
     async fn netflow5_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -212,24 +262,29 @@ impl NetflowQuery {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, Netflow5RawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow5_store()?;
-
         filter.kind = Some("netflow5".to_string());
+        let handler = handle_netflow5_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            request_from_peer,
+            handler,
+            Netflow5RawEvents,
+            netflow5_raw_events::Variables,
+            netflow5_raw_events::ResponseData,
+            netflow5_raw_events
         )
-        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn netflow9_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -238,21 +293,48 @@ impl NetflowQuery {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-    ) -> Result<Connection<String, NetflowV9RawEvent>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.netflow9_store()?;
-
+        request_from_peer: Option<bool>,
+    ) -> Result<Connection<String, Netflow9RawEvent>> {
         filter.kind = Some("netflow9".to_string());
+        let handler = handle_netflow9_raw_events;
 
-        query(
+        paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
+            ctx,
+            filter,
             after,
             before,
             first,
             last,
-            |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
-            },
+            request_from_peer,
+            handler,
+            Netflow9RawEvents,
+            netflow9_raw_events::Variables,
+            netflow9_raw_events::ResponseData,
+            netflow9_raw_events
         )
-        .await
     }
 }
+
+macro_rules! impl_from_giganto_netflow_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<NetflowFilter> for $autogen_mod::NetflowFilter {
+                fn from(filter: NetflowFilter) -> Self {
+                    Self {
+                        time: filter.time.map(Into::into),
+                        source: filter.source,
+                        kind: filter.kind,
+                        orig_addr: filter.orig_addr.map(Into::into),
+                        resp_addr: filter.resp_addr.map(Into::into),
+                        orig_port: filter.orig_port.map(Into::into),
+                        resp_port: filter.resp_port.map(Into::into),
+                        contents: filter.contents,
+                    }
+                }
+            }
+        )*
+    };
+}
+impl_from_giganto_range_structs_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);
+impl_from_giganto_netflow_filter_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);

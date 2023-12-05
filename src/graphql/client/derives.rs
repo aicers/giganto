@@ -1,7 +1,25 @@
+#![allow(clippy::enum_variant_names)]
+
 use chrono::{DateTime as ChronoDateTime, Utc};
 use graphql_client::GraphQLQuery;
 
 type DateTime = ChronoDateTime<Utc>;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/network_raw_events.graphql",
+    response_derives = "Clone, PartialEq"
+)]
+pub struct NetworkRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/sysmon_events.graphql",
+    response_derives = "Clone, PartialEq"
+)]
+pub struct SysmonEvents;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -490,3 +508,51 @@ pub struct SearchProcessTamperEvents;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct SearchFileDeleteDetectedEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/log_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct LogRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/netflow5_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct Netflow5RawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/netflow9_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct Netflow9RawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/secu_log_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SecuLogRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/export.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct Export;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/statistics.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct Statistics;
