@@ -13,6 +13,14 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+};
+use giganto_client::ingest::sysmon::{
+    DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+    FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
+    ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+};
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
@@ -27,6 +35,8 @@ use giganto_client::{
 };
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::sync::atomic::AtomicU16;
 use std::{
     net::SocketAddr,
@@ -175,7 +185,6 @@ async fn handle_connection(
             .await
             .insert(source.clone(), connection.clone());
     }
-
     if let Err(error) = sender
         .send((source.clone(), Utc::now(), ConnState::Connected, rep))
         .await
@@ -837,112 +846,175 @@ async fn handle_data<T>(
                     }
                     continue;
                 }
-                let key_builder = StorageKey::builder().start_key(&source);
+                let key_builder = StorageKey::builder();
                 let key_builder = match raw_event_kind {
-                    RawEventKind::Log => {
-                        let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Log".to_string());
-                            break;
-                        };
-                        key_builder
-                            .mid_key(Some(log.kind.as_bytes().to_vec()))
-                            .end_key(timestamp)
+                    RawEventKind::Conn => {
+                        let (source, data) = process_raw_event::<Conn>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
                     }
-                    RawEventKind::PeriodicTimeSeries => {
-                        let Ok(time_series) =
-                            bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
-                        else {
-                            err_msg = Some("Failed to deserialize PeriodicTimeSeries".to_string());
-                            break;
-                        };
-                        StorageKey::builder()
-                            .start_key(&time_series.id)
-                            .end_key(timestamp)
+                    RawEventKind::Dns => {
+                        let (source, data) = process_raw_event::<Dns>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
                     }
-                    RawEventKind::OpLog => {
-                        let Ok(op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize OpLog".to_string());
-                            break;
-                        };
-                        let agent_id = format!("{}@{source}", op_log.agent_name);
-                        StorageKey::builder()
-                            .start_key(&agent_id)
-                            .end_key(timestamp)
+                    RawEventKind::Http => {
+                        let (source, data) = process_raw_event::<Http>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Rdp => {
+                        let (source, data) = process_raw_event::<Rdp>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Smtp => {
+                        let (source, data) = process_raw_event::<Smtp>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Ntlm => {
+                        let (source, data) = process_raw_event::<Ntlm>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Kerberos => {
+                        let (source, data) = process_raw_event::<Kerberos>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Ssh => {
+                        let (source, data) = process_raw_event::<Ssh>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::DceRpc => {
+                        let (source, data) = process_raw_event::<DceRpc>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Ftp => {
+                        let (source, data) = process_raw_event::<Ftp>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Mqtt => {
+                        let (source, data) = process_raw_event::<Mqtt>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Ldap => {
+                        let (source, data) = process_raw_event::<Ldap>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Tls => {
+                        let (source, data) = process_raw_event::<Tls>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Smb => {
+                        let (source, data) = process_raw_event::<Smb>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::Nfs => {
+                        let (source, data) = process_raw_event::<Nfs>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::ProcessCreate => {
+                        let (source, data) = process_raw_event::<ProcessCreate>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::FileCreateTime => {
+                        let (source, data) =
+                            process_raw_event::<FileCreationTimeChanged>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::NetworkConnect => {
+                        let (source, data) = process_raw_event::<NetworkConnection>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::ProcessTerminate => {
+                        let (source, data) = process_raw_event::<ProcessTerminated>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::ImageLoad => {
+                        let (source, data) = process_raw_event::<ImageLoaded>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::FileCreate => {
+                        let (source, data) = process_raw_event::<FileCreate>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::RegistryValueSet => {
+                        let (source, data) = process_raw_event::<RegistryValueSet>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::RegistryKeyRename => {
+                        let (source, data) =
+                            process_raw_event::<RegistryKeyValueRename>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::FileCreateStreamHash => {
+                        let (source, data) = process_raw_event::<FileCreateStreamHash>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::PipeEvent => {
+                        let (source, data) = process_raw_event::<PipeEvent>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::DnsQuery => {
+                        let (source, data) = process_raw_event::<DnsEvent>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::FileDelete => {
+                        let (source, data) = process_raw_event::<FileDelete>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::ProcessTamper => {
+                        let (source, data) = process_raw_event::<ProcessTampering>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::FileDeleteDetected => {
+                        let (source, data) = process_raw_event::<FileDeleteDetected>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
                     }
                     RawEventKind::Packet => {
-                        let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Packet".to_string());
-                            break;
+                        let Ok((source, packet)) =
+                            bincode::deserialize::<(String, Packet)>(&raw_event)
+                        else {
+                            bail!("Failed to deserialize pk".to_string());
                         };
-                        key_builder
+                        let key_builder = key_builder
+                            .start_key(&source)
                             .mid_key(Some(timestamp.to_be_bytes().to_vec()))
-                            .end_key(packet.packet_timestamp)
-                    }
-                    RawEventKind::Statistics => {
-                        let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Statistics".to_string());
-                            break;
+                            .end_key(packet.packet_timestamp);
+
+                        let Ok(serde_data) = bincode::serialize(&packet) else {
+                            bail!("Failed to serialize pk".to_string());
                         };
-                        #[cfg(feature = "benchmark")]
-                        {
-                            (packet_count, packet_size) = statistics
-                                .stats
-                                .iter()
-                                .fold((0, 0), |(sumc, sums), c| (sumc + c.1, sums + c.2));
-                        }
+                        raw_event = serde_data;
                         key_builder
-                            .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
-                            .end_key(timestamp)
                     }
-                    RawEventKind::Netflow5 => {
-                        let Ok(mut netflow5) = bincode::deserialize::<Netflow5>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Netflow5".to_string());
-                            break;
-                        };
-
-                        netflow5.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&netflow5) else {
-                            err_msg = Some("Failed to serialize Netflow5".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key("netflow5")
-                            .end_key(timestamp)
+                    _ => {
+                        continue;
                     }
-                    RawEventKind::Netflow9 => {
-                        let Ok(mut netflow9) = bincode::deserialize::<Netflow9>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Netflow9".to_string());
-                            break;
-                        };
-
-                        netflow9.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&netflow9) else {
-                            err_msg = Some("Failed to serialize Netflow9".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key("netflow9")
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::SecuLog => {
-                        let Ok(mut secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize SecuLog".to_string());
-                            break;
-                        };
-
-                        secu_log.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&secu_log) else {
-                            err_msg = Some("Failed to serialize SecuLog".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key(&secu_log.kind)
-                            .end_key(timestamp)
-                    }
-                    _ => key_builder.end_key(timestamp),
                 };
                 let storage_key = key_builder.build();
                 store.append(&storage_key.key(), &raw_event)?;
@@ -1080,6 +1152,19 @@ async fn check_sources_conn(
             }
         }
     }
+}
+
+fn process_raw_event<T>(raw_event: &[u8]) -> Result<(String, Vec<u8>)>
+where
+    T: DeserializeOwned + Serialize + std::fmt::Debug,
+{
+    let Ok((source, event)) = bincode::deserialize::<(String, T)>(raw_event) else {
+        bail!("Failed to deserialize raw event".to_string());
+    };
+    let Ok(serde_data) = bincode::serialize(&event) else {
+        bail!("Failed to serialize raw event".to_string());
+    };
+    Ok((source, serde_data))
 }
 
 pub struct NetworkKey {

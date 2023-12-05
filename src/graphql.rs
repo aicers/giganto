@@ -600,6 +600,14 @@ fn check_source(filter_src: &Option<String>, target_src: &Option<String>) -> boo
     })
 }
 
+fn check_agent_id(filter_str: &Option<String>, target_str: Option<String>) -> bool {
+    filter_str.as_ref().map_or(true, |filter_id| {
+        target_str
+            .as_ref()
+            .map_or(false, |agent_id| agent_id == filter_id)
+    })
+}
+
 fn min_max_time(is_forward: bool) -> DateTime<Utc> {
     if is_forward {
         DateTime::<Utc>::MAX_UTC

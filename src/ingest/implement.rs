@@ -545,7 +545,7 @@ impl EventFilter for ProcessCreate {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -569,7 +569,7 @@ impl EventFilter for FileCreationTimeChanged {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -593,7 +593,7 @@ impl EventFilter for NetworkConnection {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -617,7 +617,7 @@ impl EventFilter for ProcessTerminated {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -641,7 +641,7 @@ impl EventFilter for ImageLoaded {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -665,7 +665,7 @@ impl EventFilter for FileCreate {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -689,7 +689,7 @@ impl EventFilter for RegistryValueSet {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -713,7 +713,7 @@ impl EventFilter for RegistryKeyValueRename {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -737,7 +737,7 @@ impl EventFilter for FileCreateStreamHash {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -761,7 +761,7 @@ impl EventFilter for PipeEvent {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -785,7 +785,7 @@ impl EventFilter for DnsEvent {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -809,7 +809,7 @@ impl EventFilter for FileDelete {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -833,7 +833,7 @@ impl EventFilter for ProcessTampering {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
@@ -857,7 +857,7 @@ impl EventFilter for FileDeleteDetected {
         None
     }
     fn log_contents(&self) -> Option<String> {
-        None
+        Some(self.agent_id.clone())
     }
 }
 
