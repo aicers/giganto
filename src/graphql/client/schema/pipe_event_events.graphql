@@ -1,0 +1,24 @@
+query PipeEventEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    pipeEventEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                eventType
+                processGuid
+                processId
+                pipeName
+                image
+                user
+            }
+        }
+    }
+}

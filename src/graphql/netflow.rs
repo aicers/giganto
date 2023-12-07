@@ -1,8 +1,6 @@
 use super::{
     check_address, check_contents, check_port, check_source, get_timestamp_from_key,
-    load_connection,
-    network::{IpRange, PortRange},
-    FromKeyValue,
+    load_connection, FromKeyValue, IpRange, PortRange,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},

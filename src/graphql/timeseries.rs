@@ -102,7 +102,7 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::{graphql::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
     #[tokio::test]

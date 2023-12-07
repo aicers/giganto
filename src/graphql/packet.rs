@@ -144,7 +144,7 @@ impl PacketQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::{graphql::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
     use chrono::{NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
     use std::mem;

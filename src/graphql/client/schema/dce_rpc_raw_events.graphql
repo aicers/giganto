@@ -1,0 +1,26 @@
+query DceRpcRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    dceRpcRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                origAddr
+                respAddr
+                origPort
+                respPort
+                proto
+                lastTime
+                rtt
+                namedPipe
+                endpoint
+                operation
+            }
+        }
+    }
+}

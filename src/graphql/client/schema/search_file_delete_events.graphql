@@ -1,0 +1,3 @@
+query SearchFileDeleteEvents($filter: SearchFilter!){
+    searchFileDeleteEvents(filter: $filter)
+}

@@ -1,0 +1,3 @@
+query SearchPipeEventEvents($filter: SearchFilter!){
+    searchPipeEventEvents(filter: $filter)
+}

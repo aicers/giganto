@@ -1,0 +1,3 @@
+query SearchRegistryKeyRenameEvents($filter: SearchFilter!){
+    searchRegistryKeyRenameEvents(filter: $filter)
+}

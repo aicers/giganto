@@ -21,7 +21,7 @@ impl SourceQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::TestSchema;
+    use crate::graphql::tests::TestSchema;
     use chrono::Utc;
 
     #[tokio::test]

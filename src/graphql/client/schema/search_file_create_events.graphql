@@ -1,0 +1,3 @@
+query SearchFileCreateEvents($filter: SearchFilter!){
+    searchFileCreateEvents(filter: $filter)
+}

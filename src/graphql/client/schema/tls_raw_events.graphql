@@ -1,0 +1,40 @@
+query TlsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    tlsRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                origAddr
+                respAddr
+                origPort
+                respPort
+                proto
+                lastTime
+                serverName
+                alpnProtocol
+                ja3
+                version
+                cipher
+                ja3S
+                serial
+                subjectCountry
+                subjectOrgName
+                subjectCommonName
+                validityNotBefore
+                validityNotAfter
+                subjectAltName
+                issuerCountry
+                issuerOrgName
+                issuerOrgUnitName
+                issuerCommonName
+                lastAlert
+            }
+        }
+    }
+}

@@ -1,0 +1,3 @@
+query SearchNetworkConnectEvents($filter: SearchFilter!){
+    searchNetworkConnectEvents(filter: $filter)
+}

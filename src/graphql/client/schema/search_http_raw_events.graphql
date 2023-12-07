@@ -1,0 +1,3 @@
+query SearchHttpRawEvents($filter: SearchFilter!){
+    searchHttpRawEvents(filter: $filter)
+}

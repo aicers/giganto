@@ -11,6 +11,7 @@ use crate::{server::SERVER_REBOOT_DELAY, storage::migrate_data_dir};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::init_tracing;
+use peer::{PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
 use rustls::{Certificate, PrivateKey};
@@ -108,10 +109,17 @@ async fn main() -> Result<()> {
         return Err(anyhow!("failed to set signal handler: {}", e));
     }
 
+    let request_client_pool = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .tls_sni(false)
+        .build()
+        .expect("Failed to build request client pool");
+
     loop {
         let pcap_sources = new_pcap_sources();
         let ingest_sources = new_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
+        let peers = new_peers();
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
         let mut notify_source_change = None;
@@ -120,6 +128,9 @@ async fn main() -> Result<()> {
         let schema = graphql::schema(
             database.clone(),
             pcap_sources.clone(),
+            ingest_sources.clone(),
+            peers.clone(),
+            request_client_pool.clone(),
             settings.export_dir.clone(),
             notify_config_reload.clone(),
             settings.cfg_path.clone(),
@@ -143,17 +154,12 @@ async fn main() -> Result<()> {
         if let Some(peer_address) = settings.peer_address {
             let peer_server =
                 peer::Peer::new(peer_address, cert.clone(), key.clone(), files.clone())?;
-            let peer_sources = Arc::new(RwLock::new(HashMap::new()));
             let notify_source = Arc::new(Notify::new());
-            let peers = if let Some(peers) = settings.peers {
-                peers
-            } else {
-                HashSet::new()
-            };
+            let peer_identities = settings.peers.unwrap_or_else(HashSet::new);
             task::spawn(peer_server.run(
-                peers,
+                peer_identities,
                 ingest_sources.clone(),
-                peer_sources,
+                peers.clone(),
                 notify_source.clone(),
                 notify_shutdown.clone(),
                 settings.cfg_path.clone(),
@@ -303,4 +309,8 @@ fn new_stream_direct_channels() -> StreamDirectChannels {
 
 fn new_ack_transmission_count(count: u16) -> AckTransmissionCount {
     Arc::new(RwLock::new(count))
+}
+
+fn new_peers() -> Peers {
+    Arc::new(RwLock::new(HashMap::<String, PeerInfo>::new()))
 }

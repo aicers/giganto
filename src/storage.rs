@@ -3,7 +3,7 @@
 mod migration;
 
 use crate::{
-    graphql::{network::NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
+    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
     ingest::implement::EventFilter,
 };
 use anyhow::{Context, Result};

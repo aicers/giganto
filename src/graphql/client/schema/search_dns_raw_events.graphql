@@ -1,0 +1,3 @@
+query SearchDnsRawEvents($filter: SearchFilter!){
+    searchDnsRawEvents(filter: $filter)
+}

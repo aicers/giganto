@@ -1,0 +1,25 @@
+query FileDeleteDetectedEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
+    fileDeleteDetectedEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                timestamp
+                agentName
+                agentId
+                processGuid
+                processId
+                user
+                image
+                targetFilename
+                hashes
+                isExecutable
+            }
+        }
+    }
+}

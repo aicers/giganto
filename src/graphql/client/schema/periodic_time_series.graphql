@@ -1,0 +1,19 @@
+query PeriodicTimeSeries($filter: TimeSeriesFilter!, $after: String, $before: String, $first: Int, $last: Int){
+    periodicTimeSeries(filter:$filter, after:$after, before:$before, first: $first, last:$last){
+        pageInfo {
+            hasPreviousPage
+            hasNextPage
+            startCursor
+            endCursor
+        }
+        edges {
+            cursor
+            node {
+                start
+                id
+                data
+            }
+        }
+    }
+
+}

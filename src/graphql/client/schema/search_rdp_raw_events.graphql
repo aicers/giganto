@@ -1,0 +1,3 @@
+query SearchRdpRawEvents($filter: SearchFilter!){
+    searchRdpRawEvents(filter: $filter)
+}

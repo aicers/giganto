@@ -1,0 +1,1679 @@
+type ConnRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  duration: Int!
+  service: String!
+  origBytes: Int!
+  respBytes: Int!
+  origPkts: Int!
+  respPkts: Int!
+}
+
+type ConnRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [ConnRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [ConnRawEvent!]!
+}
+
+# An edge in a connection.
+type ConnRawEventEdge {
+  # The item at the end of the edge
+  node: ConnRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+# Implement the DateTime<Utc> scalar
+#
+# The input/output is a string in RFC3339 format.
+scalar DateTime
+
+type DceRpcRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  rtt: Int!
+  namedPipe: String!
+  endpoint: String!
+  operation: String!
+}
+
+type DceRpcRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [DceRpcRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [DceRpcRawEvent!]!
+}
+
+# An edge in a connection.
+type DceRpcRawEventEdge {
+  # The item at the end of the edge
+  node: DceRpcRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type DnsEventEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  queryName: String!
+  queryStatus: Int!
+  queryResults: [String!]!
+  image: String!
+  user: String!
+}
+
+type DnsEventEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [DnsEventEventEdge!]!
+
+  # A list of nodes.
+  nodes: [DnsEventEvent!]!
+}
+
+# An edge in a connection.
+type DnsEventEventEdge {
+  # The item at the end of the edge
+  node: DnsEventEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type DnsRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  query: String!
+  answer: [String!]!
+  transId: Int!
+  rtt: Int!
+  qclass: Int!
+  qtype: Int!
+  rcode: Int!
+  aaFlag: Boolean!
+  tcFlag: Boolean!
+  rdFlag: Boolean!
+  raFlag: Boolean!
+  ttl: [Int!]!
+}
+
+type DnsRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [DnsRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [DnsRawEvent!]!
+}
+
+# An edge in a connection.
+type DnsRawEventEdge {
+  # The item at the end of the edge
+  node: DnsRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input ExportFilter {
+  protocol: String!
+  sourceId: String!
+  agentName: String
+  agentId: String
+  kind: String
+  time: TimeRange
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+}
+
+type FileCreateEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  targetFilename: String!
+  creationUtcTime: Int!
+  user: String!
+}
+
+type FileCreateEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FileCreateEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FileCreateEvent!]!
+}
+
+# An edge in a connection.
+type FileCreateEventEdge {
+  # The item at the end of the edge
+  node: FileCreateEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type FileCreateStreamHashEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  targetFilename: String!
+  creationUtcTime: Int!
+  hash: [String!]!
+  contents: String!
+  user: String!
+}
+
+type FileCreateStreamHashEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FileCreateStreamHashEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FileCreateStreamHashEvent!]!
+}
+
+# An edge in a connection.
+type FileCreateStreamHashEventEdge {
+  # The item at the end of the edge
+  node: FileCreateStreamHashEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type FileCreationTimeChangedEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  targetFilename: String!
+  creationUtcTime: Int!
+  previousCreationUtcTime: Int!
+  user: String!
+}
+
+type FileCreationTimeChangedEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FileCreationTimeChangedEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FileCreationTimeChangedEvent!]!
+}
+
+# An edge in a connection.
+type FileCreationTimeChangedEventEdge {
+  # The item at the end of the edge
+  node: FileCreationTimeChangedEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type FileDeleteDetectedEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  user: String!
+  image: String!
+  targetFilename: String!
+  hashes: [String!]!
+  isExecutable: Boolean!
+}
+
+type FileDeleteDetectedEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FileDeleteDetectedEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FileDeleteDetectedEvent!]!
+}
+
+# An edge in a connection.
+type FileDeleteDetectedEventEdge {
+  # The item at the end of the edge
+  node: FileDeleteDetectedEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type FileDeleteEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  user: String!
+  image: String!
+  targetFilename: String!
+  hashes: [String!]!
+  isExecutable: Boolean!
+  archived: Boolean!
+}
+
+type FileDeleteEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FileDeleteEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FileDeleteEvent!]!
+}
+
+# An edge in a connection.
+type FileDeleteEventEdge {
+  # The item at the end of the edge
+  node: FileDeleteEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type FtpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  user: String!
+  password: String!
+  command: String!
+  replyCode: String!
+  replyMsg: String!
+  dataPassive: Boolean!
+  dataOrigAddr: String!
+  dataRespAddr: String!
+  dataRespPort: Int!
+  file: String!
+  fileSize: Int!
+  fileId: String!
+}
+
+type FtpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [FtpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [FtpRawEvent!]!
+}
+
+# An edge in a connection.
+type FtpRawEventEdge {
+  # The item at the end of the edge
+  node: FtpRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type GigantoConfig {
+  ingestAddress: String!
+  publishAddress: String!
+  graphqlAddress: String!
+  retention: String!
+  maxOpenFiles: String!
+  maxMbOfLevelBase: String!
+  peerAddress: String!
+  peerList: [PeerList!]!
+}
+
+type GigantoStatus {
+  name: String!
+  cpuUsage: Float!
+  totalMemory: Int!
+  usedMemory: Int!
+  totalDiskSpace: Int!
+  usedDiskSpace: Int!
+}
+
+type HttpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  method: String!
+  host: String!
+  uri: String!
+  referrer: String!
+  version: String!
+  userAgent: String!
+  requestLen: Int!
+  responseLen: Int!
+  statusCode: Int!
+  statusMsg: String!
+  username: String!
+  password: String!
+  cookie: String!
+  contentEncoding: String!
+  contentType: String!
+  cacheControl: String!
+  origFilenames: [String!]!
+  origMimeTypes: [String!]!
+  respFilenames: [String!]!
+  respMimeTypes: [String!]!
+}
+
+type HttpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [HttpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [HttpRawEvent!]!
+}
+
+# An edge in a connection.
+type HttpRawEventEdge {
+  # The item at the end of the edge
+  node: HttpRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type ImageLoadedEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  imageLoaded: String!
+  fileVersion: String!
+  description: String!
+  product: String!
+  company: String!
+  originalFileName: String!
+  hashes: [String!]!
+  signed: Boolean!
+  signature: String!
+  signatureStatus: String!
+  user: String!
+}
+
+type ImageLoadedEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [ImageLoadedEventEdge!]!
+
+  # A list of nodes.
+  nodes: [ImageLoadedEvent!]!
+}
+
+# An edge in a connection.
+type ImageLoadedEventEdge {
+  # The item at the end of the edge
+  node: ImageLoadedEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input InputPeerList {
+  address: String!
+  hostName: String!
+}
+
+input IpRange {
+  start: String
+  end: String
+}
+
+type KerberosRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  clientTime: Int!
+  serverTime: Int!
+  errorCode: Int!
+  clientRealm: String!
+  cnameType: Int!
+  clientName: [String!]!
+  realm: String!
+  snameType: Int!
+  serviceName: [String!]!
+}
+
+type KerberosRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [KerberosRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [KerberosRawEvent!]!
+}
+
+# An edge in a connection.
+type KerberosRawEventEdge {
+  # The item at the end of the edge
+  node: KerberosRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type LdapRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  messageId: Int!
+  version: Int!
+  opcode: [String!]!
+  result: [String!]!
+  diagnosticMessage: [String!]!
+  object: [String!]!
+  argument: [String!]!
+}
+
+type LdapRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [LdapRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [LdapRawEvent!]!
+}
+
+# An edge in a connection.
+type LdapRawEventEdge {
+  # The item at the end of the edge
+  node: LdapRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input LogFilter {
+  time: TimeRange
+  source: String!
+  kind: String
+}
+
+type LogRawEvent {
+  timestamp: DateTime!
+  log: String!
+}
+
+type LogRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [LogRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [LogRawEvent!]!
+}
+
+# An edge in a connection.
+type LogRawEventEdge {
+  # The item at the end of the edge
+  node: LogRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type MqttRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  protocol: String!
+  version: Int!
+  clientId: String!
+  connackReason: Int!
+  subscribe: [String!]!
+  subackReason: [Int!]!
+}
+
+type MqttRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [MqttRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [MqttRawEvent!]!
+}
+
+# An edge in a connection.
+type MqttRawEventEdge {
+  # The item at the end of the edge
+  node: MqttRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type Mutation {
+  setGigantoConfig(field: UserConfig!): String!
+}
+
+type NetworkConnectionEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  user: String!
+  protocol: String!
+  initiated: Boolean!
+  sourceIsIpv6: Boolean!
+  sourceIp: String!
+  sourceHostname: String!
+  sourcePort: Int!
+  sourcePortName: String!
+  destinationIsIpv6: Boolean!
+  destinationIp: String!
+  destinationHostname: String!
+  destinationPort: Int!
+  destinationPortName: String!
+}
+
+type NetworkConnectionEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [NetworkConnectionEventEdge!]!
+
+  # A list of nodes.
+  nodes: [NetworkConnectionEvent!]!
+}
+
+# An edge in a connection.
+type NetworkConnectionEventEdge {
+  # The item at the end of the edge
+  node: NetworkConnectionEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input NetworkFilter {
+  time: TimeRange
+  source: String!
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+  logLevel: String
+  logContents: String
+}
+
+union NetworkRawEvents =
+    ConnRawEvent
+  | DnsRawEvent
+  | HttpRawEvent
+  | RdpRawEvent
+  | NtlmRawEvent
+  | KerberosRawEvent
+  | SshRawEvent
+  | DceRpcRawEvent
+  | FtpRawEvent
+  | MqttRawEvent
+  | LdapRawEvent
+  | TlsRawEvent
+  | SmbRawEvent
+  | NfsRawEvent
+
+type NetworkRawEventsConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [NetworkRawEventsEdge!]!
+
+  # A list of nodes.
+  nodes: [NetworkRawEvents!]!
+}
+
+# An edge in a connection.
+type NetworkRawEventsEdge {
+  # The item at the end of the edge
+  node: NetworkRawEvents!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type NfsRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  readFiles: [String!]!
+  writeFiles: [String!]!
+}
+
+type NfsRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [NfsRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [NfsRawEvent!]!
+}
+
+# An edge in a connection.
+type NfsRawEventEdge {
+  # The item at the end of the edge
+  node: NfsRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type NtlmRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  username: String!
+  hostname: String!
+  domainname: String!
+  serverNbComputerName: String!
+  serverDnsComputerName: String!
+  serverTreeName: String!
+  success: String!
+}
+
+type NtlmRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [NtlmRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [NtlmRawEvent!]!
+}
+
+# An edge in a connection.
+type NtlmRawEventEdge {
+  # The item at the end of the edge
+  node: NtlmRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input OpLogFilter {
+  time: TimeRange
+  agentId: String!
+  logLevel: String
+  contents: String
+}
+
+type OpLogRawEvent {
+  timestamp: DateTime!
+  level: String!
+  contents: String!
+}
+
+type OpLogRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [OpLogRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [OpLogRawEvent!]!
+}
+
+# An edge in a connection.
+type OpLogRawEventEdge {
+  # The item at the end of the edge
+  node: OpLogRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type Packet {
+  requestTime: DateTime!
+  packetTime: DateTime!
+  packet: String!
+}
+
+type PacketConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [PacketEdge!]!
+
+  # A list of nodes.
+  nodes: [Packet!]!
+}
+
+# An edge in a connection.
+type PacketEdge {
+  # The item at the end of the edge
+  node: Packet!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input PacketFilter {
+  source: String!
+  requestTime: DateTime!
+  packetTime: TimeRange
+}
+
+# Information about pagination in a connection
+type PageInfo {
+  # When paginating backwards, are there more items?
+  hasPreviousPage: Boolean!
+
+  # When paginating forwards, are there more items?
+  hasNextPage: Boolean!
+
+  # When paginating backwards, the cursor to continue.
+  startCursor: String
+
+  # When paginating forwards, the cursor to continue.
+  endCursor: String
+}
+
+type Pcap {
+  requestTime: DateTime!
+  parsedPcap: String!
+}
+
+type PeerList {
+  address: String!
+  hostName: String!
+}
+
+type PipeEventEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  eventType: String!
+  processGuid: String!
+  processId: Int!
+  pipeName: String!
+  image: String!
+  user: String!
+}
+
+type PipeEventEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [PipeEventEventEdge!]!
+
+  # A list of nodes.
+  nodes: [PipeEventEvent!]!
+}
+
+# An edge in a connection.
+type PipeEventEventEdge {
+  # The item at the end of the edge
+  node: PipeEventEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input PortRange {
+  start: Int
+  end: Int
+}
+
+type ProcessCreateEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  fileVersion: String!
+  description: String!
+  product: String!
+  company: String!
+  originalFileName: String!
+  commandLine: String!
+  currentDirectory: String!
+  user: String!
+  logonGuid: String!
+  logonId: Int!
+  terminalSessionId: Int!
+  integrityLevel: String!
+  hashes: [String!]!
+  parentProcessGuid: String!
+  parentProcessId: Int!
+  parentImage: String!
+  parentCommandLine: String!
+  parentUser: String!
+}
+
+type ProcessCreateEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [ProcessCreateEventEdge!]!
+
+  # A list of nodes.
+  nodes: [ProcessCreateEvent!]!
+}
+
+# An edge in a connection.
+type ProcessCreateEventEdge {
+  # The item at the end of the edge
+  node: ProcessCreateEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type ProcessTamperingEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  tamperType: String!
+  user: String!
+}
+
+type ProcessTamperingEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [ProcessTamperingEventEdge!]!
+
+  # A list of nodes.
+  nodes: [ProcessTamperingEvent!]!
+}
+
+# An edge in a connection.
+type ProcessTamperingEventEdge {
+  # The item at the end of the edge
+  node: ProcessTamperingEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type ProcessTerminatedEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  user: String!
+}
+
+type ProcessTerminatedEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [ProcessTerminatedEventEdge!]!
+
+  # A list of nodes.
+  nodes: [ProcessTerminatedEvent!]!
+}
+
+# An edge in a connection.
+type ProcessTerminatedEventEdge {
+  # The item at the end of the edge
+  node: ProcessTerminatedEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type Properties {
+  estimateLiveDataSize: Int!
+  estimateNumKeys: Int!
+  stats: String!
+}
+
+input PropertyFilter {
+  recordType: String!
+}
+
+type Query {
+  logRawEvents(
+    filter: LogFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): LogRawEventConnection!
+  opLogRawEvents(
+    filter: OpLogFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): OpLogRawEventConnection!
+  connRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): ConnRawEventConnection!
+  dnsRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): DnsRawEventConnection!
+  httpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): HttpRawEventConnection!
+  rdpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): RdpRawEventConnection!
+  smtpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): SmtpRawEventConnection!
+  ntlmRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): NtlmRawEventConnection!
+  kerberosRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): KerberosRawEventConnection!
+  sshRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): SshRawEventConnection!
+  dceRpcRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): DceRpcRawEventConnection!
+  ftpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FtpRawEventConnection!
+  mqttRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): MqttRawEventConnection!
+  ldapRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): LdapRawEventConnection!
+  tlsRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): TlsRawEventConnection!
+  smbRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): SmbRawEventConnection!
+  nfsRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): NfsRawEventConnection!
+  networkRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): NetworkRawEventsConnection!
+  searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchHttpRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchRdpRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchSmtpRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchNtlmRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchKerberosRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchSshRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchDceRpcRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchFtpRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchMqttRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchLdapRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchTlsRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchSmbRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
+  export(exportType: String!, filter: ExportFilter!): String!
+  packets(
+    filter: PacketFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): PacketConnection!
+  pcap(filter: PacketFilter!): Pcap!
+  periodicTimeSeries(
+    filter: TimeSeriesFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): TimeSeriesConnection!
+  gigantoStatus: GigantoStatus!
+  propertiesCf(filter: PropertyFilter!): Properties!
+  gigantoConfig: GigantoConfig!
+  sources: [String!]!
+  statistics(
+    filter: StatisticsFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): StatisticsRawEventConnection!
+  processCreateEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): ProcessCreateEventConnection!
+  fileCreateTimeEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FileCreationTimeChangedEventConnection!
+  networkConnectEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): NetworkConnectionEventConnection!
+  processTerminateEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): ProcessTerminatedEventConnection!
+  imageLoadEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): ImageLoadedEventConnection!
+  fileCreateEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FileCreateEventConnection!
+  registryValueSetEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): RegistryValueSetEventConnection!
+  registryKeyRenameEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): RegistryKeyValueRenameEventConnection!
+  fileCreateStreamHashEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FileCreateStreamHashEventConnection!
+  pipeEventEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): PipeEventEventConnection!
+  dnsQueryEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): DnsEventEventConnection!
+  fileDeleteEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FileDeleteEventConnection!
+  processTamperEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): ProcessTamperingEventConnection!
+  fileDeleteDetectedEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): FileDeleteDetectedEventConnection!
+  searchProcessCreateEvents(filter: SearchFilter!): [DateTime!]!
+  searchFileCreateTimeEvents(filter: SearchFilter!): [DateTime!]!
+  searchNetworkConnectEvents(filter: SearchFilter!): [DateTime!]!
+  searchProcessTerminateEvents(filter: SearchFilter!): [DateTime!]!
+  searchImageLoadEvents(filter: SearchFilter!): [DateTime!]!
+  searchFileCreateEvents(filter: SearchFilter!): [DateTime!]!
+  searchRegistryValueSetEvents(filter: SearchFilter!): [DateTime!]!
+  searchRegistryKeyRenameEvents(filter: SearchFilter!): [DateTime!]!
+  searchFileCreateStreamHashEvents(filter: SearchFilter!): [DateTime!]!
+  searchPipeEventEvents(filter: SearchFilter!): [DateTime!]!
+  searchDnsQueryEvents(filter: SearchFilter!): [DateTime!]!
+  searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
+  searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
+  searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
+}
+
+type RdpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  cookie: String!
+}
+
+type RdpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [RdpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [RdpRawEvent!]!
+}
+
+# An edge in a connection.
+type RdpRawEventEdge {
+  # The item at the end of the edge
+  node: RdpRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type RegistryKeyValueRenameEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  eventType: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  targetObject: String!
+  newName: String!
+  user: String!
+}
+
+type RegistryKeyValueRenameEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [RegistryKeyValueRenameEventEdge!]!
+
+  # A list of nodes.
+  nodes: [RegistryKeyValueRenameEvent!]!
+}
+
+# An edge in a connection.
+type RegistryKeyValueRenameEventEdge {
+  # The item at the end of the edge
+  node: RegistryKeyValueRenameEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type RegistryValueSetEvent {
+  timestamp: DateTime!
+  agentName: String!
+  agentId: String!
+  eventType: String!
+  processGuid: String!
+  processId: Int!
+  image: String!
+  targetObject: String!
+  details: String!
+  user: String!
+}
+
+type RegistryValueSetEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [RegistryValueSetEventEdge!]!
+
+  # A list of nodes.
+  nodes: [RegistryValueSetEvent!]!
+}
+
+# An edge in a connection.
+type RegistryValueSetEventEdge {
+  # The item at the end of the edge
+  node: RegistryValueSetEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input SearchFilter {
+  time: TimeRange
+  source: String!
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+  logLevel: String
+  logContents: String
+  timestamps: [DateTime!]!
+  keyword: String
+}
+
+type SmbRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  command: Int!
+  path: String!
+  service: String!
+  fileName: String!
+  fileSize: Int!
+  resourceType: Int!
+  fid: Int!
+  createTime: Int!
+  accessTime: Int!
+  writeTime: Int!
+  changeTime: Int!
+}
+
+type SmbRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [SmbRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [SmbRawEvent!]!
+}
+
+# An edge in a connection.
+type SmbRawEventEdge {
+  # The item at the end of the edge
+  node: SmbRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type SmtpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  mailfrom: String!
+  date: String!
+  from: String!
+  to: String!
+  subject: String!
+  agent: String!
+}
+
+type SmtpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [SmtpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [SmtpRawEvent!]!
+}
+
+# An edge in a connection.
+type SmtpRawEventEdge {
+  # The item at the end of the edge
+  node: SmtpRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type SshRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  version: Int!
+  authSuccess: String!
+  authAttempts: Int!
+  direction: String!
+  client: String!
+  server: String!
+  cipherAlg: String!
+  macAlg: String!
+  compressionAlg: String!
+  kexAlg: String!
+  hostKeyAlg: String!
+  hostKey: String!
+}
+
+type SshRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [SshRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [SshRawEvent!]!
+}
+
+# An edge in a connection.
+type SshRawEventEdge {
+  # The item at the end of the edge
+  node: SshRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input StatisticsFilter {
+  time: TimeRange
+  source: String!
+  core: Int!
+}
+
+type StatisticsRawEvent {
+  timestamp: DateTime!
+  core: Int!
+  period: Int!
+  stats: [String!]!
+}
+
+type StatisticsRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [StatisticsRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [StatisticsRawEvent!]!
+}
+
+# An edge in a connection.
+type StatisticsRawEventEdge {
+  # The item at the end of the edge
+  node: StatisticsRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input TimeRange {
+  start: DateTime
+  end: DateTime
+}
+
+type TimeSeries {
+  start: DateTime!
+  id: String!
+  data: [Float!]!
+}
+
+type TimeSeriesConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [TimeSeriesEdge!]!
+
+  # A list of nodes.
+  nodes: [TimeSeries!]!
+}
+
+# An edge in a connection.
+type TimeSeriesEdge {
+  # The item at the end of the edge
+  node: TimeSeries!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input TimeSeriesFilter {
+  time: TimeRange
+  id: String!
+}
+
+type TlsRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  serverName: String!
+  alpnProtocol: String!
+  ja3: String!
+  version: String!
+  cipher: Int!
+  ja3S: String!
+  serial: String!
+  subjectCountry: String!
+  subjectOrgName: String!
+  subjectCommonName: String!
+  validityNotBefore: Int!
+  validityNotAfter: Int!
+  subjectAltName: String!
+  issuerCountry: String!
+  issuerOrgName: String!
+  issuerOrgUnitName: String!
+  issuerCommonName: String!
+  lastAlert: Int!
+}
+
+type TlsRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [TlsRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [TlsRawEvent!]!
+}
+
+# An edge in a connection.
+type TlsRawEventEdge {
+  # The item at the end of the edge
+  node: TlsRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+input UserConfig {
+  ingestAddress: String
+  publishAddress: String
+  graphqlAddress: String
+  retention: String
+  maxOpenFiles: String
+  maxMbOfLevelBase: String
+  peerAddress: String
+  peerList: [InputPeerList!]
+}

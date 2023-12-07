@@ -1,0 +1,3 @@
+query SearchSmbRawEvents($filter: SearchFilter!){
+    searchSmbRawEvents(filter: $filter)
+}

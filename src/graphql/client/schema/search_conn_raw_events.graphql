@@ -1,0 +1,3 @@
+query SearchConnRawEvents($filter: SearchFilter!){
+    searchConnRawEvents(filter: $filter)
+}

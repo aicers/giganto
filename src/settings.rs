@@ -1,5 +1,5 @@
 //! Configurations for the application.
-use crate::peer::PeerInfo;
+use crate::peer::PeerIdentity;
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
@@ -38,7 +38,7 @@ pub struct Settings {
     //peers
     #[serde(deserialize_with = "deserialize_peer_addr")]
     pub peer_address: Option<SocketAddr>, // IP address & port for peer connection
-    pub peers: Option<HashSet<PeerInfo>>,
+    pub peers: Option<HashSet<PeerIdentity>>,
 
     //ack transmission interval
     pub ack_transmission: u16,

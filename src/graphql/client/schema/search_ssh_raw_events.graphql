@@ -1,0 +1,3 @@
+query SearchSshRawEvents($filter: SearchFilter!){
+    searchSshRawEvents(filter: $filter)
+}
