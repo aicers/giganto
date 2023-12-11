@@ -36,7 +36,8 @@ use giganto_client::{
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU16;
 use std::{
     net::SocketAddr,
@@ -66,6 +67,26 @@ const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = ">=0.15.0,<0.16.0";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PEFile {
+    pub agent_name: String,
+    pub agent_id: String,
+    pub file_name: String,
+    pub file_hash: String,
+    pub data: Vec<u8>,
+}
+
+impl Display for PEFile {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{:?}",
+            self.agent_name, self.agent_id, self.file_name, self.file_hash, self.data,
+        )
+    }
+}
 
 enum ConnState {
     Connected,
@@ -752,13 +773,14 @@ async fn handle_request(
             .await?;
         }
         RawEventKind::SecuLog => {
+            // pe file
             handle_data(
                 send,
                 recv,
                 RawEventKind::SecuLog,
                 None,
                 source,
-                db.secu_log_store()?,
+                db.pe_file_store()?,
                 stream_direct_channels,
                 shutdown_signal,
                 ack_trans_cnt,
@@ -992,6 +1014,12 @@ async fn handle_data<T>(
                     }
                     RawEventKind::FileDeleteDetected => {
                         let (source, data) = process_raw_event::<FileDeleteDetected>(&raw_event)?;
+                        raw_event = data;
+                        key_builder.start_key(&source).end_key(timestamp)
+                    }
+                    RawEventKind::SecuLog => {
+                        //pe file
+                        let (source, data) = process_raw_event::<PEFile>(&raw_event)?;
                         raw_event = data;
                         key_builder.start_key(&source).end_key(timestamp)
                     }

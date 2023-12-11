@@ -5,6 +5,7 @@ use super::{
     network::{NetworkFilter, SearchFilter},
     Engine, FromKeyValue,
 };
+use crate::ingest::PEFile;
 use crate::storage::{Database, FilteredIter};
 use async_graphql::{
     connection::{query, Connection, Edge},
@@ -242,6 +243,29 @@ struct FileDeleteDetectedEvent {
     is_executable: bool,
 }
 
+#[derive(SimpleObject, Debug)]
+struct PEFileEvent {
+    timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
+    file_name: String,
+    file_hash: String,
+    data: Vec<u8>,
+}
+
+impl FromKeyValue<PEFile> for PEFileEvent {
+    fn from_key_value(key: &[u8], value: PEFile) -> Result<Self> {
+        Ok(PEFileEvent {
+            timestamp: get_timestamp_from_key(key)?,
+            agent_name: value.agent_name,
+            agent_id: value.agent_id,
+            file_name: value.file_name,
+            file_hash: value.file_hash,
+            data: value.data,
+        })
+    }
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum SysmonEvents {
@@ -450,6 +474,30 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
 
 #[Object]
 impl SysmonQuery {
+    async fn pe_file<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, PEFileEvent>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.pe_file_store()?;
+
+        query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                load_connection(&store, &filter, after, before, first, last)
+            },
+        )
+        .await
+    }
+
     async fn process_create_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
