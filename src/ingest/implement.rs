@@ -16,6 +16,8 @@ use giganto_client::ingest::{
 };
 use std::net::IpAddr;
 
+use super::PEFile;
+
 pub trait EventFilter {
     fn data_type(&self) -> String;
     fn orig_addr(&self) -> Option<IpAddr>;
@@ -840,6 +842,30 @@ impl EventFilter for ProcessTampering {
 impl EventFilter for FileDeleteDetected {
     fn data_type(&self) -> String {
         "file delete detected".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.agent_id.clone())
+    }
+}
+
+impl EventFilter for PEFile {
+    fn data_type(&self) -> String {
+        "pe file".to_string()
     }
     fn orig_addr(&self) -> Option<IpAddr> {
         None

@@ -27,6 +27,8 @@ use giganto_client::{
 };
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
+use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU16;
 use std::{
     net::SocketAddr,
@@ -60,6 +62,26 @@ type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 enum ConnState {
     Connected,
     Disconnected,
+}
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PEFile {
+    pub agent_name: String,
+    pub agent_id: String,
+    pub file_name: String,
+    pub file_hash: String,
+    pub data: Vec<u8>,
+}
+
+impl Display for PEFile {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{:?}",
+            self.agent_name, self.agent_id, self.file_name, self.file_hash, self.data,
+        )
+    }
 }
 
 pub struct Server {
@@ -743,13 +765,14 @@ async fn handle_request(
             .await?;
         }
         RawEventKind::SecuLog => {
+            // pe file
             handle_data(
                 send,
                 recv,
                 RawEventKind::SecuLog,
                 None,
                 source,
-                db.secu_log_store()?,
+                db.pe_file_store()?,
                 stream_direct_channels,
                 shutdown_signal,
                 ack_trans_cnt,
@@ -924,22 +947,6 @@ async fn handle_data<T>(
                         raw_event = serde_data;
                         StorageKey::builder()
                             .start_key("netflow9")
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::SecuLog => {
-                        let Ok(mut secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize SecuLog".to_string());
-                            break;
-                        };
-
-                        secu_log.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&secu_log) else {
-                            err_msg = Some("Failed to serialize SecuLog".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key(&secu_log.kind)
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),
