@@ -30,6 +30,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify the `giganto_config` query so that config files that work in
   `standalone mode` can also be read correctly.
 
+### Fixed
+
+- Fix `retain_periodically`
+
 ## [0.15.4] - 2023-11-22
 
 ### Added

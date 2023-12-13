@@ -33,7 +33,7 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 use std::{marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration};
 use tokio::{select, sync::Notify, time};
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "conn",
@@ -77,13 +77,15 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
 // Not a `source`+`timestamp` event.
-const NON_STANDARD_CFS: [&str; 6] = [
+const NON_STANDARD_CFS: [&str; 8] = [
     "log",
     "periodic time series",
     "statistics",
     "oplog",
     "packet",
     "seculog",
+    "netflow5", // netflow5 + timestamp
+    "netflow9", // netflow9 + timestamp
 ];
 const USAGE_THRESHOLD: u64 = 95;
 const USAGE_LOW: u64 = 85;
@@ -826,7 +828,8 @@ pub async fn retain_periodically(
     loop {
         select! {
             _ = itv.tick() => {
-                let mut retention_timestamp = Utc::now()
+                let now = Utc::now();
+                let mut retention_timestamp = now
                     .timestamp_nanos_opt()
                     .unwrap_or(retention_duration)
                     - retention_duration;
@@ -891,6 +894,10 @@ pub async fn retain_periodically(
                     }
                     if check_db_usage().await.1 && usage_flag {
                         retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+                        if retention_timestamp > now.timestamp_nanos_opt().unwrap_or(0) {
+                            warn!("cannot delete data to usage under {USAGE_LOW}");
+                            break;
+                        }
                     } else if usage_flag {
                         info!("Disk usage is under {USAGE_LOW}%");
                         break;
@@ -910,6 +917,7 @@ pub async fn retain_periodically(
 async fn check_db_usage() -> (bool, bool) {
     let resource_usage = roxy::resource_usage().await;
     let usage = (resource_usage.used_disk_space * 100) / resource_usage.total_disk_space;
+    debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
 }
 
