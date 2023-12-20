@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.19.0"
+version = "0.19.0+tis.0.1.0-alpha.1"
 edition = "2021"
 
 [lib]
