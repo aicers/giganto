@@ -4,7 +4,7 @@ use crate::{
         TomlPeers, CONFIG_GRAPHQL_ADDRESS, CONFIG_PUBLISH_ADDRESS,
     },
     server::{
-        certificate_info, config_client, config_server, extract_cert_from_conn,
+        certificate_info, config_client, config_server, extract_cert_from_conn, Certs,
         SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
     IngestSources,
@@ -19,7 +19,6 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
 };
-use rustls::{Certificate, PrivateKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -38,10 +37,12 @@ use tokio::{
 };
 use toml_edit::Document;
 
-const PEER_VERSION_REQ: &str = ">=0.16.0-alpha.1,<0.17.0";
+const PEER_VERSION_REQ: &str = ">=0.16.0,<0.17.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
+#[allow(clippy::module_name_repetitions)]
+pub type PeerIdents = Arc<RwLock<HashSet<PeerIdentity>>>;
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Deserialize, Serialize, Debug, Default)]
@@ -86,7 +87,7 @@ pub struct PeerConns {
     peer_conns: Arc<RwLock<HashMap<String, Connection>>>,
     // `peer_identities` is in sync with config toml's `peers`;
     // e.g. { PeerIdentity {"node2", "1.2.3.2:38384"}, PeerIdentity {"node1", "1.2.3.1:38384"}, }
-    peer_identities: Arc<RwLock<HashSet<PeerIdentity>>>,
+    peer_identities: PeerIdents,
     ingest_sources: IngestSources,
     // Key string is peer's address(without port); Value is `ingest_sources`, `graphql_port`,
     // and `publish_port` belonging to that peer;
@@ -107,19 +108,14 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(
-        local_address: SocketAddr,
-        certs: Vec<Certificate>,
-        key: PrivateKey,
-        files: Vec<Vec<u8>>,
-    ) -> Result<Self> {
-        let (_, local_host_name) = certificate_info(&certs)?;
+    pub fn new(local_address: SocketAddr, certs: &Arc<Certs>) -> Result<Self> {
+        let (_, local_host_name) = certificate_info(certs.certs.as_slice())?;
 
-        let server_config = config_server(certs.clone(), key.clone(), files.clone())
-            .expect("server configuration error with cert, key or root");
+        let server_config =
+            config_server(certs).expect("server configuration error with cert, key or root");
 
-        let client_config = config_client(certs, key, files)
-            .expect("client configuration error with cert, key or root");
+        let client_config =
+            config_client(certs).expect("client configuration error with cert, key or root");
 
         Ok(Peer {
             client_config,
@@ -131,9 +127,9 @@ impl Peer {
 
     pub async fn run(
         self,
-        peer_identities: HashSet<PeerIdentity>,
         ingest_sources: IngestSources,
         peers: Peers,
+        peer_idents: PeerIdents,
         notify_source: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
         config_path: String,
@@ -164,7 +160,7 @@ impl Peer {
         // A structure of values common to peer connections.
         let peer_conn_info = PeerConns {
             peer_conns: Arc::new(RwLock::new(HashMap::new())),
-            peer_identities: Arc::new(RwLock::new(peer_identities)),
+            peer_identities: peer_idents,
             peers,
             ingest_sources,
             peer_sender: sender,
@@ -751,7 +747,8 @@ pub mod tests {
     use super::Peer;
     use crate::{
         peer::{receive_peer_data, request_init_info, PeerCode, PeerIdentity},
-        to_cert_chain, to_private_key, PeerInfo,
+        server::Certs,
+        to_cert_chain, to_private_key, to_root_cert, PeerInfo,
     };
     use chrono::Utc;
     use giganto_client::connection::client_handshake;
@@ -760,7 +757,7 @@ pub mod tests {
         collections::{HashMap, HashSet},
         fs::{self, File},
         net::{IpAddr, Ipv6Addr, SocketAddr},
-        path::Path,
+        path::{Path, PathBuf},
         sync::{Arc, OnceLock},
     };
     use tempfile::TempDir;
@@ -772,12 +769,12 @@ pub mod tests {
         TOKEN.get_or_init(|| Mutex::new(0))
     }
 
-    const CERT_PATH: &str = "tests/cert.pem";
-    const KEY_PATH: &str = "tests/key.pem";
-    const CA_CERT_PATH: &str = "tests/root.pem";
-    const HOST: &str = "localhost";
+    const CERT_PATH: &str = "tests/certs/node1/cert.pem";
+    const KEY_PATH: &str = "tests/certs/node1/key.pem";
+    const CA_CERT_PATH: &str = "tests/certs/root.pem";
+    const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.16.0-alpha.1";
+    const PROTOCOL_VERSION: &str = "0.16.0";
 
     pub struct TestClient {
         send: SendStream,
@@ -884,13 +881,18 @@ pub mod tests {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert = fs::read("tests/root.pem").unwrap();
+        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+        let certs = Arc::new(Certs {
+            certs: cert,
+            key,
+            ca_certs,
+        });
 
         Peer::new(
             SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
-            cert,
-            key,
-            vec![ca_cert],
+            &certs,
         )
         .unwrap()
     }
@@ -907,6 +909,7 @@ pub mod tests {
             address: peer_addr,
             host_name: peer_name.clone(),
         });
+        let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         // peer server's source list
         let source_name = String::from("einsis_source");
@@ -924,9 +927,9 @@ pub mod tests {
 
         // run peer
         tokio::spawn(peer_init().run(
-            peer_identities,
             ingest_sources.clone(),
             peers,
+            peer_idents,
             notify_source.clone(),
             Arc::new(Notify::new()),
             file_path.to_str().unwrap().to_string(),

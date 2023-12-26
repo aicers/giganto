@@ -1,8 +1,10 @@
 use super::Server;
 use crate::{
-    new_pcap_sources, new_stream_direct_channels,
+    new_pcap_sources, new_peers_data, new_stream_direct_channels,
+    peer::{PeerIdentity, PeerInfo},
+    server::Certs,
     storage::{Database, DbOptions, RawEventStore},
-    to_cert_chain, to_private_key,
+    to_cert_chain, to_private_key, to_root_cert,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
@@ -25,14 +27,16 @@ use giganto_client::{
 };
 use quinn::{Connection, Endpoint, SendStream};
 use serde::Serialize;
+use serial_test::serial;
 use std::{
     cell::RefCell,
+    collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 fn get_token() -> &'static Mutex<u32> {
     static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
@@ -40,12 +44,21 @@ fn get_token() -> &'static Mutex<u32> {
     TOKEN.get_or_init(|| Mutex::new(0))
 }
 
-const CERT_PATH: &str = "tests/cert.pem";
-const KEY_PATH: &str = "tests/key.pem";
-const CA_CERT_PATH: &str = "tests/root.pem";
-const HOST: &str = "localhost";
-const TEST_PORT: u16 = 60191;
-const PROTOCOL_VERSION: &str = "0.15.2";
+const CA_CERT_PATH: &str = "tests/certs/root.pem";
+const PROTOCOL_VERSION: &str = "0.16.0";
+
+const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
+const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
+const NODE1_HOST: &str = "node1";
+const NODE1_TEST_PORT: u16 = 60191;
+
+const NODE2_CERT_PATH: &str = "tests/certs/node2/cert.pem";
+const NODE2_KEY_PATH: &str = "tests/certs/node2/key.pem";
+const NODE2_HOST: &str = "node2";
+const NODE2_PORT: u16 = 60192;
+
+const NODE1_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src1", "src 1", "ingest src 1"];
+const NODE2_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src2", "src 2", "ingest src 2"];
 
 struct TestClient {
     send: SendStream,
@@ -58,8 +71,8 @@ impl TestClient {
         let endpoint = init_client();
         let conn = endpoint
             .connect(
-                SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
-                HOST,
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+                NODE1_HOST,
             )
             .expect(
                 "Failed to connect server's endpoint, Please check if the setting value is correct",
@@ -76,35 +89,43 @@ impl TestClient {
 }
 
 fn server() -> Server {
-    let cert_pem = fs::read(CERT_PATH).unwrap();
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
     let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(KEY_PATH).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert = fs::read("tests/root.pem").unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
 
     Server::new(
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
-        cert,
-        key,
-        vec![ca_cert],
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+        &certs,
     )
 }
 
 fn init_client() -> Endpoint {
-    let (cert, key) = match fs::read(CERT_PATH)
-        .map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
-    {
+    let (cert, key) = match fs::read(NODE1_CERT_PATH).map(|x| {
+        (
+            x,
+            fs::read(NODE1_KEY_PATH).expect("Failed to Read key file"),
+        )
+    }) {
         Ok(x) => x,
         Err(_) => {
             panic!(
                 "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                CERT_PATH,
-                KEY_PATH,
+                NODE1_CERT_PATH,
+                NODE1_KEY_PATH,
             );
         }
     };
 
-    let pv_key = if Path::new(KEY_PATH)
+    let pv_key = if Path::new(NODE1_KEY_PATH)
         .extension()
         .map_or(false, |x| x == "der")
     {
@@ -128,7 +149,7 @@ fn init_client() -> Endpoint {
             }
         }
     };
-    let cert_chain = if Path::new(CERT_PATH)
+    let cert_chain = if Path::new(NODE1_CERT_PATH)
         .extension()
         .map_or(false, |x| x == "der")
     {
@@ -663,7 +684,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "einsis";
+    const SOURCE: &str = "ingest src 1";
     const CONN_KIND: &str = "conn";
     const DNS_KIND: &str = "dns";
     const HTTP_KIND: &str = "http";
@@ -685,10 +706,35 @@ async fn request_range_data_with_protocol() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
     tokio::spawn(server().run(
         db.clone(),
         pcap_sources,
         stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1642,7 +1688,7 @@ async fn request_range_data_with_protocol() {
 #[tokio::test]
 async fn request_range_data_with_log() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "einsis";
+    const SOURCE: &str = "src1";
     const KIND: &str = "Hello";
 
     #[derive(Serialize)]
@@ -1659,10 +1705,35 @@ async fn request_range_data_with_log() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
     tokio::spawn(server().run(
         db.clone(),
         pcap_sources,
         stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1733,7 +1804,7 @@ async fn request_range_data_with_log() {
 #[tokio::test]
 async fn request_range_data_with_period_time_series() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SAMPLING_POLICY_ID: &str = "policy_one";
+    const SAMPLING_POLICY_ID_AS_SOURCE: &str = "ingest src 1";
     const KIND: &str = "timeseries";
 
     let _lock = get_token().lock().await;
@@ -1741,10 +1812,35 @@ async fn request_range_data_with_period_time_series() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
     tokio::spawn(server().run(
         db.clone(),
         pcap_sources,
         stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -1756,7 +1852,7 @@ async fn request_range_data_with_period_time_series() {
     let time_series_data =
         bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
             &time_series_store,
-            SAMPLING_POLICY_ID,
+            SAMPLING_POLICY_ID_AS_SOURCE,
             send_time_series_time,
         ))
         .unwrap();
@@ -1776,7 +1872,7 @@ async fn request_range_data_with_period_time_series() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SAMPLING_POLICY_ID),
+        source: String::from(SAMPLING_POLICY_ID_AS_SOURCE),
         kind: String::from(KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -1805,7 +1901,7 @@ async fn request_range_data_with_period_time_series() {
     );
     assert_eq!(
         time_series_data
-            .response_data(send_time_series_time, SAMPLING_POLICY_ID)
+            .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SOURCE)
             .unwrap(),
         bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
@@ -1862,10 +1958,35 @@ async fn request_network_event_stream() {
     };
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
     tokio::spawn(server().run(
         db.clone(),
         pcap_sources,
         stream_direct_channels.clone(),
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
         Arc::new(Notify::new()),
     ));
     let mut publish = TestClient::new().await;
@@ -3508,10 +3629,35 @@ async fn request_raw_events() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
     tokio::spawn(server().run(
         db.clone(),
         pcap_sources,
         stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
@@ -3546,6 +3692,820 @@ async fn request_raw_events() {
             break;
         }
     }
+    assert_eq!(result_data.len(), 1);
+    assert_eq!(result_data[0].0, TIMESTAMP);
+    assert_eq!(&result_data[0].1, SOURCE);
+    assert_eq!(
+        raw_data,
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn request_range_data_with_protocol_giganto_cluster() {
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
+    const SOURCE: &str = "ingest src 2";
+    const CONN_KIND: &str = "conn";
+
+    let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
+
+    // spawn node2 publish server
+    tokio::spawn(async {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let pcap_sources = new_pcap_sources();
+        let stream_direct_channels = new_stream_direct_channels();
+        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string(), Utc::now()))
+                .collect::<HashMap<String, DateTime<Utc>>>(),
+        ));
+
+        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
+        let key = to_private_key(&key_pem).unwrap();
+        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let certs = Arc::new(Certs {
+            certs: cert,
+            key,
+            ca_certs,
+        });
+
+        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+            Ipv6Addr::LOCALHOST.to_string(),
+            PeerInfo {
+                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string()))
+                    .collect::<HashSet<String>>(),
+                graphql_port: None,
+                publish_port: Some(NODE1_TEST_PORT),
+            },
+        )])));
+
+        let mut peer_identities = HashSet::new();
+        peer_identities.insert(PeerIdentity {
+            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            host_name: NODE1_HOST.to_string(),
+        });
+        let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+        let notify_shutdown = Arc::new(Notify::new());
+
+        // prepare data in node2 database
+        let conn_store = db.conn_store().unwrap();
+        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
+            &conn_store,
+            SOURCE,
+            send_conn_time,
+        ))
+        .unwrap();
+
+        if let Err(_) = oneshot_send.send(conn_data.response_data(send_conn_time, SOURCE).unwrap())
+        {
+            eprintln!("the receiver is dropped");
+        }
+
+        let node2_server = Server::new(
+            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+            &certs,
+        );
+        node2_server
+            .run(
+                db,
+                pcap_sources,
+                stream_direct_channels,
+                ingest_sources,
+                peers,
+                peer_idents,
+                certs,
+                notify_shutdown,
+            )
+            .await
+    });
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+
+    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        "127.0.0.1".to_string(),
+        PeerInfo {
+            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string()))
+                .collect::<HashSet<String>>(),
+            graphql_port: None,
+            publish_port: Some(NODE2_PORT),
+        },
+    )])));
+    let mut peer_identities = HashSet::new();
+    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    peer_identities.insert(PeerIdentity {
+        address: peer_address.clone(),
+        host_name: NODE2_HOST.to_string(),
+    });
+    let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sources,
+        stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+
+    let publish = TestClient::new().await;
+
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("valid date")
+            .and_hms_opt(00, 00, 00)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
+    let message = RequestRange {
+        source: String::from(SOURCE),
+        kind: String::from(CONN_KIND),
+        start: start.timestamp_nanos_opt().unwrap(),
+        end: end.timestamp_nanos_opt().unwrap(),
+        count: 5,
+    };
+
+    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+        .await
+        .unwrap();
+
+    let mut result_data = Vec::new();
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        result_data.push(resp_data.clone());
+        if resp_data.is_none() {
+            break;
+        }
+    }
+
+    let raw_data = match oneshot_recv.await {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("the sender dropped");
+            Vec::new()
+        }
+    };
+
+    assert_eq!(
+        Conn::response_done().unwrap(),
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+    assert_eq!(
+        raw_data,
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+
+    publish.conn.close(0u32.into(), b"publish_time_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn request_range_data_with_log_giganto_cluster() {
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
+    const SOURCE: &str = "src2";
+    const KIND: &str = "Hello";
+
+    #[derive(Serialize)]
+    struct RequestRangeMessage {
+        source: String,
+        kind: String,
+        start: i64,
+        end: i64,
+        count: usize,
+    }
+
+    let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
+
+    // spawn node2 publish server
+    tokio::spawn(async {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let pcap_sources = new_pcap_sources();
+        let stream_direct_channels = new_stream_direct_channels();
+        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string(), Utc::now()))
+                .collect::<HashMap<String, DateTime<Utc>>>(),
+        ));
+
+        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
+        let key = to_private_key(&key_pem).unwrap();
+        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let certs = Arc::new(Certs {
+            certs: cert,
+            key,
+            ca_certs,
+        });
+
+        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+            Ipv6Addr::LOCALHOST.to_string(),
+            PeerInfo {
+                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string()))
+                    .collect::<HashSet<String>>(),
+                graphql_port: None,
+                publish_port: Some(NODE1_TEST_PORT),
+            },
+        )])));
+
+        let mut peer_identities = HashSet::new();
+        peer_identities.insert(PeerIdentity {
+            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            host_name: NODE1_HOST.to_string(),
+        });
+        let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+        let notify_shutdown = Arc::new(Notify::new());
+
+        // prepare data in node2 database
+        let log_store = db.log_store().unwrap();
+        let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
+            &log_store,
+            SOURCE,
+            KIND,
+            send_log_time,
+        ))
+        .unwrap();
+
+        if let Err(_) = oneshot_send.send(log_data.response_data(send_log_time, SOURCE).unwrap()) {
+            eprintln!("the receiver is dropped");
+        }
+
+        let node2_server = Server::new(
+            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+            &certs,
+        );
+        node2_server
+            .run(
+                db,
+                pcap_sources,
+                stream_direct_channels,
+                ingest_sources,
+                peers,
+                peer_idents,
+                certs,
+                notify_shutdown,
+            )
+            .await
+    });
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+
+    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        "127.0.0.1".to_string(),
+        PeerInfo {
+            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string()))
+                .collect::<HashSet<String>>(),
+            graphql_port: None,
+            publish_port: Some(NODE2_PORT),
+        },
+    )])));
+    let mut peer_identities = HashSet::new();
+    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    peer_identities.insert(PeerIdentity {
+        address: peer_address.clone(),
+        host_name: NODE2_HOST.to_string(),
+    });
+    let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sources,
+        stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+    let publish = TestClient::new().await;
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("valid date")
+            .and_hms_opt(00, 00, 00)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
+    let message = RequestRange {
+        source: String::from(SOURCE),
+        kind: String::from(KIND),
+        start: start.timestamp_nanos_opt().unwrap(),
+        end: end.timestamp_nanos_opt().unwrap(),
+        count: 5,
+    };
+
+    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+        .await
+        .unwrap();
+
+    let mut result_data = Vec::new();
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        result_data.push(resp_data.clone());
+        if resp_data.is_none() {
+            break;
+        }
+    }
+
+    let raw_data = match oneshot_recv.await {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("the sender dropped");
+            Vec::new()
+        }
+    };
+
+    assert_eq!(
+        Conn::response_done().unwrap(),
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+    assert_eq!(
+        raw_data,
+        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+
+    publish.conn.close(0u32.into(), b"publish_log_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn request_range_data_with_period_time_series_giganto_cluster() {
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
+    const SAMPLING_POLICY_ID_AS_SOURCE: &str = "ingest src 2";
+    const KIND: &str = "timeseries";
+
+    let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
+
+    // spawn node2 publish server
+    tokio::spawn(async {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let pcap_sources = new_pcap_sources();
+        let stream_direct_channels = new_stream_direct_channels();
+        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string(), Utc::now()))
+                .collect::<HashMap<String, DateTime<Utc>>>(),
+        ));
+
+        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
+        let key = to_private_key(&key_pem).unwrap();
+        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let certs = Arc::new(Certs {
+            certs: cert,
+            key,
+            ca_certs,
+        });
+
+        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+            Ipv6Addr::LOCALHOST.to_string(),
+            PeerInfo {
+                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string()))
+                    .collect::<HashSet<String>>(),
+                graphql_port: None,
+                publish_port: Some(NODE1_TEST_PORT),
+            },
+        )])));
+
+        let mut peer_identities = HashSet::new();
+        peer_identities.insert(PeerIdentity {
+            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            host_name: NODE1_HOST.to_string(),
+        });
+        let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+        let notify_shutdown = Arc::new(Notify::new());
+
+        // prepare data in node2 database
+        let time_series_store = db.periodic_time_series_store().unwrap();
+        let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let time_series_data =
+            bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
+                &time_series_store,
+                SAMPLING_POLICY_ID_AS_SOURCE,
+                send_time_series_time,
+            ))
+            .unwrap();
+
+        if let Err(_) = oneshot_send.send(
+            time_series_data
+                .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SOURCE)
+                .unwrap(),
+        ) {
+            eprintln!("the receiver is dropped");
+        }
+
+        let node2_server = Server::new(
+            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+            &certs,
+        );
+        node2_server
+            .run(
+                db,
+                pcap_sources,
+                stream_direct_channels,
+                ingest_sources,
+                peers,
+                peer_idents,
+                certs,
+                notify_shutdown,
+            )
+            .await
+    });
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+
+    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        "127.0.0.1".to_string(),
+        PeerInfo {
+            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string()))
+                .collect::<HashSet<String>>(),
+            graphql_port: None,
+            publish_port: Some(NODE2_PORT),
+        },
+    )])));
+
+    let mut peer_identities = HashSet::new();
+    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    peer_identities.insert(PeerIdentity {
+        address: peer_address.clone(),
+        host_name: NODE2_HOST.to_string(),
+    });
+    let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sources,
+        stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+    let publish = TestClient::new().await;
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("valid date")
+            .and_hms_opt(00, 00, 00)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
+    let message = RequestRange {
+        source: String::from(SAMPLING_POLICY_ID_AS_SOURCE),
+        kind: String::from(KIND),
+        start: start.timestamp_nanos_opt().unwrap(),
+        end: end.timestamp_nanos_opt().unwrap(),
+        count: 5,
+    };
+
+    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+        .await
+        .unwrap();
+
+    let mut result_data = Vec::new();
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<f64>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        result_data.push(resp_data.clone());
+        if resp_data.is_none() {
+            break;
+        }
+    }
+
+    let raw_data = match oneshot_recv.await {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("the sender dropped");
+            Vec::new()
+        }
+    };
+
+    assert_eq!(
+        PeriodicTimeSeries::response_done().unwrap(),
+        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+    assert_eq!(
+        raw_data,
+        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+    );
+
+    publish.conn.close(0u32.into(), b"publish_time_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn request_raw_events_giganto_cluster() {
+    const SOURCE: &str = "src 2";
+    const KIND: &str = "conn";
+    const TIMESTAMP: i64 = 100;
+
+    let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
+
+    // spawn node2 publish server
+    tokio::spawn(async {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let pcap_sources = new_pcap_sources();
+        let stream_direct_channels = new_stream_direct_channels();
+        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string(), Utc::now()))
+                .collect::<HashMap<String, DateTime<Utc>>>(),
+        ));
+
+        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
+        let key = to_private_key(&key_pem).unwrap();
+        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let certs = Arc::new(Certs {
+            certs: cert,
+            key,
+            ca_certs,
+        });
+
+        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+            Ipv6Addr::LOCALHOST.to_string(),
+            PeerInfo {
+                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| (source.to_string()))
+                    .collect::<HashSet<String>>(),
+                graphql_port: None,
+                publish_port: Some(NODE1_TEST_PORT),
+            },
+        )])));
+
+        let mut peer_identities = HashSet::new();
+        peer_identities.insert(PeerIdentity {
+            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            host_name: NODE1_HOST.to_string(),
+        });
+        let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+        let notify_shutdown = Arc::new(Notify::new());
+
+        // prepare data in node2 database
+        let conn_store = db.conn_store().unwrap();
+        let send_conn_time = TIMESTAMP;
+        let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
+        let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
+        let raw_data = conn_data.response_data(TIMESTAMP, SOURCE).unwrap();
+
+        if let Err(_) = oneshot_send.send(raw_data) {
+            eprintln!("the receiver is dropped");
+        }
+
+        let node2_server = Server::new(
+            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+            &certs,
+        );
+        node2_server
+            .run(
+                db,
+                pcap_sources,
+                stream_direct_channels,
+                ingest_sources,
+                peers,
+                peer_idents,
+                certs,
+                notify_shutdown,
+            )
+            .await
+    });
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sources = new_pcap_sources();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SOURCES
+            .into_iter()
+            .map(|source| (source.to_string(), Utc::now()))
+            .collect::<HashMap<String, DateTime<Utc>>>(),
+    ));
+
+    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        "127.0.0.1".to_string(),
+        PeerInfo {
+            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+                .into_iter()
+                .map(|source| (source.to_string()))
+                .collect::<HashSet<String>>(),
+            graphql_port: None,
+            publish_port: Some(NODE2_PORT),
+        },
+    )])));
+
+    let mut peer_identities = HashSet::new();
+    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    peer_identities.insert(PeerIdentity {
+        address: peer_address.clone(),
+        host_name: NODE2_HOST.to_string(),
+    });
+    let peer_idents = Arc::new(RwLock::new(peer_identities));
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sources,
+        stream_direct_channels,
+        ingest_sources,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+    let publish = TestClient::new().await;
+
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let message = RequestRawData {
+        kind: String::from(KIND),
+        input: vec![(String::from(SOURCE), vec![TIMESTAMP])],
+    };
+
+    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
+        .await
+        .unwrap();
+
+    let mut result_data = vec![];
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        if let Some(data) = resp_data {
+            result_data.push(data);
+        } else {
+            break;
+        }
+    }
+
+    let raw_data = match oneshot_recv.await {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("the sender dropped");
+            Vec::new()
+        }
+    };
+
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
     assert_eq!(&result_data[0].1, SOURCE);

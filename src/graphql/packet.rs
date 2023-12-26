@@ -71,6 +71,7 @@ impl RawEventFilter for PacketFilter {
 #[allow(clippy::struct_field_names)]
 #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
+#[allow(clippy::struct_field_names)]
 struct Packet {
     request_time: DateTime<Utc>,
     packet_time: DateTime<Utc>,

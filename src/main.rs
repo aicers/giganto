@@ -11,13 +11,13 @@ mod web;
 use crate::{
     graphql::NodeName,
     redis::fetch_and_store_op_logs,
-    server::{certificate_info, SERVER_REBOOT_DELAY},
+    server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
     storage::migrate_data_dir,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use log_broker::{error, info, init_redis_connection, init_tracing, warn, LogLocation};
-use peer::{PeerInfo, Peers};
+use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
 use rustls::{Certificate, PrivateKey};
@@ -25,6 +25,7 @@ use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    path::PathBuf,
     process::exit,
     sync::Arc,
     time::{Duration, Instant},
@@ -78,6 +79,12 @@ async fn main() -> Result<()> {
         )
     })?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
+    let root_cert = to_root_cert(&settings.roots)?;
+    let certs = Arc::new(Certs {
+        certs: cert.clone(),
+        key: key.clone(),
+        ca_certs: root_cert.clone(),
+    });
 
     let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
 
@@ -105,12 +112,6 @@ async fn main() -> Result<()> {
     }
     let database = storage::Database::open(&db_path, &db_options)?;
 
-    let mut files: Vec<Vec<u8>> = Vec::new();
-    for root in &settings.roots {
-        let file = fs::read(root).expect("Failed to read file");
-        files.push(file);
-    }
-
     if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
         error!(LogLocation::Both, "migration failed: {e}");
         return Ok(());
@@ -132,7 +133,7 @@ async fn main() -> Result<()> {
         let pcap_sources = new_pcap_sources();
         let ingest_sources = new_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
-        let peers = new_peers();
+        let (peers, peer_idents) = new_peers_data(settings.peers);
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
         let mut notify_source_change = None;
@@ -166,14 +167,12 @@ async fn main() -> Result<()> {
         ));
 
         if let Some(peer_address) = settings.peer_address {
-            let peer_server =
-                peer::Peer::new(peer_address, cert.clone(), key.clone(), files.clone())?;
+            let peer_server = peer::Peer::new(peer_address, &certs.clone())?;
             let notify_source = Arc::new(Notify::new());
-            let peer_identities = settings.peers.unwrap_or_else(HashSet::new);
             task::spawn(peer_server.run(
-                peer_identities,
                 ingest_sources.clone(),
                 peers.clone(),
+                peer_idents.clone(),
                 notify_source.clone(),
                 notify_shutdown.clone(),
                 settings.cfg_path.clone(),
@@ -181,25 +180,19 @@ async fn main() -> Result<()> {
             notify_source_change = Some(notify_source);
         }
 
-        let publish_server = publish::Server::new(
-            settings.publish_address,
-            cert.clone(),
-            key.clone(),
-            files.clone(),
-        );
+        let publish_server = publish::Server::new(settings.publish_address, &certs.clone());
         task::spawn(publish_server.run(
             database.clone(),
             pcap_sources.clone(),
             stream_direct_channels.clone(),
+            ingest_sources.clone(),
+            peers.clone(),
+            peer_idents.clone(),
+            certs.clone(),
             notify_shutdown.clone(),
         ));
 
-        let ingest_server = ingest::Server::new(
-            settings.ingest_address,
-            cert.clone(),
-            key.clone(),
-            files.clone(),
-        );
+        let ingest_server = ingest::Server::new(settings.ingest_address, &certs.clone());
         task::spawn(ingest_server.run(
             database.clone(),
             pcap_sources,
@@ -305,6 +298,27 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
     }
 }
 
+fn to_root_cert(root_cert_paths: &Vec<PathBuf>) -> Result<rustls::RootCertStore> {
+    let mut root_files: Vec<Vec<u8>> = Vec::new();
+    for root in root_cert_paths {
+        let file = fs::read(root).expect("Failed to read file");
+        root_files.push(file);
+    }
+
+    let mut root_cert = rustls::RootCertStore::empty();
+    for file in root_files {
+        let root_certs: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
+            .context("invalid PEM-encoded certificate")?
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect();
+        if let Some(cert) = root_certs.first() {
+            root_cert.add(cert).context("failed to add root cert")?;
+        }
+    }
+    Ok(root_cert)
+}
+
 fn to_hms(dur: Duration) -> String {
     let total_sec = dur.as_secs();
     let hours = total_sec / 3600;
@@ -332,6 +346,9 @@ fn new_ack_transmission_count(count: u16) -> AckTransmissionCount {
     Arc::new(RwLock::new(count))
 }
 
-fn new_peers() -> Peers {
-    Arc::new(RwLock::new(HashMap::<String, PeerInfo>::new()))
+fn new_peers_data(peers_list: Option<HashSet<PeerIdentity>>) -> (Peers, PeerIdents) {
+    (
+        Arc::new(RwLock::new(HashMap::<String, PeerInfo>::new())),
+        Arc::new(RwLock::new(peers_list.unwrap_or_default())),
+    )
 }

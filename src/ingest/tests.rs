@@ -2,7 +2,7 @@ use super::Server;
 use crate::{
     new_ingest_sources, new_pcap_sources, new_stream_direct_channels,
     storage::{Database, DbOptions},
-    to_cert_chain, to_private_key,
+    to_cert_chain, to_private_key, to_root_cert, Certs,
 };
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{Duration, Utc};
@@ -22,6 +22,7 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint};
+use std::path::PathBuf;
 use std::{
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -40,10 +41,10 @@ fn get_token() -> &'static Mutex<u32> {
     TOKEN.get_or_init(|| Mutex::new(0))
 }
 
-const CERT_PATH: &str = "tests/cert.pem";
-const KEY_PATH: &str = "tests/key.pem";
-const CA_CERT_PATH: &str = "tests/root.pem";
-const HOST: &str = "localhost";
+const CERT_PATH: &str = "tests/certs/node1/cert.pem";
+const KEY_PATH: &str = "tests/certs/node1/key.pem";
+const CA_CERT_PATH: &str = "tests/certs/root.pem";
+const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
 const PROTOCOL_VERSION: &str = "0.15.2";
 
@@ -75,13 +76,18 @@ fn server() -> Server {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert = fs::read("tests/root.pem").unwrap();
+    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
+    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        ca_certs,
+    });
 
     Server::new(
         SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
-        cert,
-        key,
-        vec![ca_cert],
+        &certs,
     )
 }
 
