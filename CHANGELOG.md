@@ -5,6 +5,12 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Add url collector to `request_stream()`and `send_stream()` and testcode.
+
 ## [0.15.4] - 2023-11-22
 
 ### Added
@@ -356,6 +362,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: <https://github.com/aicers/giganto/compare/0.15.4...tis>
 [0.15.4]: <https://github.com/aicers/giganto/compare/0.15.3...0.15.4>
 [0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
 [0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>

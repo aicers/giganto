@@ -63,6 +63,7 @@ impl RawEventFilter for PacketFilter {
 }
 
 #[derive(SimpleObject, Debug)]
+#[allow(clippy::struct_field_names)]
 struct Packet {
     request_time: DateTime<Utc>,
     packet_time: DateTime<Utc>,
