@@ -1,5 +1,3 @@
-#![allow(clippy::module_name_repetitions)]
-
 use crate::{
     graphql::status::{
         insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file,
@@ -45,6 +43,7 @@ const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Deserialize, Serialize, Debug, Default)]
 pub struct PeerInfo {
     pub ingest_sources: HashSet<String>,
@@ -52,6 +51,7 @@ pub struct PeerInfo {
     pub publish_port: Option<u16>,
 }
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, IntoPrimitive, PartialEq, Serialize, TryFromPrimitive,
 )]
@@ -62,6 +62,7 @@ pub enum PeerCode {
     UpdateSourceList = 1,
 }
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct PeerIdentity {
     pub address: SocketAddr,
@@ -77,7 +78,7 @@ impl TomlPeers for PeerIdentity {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
+#[allow(clippy::module_name_repetitions, clippy::struct_field_names)]
 #[derive(Clone, Debug)]
 pub struct PeerConns {
     // Key string is cert's CN hostname; Value is Connection; e.g. ( ("node2", Connection { .. }), }

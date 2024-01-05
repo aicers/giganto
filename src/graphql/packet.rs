@@ -68,6 +68,7 @@ impl RawEventFilter for PacketFilter {
     }
 }
 
+#[allow(clippy::struct_field_names)]
 #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
 struct Packet {

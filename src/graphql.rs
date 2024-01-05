@@ -441,17 +441,17 @@ fn get_peekable_iter<'c, T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    let (filterd_iter, cursor, size) =
+    let (filtered_iter, cursor, size) =
         get_filtered_iter(store, filter, after, before, first, last)?;
-    let mut filterd_iter = filterd_iter.peekable();
+    let mut filtered_iter = filtered_iter.peekable();
     if let Some(cursor) = cursor {
-        if let Some((key, _)) = filterd_iter.peek() {
+        if let Some((key, _)) = filtered_iter.peek() {
             if key.as_ref() == cursor {
-                filterd_iter.next();
+                filtered_iter.next();
             }
         }
     }
-    Ok((filterd_iter, size))
+    Ok((filtered_iter, size))
 }
 
 fn get_filtered_iter<'c, T>(
