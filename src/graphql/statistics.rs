@@ -13,6 +13,7 @@ use async_graphql::{Context, Error, Object, Result, SimpleObject};
 use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
+use log_broker::{error, LogLocation};
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
@@ -21,7 +22,6 @@ use std::{
     iter::Peekable,
     str::FromStr,
 };
-use tracing::error;
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
 const BYTE_TO_BIT: u64 = 8;
@@ -282,7 +282,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
             return result;
         }
     }
-    error!("Failed to convert period/len to f64");
+    error!(LogLocation::Both, "Failed to convert period/len to f64");
     0.0
 }
 

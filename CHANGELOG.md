@@ -27,6 +27,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `request_from_peer: Option<bool>` argument to GraphQL endpoints:
   `netflow5_raw_events`, `netflow9_raw_events`, `secu_log_raw_events`,
   `statistics`.
+- Supported `log-broker` to send/receive operation log with redis server.
+  - Set the redis server with `redis_log_address`, `redis_log_agent_id` and
+    `redis_log_fetch_interval` in configuration options.
 
 ### Changed
 
@@ -40,6 +43,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed `export` GraphQL query's response value format from `{export_path}` to
 `{export_path}@{giganto_node_name}`
 - Changed `PEER_VERSION_REQ` to ">=0.16.0-alpha.1,<0.17.0"
+- Changed logging from `tracing` to `log-broker`.
 
 ### Fixed
 

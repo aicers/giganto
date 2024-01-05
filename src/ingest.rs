@@ -25,6 +25,7 @@ use giganto_client::{
     },
     RawEventKind,
 };
+use log_broker::{error, info, LogLocation};
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use rustls::{Certificate, PrivateKey};
 use std::sync::atomic::AtomicU16;
@@ -45,7 +46,6 @@ use tokio::{
     task, time,
     time::sleep,
 };
-use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
 const ACK_INTERVAL_TIME: u64 = 60;
@@ -95,6 +95,7 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
+            LogLocation::Both,
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
@@ -125,7 +126,7 @@ impl Server {
                         if let Err(e) =
                             handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
                         {
-                            error!("connection failed: {}", e);
+                            error!(LogLocation::Both, "connection failed: {}", e);
                         }
                     });
                 },
@@ -133,7 +134,7 @@ impl Server {
                     shutdown_signal.store(true,Ordering::SeqCst); // Setting signal to handle termination on each channel.
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
-                    info!("Shutting down ingest");
+                    info!(LogLocation::Both, "Shutting down ingest");
                     notify_shutdown.notify_one();
                     break;
                 },
@@ -156,11 +157,11 @@ async fn handle_connection(
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
         Ok((mut send, _)) => {
-            info!("Compatible version");
+            info!(LogLocation::Both, "Compatible version");
             send.finish().await?;
         }
         Err(e) => {
-            info!("Incompatible version");
+            info!(LogLocation::Both, "Incompatible version");
             connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
             bail!("{e}")
         }
@@ -180,7 +181,7 @@ async fn handle_connection(
         .send((source.clone(), Utc::now(), ConnState::Connected, rep))
         .await
     {
-        error!("Failed to send channel data : {}", error);
+        error!(LogLocation::Both, "Failed to send channel data : {}", error);
     }
     loop {
         select! {
@@ -191,11 +192,11 @@ async fn handle_connection(
                             .send((source, Utc::now(), ConnState::Disconnected, rep))
                             .await
                         {
-                            error!("Failed to send internal channel data : {}", error);
+                            error!(LogLocation::Both, "Failed to send internal channel data : {}", error);
                         }
                         match conn_err {
                             quinn::ConnectionError::ApplicationClosed(_) => {
-                                info!("application closed");
+                                info!(LogLocation::Both, "application closed");
                                 return Ok(());
                             }
                             _ => return Err(conn_err.into()),
@@ -210,7 +211,7 @@ async fn handle_connection(
                 let ack_trans_cnt = ack_trans_cnt.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(source, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
-                        error!("failed: {}", e);
+                        error!(LogLocation::Both, "failed: {}", e);
                     }
                 });
             },
@@ -757,7 +758,10 @@ async fn handle_request(
             .await?;
         }
         _ => {
-            error!("The record type message could not be processed.");
+            error!(
+                LogLocation::Both,
+                "The record type message could not be processed."
+            );
         }
     };
     Ok(())
@@ -978,7 +982,7 @@ async fn handle_data<T>(
                         size += raw_event.len();
                     }
                     if start.elapsed().as_secs() > 3600 {
-                        info!(
+                        info!(LogLocation::Both,
                             "Ingest: source = {source} type = {raw_event_kind:?} count = {count} size = {size}, duration = {}",
                             start.elapsed().as_secs()
                         );
@@ -1045,7 +1049,7 @@ async fn check_sources_conn(
                 for source_key in keys {
                     let timestamp = Utc::now();
                     if source_store.insert(&source_key, timestamp).is_err(){
-                        error!("Failed to append source store");
+                        error!(LogLocation::Both, "Failed to append source store");
                     }
                     sources.insert(source_key, timestamp);
                 }
@@ -1055,7 +1059,7 @@ async fn check_sources_conn(
                 match conn_state {
                     ConnState::Connected => {
                         if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append source store");
+                            error!(LogLocation::Both, "Failed to append source store");
                         }
                         ingest_sources.write().await.insert(source_key, timestamp_val);
                         if let Some(ref notify) = notify_source {
@@ -1064,7 +1068,7 @@ async fn check_sources_conn(
                     }
                     ConnState::Disconnected => {
                         if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append source store");
+                            error!(LogLocation::Both, "Failed to append source store");
                         }
                         if !rep {
                             ingest_sources.write().await.remove(&source_key);
