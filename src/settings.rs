@@ -8,7 +8,12 @@ const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
 const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
+const DEFAULT_REDIS_ADDRESS: &str = "127.0.0.1:6379";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
+const DEFAULT_RETENTION: &str = "100d";
+const DEFAULT_REDIS_FETCH_INTERVAL: &str = "10m";
+const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
+const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
@@ -32,16 +37,23 @@ pub struct Settings {
     pub max_open_files: i32,
     pub max_mb_of_level_base: u64,
 
-    //config file path
+    // config file path
     pub cfg_path: String,
 
-    //peers
+    // peers
     #[serde(deserialize_with = "deserialize_peer_addr")]
     pub peer_address: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
-    //ack transmission interval
+    // ack transmission interval
     pub ack_transmission: u16,
+
+    // redis log
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub redis_log_address: SocketAddr, // IP address & port to redis
+    pub redis_log_agent_id: String, // redis client ID to logging
+    #[serde(with = "humantime_serde")]
+    pub redis_log_fetch_interval: Duration, // redis fetch interval
 }
 
 impl Settings {
@@ -107,17 +119,21 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("valid address")
         .set_default("graphql_address", DEFAULT_GRAPHQL_ADDRESS)
         .expect("local address")
+        .set_default("redis_log_address", DEFAULT_REDIS_ADDRESS)
+        .expect("local address")
+        .set_default("redis_log_fetch_interval", DEFAULT_REDIS_FETCH_INTERVAL)
+        .expect("retention")
         .set_default("data_dir", db_path)
         .expect("data dir")
-        .set_default("retention", "100d")
+        .set_default("retention", DEFAULT_RETENTION)
         .expect("retention")
         .set_default("log_path", log_path)
         .expect("log dir")
         .set_default("export_path", export_path)
         .expect("export_dir")
-        .set_default("max_open_files", 8000)
+        .set_default("max_open_files", DEFAULT_MAX_OPEN_FILES)
         .expect("default max open files")
-        .set_default("max_mb_of_level_base", 512)
+        .set_default("max_mb_of_level_base", DEFAULT_MAX_MB_OF_LEVEL_BASE)
         .expect("default max mb of level base")
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
         .expect("default config dir")

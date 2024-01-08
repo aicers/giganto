@@ -1,8 +1,8 @@
 use crate::graphql::Schema;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
+use log_broker::{info, LogLocation};
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::{sync::Notify, task};
-use tracing::info;
 use warp::{http::Response as HttpResponse, Filter};
 
 /// Runs the GraphQL server.
@@ -42,6 +42,6 @@ pub async fn serve(
         .bind_with_graceful_shutdown(addr, async move { notify_shutdown.notified().await });
 
     // start Graphql Server
-    info!("listening on https://{addr:?}");
+    info!(LogLocation::Both, "listening on https://{addr:?}");
     task::spawn(server);
 }

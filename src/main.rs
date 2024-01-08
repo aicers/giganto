@@ -2,6 +2,7 @@ mod graphql;
 mod ingest;
 mod peer;
 mod publish;
+mod redis;
 mod server;
 mod settings;
 mod storage;
@@ -9,12 +10,13 @@ mod web;
 
 use crate::{
     graphql::NodeName,
+    redis::fetch_and_store_op_logs,
     server::{certificate_info, SERVER_REBOOT_DELAY},
     storage::migrate_data_dir,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::init_tracing;
+use log_broker::{error, info, init_redis_connection, init_tracing, warn, LogLocation};
 use peer::{PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
@@ -33,7 +35,6 @@ use tokio::{
     task,
     time::{self, sleep},
 };
-use tracing::{error, info, warn};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -79,19 +80,27 @@ async fn main() -> Result<()> {
     let key = to_private_key(&key_pem).context("cannot read private key")?;
 
     let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
+
+    init_redis_connection(
+        settings.redis_log_address.ip(),
+        settings.redis_log_address.port(),
+        settings.redis_log_agent_id,
+    )
+    .await?;
+
     let db_path = settings.data_dir.join("db");
     let db_options =
         crate::storage::DbOptions::new(settings.max_open_files, settings.max_mb_of_level_base);
     if repair {
         let start = Instant::now();
         let (db_opts, _) = storage::rocksdb_options(&db_options);
-        info!("repair db start.");
+        info!(LogLocation::Both, "repair db start.");
         match DB::repair(&db_opts, db_path) {
-            Ok(()) => info!("repair ok"),
-            Err(e) => error!("repair error: {e}"),
+            Ok(()) => info!(LogLocation::Both, "repair ok"),
+            Err(e) => error!(LogLocation::Both, "repair error: {e}"),
         }
         let dur = start.elapsed();
-        info!("{}", to_hms(dur));
+        info!(LogLocation::Both, "{}", to_hms(dur));
         exit(0);
     }
     let database = storage::Database::open(&db_path, &db_options)?;
@@ -103,7 +112,7 @@ async fn main() -> Result<()> {
     }
 
     if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
-        error!("migration failed: {e}");
+        error!(LogLocation::Both, "migration failed: {e}");
         return Ok(());
     }
 
@@ -201,6 +210,13 @@ async fn main() -> Result<()> {
             ack_transmission_cnt,
         ));
 
+        task::spawn(fetch_and_store_op_logs(
+            database.clone(),
+            settings.redis_log_address,
+            settings.redis_log_fetch_interval,
+            notify_shutdown.clone(),
+        ));
+
         loop {
             select! {
                 () = notify_config_reload.notified() =>{
@@ -212,14 +228,14 @@ async fn main() -> Result<()> {
                             break;
                         }
                         Err(e) => {
-                            error!("Failed to load the new configuration: {:#}", e);
-                            warn!("Run giganto with the previous config");
+                            error!(LogLocation::Both, "Failed to load the new configuration: {:#}", e);
+                            warn!(LogLocation::Both, "Run giganto with the previous config");
                             continue;
                         }
                     }
                 },
                 () = notify_ctrlc.notified() =>{
-                    info!("Termination signal: giganto daemon exit");
+                    info!(LogLocation::Both, "Termination signal: giganto daemon exit");
                     notify_shutdown.notify_waiters();
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(())

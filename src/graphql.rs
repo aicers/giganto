@@ -29,6 +29,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
 use graphql_client::Response as GraphQlResponse;
 use libc::timeval;
+use log_broker::{error, LogLocation};
 use num_traits::AsPrimitive;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::Deserialize;
@@ -48,7 +49,6 @@ use std::{
 };
 use tempfile::tempfile;
 use tokio::sync::Notify;
-use tracing::error;
 
 pub const TIMESTAMP_SIZE: usize = 8;
 
@@ -412,6 +412,7 @@ where
         if records.len() == size {
             if invalid_data_cnt > 1 {
                 error!(
+                    LogLocation::Both,
                     "failed to read database or invalid data of {data_type} #{invalid_data_cnt}"
                 );
             }

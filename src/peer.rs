@@ -14,6 +14,7 @@ use giganto_client::{
     connection::{client_handshake, server_handshake},
     frame::{self, recv_bytes, recv_raw, send_bytes},
 };
+use log_broker::{error, info, warn, LogLocation};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
@@ -36,7 +37,6 @@ use tokio::{
     time::sleep,
 };
 use toml_edit::Document;
-use tracing::{error, info, warn};
 
 const PEER_VERSION_REQ: &str = ">=0.16.0-alpha.1,<0.17.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
@@ -73,6 +73,7 @@ impl TomlPeers for PeerIdentity {
     fn get_host_name(&self) -> String {
         self.host_name.clone()
     }
+
     fn get_address(&self) -> String {
         self.address.to_string()
     }
@@ -140,6 +141,7 @@ impl Peer {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
         info!(
+            LogLocation::Both,
             "listening on {}",
             server_endpoint
                 .local_addr()
@@ -192,7 +194,7 @@ impl Peer {
                         )
                         .await
                         {
-                            error!("connection failed: {}", e);
+                            error!(LogLocation::Both, "connection failed: {}", e);
                         }
                     });
                 },
@@ -208,7 +210,7 @@ impl Peer {
                 () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
                     server_endpoint.close(0_u32.into(), &[]);
-                    info!("Shutting down peer");
+                    info!(LogLocation::Both, "Shutting down peer");
                     return Ok(())
                 }
 
@@ -283,7 +285,10 @@ async fn client_connection(
                 .await
                 {
                     Ok((addr, name)) => {
-                        info!("Connection established to {}/{} (client role)", addr, name);
+                        info!(
+                            LogLocation::Both,
+                            "Connection established to {}/{} (client role)", addr, name
+                        );
                         (addr, name)
                     }
                     Err(_) => {
@@ -366,7 +371,7 @@ async fn client_connection(
                                     peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
                                     peer_conn_info.peers.write().await.remove(&remote_addr);
                                     if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                                        info!("giganto peer({}/{}) closed",remote_host_name, remote_addr);
+                                        info!(LogLocation::Both, "giganto peer({}/{}) closed",remote_host_name, remote_addr);
                                         return Ok(());
                                     }
                                     continue 'connection;
@@ -382,7 +387,7 @@ async fn client_connection(
                             let path= peer_conn_info.config_path.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
-                                    error!("failed: {}", e);
+                                    error!(LogLocation::Both, "failed: {}", e);
                                 }
                             });
                         },
@@ -417,8 +422,10 @@ async fn client_connection(
                         | ConnectionError::Reset
                         | ConnectionError::TimedOut => {
                             warn!(
+                                LogLocation::Both,
                                 "Retry connection to {} after {} seconds.",
-                                peer_info.address, PEER_RETRY_INTERVAL,
+                                peer_info.address,
+                                PEER_RETRY_INTERVAL,
                             );
                             sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
                             continue 'connection;
@@ -454,7 +461,10 @@ async fn server_connection(
         match check_for_duplicate_connections(&connection, peer_conn_info.peer_conns.clone()).await
         {
             Ok((addr, name)) => {
-                info!("Connection established to {}/{} (server role)", addr, name);
+                info!(
+                    LogLocation::Both,
+                    "Connection established to {}/{} (server role)", addr, name
+                );
                 (addr, name)
             }
             Err(_) => {
@@ -531,7 +541,7 @@ async fn server_connection(
                         peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
                         peer_conn_info.peers.write().await.remove(&remote_addr);
                         if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                            info!("giganto peer({}/{}) closed",remote_host_name, remote_addr);
+                            info!(LogLocation::Both, "giganto peer({}/{}) closed",remote_host_name, remote_addr);
                             return Ok(());
                         }
                         return Err(e.into());
@@ -547,7 +557,7 @@ async fn server_connection(
                 let path= peer_conn_info.config_path.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
-                        error!("failed: {}", e);
+                        error!(LogLocation::Both, "failed: {}", e);
                     }
                 });
             },
@@ -718,10 +728,10 @@ async fn update_to_new_peer_list(
     if is_change {
         let data: Vec<PeerIdentity> = peer_list.read().await.iter().cloned().collect();
         if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
-            error!("{e:?}");
+            error!(LogLocation::Both, "{e:?}");
         }
         if let Err(e) = write_toml_file(&doc, path) {
-            error!("{e:?}");
+            error!(LogLocation::Both, "{e:?}");
         }
     }
 
@@ -800,10 +810,10 @@ pub mod tests {
             Ok(x) => x,
             Err(_) => {
                 panic!(
-                "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                CERT_PATH,
-                KEY_PATH,
-            );
+                    "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
+                    CERT_PATH,
+                    KEY_PATH,
+                );
             }
         };
 
@@ -824,8 +834,8 @@ pub mod tests {
                         Some(x) => rustls::PrivateKey(x),
                         None => {
                             panic!(
-                            "no private keys found. Private key doesn't exist in default test folder"
-                        );
+                                "no private keys found. Private key doesn't exist in default test folder"
+                            );
                         }
                     }
                 }

@@ -28,12 +28,14 @@ graphql_client = "0.13"
 humantime = "2.1"
 humantime-serde = "1"
 libc = "0.2"
+log-broker = { git = "https://github.com/aicers/log-broker.git", tag = "0.1.0" }
 num_enum = "0.7"
 num-traits = "0.2"
 pcap = "1"
 proc-macro2 = "1.0"
 quinn = "0.10"
 quote = "1.0"
+redis = { version = "0.24", features = ["tokio-comp"]}
 reqwest = { version = "0.11", features = ["rustls-tls", "json"] }
 rocksdb = "0.21"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.1" }
@@ -46,7 +48,6 @@ syn = "2.0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml_edit = "0.21"
-tracing = "0.1"
 warp = { version = "0.3", features = ["tls"] }
 x509-parser = "0.15"
 
