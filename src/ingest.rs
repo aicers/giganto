@@ -4,7 +4,7 @@ mod tests;
 
 use crate::publish::send_direct_stream;
 use crate::server::{
-    certificate_info, config_server, extract_cert_from_conn, SERVER_CONNNECTION_DELAY,
+    certificate_info, config_server, extract_cert_from_conn, Certs, SERVER_CONNNECTION_DELAY,
     SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
@@ -27,7 +27,6 @@ use giganto_client::{
 };
 use log_broker::{error, info, LogLocation};
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use rustls::{Certificate, PrivateKey};
 use std::sync::atomic::AtomicU16;
 use std::{
     net::SocketAddr,
@@ -68,14 +67,9 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(
-        addr: SocketAddr,
-        certs: Vec<Certificate>,
-        key: PrivateKey,
-        files: Vec<Vec<u8>>,
-    ) -> Self {
-        let server_config = config_server(certs, key, files)
-            .expect("server configuration error with cert, key or root");
+    pub fn new(addr: SocketAddr, certs: &Arc<Certs>) -> Self {
+        let server_config =
+            config_server(certs).expect("server configuration error with cert, key or root");
         Server {
             server_config,
             server_address: addr,

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use log_broker::{info, LogLocation};
 use quinn::{ClientConfig, Connection, ServerConfig, TransportConfig};
-use rustls::{Certificate, PrivateKey};
+use rustls::{Certificate, PrivateKey, RootCertStore};
 use std::{sync::Arc, time::Duration};
 use x509_parser::nom::Parser;
 
@@ -10,30 +10,22 @@ pub const SERVER_ENDPOINT_DELAY: u64 = 300;
 pub const SERVER_CONNNECTION_DELAY: u64 = 200;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(5_000);
 
+#[allow(clippy::module_name_repetitions, clippy::struct_field_names)]
+#[derive(Clone)]
+pub struct Certs {
+    pub certs: Vec<Certificate>,
+    pub key: PrivateKey,
+    pub ca_certs: RootCertStore,
+}
+
 #[allow(clippy::module_name_repetitions)]
-pub fn config_server(
-    certs: Vec<Certificate>,
-    key: PrivateKey,
-    files: Vec<Vec<u8>>,
-) -> Result<ServerConfig> {
-    let mut client_auth_roots = rustls::RootCertStore::empty();
-    for file in files {
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_cert.first() {
-            client_auth_roots
-                .add(cert)
-                .context("failed to add client auth root cert")?;
-        }
-    }
-    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(client_auth_roots).boxed();
+pub fn config_server(certs: &Arc<Certs>) -> Result<ServerConfig> {
+    let client_auth =
+        rustls::server::AllowAnyAuthenticatedClient::new(certs.ca_certs.clone()).boxed();
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_auth)
-        .with_single_cert(certs, key)
+        .with_single_cert(certs.certs.clone(), certs.key.clone())
         .context("server config error")?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
@@ -83,28 +75,11 @@ pub fn certificate_info(cert_info: &[Certificate]) -> Result<(String, String)> {
     }
 }
 
-pub fn config_client(
-    cert: Vec<Certificate>,
-    key: PrivateKey,
-    files: Vec<Vec<u8>>,
-) -> Result<ClientConfig> {
-    let mut root_store = rustls::RootCertStore::empty();
-    for file in files {
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_cert.first() {
-            root_store
-                .add(cert)
-                .context("failed to add client auth root cert")?;
-        }
-    }
+pub fn config_client(certs: &Arc<Certs>) -> Result<ClientConfig> {
     let tls_config = rustls::ClientConfig::builder()
         .with_safe_defaults()
-        .with_root_certificates(root_store)
-        .with_client_auth_cert(cert, key)?;
+        .with_root_certificates(certs.ca_certs.clone())
+        .with_client_auth_cert(certs.certs.clone(), certs.key.clone())?;
 
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
