@@ -54,7 +54,7 @@ x509-parser = "0.15"
 [dev-dependencies]
 mockito = "1.2.0"
 regex = "1"
-serial_test = "2.0.0"
+serial_test = "3.0.0"
 tempfile = "3"
 url = "2"
 
