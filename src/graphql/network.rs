@@ -4,8 +4,8 @@
 mod tests;
 
 use super::{
-    base64_engine, check_address, check_port, collect_exist_timestamp, events_vec_in_cluster,
-    get_peekable_iter, get_timestamp_from_key, handle_paged_events,
+    base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
+    events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
     impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
@@ -74,11 +74,13 @@ impl RawEventFilter for NetworkFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _source: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
+            && check_agent_id(&self.agent_id, &agent_id)
         {
             return Ok(true);
         }
@@ -97,6 +99,7 @@ impl RawEventFilter for SearchFilter {
         _log_contents: Option<String>,
         text: Option<String>,
         _source: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<bool> {
         if let Some(keyword) = &self.keyword {
             if let Some(text) = text {
@@ -111,6 +114,7 @@ impl RawEventFilter for SearchFilter {
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
+            && check_agent_id(&self.agent_id, &agent_id)
         {
             return Ok(true);
         }

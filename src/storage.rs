@@ -746,6 +746,7 @@ where
                 elem.1.log_contents(),
                 elem.1.text(),
                 elem.1.source(),
+                elem.1.agent_id(),
             ) {
                 return Some(elem);
             }

@@ -99,6 +99,7 @@ pub struct NetworkFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
+    agent_id: Option<String>,
 }
 
 #[derive(InputObject, Serialize)]
@@ -114,6 +115,7 @@ pub struct SearchFilter {
     log_contents: Option<String>,
     pub timestamps: Vec<DateTime<Utc>>,
     keyword: Option<String>,
+    agent_id: Option<String>,
 }
 
 pub trait RawEventFilter {
@@ -128,6 +130,7 @@ pub trait RawEventFilter {
         log_contents: Option<String>,
         text: Option<String>,
         source: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<bool>;
 }
 
@@ -199,6 +202,7 @@ where
                             raw_event.log_contents(),
                             raw_event.text(),
                             raw_event.source(),
+                            raw_event.agent_id(),
                         )
                         .map_or(None, |c| c.then_some(*time))
                 } else {
@@ -405,6 +409,7 @@ where
             item.1.log_contents(),
             item.1.text(),
             item.1.source(),
+            item.1.agent_id(),
         ) {
             Ok(true) => records.push(item),
             Ok(false) | Err(_) => {}
@@ -653,10 +658,18 @@ fn check_contents(filter_str: &Option<String>, target_str: Option<String>) -> bo
 }
 
 fn check_source(filter_src: &Option<String>, target_src: &Option<String>) -> bool {
-    filter_src.as_ref().map_or(true, |filter_src| {
-        target_src
+    filter_by_str(filter_src, target_src)
+}
+
+fn check_agent_id(filter_agent_id: &Option<String>, target_agent_id: &Option<String>) -> bool {
+    filter_by_str(filter_agent_id, target_agent_id)
+}
+
+fn filter_by_str(filter_str: &Option<String>, target_str: &Option<String>) -> bool {
+    filter_str.as_ref().map_or(true, |filter_id| {
+        target_str
             .as_ref()
-            .map_or(false, |source| source == filter_src)
+            .map_or(false, |agent_id| agent_id == filter_id)
     })
 }
 
@@ -1462,6 +1475,7 @@ macro_rules! impl_from_giganto_network_filter_for_graphql_client {
                         resp_port: filter.resp_port.map(Into::into),
                         log_level: filter.log_level,
                         log_contents: filter.log_contents,
+                        agent_id: filter.agent_id,
                     }
                 }
             }
@@ -1486,6 +1500,7 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
                         log_contents: filter.log_contents,
                         timestamps: filter.timestamps,
                         keyword: filter.keyword,
+                        agent_id: filter.agent_id,
                     }
                 }
             }
