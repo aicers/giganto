@@ -685,18 +685,7 @@ type Netflow5RawEventEdge {
   cursor: String!
 }
 
-input NetflowFilter {
-  time: TimeRange
-  source: String
-  kind: String
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
-  contents: String
-}
-
-type NetflowV9RawEvent {
+type Netflow9RawEvent {
   timestamp: DateTime!
   source: String!
   sequence: Int!
@@ -710,24 +699,35 @@ type NetflowV9RawEvent {
   contents: String!
 }
 
-type NetflowV9RawEventConnection {
+type Netflow9RawEventConnection {
   # Information to aid in pagination.
   pageInfo: PageInfo!
 
   # A list of edges.
-  edges: [NetflowV9RawEventEdge!]!
+  edges: [Netflow9RawEventEdge!]!
 
   # A list of nodes.
-  nodes: [NetflowV9RawEvent!]!
+  nodes: [Netflow9RawEvent!]!
 }
 
 # An edge in a connection.
-type NetflowV9RawEventEdge {
+type Netflow9RawEventEdge {
   # The item at the end of the edge
-  node: NetflowV9RawEvent!
+  node: Netflow9RawEvent!
 
   # A cursor for use in pagination
   cursor: String!
+}
+
+input NetflowFilter {
+  time: TimeRange
+  source: String
+  kind: String
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+  contents: String
 }
 
 type NetworkConnectionEvent {
@@ -781,6 +781,7 @@ input NetworkFilter {
   respPort: PortRange
   logLevel: String
   logContents: String
+  agentId: String
 }
 
 union NetworkRawEvents =
@@ -1296,9 +1297,10 @@ type Query {
   gigantoConfig: GigantoConfig!
   sources: [String!]!
   statistics(
-    time: TimeRange
     sources: [String!]!
+    time: TimeRange
     protocols: [String!]
+    requestFromPeer: Boolean
   ): [StatisticsRawEvent!]!
   processCreateEvents(
     filter: NetworkFilter!
@@ -1442,7 +1444,7 @@ type Query {
     first: Int
     last: Int
     requestFromPeer: Boolean
-  ): NetflowV9RawEventConnection!
+  ): Netflow9RawEventConnection!
 }
 
 type RdpRawEvent {
@@ -1553,6 +1555,7 @@ input SearchFilter {
   logContents: String
   timestamps: [DateTime!]!
   keyword: String
+  agentId: String
 }
 
 input SecuLogFilter {

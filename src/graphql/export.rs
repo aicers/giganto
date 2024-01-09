@@ -2,7 +2,7 @@
 mod tests;
 
 use super::{
-    check_address, check_port,
+    check_address, check_agent_id, check_port,
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
     IpRange, NodeName, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
@@ -49,18 +49,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const NON_NETWORK: [&str; 20] = [
-    "log",
-    "periodic time series",
-    "op_log",
-    "statistics",
-    "sysmon",
+const ADDRESS_PROTOCOL: [&str; 16] = [
+    "conn",
+    "dns",
+    "http",
+    "rdp",
+    "smtp",
+    "ntlm",
+    "kerberos",
+    "ssh",
+    "dce rpc",
+    "ftp",
+    "mqtt",
+    "ldap",
+    "tls",
+    "smb",
+    "nfs",
+    "network connect",
+];
+const AGENT_PROTOCOL: [&str; 14] = [
     "process create",
     "file create time",
-    "network connect",
     "process terminate",
     "image load",
     "file create",
+    "network connect",
     "registry value set",
     "registry key rename",
     "file create stream hash",
@@ -69,8 +82,8 @@ const NON_NETWORK: [&str; 20] = [
     "file delete",
     "process tamper",
     "file delete detected",
-    "secu_log",
 ];
+const KIND_PROTOCOL: [&str; 2] = ["log", "sec log"];
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -1487,11 +1500,13 @@ impl RawEventFilter for ExportFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _source: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
+            && check_agent_id(&self.agent_id, &agent_id)
         {
             return Ok(true);
         }
@@ -1530,8 +1545,8 @@ impl ExportQuery {
         export_type: String,
         filter: ExportFilter,
     ) -> Result<String> {
-        if NON_NETWORK.contains(&filter.protocol.as_str()) {
-            // check log/time_series protocol filter format
+        if !ADDRESS_PROTOCOL.contains(&filter.protocol.as_str()) {
+            // check sysmon type/log type/time_series/statistics filter format
             if filter.orig_addr.is_some()
                 || filter.resp_addr.is_some()
                 || filter.orig_port.is_some()
@@ -1539,9 +1554,16 @@ impl ExportQuery {
             {
                 return Err(anyhow!("Invalid ip/port input").into());
             }
-        } else {
-            // check network protocol filter format
-            if filter.kind.is_some() || filter.agent_name.is_some() || filter.agent_id.is_some() {
+        }
+        if !AGENT_PROTOCOL.contains(&filter.protocol.as_str()) {
+            // check network/log type/time_series/netflow/statistics filter format
+            if filter.agent_name.is_some() || filter.agent_id.is_some() {
+                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
+            }
+        }
+        if !KIND_PROTOCOL.contains(&filter.protocol.as_str()) {
+            // check sysomon/network/time_series/netflow/statistics filter format
+            if filter.kind.is_some() {
                 return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
         }
@@ -1844,7 +1866,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "process_create" => tokio::spawn(async move {
+        "process create" => tokio::spawn(async move {
             if let Ok(store) = db.process_create_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1858,7 +1880,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "file_create_time" => tokio::spawn(async move {
+        "file create time" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_time_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1886,7 +1908,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "process_terminate" => tokio::spawn(async move {
+        "process terminate" => tokio::spawn(async move {
             if let Ok(store) = db.process_terminate_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1900,7 +1922,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "image_load" => tokio::spawn(async move {
+        "image load" => tokio::spawn(async move {
             if let Ok(store) = db.image_load_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1914,7 +1936,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "file_create" => tokio::spawn(async move {
+        "file create" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1928,7 +1950,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "registry_value_set" => tokio::spawn(async move {
+        "registry value set" => tokio::spawn(async move {
             if let Ok(store) = db.registry_value_set_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1942,7 +1964,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "registry_key_rename" => tokio::spawn(async move {
+        "registry key rename" => tokio::spawn(async move {
             if let Ok(store) = db.registry_key_rename_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1956,7 +1978,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "file_create_stream_hash" => tokio::spawn(async move {
+        "file create stream hash" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_stream_hash_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1970,7 +1992,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "pipe_event" => tokio::spawn(async move {
+        "pipe event" => tokio::spawn(async move {
             if let Ok(store) = db.pipe_event_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1984,7 +2006,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "dns_query" => tokio::spawn(async move {
+        "dns query" => tokio::spawn(async move {
             if let Ok(store) = db.dns_query_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -1998,7 +2020,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "file_delete" => tokio::spawn(async move {
+        "file delete" => tokio::spawn(async move {
             if let Ok(store) = db.file_delete_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -2012,7 +2034,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "process_tamper" => tokio::spawn(async move {
+        "process tamper" => tokio::spawn(async move {
             if let Ok(store) = db.process_tamper_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -2026,7 +2048,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "file_delete_detected" => tokio::spawn(async move {
+        "file delete detected" => tokio::spawn(async move {
             if let Ok(store) = db.file_delete_detected_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -2068,7 +2090,7 @@ fn export_by_protocol(
                 error!(LogLocation::Both, "Failed to open db store");
             }
         }),
-        "secu_log" => tokio::spawn(async move {
+        "secu log" => tokio::spawn(async move {
             if let Ok(store) = db.secu_log_store() {
                 match process_export(&store, &filter, &export_type, &export_path) {
                     Ok(result) => {
@@ -2280,6 +2302,7 @@ where
         value.log_contents(),
         value.text(),
         value.source(),
+        value.agent_id(),
     ) {
         Ok(true) => {
             let (source, timestamp) = parse_key(key)?;

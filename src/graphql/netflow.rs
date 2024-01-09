@@ -77,6 +77,7 @@ impl RawEventFilter for NetflowFilter {
         log_contents: Option<String>,
         _text: Option<String>,
         source: Option<String>,
+        _agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
             && check_address(&self.resp_addr, resp_addr)?
