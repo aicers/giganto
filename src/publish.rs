@@ -38,7 +38,11 @@ use giganto_client::{
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err,
         send_hog_stream_start_message, send_ok, send_range_data,
-        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+        send_url_collector_stream_start_message,
+        stream::{
+            NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord,
+            RequestUrlCollectorStream,
+        },
         PcapFilter,
     },
     RawEventKind,
@@ -285,6 +289,29 @@ async fn request_stream(
                                     }
                                     Err(_) => {
                                         error!("Failed to deserialize crusher message");
+                                    }
+                                }
+                            }
+                            NodeType::UrlCollector => {
+                                match bincode::deserialize::<RequestUrlCollectorStream>(&raw_data) {
+                                    Ok(msg) => {
+                                        if let Err(e) = process_stream(
+                                            db,
+                                            conn,
+                                            Some(source),
+                                            None,
+                                            node_type,
+                                            RequestStreamRecord::Http,
+                                            msg,
+                                            stream_direct_channels,
+                                        )
+                                        .await
+                                        {
+                                            error!("{}", e);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Failed to deserialize url collector message");
                                     }
                                 }
                             }
@@ -780,7 +807,9 @@ pub async fn send_direct_stream(
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
-            if req_key.contains(NodeType::Hog.convert_to_str()) {
+            if req_key.contains(NodeType::Hog.convert_to_str())
+                || req_key.contains(NodeType::UrlCollector.convert_to_str())
+            {
                 let source_bytes = bincode::serialize(&source)?;
                 let source_len = u32::try_from(source_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&source_len);
@@ -862,6 +891,12 @@ where
                     last_ts = timestamp;
                 }
             }
+        }
+        NodeType::UrlCollector => {
+            send_url_collector_stream_start_message(&mut sender, record_type)
+                .await
+                .map_err(|e| anyhow!("Failed to write url collector start message: {}", e))?;
+            info!("start url collector's publish stream : {:?}", record_type);
         }
     }
 
