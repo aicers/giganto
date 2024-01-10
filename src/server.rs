@@ -23,7 +23,7 @@ pub fn config_server(
             .into_iter()
             .map(rustls::Certificate)
             .collect();
-        if let Some(cert) = root_cert.get(0) {
+        if let Some(cert) = root_cert.first() {
             client_auth_roots
                 .add(cert)
                 .context("failed to add client auth root cert")?;
@@ -59,7 +59,7 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
 }
 
 pub fn certificate_info(cert_info: &[Certificate]) -> Result<(String, String)> {
-    let Some(cert) = cert_info.get(0) else {
+    let Some(cert) = cert_info.first() else {
         bail!("no certificate in identity");
     };
     let mut parser =
@@ -95,7 +95,7 @@ pub fn config_client(
             .into_iter()
             .map(rustls::Certificate)
             .collect();
-        if let Some(cert) = root_cert.get(0) {
+        if let Some(cert) = root_cert.first() {
             root_store
                 .add(cert)
                 .context("failed to add client auth root cert")?;
