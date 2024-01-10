@@ -23,7 +23,7 @@ data-encoding = "2.4"
 deluxe = "0.5"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.15.2" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.15.2+tis.0.0.1" }
 graphql_client = "0.13"
 humantime = "2.1"
 humantime-serde = "1"

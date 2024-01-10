@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
-use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
+use giganto_client::publish::stream::{
+    NodeType, RequestCrusherStream, RequestHogStream, RequestUrlCollectorStream,
+};
 use std::{net::IpAddr, vec};
 
 pub trait RequestStreamMessage {
@@ -104,5 +106,41 @@ impl RequestStreamMessage for RequestCrusherStream {
 
     fn id(&self) -> Option<String> {
         Some(self.id.clone())
+    }
+}
+
+impl RequestStreamMessage for RequestUrlCollectorStream {
+    fn channel_key(&self, source: Option<String>, record_type: &str) -> Result<Vec<String>> {
+        if let Some(ref target_source) = self.source {
+            let mut url_collector_key = String::new();
+            url_collector_key.push_str(NodeType::UrlCollector.convert_to_str());
+            url_collector_key.push('\0');
+            url_collector_key.push_str(source.as_ref().unwrap());
+            url_collector_key.push('\0');
+            url_collector_key.push_str(target_source);
+            url_collector_key.push('\0');
+            url_collector_key.push_str(record_type);
+            return Ok(vec![url_collector_key]);
+        }
+        bail!("Failed to generate url collector channel key, source is required.");
+    }
+    fn start_time(&self) -> i64 {
+        self.start
+    }
+
+    fn filter_ip(&self, _orig_addr: IpAddr, _resp_addr: IpAddr) -> bool {
+        true
+    }
+
+    fn source(&self) -> Result<String> {
+        if let Some(ref source) = self.source {
+            return Ok(source.clone());
+        }
+        bail!("Failed to generate url collector key, source is required.");
+    }
+
+    // url collector don't use id function
+    fn id(&self) -> Option<String> {
+        unreachable!()
     }
 }
