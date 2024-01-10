@@ -17,6 +17,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify GraphQL schema file due to the addition of the `agent_id` field.
 - Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0-alpha.2"
 - Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0-alpha.2"
+- Modify the `ingest` handling so that it depends on the feature.
+  - `edge`: The data received from that feature is only raw event data.
+  - `central`: The data received from that feature is source/raw event data.
 
 ### Fixed
 
