@@ -58,5 +58,7 @@ tempfile = "3"
 url = "2"
 
 [features]
-default = ["benchmark"]
+default = ["benchmark","edge"]
 benchmark = []
+edge = []
+central = []

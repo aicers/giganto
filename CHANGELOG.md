@@ -34,6 +34,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.18.0"
 - Modify `export` query to set the extension of the extract file according to
   the export type.
+- Modify the `ingest` handling so that it depends on the feature.
+  - `edge`: The data received from that feature is only raw event data.
+  - `central`: The data received from that feature is source/raw event data.
 
 ### Fixed
 
