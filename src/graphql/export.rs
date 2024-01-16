@@ -1524,7 +1524,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         fs::create_dir_all(path)?;
     }
     let filename = format!(
-        "{}_{}.dump",
+        "{}_{}.{export_type}",
         filter.protocol,
         Local::now().format("%Y%m%d_%H%M%S"),
     );
