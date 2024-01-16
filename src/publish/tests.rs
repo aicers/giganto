@@ -709,8 +709,8 @@ async fn request_range_data_with_protocol() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| (source.to_string()))
+            .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
 
@@ -1708,8 +1708,8 @@ async fn request_range_data_with_log() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| source.to_string())
+            .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
 
@@ -1815,8 +1815,8 @@ async fn request_range_data_with_period_time_series() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| source.to_string())
+            .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
 
@@ -1961,8 +1961,8 @@ async fn request_network_event_stream() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| source.to_string())
+            .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
 
@@ -3632,8 +3632,8 @@ async fn request_raw_events() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| source.to_string())
+            .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
 
@@ -3719,8 +3719,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let ingest_sources = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SOURCES
                 .into_iter()
-                .map(|source| (source.to_string(), Utc::now()))
-                .collect::<HashMap<String, DateTime<Utc>>>(),
+                .map(|source| source.to_string())
+                .collect::<HashSet<String>>(),
         ));
 
         let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
@@ -3797,8 +3797,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| (source.to_string()))
+            .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -3935,8 +3935,8 @@ async fn request_range_data_with_log_giganto_cluster() {
         let ingest_sources = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SOURCES
                 .into_iter()
-                .map(|source| (source.to_string(), Utc::now()))
-                .collect::<HashMap<String, DateTime<Utc>>>(),
+                .map(|source| source.to_string())
+                .collect::<HashSet<String>>(),
         ));
 
         let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
@@ -4013,8 +4013,8 @@ async fn request_range_data_with_log_giganto_cluster() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| (source.to_string()))
+            .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -4140,8 +4140,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let ingest_sources = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SOURCES
                 .into_iter()
-                .map(|source| (source.to_string(), Utc::now()))
-                .collect::<HashMap<String, DateTime<Utc>>>(),
+                .map(|source| source.to_string())
+                .collect::<HashSet<String>>(),
         ));
 
         let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
@@ -4222,8 +4222,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| (source.to_string()))
+            .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -4350,8 +4350,8 @@ async fn request_raw_events_giganto_cluster() {
         let ingest_sources = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SOURCES
                 .into_iter()
-                .map(|source| (source.to_string(), Utc::now()))
-                .collect::<HashMap<String, DateTime<Utc>>>(),
+                .map(|source| source.to_string())
+                .collect::<HashSet<String>>(),
         ));
 
         let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
@@ -4424,8 +4424,8 @@ async fn request_raw_events_giganto_cluster() {
     let ingest_sources = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SOURCES
             .into_iter()
-            .map(|source| (source.to_string(), Utc::now()))
-            .collect::<HashMap<String, DateTime<Utc>>>(),
+            .map(|source| (source.to_string()))
+            .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(

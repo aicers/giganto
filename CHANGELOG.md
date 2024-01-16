@@ -13,6 +13,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   requesting a sysmon events.
 - Added `SmtpRawEvent` to the return value union of `network_raw_events` GraphQL
   query.
+- Added `RunTimeIngestSources` type that checks for information from source
+  that is connected to ingest in real time. This type is not currently used,
+  but may be used in the future to provide real-time connection information.
 
 ### Changed
 
@@ -25,6 +28,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Fix the part of the `export` query about validating filters for protocols.
+- Fix to initialize `ingest_sources` value from `sources` cf on giganto startup.
+  This change is intended to ensure that `IngestSources` provide all source
+  information for stored data and `RunTimeIngestSources` provide real-time
+  connection source information.
 
 ## [0.16.0] - 2024-01-08
 

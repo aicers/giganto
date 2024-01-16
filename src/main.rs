@@ -30,6 +30,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use storage::Database;
 use tokio::{
     select,
     sync::{mpsc::UnboundedSender, Notify, RwLock},
@@ -51,7 +52,8 @@ ARG:
 ";
 
 pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
-pub type IngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type IngestSources = Arc<RwLock<HashSet<String>>>;
+pub type RunTimeIngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 pub type AckTransmissionCount = Arc<RwLock<u16>>;
 
@@ -131,7 +133,8 @@ async fn main() -> Result<()> {
 
     loop {
         let pcap_sources = new_pcap_sources();
-        let ingest_sources = new_ingest_sources();
+        let ingest_sources = new_ingest_sources(&database);
+        let runtime_ingest_sources = new_runtime_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
         let (peers, peer_idents) = new_peers_data(settings.peers);
         let notify_config_reload = Arc::new(Notify::new());
@@ -197,6 +200,7 @@ async fn main() -> Result<()> {
             database.clone(),
             pcap_sources,
             ingest_sources,
+            runtime_ingest_sources,
             stream_direct_channels,
             notify_shutdown.clone(),
             notify_source_change,
@@ -332,7 +336,12 @@ fn new_pcap_sources() -> PcapSources {
     Arc::new(RwLock::new(HashMap::<String, Connection>::new()))
 }
 
-fn new_ingest_sources() -> IngestSources {
+fn new_ingest_sources(db: &Database) -> IngestSources {
+    let source_store = db.sources_store().expect("Failed to open source store");
+    Arc::new(RwLock::new(source_store.source_list()))
+}
+
+fn new_runtime_ingest_sources() -> RunTimeIngestSources {
     Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
 }
 

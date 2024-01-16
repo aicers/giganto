@@ -1,6 +1,6 @@
 use super::Server;
 use crate::{
-    new_ingest_sources, new_pcap_sources, new_stream_direct_channels,
+    new_ingest_sources, new_pcap_sources, new_runtime_ingest_sources, new_stream_direct_channels,
     storage::{Database, DbOptions},
     to_cert_chain, to_private_key, to_root_cert, Certs,
 };
@@ -1115,12 +1115,14 @@ async fn one_short_reproduce_channel_close() {
 fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sources = new_pcap_sources();
-    let ingest_sources = new_ingest_sources();
+    let ingest_sources = new_ingest_sources(&db);
+    let runtime_ingest_sources = new_runtime_ingest_sources();
     let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db,
         pcap_sources,
         ingest_sources,
+        runtime_ingest_sources,
         stream_direct_channels,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),

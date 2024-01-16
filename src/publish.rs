@@ -46,7 +46,7 @@ use giganto_client::{
 use log_broker::{debug, error, info, warn, LogLocation};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use serde::{de::DeserializeOwned, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -1860,7 +1860,7 @@ where
 }
 
 async fn is_current_giganto_in_charge(ingest_sources: IngestSources, source: &String) -> bool {
-    ingest_sources.read().await.contains_key(source)
+    ingest_sources.read().await.contains(source)
 }
 
 async fn peer_in_charge_publish_addr(peers: Peers, source: &String) -> Option<SocketAddr> {
@@ -2004,17 +2004,10 @@ async fn req_inputs_by_gigantos_in_charge(
     ingest_sources: IngestSources,
     req_inputs: Vec<(String, Vec<i64>)>,
 ) -> (Vec<(String, Vec<i64>)>, Vec<(String, Vec<i64>)>) {
-    let current_giganto_sources: HashSet<String> = ingest_sources
-        .read()
-        .await
-        .keys()
-        .cloned()
-        .collect::<HashSet<String>>();
-
     let mut handle_by_current_giganto = Vec::with_capacity(req_inputs.len());
     let mut handle_by_peer_gigantos = Vec::with_capacity(req_inputs.len());
     for req_input in req_inputs {
-        if current_giganto_sources.contains(&req_input.0) {
+        if ingest_sources.read().await.contains(&req_input.0) {
             handle_by_current_giganto.push(req_input);
         } else {
             handle_by_peer_gigantos.push(req_input);

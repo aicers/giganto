@@ -32,7 +32,9 @@ use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, ReadOptions, DB,
 };
 use serde::de::DeserializeOwned;
-use std::{marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet, marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration,
+};
 use tokio::{select, sync::Notify, time};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
@@ -590,6 +592,15 @@ impl<'db> SourceStore<'db> {
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
             .flatten()
             .map(|(key, _value)| key.to_vec())
+            .collect()
+    }
+
+    /// Returns the source list that sent the data to ingest.
+    pub fn source_list(&self) -> HashSet<String> {
+        self.db
+            .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
+            .flatten()
+            .map(|(key, _)| String::from_utf8(key.to_vec()).expect("from utf8"))
             .collect()
     }
 }

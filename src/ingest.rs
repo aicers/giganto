@@ -8,7 +8,9 @@ use crate::server::{
     SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
-use crate::{AckTransmissionCount, IngestSources, PcapSources, StreamDirectChannels};
+use crate::{
+    AckTransmissionCount, IngestSources, PcapSources, RunTimeIngestSources, StreamDirectChannels,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
@@ -82,6 +84,7 @@ impl Server {
         db: Database,
         pcap_sources: PcapSources,
         ingest_sources: IngestSources,
+        runtime_ingest_sources: RunTimeIngestSources,
         stream_direct_channels: StreamDirectChannels,
         notify_shutdown: Arc<Notify>,
         notify_source: Option<Arc<Notify>>,
@@ -100,6 +103,7 @@ impl Server {
             source_db,
             pcap_sources.clone(),
             ingest_sources,
+            runtime_ingest_sources,
             rx,
             notify_source,
         ));
@@ -1026,6 +1030,7 @@ async fn check_sources_conn(
     source_db: Database,
     pcap_sources: PcapSources,
     ingest_sources: IngestSources,
+    runtime_ingest_sources: RunTimeIngestSources,
     mut rx: Receiver<SourceInfo>,
     notify_source: Option<Arc<Notify>>,
 ) -> Result<()> {
@@ -1037,25 +1042,26 @@ async fn check_sources_conn(
     loop {
         select! {
             _ = itv.tick() => {
-                let mut sources = ingest_sources.write().await;
-                let keys: Vec<String> = sources.keys().map(std::borrow::ToOwned::to_owned).collect();
+                let mut runtime_sources = runtime_ingest_sources.write().await;
+                let keys: Vec<String> = runtime_sources.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for source_key in keys {
                     let timestamp = Utc::now();
                     if source_store.insert(&source_key, timestamp).is_err(){
                         error!(LogLocation::Both, "Failed to append source store");
                     }
-                    sources.insert(source_key, timestamp);
+                    runtime_sources.insert(source_key, timestamp);
                 }
             }
 
-            Some((source_key,timestamp_val,conn_state, rep)) = rx.recv() => {
+            Some((source_key, timestamp_val, conn_state, rep)) = rx.recv() => {
                 match conn_state {
                     ConnState::Connected => {
                         if source_store.insert(&source_key, timestamp_val).is_err() {
                             error!(LogLocation::Both, "Failed to append source store");
                         }
-                        ingest_sources.write().await.insert(source_key, timestamp_val);
+                        runtime_ingest_sources.write().await.insert(source_key.clone(), timestamp_val);
+                        ingest_sources.write().await.insert(source_key);
                         if let Some(ref notify) = notify_source {
                             notify.notify_one();
                         }
@@ -1065,7 +1071,7 @@ async fn check_sources_conn(
                             error!(LogLocation::Both, "Failed to append source store");
                         }
                         if !rep {
-                            ingest_sources.write().await.remove(&source_key);
+                            runtime_ingest_sources.write().await.remove(&source_key);
                             pcap_sources.write().await.remove(&source_key);
                         }
                     }
