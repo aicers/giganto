@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<0.17.0-alpha.2";
+const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.17.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
