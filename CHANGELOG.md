@@ -17,6 +17,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify GraphQL schema file due to the addition of the `agent_id` field.
 - Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0-alpha.2"
 - Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0-alpha.2"
+- Modify `export` query to set the extension of the extract file according to
+  the export type.
 
 ### Fixed
 
