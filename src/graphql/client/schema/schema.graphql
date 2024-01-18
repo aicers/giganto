@@ -799,6 +799,7 @@ union NetworkRawEvents =
   | TlsRawEvent
   | SmbRawEvent
   | NfsRawEvent
+  | SmtpRawEvent
 
 type NetworkRawEventsConnection {
   # Information to aid in pagination.

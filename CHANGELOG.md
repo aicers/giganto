@@ -11,6 +11,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added the ability to filter via `agent_id` in the filter of a GraphQL query
   requesting a sysmon events.
+- Added `SmtpRawEvent` to the return value union of `network_raw_events` GraphQL
+  query.
 
 ### Changed
 
