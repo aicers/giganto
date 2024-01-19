@@ -209,7 +209,7 @@ struct RdpRawEvent {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, ])]
+#[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
 struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
     orig_addr: String,
@@ -452,6 +452,7 @@ enum NetworkRawEvents {
     TlsRawEvent(TlsRawEvent),
     SmbRawEvent(SmbRawEvent),
     NfsRawEvent(NfsRawEvent),
+    SmtpRawEvent(SmtpRawEvent),
 }
 
 impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for NetworkRawEvents {
@@ -498,6 +499,9 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
             }
             network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::NfsRawEvent(event) => {
                 NetworkRawEvents::NfsRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::SmtpRawEvent(event) => {
+                NetworkRawEvents::SmtpRawEvent(event.into())
             }
         }
     }
@@ -989,6 +993,9 @@ async fn handle_network_raw_events<'ctx>(
             let (nfs_iter, _) =
                 get_peekable_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
 
+            let (smtp_iter, _) =
+                get_peekable_iter(&db.smtp_store()?, &filter, &after, &before, first, last)?;
+
             let mut is_forward: bool = true;
             if before.is_some() || last.is_some() {
                 is_forward = false;
@@ -1009,6 +1016,7 @@ async fn handle_network_raw_events<'ctx>(
                 tls_iter,
                 smb_iter,
                 nfs_iter,
+                smtp_iter,
                 size,
                 is_forward,
             )
@@ -1879,6 +1887,7 @@ fn network_connection(
     mut tls_iter: Peekable<FilteredIter<Tls>>,
     mut smb_iter: Peekable<FilteredIter<Smb>>,
     mut nfs_iter: Peekable<FilteredIter<Nfs>>,
+    mut smtp_iter: Peekable<FilteredIter<Smtp>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -1902,6 +1911,7 @@ fn network_connection(
     let mut tls_data = tls_iter.next();
     let mut smb_data = smb_iter.next();
     let mut nfs_data = nfs_iter.next();
+    let mut smtp_data = smtp_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -1988,18 +1998,24 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
+        let smtp_ts = if let Some((ref key, _)) = smtp_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
         let selected =
             if is_forward {
                 timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
-                    kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(
-                        ftp_ts.min(mqtt_ts.min(ldap_ts.min(tls_ts.min(smb_ts.min(nfs_ts))))),
-                    ))),
+                    kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(
+                        mqtt_ts.min(ldap_ts.min(tls_ts.min(smb_ts.min(nfs_ts.min(smtp_ts))))),
+                    )))),
                 ))))))
             } else {
                 timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
-                    kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(
-                        ftp_ts.max(mqtt_ts.max(ldap_ts.max(tls_ts.max(smb_ts.max(nfs_ts))))),
-                    ))),
+                    kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(
+                        mqtt_ts.max(ldap_ts.max(tls_ts.max(smb_ts.max(nfs_ts.max(smtp_ts))))),
+                    )))),
                 ))))))
             };
 
@@ -2134,6 +2150,15 @@ fn network_connection(
                     nfs_data = nfs_iter.next();
                 };
             }
+            _ if selected == smtp_ts => {
+                if let Some((key, value)) = smtp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::SmtpRawEvent(SmtpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    smtp_data = smtp_iter.next();
+                };
+            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -2150,7 +2175,8 @@ fn network_connection(
                 && ldap_data.is_none()
                 && tls_data.is_none()
                 && smb_data.is_none()
-                && nfs_data.is_none())
+                && nfs_data.is_none()
+                && smtp_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -2166,6 +2192,7 @@ fn network_connection(
                 || tls_data.is_some()
                 || smb_data.is_some()
                 || nfs_data.is_some()
+                || smtp_data.is_some()
             {
                 has_next_value = true;
             }

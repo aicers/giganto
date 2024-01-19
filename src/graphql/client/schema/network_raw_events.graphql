@@ -262,6 +262,21 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     readFiles
                     writeFiles
                 }
+                ... on SmtpRawEvent {
+                    timestamp
+                    origAddr
+                    respAddr
+                    origPort
+                    respPort
+                    proto
+                    lastTime
+                    mailfrom
+                    date
+                    from
+                    to
+                    subject
+                    agent
+                }
             }
         }
     }

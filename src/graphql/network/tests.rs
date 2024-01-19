@@ -2611,6 +2611,7 @@ async fn union() {
     let tls_store = schema.db.tls_store().unwrap();
     let smb_store = schema.db.smb_store().unwrap();
     let nfs_store = schema.db.nfs_store().unwrap();
+    let smtp_store = schema.db.smtp_store().unwrap();
 
     insert_conn_raw_event(
         &conn_store,
@@ -2724,8 +2725,16 @@ async fn union() {
             .timestamp_nanos_opt()
             .unwrap(),
     );
+    insert_smtp_raw_event(
+        &smtp_store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
 
-    // order: ssh, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs
+    // order: ssh, smtp, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs
     let query = r#"
     {
         networkRawEvents(
@@ -2779,13 +2788,16 @@ async fn union() {
                     ... on NfsRawEvent {
                         timestamp
                     }
+                    ... on SmtpRawEvent {
+                        timestamp
+                    }
                     __typename
                 }
             }
         }
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"MqttRawEvent\"}},{node: {timestamp: \"2023-01-06T11:11:00+00:00\",__typename: \"TlsRawEvent\"}},{node: {timestamp: \"2023-01-06T12:12:00+00:00\",__typename: \"LdapRawEvent\"}},{node: {timestamp: \"2023-01-06T12:12:10+00:00\",__typename: \"SmbRawEvent\"}},{node: {timestamp: \"2023-01-06T12:13:00+00:00\",__typename: \"NfsRawEvent\"}}]}}");
+    assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2020-01-01T00:00:01+00:00\",__typename: \"SshRawEvent\"}},{node: {timestamp: \"2020-01-01T00:00:05+00:00\",__typename: \"SmtpRawEvent\"}},{node: {timestamp: \"2020-01-01T00:01:01+00:00\",__typename: \"ConnRawEvent\"}},{node: {timestamp: \"2020-01-05T00:01:01+00:00\",__typename: \"RdpRawEvent\"}},{node: {timestamp: \"2020-01-05T06:05:00+00:00\",__typename: \"DceRpcRawEvent\"}},{node: {timestamp: \"2020-06-01T00:01:01+00:00\",__typename: \"HttpRawEvent\"}},{node: {timestamp: \"2021-01-01T00:01:01+00:00\",__typename: \"DnsRawEvent\"}},{node: {timestamp: \"2022-01-05T00:01:01+00:00\",__typename: \"NtlmRawEvent\"}},{node: {timestamp: \"2023-01-05T00:01:01+00:00\",__typename: \"KerberosRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"FtpRawEvent\"}},{node: {timestamp: \"2023-01-05T12:12:00+00:00\",__typename: \"MqttRawEvent\"}},{node: {timestamp: \"2023-01-06T11:11:00+00:00\",__typename: \"TlsRawEvent\"}},{node: {timestamp: \"2023-01-06T12:12:00+00:00\",__typename: \"LdapRawEvent\"}},{node: {timestamp: \"2023-01-06T12:12:10+00:00\",__typename: \"SmbRawEvent\"}},{node: {timestamp: \"2023-01-06T12:13:00+00:00\",__typename: \"NfsRawEvent\"}}]}}");
 }
 
 #[tokio::test]
