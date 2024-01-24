@@ -56,7 +56,7 @@ use tokio::{
     time::sleep,
 };
 
-const PUBLISH_VERSION_REQ: &str = ">=0.16.0,<0.17.0-alpha.2";
+const PUBLISH_VERSION_REQ: &str = ">=0.17.0,<0.18.0";
 
 pub struct Server {
     server_config: ServerConfig,
