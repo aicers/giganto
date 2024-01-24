@@ -292,13 +292,8 @@ async fn client_connection(
                     }
                 };
 
-                let send_source_list: HashSet<String> = peer_conn_info
-                    .ingest_sources
-                    .read()
-                    .await
-                    .keys()
-                    .cloned()
-                    .collect();
+                let send_source_list: HashSet<String> =
+                    peer_conn_info.ingest_sources.read().await.to_owned();
 
                 // Add my peer info to the peer list.
                 let mut send_peer_list = peer_conn_info.peer_identities.read().await.clone();
@@ -388,7 +383,7 @@ async fn client_connection(
                             });
                         },
                         () = peer_conn_info.notify_source.notified() => {
-                            let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.keys().cloned().collect();
+                            let source_list = peer_conn_info.ingest_sources.read().await.to_owned();
                             for conn in (*peer_conn_info.peer_conns.write().await).values() {
                                 tokio::spawn(update_peer_info::<PeerInfo>(
                                     conn.clone(),
@@ -468,13 +463,7 @@ async fn server_connection(
             }
         };
 
-    let source_list: HashSet<String> = peer_conn_info
-        .ingest_sources
-        .read()
-        .await
-        .keys()
-        .cloned()
-        .collect();
+    let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.to_owned();
 
     // Exchange peer list/source list.
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
@@ -558,7 +547,7 @@ async fn server_connection(
                 });
             },
             () = peer_conn_info.notify_source.notified() => {
-                let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.keys().cloned().collect();
+                let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.to_owned();
                 for conn in (*peer_conn_info.peer_conns.read().await).values() {
                     tokio::spawn(update_peer_info::<PeerInfo>(
                         conn.clone(),
@@ -913,8 +902,8 @@ pub mod tests {
 
         // peer server's source list
         let source_name = String::from("einsis_source");
-        let mut source_info = HashMap::new();
-        source_info.insert(source_name.clone(), Utc::now());
+        let mut source_info = HashSet::new();
+        source_info.insert(source_name.clone());
 
         let ingest_sources = Arc::new(RwLock::new(source_info));
         let peers = Arc::new(RwLock::new(HashMap::new()));
@@ -956,10 +945,7 @@ pub mod tests {
 
         // insert peer server's source value & notify to server
         let source_name2 = String::from("einsis_source2");
-        ingest_sources
-            .write()
-            .await
-            .insert(source_name2.clone(), Utc::now());
+        ingest_sources.write().await.insert(source_name2.clone());
         notify_source.notify_one();
 
         // receive source list

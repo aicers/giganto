@@ -1180,11 +1180,7 @@ where
 async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, source_filter: &str) -> bool {
     let ingest_sources = ctx.data_opt::<IngestSources>();
     match ingest_sources {
-        Some(ingest_sources) => ingest_sources
-            .read()
-            .await
-            .iter()
-            .any(|(ingest_source_name, _last_conn_time)| ingest_source_name == source_filter),
+        Some(ingest_sources) => ingest_sources.read().await.contains(source_filter),
         None => false,
     }
 }
@@ -1227,7 +1223,7 @@ async fn find_who_are_in_charge(
             let ingest_sources = ingest_sources.read().await;
             let ingest_sources_set = ingest_sources
                 .iter()
-                .map(|(ingest_source_name, _last_conn_time)| ingest_source_name.as_str())
+                .map(std::string::String::as_str)
                 .collect::<HashSet<_>>();
 
             sources
@@ -1568,8 +1564,8 @@ mod tests {
             let ingest_sources = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SOURCES
                     .into_iter()
-                    .map(|source| (source.to_string(), Utc::now()))
-                    .collect::<HashMap<String, DateTime<Utc>>>(),
+                    .map(|source| source.to_string())
+                    .collect::<HashSet<String>>(),
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
@@ -1580,8 +1576,8 @@ mod tests {
             let ingest_sources = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SOURCES
                     .into_iter()
-                    .map(|source| (source.to_string(), Utc::now()))
-                    .collect::<HashMap<String, DateTime<Utc>>>(),
+                    .map(|source| source.to_string())
+                    .collect::<HashSet<String>>(),
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
