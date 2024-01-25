@@ -90,10 +90,15 @@ async fn main() -> Result<()> {
 
     let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
 
+    let agent_id = match certificate_info(&cert) {
+        Ok((agent, host)) => format!("{agent}@{host}"),
+        Err(e) => return Err(e),
+    };
+
     init_redis_connection(
         settings.redis_log_address.ip(),
         settings.redis_log_address.port(),
-        settings.redis_log_agent_id,
+        agent_id,
     )
     .await?;
 

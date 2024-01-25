@@ -51,7 +51,6 @@ pub struct Settings {
     // redis log
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub redis_log_address: SocketAddr, // IP address & port to redis
-    pub redis_log_agent_id: String, // redis client ID to logging
     #[serde(with = "humantime_serde")]
     pub redis_log_fetch_interval: Duration, // redis fetch interval
 }

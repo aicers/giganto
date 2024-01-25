@@ -5,6 +5,12 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Changed to read `agent_id` from certificates.
+
 ## [0.17.0]
 
 ### Added
@@ -429,6 +435,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: <https://github.com/aicers/giganto/compare/0.17.0...main>
 [0.17.0]: <https://github.com/aicers/giganto/compare/0.16.0...0.17.0>
 [0.16.0]: <https://github.com/aicers/giganto/compare/0.15.3...0.16.0>
 [0.15.4]: <https://github.com/aicers/giganto/compare/0.15.3...0.15.4>

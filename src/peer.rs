@@ -739,7 +739,6 @@ pub mod tests {
         server::Certs,
         to_cert_chain, to_private_key, to_root_cert, PeerInfo,
     };
-    use chrono::Utc;
     use giganto_client::connection::client_handshake;
     use quinn::{Connection, Endpoint, RecvStream, SendStream};
     use std::{

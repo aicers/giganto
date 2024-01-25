@@ -37,7 +37,6 @@ ingest_address = "0.0.0.0:38370"           # address to listen for ingest QUIC
 publish_address = "0.0.0.0:38371"          # address to listen for publish QUIC
 graphql_address = "127.0.0.1:8443"         # giganto's graphql address
 redis_log_address = "127.0.0.1:6379"       # address to redis server
-redis_log_agent_id = "giganto@localhost"   # agent id to send log to redis
 redis_log_fetch_interval = "10m"           # log fetch interval from redis
 data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
