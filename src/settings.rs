@@ -6,12 +6,10 @@ use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
 const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
 const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
-const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8443";
+const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8442";
 const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
-const DEFAULT_REDIS_ADDRESS: &str = "127.0.0.1:6379";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
-const DEFAULT_REDIS_FETCH_INTERVAL: &str = "10m";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 
@@ -47,13 +45,6 @@ pub struct Settings {
 
     // ack transmission interval
     pub ack_transmission: u16,
-
-    // redis log
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub redis_log_address: SocketAddr, // IP address & port to redis
-    pub redis_log_agent_id: String, // redis client ID to logging
-    #[serde(with = "humantime_serde")]
-    pub redis_log_fetch_interval: Duration, // redis fetch interval
 }
 
 impl Settings {
@@ -119,10 +110,6 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("valid address")
         .set_default("graphql_address", DEFAULT_GRAPHQL_ADDRESS)
         .expect("local address")
-        .set_default("redis_log_address", DEFAULT_REDIS_ADDRESS)
-        .expect("local address")
-        .set_default("redis_log_fetch_interval", DEFAULT_REDIS_FETCH_INTERVAL)
-        .expect("retention")
         .set_default("data_dir", db_path)
         .expect("data dir")
         .set_default("retention", DEFAULT_RETENTION)

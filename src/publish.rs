@@ -43,7 +43,6 @@ use giganto_client::{
     },
     RawEventKind,
 };
-use log_broker::{debug, error, info, warn, LogLocation};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
@@ -55,6 +54,7 @@ use tokio::{
     sync::{mpsc::unbounded_channel, Notify},
     time::sleep,
 };
+use tracing::{debug, error, info, warn};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.17.0,<0.18.0";
 
@@ -87,7 +87,6 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
-            LogLocation::Both,
             "listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
@@ -117,14 +116,14 @@ impl Server {
                         )
                         .await
                         {
-                            error!(LogLocation::Both, "connection failed: {}", e);
+                            error!("connection failed: {}", e);
                         }
                     });
                 },
                 () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
-                    info!(LogLocation::Both, "Shutting down publish");
+                    info!("Shutting down publish");
                     break;
                 },
             }
@@ -148,11 +147,11 @@ async fn handle_connection(
 
     let (send, recv) = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
         Ok((send, recv)) => {
-            info!(LogLocation::Both, "Compatible version");
+            info!("Compatible version");
             (send, recv)
         }
         Err(e) => {
-            info!(LogLocation::Both, "Incompatible version");
+            info!("Incompatible version");
             connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
             bail!("{e}")
         }
@@ -196,7 +195,7 @@ async fn handle_connection(
                 let certs = certs.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(stream, db, pcap_sources, ingest_sources, peers, peer_idents, certs).await {
-                        error!(LogLocation::Both, "failed: {}", e);
+                        error!("failed: {}", e);
                     }
                 });
             },
@@ -258,14 +257,11 @@ async fn request_stream(
                                         )
                                         .await
                                         {
-                                            error!(LogLocation::Both, "{}", e);
+                                            error!("{}", e);
                                         }
                                     }
                                     Err(_) => {
-                                        error!(
-                                            LogLocation::Both,
-                                            "Failed to deserialize hog message"
-                                        );
+                                        error!("Failed to deserialize hog message");
                                     }
                                 }
                             }
@@ -284,14 +280,11 @@ async fn request_stream(
                                         )
                                         .await
                                         {
-                                            error!(LogLocation::Both, "{}", e);
+                                            error!("{}", e);
                                         }
                                     }
                                     Err(_) => {
-                                        error!(
-                                            LogLocation::Both,
-                                            "Failed to deserialize crusher message"
-                                        );
+                                        error!("Failed to deserialize crusher message");
                                     }
                                 }
                             }
@@ -300,7 +293,7 @@ async fn request_stream(
                 }
             }
             Err(e) => {
-                error!(LogLocation::Both, "{}", e);
+                error!("{}", e);
                 break;
             }
         }
@@ -342,7 +335,7 @@ async fn process_pcap_extract(
                 // send/receive extract request from piglet
                 match pcap_extract_request(&source_conn, &filter).await {
                     Ok(()) => (),
-                    Err(e) => debug!(LogLocation::Local, "failed to relay pcap request, {e}"),
+                    Err(e) => debug!("failed to relay pcap request, {e}"),
                 }
             } else if let Some(peer_addr) =
                 peer_in_charge_publish_addr(peers.clone(), &filter.source).await
@@ -356,7 +349,7 @@ async fn process_pcap_extract(
                     if let Some(peer_ident) = peer_ident {
                         peer_ident.host_name.clone()
                     } else {
-                        error!(LogLocation::Both, "Peer giganto's server name cannot be identitified. addr: {peer_addr}, source: {}", filter.source);
+                        error!("Peer giganto's server name cannot be identitified. addr: {peer_addr}, source: {}", filter.source);
                         continue;
                     }
                 };
@@ -370,14 +363,13 @@ async fn process_pcap_extract(
                 .await
                 {
                     if let Err(e) = recv_ack_response(&mut peer_recv).await {
-                        error!(LogLocation::Both, "Failed to receive ack response from peer giganto. addr: {peer_addr} name: {peer_name} {e}");
+                        error!("Failed to receive ack response from peer giganto. addr: {peer_addr} name: {peer_name} {e}");
                     }
                 } else {
-                    error!(LogLocation::Both, "Failed to connect to peer giganto's publish module. addr: {peer_addr} name: {peer_name}");
+                    error!("Failed to connect to peer giganto's publish module. addr: {peer_addr} name: {peer_name}");
                 }
             } else {
                 error!(
-                    LogLocation::Both,
                     "Neither current nor peer gigantos are in charge of requested pcap source {}",
                     filter.source
                 );
@@ -424,10 +416,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open conn store");
+                error!("Failed to open conn store");
             }
         }
         RequestStreamRecord::Dns => {
@@ -444,10 +436,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open dns store");
+                error!("Failed to open dns store");
             }
         }
         RequestStreamRecord::Rdp => {
@@ -464,10 +456,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open rdp store");
+                error!("Failed to open rdp store");
             }
         }
         RequestStreamRecord::Http => {
@@ -484,10 +476,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open http store");
+                error!("Failed to open http store");
             }
         }
         RequestStreamRecord::Log => {
@@ -504,10 +496,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open log store");
+                error!("Failed to open log store");
             }
         }
         RequestStreamRecord::Smtp => {
@@ -524,10 +516,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open smtp store");
+                error!("Failed to open smtp store");
             }
         }
         RequestStreamRecord::Ntlm => {
@@ -544,10 +536,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open ntlm store");
+                error!("Failed to open ntlm store");
             }
         }
         RequestStreamRecord::Kerberos => {
@@ -564,10 +556,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open kerberos store");
+                error!("Failed to open kerberos store");
             }
         }
         RequestStreamRecord::Ssh => {
@@ -584,10 +576,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open ssh store");
+                error!("Failed to open ssh store");
             }
         }
         RequestStreamRecord::DceRpc => {
@@ -604,10 +596,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open dce rpc store");
+                error!("Failed to open dce rpc store");
             }
         }
         RequestStreamRecord::Ftp => {
@@ -624,10 +616,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open ftp store");
+                error!("Failed to open ftp store");
             }
         }
         RequestStreamRecord::Mqtt => {
@@ -644,10 +636,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open mqtt store");
+                error!("Failed to open mqtt store");
             }
         }
         RequestStreamRecord::Ldap => {
@@ -664,10 +656,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open ldap store");
+                error!("Failed to open ldap store");
             }
         }
         RequestStreamRecord::Tls => {
@@ -684,10 +676,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open tls store");
+                error!("Failed to open tls store");
             }
         }
         RequestStreamRecord::Smb => {
@@ -704,10 +696,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open smb store");
+                error!("Failed to open smb store");
             }
         }
         RequestStreamRecord::Nfs => {
@@ -724,10 +716,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send network stream : {}", e);
+                    error!("Failed to send network stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open nfs store");
+                error!("Failed to open nfs store");
             }
         }
         RequestStreamRecord::FileCreate => {
@@ -744,10 +736,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send sysmon stream : {}", e);
+                    error!("Failed to send sysmon stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open file_create store");
+                error!("Failed to open file_create store");
             }
         }
         RequestStreamRecord::FileDelete => {
@@ -764,10 +756,10 @@ where
                 )
                 .await
                 {
-                    error!(LogLocation::Both, "Failed to send sysmon stream : {}", e);
+                    error!("Failed to send sysmon stream : {}", e);
                 }
             } else {
-                error!(LogLocation::Both, "Failed to open file_delete store");
+                error!("Failed to open file_delete store");
             }
         }
         RequestStreamRecord::Pcap => {}
@@ -838,10 +830,7 @@ where
             send_hog_stream_start_message(&mut sender, record_type)
                 .await
                 .map_err(|e| anyhow!("Failed to write hog start message: {}", e))?;
-            info!(
-                LogLocation::Both,
-                "start hog's publish stream : {:?}", record_type
-            );
+            info!("start hog's publish stream : {:?}", record_type);
         }
         NodeType::Crusher => {
             // crusher's policy Id always exists.
@@ -849,10 +838,7 @@ where
             send_crusher_stream_start_message(&mut sender, id)
                 .await
                 .map_err(|e| anyhow!("Failed to write crusher start message: {}", e))?;
-            info!(
-                LogLocation::Both,
-                "start crusher's publish stream : {:?}", record_type
-            );
+            info!("start crusher's publish stream : {:?}", record_type);
 
             let key_builder = StorageKey::builder()
                 .start_key(&msg.source()?)
@@ -1396,7 +1382,7 @@ async fn handle_request(
                 }
                 _ => {
                     // do nothing
-                    warn!(LogLocation::Both, "Not expected to reach here");
+                    warn!("Not expected to reach here");
                 }
             }
         }
@@ -1814,7 +1800,7 @@ async fn handle_request(
                 }
                 _ => {
                     // do nothing
-                    warn!(LogLocation::Both, "Not expected to reach here");
+                    warn!("Not expected to reach here");
                 }
             }
         }
@@ -2117,17 +2103,17 @@ async fn connect_repeatedly(
     let mut delay = Duration::from_millis(500);
 
     loop {
-        info!(LogLocation::Both, "connecting to {}", server_addr);
+        info!("connecting to {}", server_addr);
         match endpoint.connect(server_addr, server_name) {
             Ok(connecting) => match connecting.await {
                 Ok(conn) => {
-                    info!(LogLocation::Both, "connected to {}", server_addr);
+                    info!("connected to {}", server_addr);
                     return conn;
                 }
-                Err(e) => error!(LogLocation::Both, "cannot connect to controller: {:#}", e),
+                Err(e) => error!("cannot connect to controller: {:#}", e),
             },
             Err(e) => {
-                error!(LogLocation::Both, "{:#}", e);
+                error!("{:#}", e);
             }
         }
         delay = std::cmp::min(max_delay, delay * 2);

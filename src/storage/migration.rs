@@ -1,7 +1,6 @@
 //! Routines to check the database format version and migrate it if necessary.
 use super::Database;
 use anyhow::{anyhow, Context, Result};
-use log_broker::{info, LogLocation};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -10,6 +9,7 @@ use std::{
     net::IpAddr,
     path::Path,
 };
+use tracing::info;
 
 const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.17.0";
 
@@ -43,7 +43,7 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
         .iter()
         .find(|(req, _to, _m)| req.matches(&version))
     {
-        info!(LogLocation::Both, "Migrating database to {to}");
+        info!("Migrating database to {to}");
         m(db)?;
         version = to.clone();
         if compatible.matches(&version) {

@@ -23,7 +23,6 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
     Packet,
 };
-use log_broker::{debug, error, info, warn, LogLocation};
 pub use migration::migrate_data_dir;
 #[cfg(debug_assertions)]
 use rocksdb::properties;
@@ -36,6 +35,7 @@ use std::{
     collections::HashSet, marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration,
 };
 use tokio::{select, sync::Notify, time};
+use tracing::{debug, error, info, warn};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "conn",
@@ -848,7 +848,7 @@ pub async fn retain_periodically(
                 let mut usage_flag = false;
 
                 if check_db_usage().await.0 {
-                    info!(LogLocation::Both, "Disk usage is over {USAGE_THRESHOLD}%.");
+                    info!("Disk usage is over {USAGE_THRESHOLD}%.");
                     retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                     usage_flag = true;
                 }
@@ -879,7 +879,7 @@ pub async fn retain_periodically(
                                     store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
                                 }
                             } else {
-                                error!(LogLocation::Both, "Failed to delete file in range");
+                                error!("Failed to delete file in range");
                             }
                         }
 
@@ -895,7 +895,7 @@ pub async fn retain_periodically(
 
                                 if retention_timestamp > data_timestamp {
                                     if store.delete(&key).is_err() {
-                                        error!(LogLocation::Both, "Failed to delete data");
+                                        error!("Failed to delete data");
                                     }
                                 } else {
                                     break;
@@ -907,11 +907,11 @@ pub async fn retain_periodically(
                     if check_db_usage().await.1 && usage_flag {
                         retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                         if retention_timestamp > now.timestamp_nanos_opt().unwrap_or(0) {
-                            warn!(LogLocation::Both, "cannot delete data to usage under {USAGE_LOW}");
+                            warn!("cannot delete data to usage under {USAGE_LOW}");
                             break;
                         }
                     } else if usage_flag {
-                        info!(LogLocation::Both, "Disk usage is under {USAGE_LOW}%");
+                        info!("Disk usage is under {USAGE_LOW}%");
                         break;
                     } else {
                         break;
@@ -929,7 +929,7 @@ pub async fn retain_periodically(
 async fn check_db_usage() -> (bool, bool) {
     let resource_usage = roxy::resource_usage().await;
     let usage = (resource_usage.used_disk_space * 100) / resource_usage.total_disk_space;
-    debug!(LogLocation::Local, "Disk usage: {usage}%");
+    debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
 }
 
