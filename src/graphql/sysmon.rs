@@ -36,8 +36,8 @@ use async_graphql::{
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-    FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
-    ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    FileDeleteDetected, ImageLoaded, NetworkConnection, PEFile, PipeEvent, ProcessCreate,
+    ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
@@ -281,6 +281,16 @@ struct FileDeleteDetectedEvent {
     is_executable: bool,
 }
 
+#[derive(SimpleObject, Debug)]
+struct PEFileEvent {
+    timestamp: DateTime<Utc>,
+    agent_name: String,
+    agent_id: String,
+    file_name: String,
+    file_hash: String,
+    data: Vec<u8>,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum SysmonEvents {
@@ -508,6 +518,19 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     }
 }
 
+impl FromKeyValue<PEFile> for PEFileEvent {
+    fn from_key_value(key: &[u8], value: PEFile) -> Result<Self> {
+        Ok(PEFileEvent {
+            timestamp: get_timestamp_from_key(key)?,
+            agent_name: value.agent_name,
+            agent_id: value.agent_id,
+            file_name: value.file_name,
+            file_hash: value.file_hash,
+            data: value.data,
+        })
+    }
+}
+
 async fn handle_process_create_events<'ctx>(
     ctx: &Context<'ctx>,
     filter: NetworkFilter,
@@ -700,6 +723,20 @@ async fn handle_file_delete_detected_events<'ctx>(
 ) -> Result<Connection<String, FileDeleteDetectedEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.file_delete_detected_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_pe_file_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, PEFileEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.pe_file_store()?;
 
     handle_paged_events(store, filter, after, before, first, last).await
 }
@@ -1078,6 +1115,18 @@ impl SysmonQuery {
             file_delete_detected_events::ResponseData,
             file_delete_detected_events
         )
+    }
+
+    async fn pe_file_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, PEFileEvent>> {
+        handle_pe_file_events(ctx, filter, after, before, first, last).await
     }
 
     async fn search_process_create_events<'ctx>(
