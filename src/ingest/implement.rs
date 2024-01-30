@@ -8,7 +8,7 @@ use giganto_client::ingest::{
     statistics::Statistics,
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PEFile, PipeEvent, ProcessCreate,
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
@@ -984,5 +984,32 @@ impl EventFilter for SecuLog {
     }
     fn source(&self) -> Option<String> {
         Some(self.source.clone())
+    }
+}
+
+impl EventFilter for PEFile {
+    fn data_type(&self) -> String {
+        "pe file".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        None
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+    fn agent_id(&self) -> Option<String> {
+        Some(self.agent_id.clone())
     }
 }

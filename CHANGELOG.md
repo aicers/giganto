@@ -26,6 +26,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `RunTimeIngestSources` type that checks for information from source
   that is connected to ingest in real time. This type is not currently used,
   but may be used in the future to provide real-time connection information.
+- Supports the `PEFile` protocol.
 
 ### Changed
 

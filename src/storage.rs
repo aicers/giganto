@@ -17,7 +17,7 @@ use giganto_client::ingest::{
     statistics::Statistics,
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PEFile, PipeEvent, ProcessCreate,
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
@@ -37,7 +37,7 @@ use std::{
 use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 38] = [
     "conn",
     "dns",
     "log",
@@ -75,6 +75,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "netflow5",
     "netflow9",
     "seculog",
+    "pe file",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 
@@ -442,6 +443,12 @@ impl Database {
     /// Returns the store for security log.
     pub fn secu_log_store(&self) -> Result<RawEventStore<SecuLog>> {
         let cf = self.get_cf_handle("seculog")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for pe file.
+    pub fn pe_file_store(&self) -> Result<RawEventStore<PEFile>> {
+        let cf = self.get_cf_handle("pe file")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

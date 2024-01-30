@@ -746,6 +746,20 @@ async fn handle_request(
             )
             .await?;
         }
+        RawEventKind::PeFile => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::PeFile,
+                None,
+                source,
+                db.pe_file_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }
@@ -1153,7 +1167,7 @@ where
 {
     use giganto_client::ingest::sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PEFile, PipeEvent, ProcessCreate,
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     };
     use giganto_client::ingest::{
@@ -1307,6 +1321,11 @@ where
         }
         RawEventKind::FileDeleteDetected => {
             let (source, data) = parse_central_data::<FileDeleteDetected>(raw_event)?;
+            *raw_event = data;
+            key_builder.start_key(&source).end_key(timestamp)
+        }
+        RawEventKind::PeFile => {
+            let (source, data) = parse_central_data::<PEFile>(raw_event)?;
             *raw_event = data;
             key_builder.start_key(&source).end_key(timestamp)
         }
