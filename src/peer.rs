@@ -14,7 +14,6 @@ use giganto_client::{
     connection::{client_handshake, server_handshake},
     frame::{self, recv_bytes, recv_raw, send_bytes},
 };
-use log_broker::{error, info, warn, LogLocation};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
@@ -36,6 +35,7 @@ use tokio::{
     time::sleep,
 };
 use toml_edit::Document;
+use tracing::{error, info, warn};
 
 const PEER_VERSION_REQ: &str = ">=0.17.0,<0.18.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
@@ -137,7 +137,6 @@ impl Peer {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
         info!(
-            LogLocation::Both,
             "listening on {}",
             server_endpoint
                 .local_addr()
@@ -190,7 +189,7 @@ impl Peer {
                         )
                         .await
                         {
-                            error!(LogLocation::Both, "connection failed: {}", e);
+                            error!("connection failed: {e}");
                         }
                     });
                 },
@@ -206,7 +205,7 @@ impl Peer {
                 () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
                     server_endpoint.close(0_u32.into(), &[]);
-                    info!(LogLocation::Both, "Shutting down peer");
+                    info!("Shutting down peer");
                     return Ok(())
                 }
 
@@ -281,10 +280,7 @@ async fn client_connection(
                 .await
                 {
                     Ok((addr, name)) => {
-                        info!(
-                            LogLocation::Both,
-                            "Connection established to {}/{} (client role)", addr, name
-                        );
+                        info!("Connection established to {addr}/{name} (client role)");
                         (addr, name)
                     }
                     Err(_) => {
@@ -362,7 +358,7 @@ async fn client_connection(
                                     peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
                                     peer_conn_info.peers.write().await.remove(&remote_addr);
                                     if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                                        info!(LogLocation::Both, "giganto peer({}/{}) closed",remote_host_name, remote_addr);
+                                        info!("giganto peer({remote_host_name}/{remote_addr}) closed");
                                         return Ok(());
                                     }
                                     continue 'connection;
@@ -378,7 +374,7 @@ async fn client_connection(
                             let path= peer_conn_info.config_path.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
-                                    error!(LogLocation::Both, "failed: {}", e);
+                                    error!("failed: {e}");
                                 }
                             });
                         },
@@ -413,10 +409,8 @@ async fn client_connection(
                         | ConnectionError::Reset
                         | ConnectionError::TimedOut => {
                             warn!(
-                                LogLocation::Both,
-                                "Retry connection to {} after {} seconds.",
+                                "Retry connection to {} after {PEER_RETRY_INTERVAL} seconds.",
                                 peer_info.address,
-                                PEER_RETRY_INTERVAL,
                             );
                             sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
                             continue 'connection;
@@ -452,10 +446,7 @@ async fn server_connection(
         match check_for_duplicate_connections(&connection, peer_conn_info.peer_conns.clone()).await
         {
             Ok((addr, name)) => {
-                info!(
-                    LogLocation::Both,
-                    "Connection established to {}/{} (server role)", addr, name
-                );
+                info!("Connection established to {addr}/{name} (server role)");
                 (addr, name)
             }
             Err(_) => {
@@ -526,7 +517,7 @@ async fn server_connection(
                         peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
                         peer_conn_info.peers.write().await.remove(&remote_addr);
                         if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                            info!(LogLocation::Both, "giganto peer({}/{}) closed",remote_host_name, remote_addr);
+                            info!("giganto peer({remote_host_name}/{remote_addr}) closed");
                             return Ok(());
                         }
                         return Err(e.into());
@@ -542,7 +533,7 @@ async fn server_connection(
                 let path= peer_conn_info.config_path.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
-                        error!(LogLocation::Both, "failed: {}", e);
+                        error!("failed: {}", e);
                     }
                 });
             },
@@ -585,13 +576,13 @@ async fn handle_request(
     match msg_type {
         PeerCode::UpdatePeerList => {
             let update_peer_list = bincode::deserialize::<HashSet<PeerIdentity>>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize peer list: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize peer list: {e}"))?;
             update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, &path)
                 .await?;
         }
         PeerCode::UpdateSourceList => {
             let update_source_list = bincode::deserialize::<PeerInfo>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize source list: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize source list: {e}"))?;
             update_to_new_source_list(update_source_list, remote_addr, peers).await;
         }
     }
@@ -680,7 +671,7 @@ async fn check_for_duplicate_connections(
             quinn::VarInt::from_u32(0),
             "exist connection close".as_bytes(),
         );
-        bail!("Duplicated connection close:{:?}", remote_host_name);
+        bail!("Duplicated connection close:{remote_host_name:?}");
     }
     Ok((remote_addr, remote_host_name))
 }
@@ -713,10 +704,10 @@ async fn update_to_new_peer_list(
     if is_change {
         let data: Vec<PeerIdentity> = peer_list.read().await.iter().cloned().collect();
         if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
-            error!(LogLocation::Both, "{e:?}");
+            error!("{e:?}");
         }
         if let Err(e) = write_toml_file(&doc, path) {
-            error!(LogLocation::Both, "{e:?}");
+            error!("{e:?}");
         }
     }
 
@@ -739,7 +730,6 @@ pub mod tests {
         server::Certs,
         to_cert_chain, to_private_key, to_root_cert, PeerInfo,
     };
-    use chrono::Utc;
     use giganto_client::connection::client_handshake;
     use quinn::{Connection, Endpoint, RecvStream, SendStream};
     use std::{
@@ -796,9 +786,7 @@ pub mod tests {
             Ok(x) => x,
             Err(_) => {
                 panic!(
-                    "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                    CERT_PATH,
-                    KEY_PATH,
+                    "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder",
                 );
             }
         };
