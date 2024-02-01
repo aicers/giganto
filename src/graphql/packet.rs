@@ -174,7 +174,6 @@ impl PacketQuery {
         )
     }
 
-    #[allow(clippy::unused_async)]
     async fn pcap<'ctx>(&self, ctx: &Context<'ctx>, filter: PacketFilter) -> Result<Pcap> {
         let handler = handle_pcap;
 

@@ -1538,7 +1538,6 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
 
 #[Object]
 impl ExportQuery {
-    #[allow(clippy::unused_async)]
     async fn export(
         &self,
         ctx: &Context<'_>,

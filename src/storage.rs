@@ -32,7 +32,12 @@ use rocksdb::{
 };
 use serde::de::DeserializeOwned;
 use std::{
-    collections::HashSet, marker::PhantomData, ops::Deref, path::Path, sync::Arc, time::Duration,
+    collections::HashSet,
+    marker::PhantomData,
+    ops::Deref,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
@@ -157,6 +162,18 @@ impl Database {
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
         Ok(Database { db: Arc::new(db) })
+    }
+
+    /// Shuts down the database, ensuring data integrity and consistency before exiting.
+    ///
+    /// This method flushes all in-memory changes to disk, writes all pending Write Ahead Log (WAL) entries to disk,
+    /// and cancels all background work to safely shut down the database.
+    pub fn shutdown(&self) -> Result<()> {
+        self.db.flush()?;
+        self.db.flush_wal(true)?;
+        self.db.cancel_all_background_work(true);
+
+        Ok(())
     }
 
     #[cfg(debug_assertions)]
@@ -819,11 +836,13 @@ impl<'d> Iterator for Iter<'d> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn retain_periodically(
     interval: Duration,
     retention_period: Duration,
     db: Database,
     notify_shutdown: Arc<Notify>,
+    running_flag: Arc<Mutex<bool>>,
 ) -> Result<()> {
     const DEFAULT_FROM: i64 = 61_000_000_000;
     const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
@@ -841,6 +860,10 @@ pub async fn retain_periodically(
         select! {
             _ = itv.tick() => {
                 info!("Begin to cleanup the database.");
+                {
+                    let mut running_flag = running_flag.lock().unwrap();
+                    *running_flag = true;
+                }
                 let now = Utc::now();
                 let mut retention_timestamp = now
                     .timestamp_nanos_opt()
@@ -919,6 +942,10 @@ pub async fn retain_periodically(
                     }
                 }
                 info!("Database cleanup completed.");
+                {
+                    let mut running_flag = running_flag.lock().unwrap();
+                    *running_flag = false;
+                }
             },
             () = notify_shutdown.notified() => {
                 return Ok(());

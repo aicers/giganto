@@ -42,6 +42,7 @@ log_dir = "/data/logs/apps"                # path to giganto's syslog file
 export_dir = "tests/export"                # path to giganto's export file
 max_open_files = 8000                      # db options max open files,
 max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1
+ack_transmission = 1024                    # ack count for ingestion data.
 peer_address = "10.10.11.1:38383"          # address to listen for peers QUIC
 peers=[{address = "10.10.12.1:38383", host_name = "ai"}]     # list of peer info.
 ```
