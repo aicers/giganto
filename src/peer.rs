@@ -182,6 +182,7 @@ impl Peer {
                     let peer_conn_info = peer_conn_info.clone();
                     let notify_shutdown = notify_shutdown.clone();
                     tokio::spawn(async move {
+                        let remote = conn.remote_address();
                         if let Err(e) = server_connection(
                             conn,
                             peer_conn_info,
@@ -189,7 +190,7 @@ impl Peer {
                         )
                         .await
                         {
-                            error!("connection failed: {e}");
+                            error!("connection failed: {e}. {remote}");
                         }
                     });
                 },

@@ -158,12 +158,31 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
         ));
 
-        task::spawn(storage::retain_periodically(
-            time::Duration::from_secs(ONE_DAY),
-            settings.retention,
-            database.clone(),
-            notify_shutdown.clone(),
-        ));
+        let database_copy = database.clone();
+        let notify_shutdown_copy = notify_shutdown.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .expect("Cannot create runtime for retain_periodically.")
+                .block_on(storage::retain_periodically(
+                    time::Duration::from_secs(ONE_DAY),
+                    settings.retention,
+                    database_copy,
+                    notify_shutdown_copy,
+                ))
+                .unwrap_or_else(|e| {
+                    error!("retain_periodically task terminated unexpectedly: {e}");
+                });
+        });
+
+        // task::spawn(storage::retain_periodically(
+        //     time::Duration::from_secs(ONE_DAY),
+        //     settings.retention,
+        //     database.clone(),
+        //     notify_shutdown.clone(),
+        // ));
 
         if let Some(peer_address) = settings.peer_address {
             let peer_server = peer::Peer::new(peer_address, &certs.clone())?;
