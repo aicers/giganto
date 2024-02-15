@@ -37,7 +37,7 @@ use tokio::{
 use toml_edit::Document;
 use tracing::{error, info, warn};
 
-const PEER_VERSION_REQ: &str = ">=0.17.0,<0.18.0";
+const PEER_VERSION_REQ: &str = ">=0.17.0,<0.19.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
