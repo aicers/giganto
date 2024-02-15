@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::info;
 
-const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.17.0";
+const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.18.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -228,7 +228,7 @@ mod tests {
         let breaking = {
             let mut breaking = current.clone();
             if breaking.major == 0 {
-                breaking.minor -= 5;
+                breaking.minor -= 6;
             } else {
                 breaking.major -= 1;
             }

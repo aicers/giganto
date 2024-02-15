@@ -2336,7 +2336,7 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
     Err(anyhow!("Invalid key"))
 }
 
-fn to_vec_string<T>(vec: &Vec<T>) -> Vec<String>
+fn to_vec_string<T>(vec: &[T]) -> Vec<String>
 where
     T: Display,
 {
