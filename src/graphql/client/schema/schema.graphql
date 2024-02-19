@@ -639,7 +639,6 @@ type Mutation {
 
 type Netflow5RawEvent {
   timestamp: DateTime!
-  source: String!
   srcAddr: String!
   dstAddr: String!
   nextHop: String!
@@ -687,7 +686,6 @@ type Netflow5RawEventEdge {
 
 type Netflow9RawEvent {
   timestamp: DateTime!
-  source: String!
   sequence: Int!
   sourceId: Int!
   templateId: Int!
@@ -721,8 +719,7 @@ type Netflow9RawEventEdge {
 
 input NetflowFilter {
   time: TimeRange
-  source: String
-  kind: String
+  source: String!
   origAddr: IpRange
   respAddr: IpRange
   origPort: PortRange
@@ -1428,7 +1425,6 @@ type Query {
     before: String
     first: Int
     last: Int
-    requestFromPeer: Boolean
   ): SecuLogRawEventConnection!
   netflow5RawEvents(
     filter: NetflowFilter!
@@ -1436,7 +1432,6 @@ type Query {
     before: String
     first: Int
     last: Int
-    requestFromPeer: Boolean
   ): Netflow5RawEventConnection!
   netflow9RawEvents(
     filter: NetflowFilter!
@@ -1444,7 +1439,6 @@ type Query {
     before: String
     first: Int
     last: Int
-    requestFromPeer: Boolean
   ): Netflow9RawEventConnection!
 }
 
@@ -1561,7 +1555,7 @@ input SearchFilter {
 
 input SecuLogFilter {
   time: TimeRange
-  source: String
+  source: String!
   kind: String!
   origAddr: IpRange
   respAddr: IpRange
@@ -1572,7 +1566,6 @@ input SecuLogFilter {
 
 type SecuLogRawEvent {
   timestamp: DateTime!
-  source: String!
   logType: String!
   version: String!
   origAddr: String

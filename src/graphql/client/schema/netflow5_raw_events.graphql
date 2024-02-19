@@ -1,5 +1,5 @@
-query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean ){
-    netflow5RawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
+query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String, $first: Int, $last: Int){
+    netflow5RawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -10,7 +10,6 @@ query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String
             cursor
             node {
                 timestamp
-                source
                 srcAddr
                 dstAddr
                 nextHop
