@@ -1,5 +1,6 @@
-use crate::storage::Database;
+use crate::{peer::Peers, IngestSources};
 use async_graphql::{Context, Object, Result};
+use std::collections::HashSet;
 
 #[derive(Default)]
 pub(super) struct SourceQuery;
@@ -8,32 +9,32 @@ pub(super) struct SourceQuery;
 impl SourceQuery {
     #[allow(clippy::unused_async)]
     async fn sources<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Vec<String>> {
-        let db = ctx.data::<Database>()?;
-        let source_store = db.sources_store()?;
-        let names = source_store.names();
-        let res: Vec<String> = names
-            .iter()
-            .map(|key| String::from_utf8(key.clone()).expect("from utf8"))
-            .collect();
-        Ok(res)
+        let mut total_source_list = HashSet::new();
+        // Add current giganto's sources
+        let ingest_sources = ctx.data_opt::<IngestSources>();
+        if let Some(ingest_sources) = ingest_sources {
+            total_source_list.extend(ingest_sources.read().await.clone());
+        }
+        // Add peer giganto's sources
+        let peers = ctx.data_opt::<Peers>();
+        if let Some(peers) = peers {
+            for peer in peers.read().await.values() {
+                total_source_list.extend(peer.ingest_sources.clone());
+            }
+        }
+
+        let mut sources: Vec<String> = total_source_list.into_iter().collect();
+        sources.sort();
+        Ok(sources)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::graphql::tests::TestSchema;
-    use chrono::Utc;
-
     #[tokio::test]
     async fn sources_test() {
         let schema = TestSchema::new();
-        let store = schema.db.sources_store().unwrap();
-        store.insert("src 1", Utc::now()).unwrap();
-        store.insert("src 2", Utc::now()).unwrap();
-        store.insert("src 1", Utc::now()).unwrap();
-        store.insert("src 3", Utc::now()).unwrap();
-        store.insert("src 1", Utc::now()).unwrap();
-
         let query = r#"
         {
             sources
@@ -41,7 +42,22 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{sources: [\"src 1\",\"src 2\",\"src 3\"]}"
+            "{sources: [\"ingest src 1\",\"src 1\",\"src1\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_with_giganto_cluster() {
+        const TEMP_PORT: u16 = 9999;
+        let schema = TestSchema::new_with_graphql_peer(TEMP_PORT);
+        let query = r#"
+        {
+            sources
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{sources: [\"ingest src 1\",\"ingest src 2\",\"src 1\",\"src 2\",\"src1\",\"src2\"]}"
         );
     }
 }
