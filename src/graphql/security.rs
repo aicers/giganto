@@ -1,7 +1,7 @@
 use super::{
-    check_address, check_contents, check_port, check_source, get_timestamp_from_key,
-    handle_paged_events, impl_from_giganto_range_structs_for_graphql_client,
-    paged_events_in_cluster, FromKeyValue, IpRange, NodeSource, PortRange,
+    check_address, check_contents, check_port, get_timestamp_from_key, handle_paged_events,
+    impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster, FromKeyValue,
+    IpRange, PortRange,
 };
 use crate::{
     graphql::{
@@ -10,9 +10,7 @@ use crate::{
     },
     storage::{Database, KeyExtractor},
 };
-use async_graphql::{
-    connection::Connection, Context, Error, InputObject, Object, Result, SimpleObject,
-};
+use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -25,7 +23,7 @@ pub(super) struct SecurityLogQuery;
 #[derive(InputObject, Clone)]
 pub struct SecuLogFilter {
     time: Option<TimeRange>,
-    source: Option<String>,
+    source: String,
     kind: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
@@ -36,11 +34,11 @@ pub struct SecuLogFilter {
 
 impl KeyExtractor for SecuLogFilter {
     fn get_start_key(&self) -> &str {
-        &self.kind
+        &self.source
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        None
+        Some(self.kind.as_bytes().to_vec())
     }
 
     fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
@@ -62,7 +60,7 @@ impl RawEventFilter for SecuLogFilter {
         _log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
-        source: Option<String>,
+        _source: Option<String>,
         _agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
@@ -70,7 +68,6 @@ impl RawEventFilter for SecuLogFilter {
             && check_port(&self.orig_port, orig_port)
             && check_port(&self.resp_port, resp_port)
             && check_contents(&self.log, log_contents)
-            && check_source(&self.source, &source)
         {
             return Ok(true);
         }
@@ -79,10 +76,9 @@ impl RawEventFilter for SecuLogFilter {
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode, ])]
+#[graphql_client_type(names = [secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode])]
 struct SecuLogRawEvent {
     timestamp: DateTime<Utc>,
-    source: String,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -93,17 +89,10 @@ struct SecuLogRawEvent {
     contents: String,
 }
 
-impl NodeSource for SecuLogRawEvent {
-    fn source(&self) -> &str {
-        &self.source
-    }
-}
-
 impl FromKeyValue<SecuLog> for SecuLogRawEvent {
     fn from_key_value(key: &[u8], sl: SecuLog) -> Result<Self> {
         Ok(SecuLogRawEvent {
             timestamp: get_timestamp_from_key(key)?,
-            source: sl.source,
             log_type: sl.log_type,
             version: sl.version,
             orig_addr: sl.orig_addr.map(|addr| addr.to_string()),
@@ -141,19 +130,17 @@ impl SecurityLogQuery {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, SecuLogRawEvent>> {
         let handler = handle_secu_log_raw_events;
 
         paged_events_in_cluster!(
-            request_all_peers_if_source_is_none
             ctx,
             filter,
+            filter.source,
             after,
             before,
             first,
             last,
-            request_from_peer,
             handler,
             SecuLogRawEvents,
             secu_log_raw_events::Variables,
@@ -295,112 +282,6 @@ mod tests {
         mock.assert_async().await;
     }
 
-    #[tokio::test]
-    async fn test_secu_log_event_for_all_source() {
-        let schema: TestSchema = TestSchema::new();
-        let store = schema.db.secu_log_store().unwrap();
-
-        insert_secu_log_event(&store, "device", "src1", 1);
-        insert_secu_log_event(&store, "device", "src 1", 2);
-
-        let query = r#"
-        {
-            secuLogRawEvents(
-                filter: {
-                    kind: "device",
-                }
-            ) {
-                edges {
-                    node {
-                        contents,
-                        version
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-
-        assert_eq!(
-            res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\",version: \"V3\"}},{node: {contents: \"secu_log_contents 2\",version: \"V3\"}}]}}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_secu_log_event_for_all_source_giganto_cluster() {
-        let query = r#"
-        {
-            secuLogRawEvents(
-                filter: {
-                    kind: "device",
-                }
-            ) {
-                edges {
-                    node {
-                        contents,
-                        version
-                    }
-                }
-            }
-        }"#;
-
-        let mut peer_server = mockito::Server::new_async().await;
-        let peer_response_mock_data = r#"
-        {
-            "data": {
-                "secuLogRawEvents": {
-                    "pageInfo": {
-                        "hasPreviousPage": false,
-                        "hasNextPage": false
-                    },
-                    "edges": [
-                        {
-                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
-                            "node": {
-                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
-                                "source": "src2",
-                                "logType": "cisco",
-                                "version": "V3",
-                                "proto": 6,
-                                "contents": "peer_giganto_contents 1"
-                            }
-                        }
-                    ]
-                }
-            }
-        }
-        "#;
-
-        let mock = peer_server
-            .mock("POST", "/graphql")
-            .with_status(200)
-            .with_body(peer_response_mock_data)
-            .create();
-
-        let peer_port = peer_server
-            .host_with_port()
-            .parse::<SocketAddr>()
-            .expect("Port must exist")
-            .port();
-
-        let schema = TestSchema::new_with_graphql_peer(peer_port);
-
-        let store = schema.db.secu_log_store().unwrap();
-
-        insert_secu_log_event(&store, "device", "src1", 1);
-        insert_secu_log_event(&store, "device", "src 1", 2);
-
-        let res = schema.execute(query).await;
-
-        assert_eq!(
-            res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\",version: \"V3\"}},{node: {contents: \"secu_log_contents 2\",version: \"V3\"}},{node: {contents: \"peer_giganto_contents 1\",version: \"V3\"}}]}}"
-        );
-
-        mock.assert_async().await;
-    }
-
     fn insert_secu_log_event(
         store: &RawEventStore<SecuLog>,
         kind: &str,
@@ -408,6 +289,8 @@ mod tests {
         timestamp: i64,
     ) {
         let mut key: Vec<u8> = Vec::new();
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
         key.extend_from_slice(kind.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());

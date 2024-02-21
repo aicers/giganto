@@ -11,6 +11,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Modify the `sources` query to return results that also include
   sources from its peers.
+- Change the prefix of the `Netflow5`/`Netflow9`/`SecuLog` db key to source.
+- Modify the related queries as the db key of `Netflow5`/`Netflow9`/`SecuLog`
+  is changed to source.(`netflow5_raw_events`/`netflow9_raw_events`/
+  `secu_log_raw_events`)
 
 ## [0.18.0] - 2024-02-16
 

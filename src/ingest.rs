@@ -13,13 +13,11 @@ use crate::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::SecuLog;
-use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::{
     connection::server_handshake,
     frame::{self, RecvError, SendError},
     ingest::{
-        log::{Log, OpLog},
+        log::{Log, OpLog, SecuLog},
         receive_event, receive_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
@@ -28,11 +26,10 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
-use std::sync::atomic::AtomicU16;
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU16, Ordering},
         Arc,
     },
     time::Duration,
@@ -823,7 +820,7 @@ async fn handle_data<T>(
     });
     loop {
         match receive_event(&mut recv).await {
-            Ok((mut raw_event, timestamp)) => {
+            Ok((raw_event, timestamp)) => {
                 if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                     && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                 {
@@ -892,52 +889,13 @@ async fn handle_data<T>(
                             .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                             .end_key(timestamp)
                     }
-                    RawEventKind::Netflow5 => {
-                        let Ok(mut netflow5) = bincode::deserialize::<Netflow5>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Netflow5".to_string());
-                            break;
-                        };
-
-                        netflow5.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&netflow5) else {
-                            err_msg = Some("Failed to serialize Netflow5".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key("netflow5")
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::Netflow9 => {
-                        let Ok(mut netflow9) = bincode::deserialize::<Netflow9>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Netflow9".to_string());
-                            break;
-                        };
-
-                        netflow9.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&netflow9) else {
-                            err_msg = Some("Failed to serialize Netflow9".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key("netflow9")
-                            .end_key(timestamp)
-                    }
                     RawEventKind::SecuLog => {
-                        let Ok(mut secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
+                        let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
                             err_msg = Some("Failed to deserialize SecuLog".to_string());
                             break;
                         };
-
-                        secu_log.source = source.clone();
-                        let Ok(serde_data) = bincode::serialize(&secu_log) else {
-                            err_msg = Some("Failed to serialize SecuLog".to_string());
-                            break;
-                        };
-                        raw_event = serde_data;
-                        StorageKey::builder()
-                            .start_key(&secu_log.kind)
+                        key_builder
+                            .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
                             .end_key(timestamp)
                     }
                     _ => key_builder.end_key(timestamp),

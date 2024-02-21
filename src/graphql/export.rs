@@ -83,7 +83,7 @@ const AGENT_PROTOCOL: [&str; 14] = [
     "process tamper",
     "file delete detected",
 ];
-const KIND_PROTOCOL: [&str; 2] = ["log", "sec log"];
+const KIND_PROTOCOL: [&str; 2] = ["log", "secu log"];
 
 #[derive(Default)]
 pub(super) struct ExportQuery;

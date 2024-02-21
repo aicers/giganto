@@ -656,10 +656,6 @@ fn check_contents(filter_str: &Option<String>, target_str: Option<String>) -> bo
     })
 }
 
-fn check_source(filter_src: &Option<String>, target_src: &Option<String>) -> bool {
-    filter_by_str(filter_src, target_src)
-}
-
 fn check_agent_id(filter_agent_id: &Option<String>, target_agent_id: &Option<String>) -> bool {
     filter_by_str(filter_agent_id, target_agent_id)
 }
@@ -1095,6 +1091,7 @@ macro_rules! paged_events_in_cluster {
 }
 pub(crate) use paged_events_in_cluster;
 
+#[allow(unused)]
 fn combine_results<N>(
     current_giganto_result: Connection<String, N>,
     peer_results: Vec<Connection<String, N>>,
@@ -1131,12 +1128,14 @@ where
     connection_to_return
 }
 
+#[allow(unused)]
 #[derive(PartialEq)]
 enum TakeDirection {
     First,
     Last,
 }
 
+#[allow(unused)]
 fn sort_and_trunk_edges<N>(
     mut edges: Vec<Edge<String, N, EmptyFields>>,
     before: &Option<String>,
@@ -1303,6 +1302,7 @@ where
         .map(|graphql_res| response_to_result_converter(graphql_res.data))
 }
 
+#[allow(unused_macros)]
 macro_rules! request_all_peers_for_paged_events_fut {
     ($ctx:expr,
      $filter:expr,
@@ -1376,6 +1376,7 @@ macro_rules! request_all_peers_for_paged_events_fut {
         futures_util::future::join_all(peer_requests)
     }};
 }
+#[allow(unused_imports)]
 pub(crate) use request_all_peers_for_paged_events_fut;
 
 macro_rules! request_selected_peers_for_events_fut {
@@ -1598,22 +1599,6 @@ mod tests {
             let request: async_graphql::Request = query.into();
             self.schema.execute(request).await
         }
-    }
-
-    #[test]
-    fn test_check_source() {
-        use super::check_source;
-        assert!(check_source(
-            &Some("test".to_string()),
-            &Some("test".to_string())
-        ));
-        assert!(!check_source(
-            &Some("test".to_string()),
-            &Some("test1".to_string())
-        ));
-        assert!(!check_source(&Some("test".to_string()), &None));
-        assert!(check_source(&None, &Some("test".to_string()),));
-        assert!(check_source(&None, &None));
     }
 
     #[derive(SimpleObject, Debug)]
