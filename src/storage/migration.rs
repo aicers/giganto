@@ -1,8 +1,14 @@
 //! Routines to check the database format version and migrate it if necessary.
 use super::Database;
+use crate::{
+    graphql::TIMESTAMP_SIZE,
+    ingest::implement::EventFilter,
+    storage::{RawEventStore, StorageKey},
+};
 use anyhow::{anyhow, Context, Result};
+use giganto_client::ingest::log::SecuLog;
 use semver::{Version, VersionReq};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs::{create_dir_all, File},
     io::{Read, Write},
@@ -11,7 +17,7 @@ use std::{
 };
 use tracing::info;
 
-const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.18.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.19.0-alpha.1,<0.20.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -21,7 +27,7 @@ const COMPATIBLE_VERSION_REQ: &str = ">0.13.0-alpha,<=0.18.0";
 /// or if the data directory exists but is in the format too old to be upgraded.
 pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
     let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid version requirement");
-    let mut version = retrieve_or_create_version(data_dir)?;
+    let mut version: Version = retrieve_or_create_version(data_dir)?;
     if compatible.matches(&version) {
         return Ok(());
     }
@@ -33,9 +39,14 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
             migrate_0_10_to_0_12,
         ),
         (
-            VersionReq::parse(">=0.12.0,<=0.13.0-alpha.1").expect("valid version requirement"),
+            VersionReq::parse(">=0.12.0,<0.13.0").expect("valid version requirement"),
             Version::parse("0.13.0").expect("valid version"),
             migrate_0_12_to_0_13_0,
+        ),
+        (
+            VersionReq::parse(">=0.13.0,<0.19.0").expect("valid version requirement"),
+            Version::parse("0.19.0").expect("valid version"),
+            migrate_0_13_to_0_19_0,
         ),
     ];
 
@@ -206,12 +217,82 @@ fn migrate_0_12_to_0_13_0(db: &Database) -> Result<()> {
     Ok(())
 }
 
+// Delete the netflow5/netflow5/secuLog data in the old key and insert it with the new key.
+fn migrate_0_13_to_0_19_0(db: &Database) -> Result<()> {
+    let netflow5_store = db.netflow5_store()?;
+    migrate_netflow(&netflow5_store)?;
+
+    let netflow9_store = db.netflow9_store()?;
+    migrate_netflow(&netflow9_store)?;
+
+    let secu_log_store = db.secu_log_store()?;
+    for raw_event in secu_log_store.iter_forward() {
+        let Ok((key, value)) = raw_event else {
+            continue;
+        };
+        secu_log_store.delete(&key)?;
+
+        let (Ok(timestamp), Ok(secu_log_raw_event)) = (
+            get_timestamp_from_key(&key),
+            bincode::deserialize::<SecuLog>(&value),
+        ) else {
+            continue;
+        };
+        let new_key = StorageKey::builder()
+            .start_key(&secu_log_raw_event.source)
+            .mid_key(Some(secu_log_raw_event.kind.as_bytes().to_vec()))
+            .end_key(timestamp)
+            .build();
+        secu_log_store.append(&new_key.key(), &value)?;
+    }
+
+    Ok(())
+}
+
+fn migrate_netflow<T>(store: &RawEventStore<'_, T>) -> Result<()>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    for raw_event in store.iter_forward() {
+        let Ok((key, value)) = raw_event else {
+            continue;
+        };
+        store.delete(&key)?;
+
+        let (Ok(timestamp), Ok(netflow_raw_event)) = (
+            get_timestamp_from_key(&key),
+            bincode::deserialize::<T>(&value),
+        ) else {
+            continue;
+        };
+        let new_key = StorageKey::builder()
+            .start_key(&netflow_raw_event.source().unwrap()) //source is always exist
+            .end_key(timestamp)
+            .build();
+        store.append(&new_key.key(), &value)?;
+    }
+    Ok(())
+}
+
+fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
+    if key.len() > TIMESTAMP_SIZE {
+        return Ok(i64::from_be_bytes(
+            key[(key.len() - TIMESTAMP_SIZE)..].try_into()?,
+        ));
+    }
+    Err(anyhow!("invalid database key length"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::COMPATIBLE_VERSION_REQ;
-    use crate::storage::{Database, DbOptions};
+    use crate::storage::{Database, DbOptions, StorageKey};
     use chrono::Utc;
-    use giganto_client::ingest::network::Http;
+    use giganto_client::ingest::{
+        log::SecuLog,
+        netflow::{Netflow5, Netflow9},
+        network::Http,
+    };
     use semver::{Version, VersionReq};
     use serde::{Deserialize, Serialize};
     use std::net::IpAddr;
@@ -351,5 +432,144 @@ mod tests {
 
         let (_, value) = result_iter.next().unwrap().unwrap();
         assert_eq!(new_http, value);
+    }
+
+    #[test]
+    fn migrate_0_13_to_0_19() {
+        const OLD_NETFLOW5_PREFIX_KEY: &str = "netflow5";
+        const OLD_NETFLOW9_PREFIX_KEY: &str = "netflow9";
+        const TEST_SOURCE: &str = "src1";
+        const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
+        const TEST_TIMESTAMP: i64 = 1000;
+
+        // open temp db
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+
+        // insert netflow5 data using the old key.
+        let netflow5_store = db.netflow5_store().unwrap();
+        let netflow5_body = Netflow5 {
+            source: TEST_SOURCE.to_string(),
+            src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            next_hop: "192.168.4.78".parse::<IpAddr>().unwrap(),
+            input: 65535,
+            output: 1,
+            d_pkts: 1,
+            d_octets: 464,
+            first: 3477280180,
+            last: 3477280180,
+            src_port: 9,
+            dst_port: 771,
+            tcp_flags: 0,
+            prot: 1,
+            tos: 192,
+            src_as: 0,
+            dst_as: 0,
+            src_mask: 0,
+            dst_mask: 0,
+            sequence: 64,
+            engine_type: 0,
+            engine_id: 0,
+            sampling_mode: 0,
+            sampling_rate: 0,
+        };
+        let serialized_netflow5 = bincode::serialize(&netflow5_body).unwrap();
+        let netflow5_old_key = StorageKey::builder()
+            .start_key(OLD_NETFLOW5_PREFIX_KEY)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+
+        netflow5_store
+            .append(&netflow5_old_key, &serialized_netflow5)
+            .unwrap();
+
+        // insert netflow9 data using the old key.
+        let netflow9_store = db.netflow9_store().unwrap();
+        let netflow9_body = Netflow9 {
+            source: TEST_SOURCE.to_string(),
+            sequence: 3282250832,
+            source_id: 17,
+            template_id: 260,
+            orig_addr: "192.168.4.75".parse::<IpAddr>().unwrap(),
+            orig_port: 5000,
+            resp_addr: "192.168.4.80".parse::<IpAddr>().unwrap(),
+            resp_port: 6000,
+            proto: 6,
+            contents: format!("netflow5_contents {TEST_TIMESTAMP}").to_string(),
+        };
+        let serialized_netflow9 = bincode::serialize(&netflow9_body).unwrap();
+        let netflow9_old_key = StorageKey::builder()
+            .start_key(OLD_NETFLOW9_PREFIX_KEY)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        netflow9_store
+            .append(&netflow9_old_key, &serialized_netflow9)
+            .unwrap();
+
+        // insert secuLog data using the old key.
+        let secu_log_store = db.secu_log_store().unwrap();
+        let secu_log_body = SecuLog {
+            source: TEST_SOURCE.to_string(),
+            kind: TEST_KIND.to_string(),
+            log_type: TEST_KIND.to_string(),
+            version: "V3".to_string(),
+            orig_addr: None,
+            orig_port: None,
+            resp_addr: None,
+            resp_port: None,
+            proto: None,
+            contents: format!("secu_log_contents {TEST_TIMESTAMP}").to_string(),
+        };
+        let serialized_secu_log = bincode::serialize(&secu_log_body).unwrap();
+        let secu_log_old_key = StorageKey::builder()
+            .start_key(TEST_KIND)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        secu_log_store
+            .append(&secu_log_old_key, &serialized_secu_log)
+            .unwrap();
+
+        //migration 0.13.0 to 0.19.0
+        super::migrate_0_13_to_0_19_0(&db).unwrap();
+
+        //check netflow5/9 migration
+        let netflow_new_key = StorageKey::builder()
+            .start_key(TEST_SOURCE)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+
+        let mut result_iter = netflow5_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_ne!(netflow5_old_key, result_key.to_vec());
+        assert_eq!(netflow_new_key, result_key.to_vec());
+        assert_eq!(serialized_netflow5, result_value.to_vec());
+
+        let mut result_iter = netflow9_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_ne!(netflow9_old_key, result_key.to_vec());
+        assert_eq!(netflow_new_key, result_key.to_vec());
+        assert_eq!(serialized_netflow9, result_value.to_vec());
+
+        //check secuLog migration
+        let secu_log_new_key = StorageKey::builder()
+            .start_key(TEST_SOURCE)
+            .mid_key(Some(TEST_KIND.as_bytes().to_vec()))
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+
+        let mut result_iter = secu_log_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_ne!(secu_log_old_key, result_key.to_vec());
+        assert_eq!(secu_log_new_key, result_key.to_vec());
+        assert_eq!(serialized_secu_log, result_value.to_vec());
     }
 }
