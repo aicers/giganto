@@ -12,7 +12,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify the `sources` query to return results that also include
   sources from its peers.
 
-## [0.18.0]
+## [0.18.0] - 2024-02-16
 
 ### Changed
 
@@ -22,7 +22,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Fixed the default port to `8442`.
 
-## [0.17.0]
+## [0.17.0] - 2024-01-24
 
 ### Added
 
@@ -82,7 +82,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify the `giganto_config` query so that config files that work in standalone
   mode can also be read correctly.
 - Changed `export` GraphQL query's response value format from `{export_path}` to
-`{export_path}@{giganto_node_name}`
+  `{export_path}@{giganto_node_name}`
 - Changed logging from `tracing` to `log-broker`.
 - Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0"
 - Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0"
@@ -335,7 +335,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Change field name `duration` to `last_time`.  (Except Conn struct)
+- Change field name `duration` to `last_time`. (Except Conn struct)
 - Modify to receive and process `multiple sources` of stream request messages
   from `HOG`.
 - Modify module name `ingestion` to `ingest`.
@@ -446,32 +446,32 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: <https://github.com/aicers/giganto/compare/0.18.0...main>
-[0.18.0]: <https://github.com/aicers/giganto/compare/0.17.0...0.18.0>
-[0.17.0]: <https://github.com/aicers/giganto/compare/0.16.0...0.17.0>
-[0.16.0]: <https://github.com/aicers/giganto/compare/0.15.3...0.16.0>
-[0.15.4]: <https://github.com/aicers/giganto/compare/0.15.3...0.15.4>
-[0.15.3]: <https://github.com/aicers/giganto/compare/0.15.2...0.15.3>
-[0.15.2]: <https://github.com/aicers/giganto/compare/0.15.1...0.15.2>
-[0.15.1]: <https://github.com/aicers/giganto/compare/0.15.0...0.15.1>
-[0.15.0]: <https://github.com/aicers/giganto/compare/0.14.0...0.15.0>
-[0.14.0]: <https://github.com/aicers/giganto/compare/0.13.1...0.14.0>
-[0.13.1]: <https://github.com/aicers/giganto/compare/0.13.0...0.13.1>
-[0.13.0]: <https://github.com/aicers/giganto/compare/0.12.3...0.13.0>
-[0.12.3]: <https://github.com/aicers/giganto/compare/0.12.2...0.12.3>
-[0.12.2]: <https://github.com/aicers/giganto/compare/0.12.1...0.12.2>
-[0.12.1]: <https://github.com/aicers/giganto/compare/0.12.0...0.12.1>
-[0.12.0]: <https://github.com/aicers/giganto/compare/0.11.0...0.12.0>
-[0.11.0]: <https://github.com/aicers/giganto/compare/0.10.2...0.11.0>
-[0.10.2]: <https://github.com/aicers/giganto/compare/0.10.1...0.10.2>
-[0.10.1]: <https://github.com/aicers/giganto/compare/0.10.0...0.10.1>
-[0.10.0]: <https://github.com/aicers/giganto/compare/0.9.0...0.10.0>
-[0.9.0]: <https://github.com/aicers/giganto/compare/0.8.0...0.9.0>
-[0.8.0]: <https://github.com/aicers/giganto/compare/0.7.0...0.8.0>
-[0.7.0]: <https://github.com/aicers/giganto/compare/0.6.0...0.7.0>
-[0.6.0]: <https://github.com/aicers/giganto/compare/0.5.0...0.6.0>
-[0.5.0]: <https://github.com/aicers/giganto/compare/0.4.0...0.5.0>
-[0.4.0]: <https://github.com/aicers/giganto/compare/0.3.0...0.4.0>
-[0.3.0]: <https://github.com/aicers/giganto/compare/0.2.0...0.3.0>
-[0.2.0]: <https://github.com/aicers/giganto/compare/0.1.0...0.2.0>
-[0.1.0]: <https://github.com/aicers/giganto/tree/0.1.0>
+[Unreleased]: https://github.com/aicers/giganto/compare/0.18.0...main
+[0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0
+[0.17.0]: https://github.com/aicers/giganto/compare/0.16.0...0.17.0
+[0.16.0]: https://github.com/aicers/giganto/compare/0.15.3...0.16.0
+[0.15.4]: https://github.com/aicers/giganto/compare/0.15.3...0.15.4
+[0.15.3]: https://github.com/aicers/giganto/compare/0.15.2...0.15.3
+[0.15.2]: https://github.com/aicers/giganto/compare/0.15.1...0.15.2
+[0.15.1]: https://github.com/aicers/giganto/compare/0.15.0...0.15.1
+[0.15.0]: https://github.com/aicers/giganto/compare/0.14.0...0.15.0
+[0.14.0]: https://github.com/aicers/giganto/compare/0.13.1...0.14.0
+[0.13.1]: https://github.com/aicers/giganto/compare/0.13.0...0.13.1
+[0.13.0]: https://github.com/aicers/giganto/compare/0.12.3...0.13.0
+[0.12.3]: https://github.com/aicers/giganto/compare/0.12.2...0.12.3
+[0.12.2]: https://github.com/aicers/giganto/compare/0.12.1...0.12.2
+[0.12.1]: https://github.com/aicers/giganto/compare/0.12.0...0.12.1
+[0.12.0]: https://github.com/aicers/giganto/compare/0.11.0...0.12.0
+[0.11.0]: https://github.com/aicers/giganto/compare/0.10.2...0.11.0
+[0.10.2]: https://github.com/aicers/giganto/compare/0.10.1...0.10.2
+[0.10.1]: https://github.com/aicers/giganto/compare/0.10.0...0.10.1
+[0.10.0]: https://github.com/aicers/giganto/compare/0.9.0...0.10.0
+[0.9.0]: https://github.com/aicers/giganto/compare/0.8.0...0.9.0
+[0.8.0]: https://github.com/aicers/giganto/compare/0.7.0...0.8.0
+[0.7.0]: https://github.com/aicers/giganto/compare/0.6.0...0.7.0
+[0.6.0]: https://github.com/aicers/giganto/compare/0.5.0...0.6.0
+[0.5.0]: https://github.com/aicers/giganto/compare/0.4.0...0.5.0
+[0.4.0]: https://github.com/aicers/giganto/compare/0.3.0...0.4.0
+[0.3.0]: https://github.com/aicers/giganto/compare/0.2.0...0.3.0
+[0.2.0]: https://github.com/aicers/giganto/compare/0.1.0...0.2.0
+[0.1.0]: https://github.com/aicers/giganto/tree/0.1.0
