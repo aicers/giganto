@@ -12,9 +12,8 @@ use crate::{
     server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
     storage::migrate_data_dir,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::init_tracing;
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
@@ -23,7 +22,7 @@ use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::exit,
     sync::Arc,
     time::{Duration, Instant},
@@ -35,7 +34,12 @@ use tokio::{
     task,
     time::{self, sleep},
 };
-use tracing::{error, info, warn};
+use tracing::{error, warn};
+use tracing::{info, metadata::LevelFilter};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{
+    fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+};
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const USAGE: &str = "\
@@ -87,7 +91,7 @@ async fn main() -> Result<()> {
         ca_certs: root_cert.clone(),
     });
 
-    let _guard = init_tracing(&settings.log_dir, env!("CARGO_PKG_NAME"))?;
+    let _guard = init_tracing(&settings.log_dir)?;
 
     let db_path = settings.data_dir.join("db");
     let db_options =
@@ -345,4 +349,35 @@ fn new_peers_data(peers_list: Option<HashSet<PeerIdentity>>) -> (Peers, PeerIden
         Arc::new(RwLock::new(HashMap::<String, PeerInfo>::new())),
         Arc::new(RwLock::new(peers_list.unwrap_or_default())),
     )
+}
+
+fn init_tracing(path: &Path) -> Result<WorkerGuard> {
+    if !path.exists() {
+        bail!("Path not found {path:?}");
+    }
+
+    let file_name = format!("{}.log", env!("CARGO_PKG_NAME"));
+    if std::fs::File::create(path.join(&file_name)).is_err() {
+        bail!("Cannot create file. {}/{file_name}", path.display());
+    }
+
+    let file_appender = tracing_appender::rolling::never(path, file_name);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+
+    let layer_file = fmt::Layer::default()
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(file_writer)
+        .with_filter(EnvFilter::from_default_env().add_directive(LevelFilter::INFO.into()));
+
+    let layered_subscriber = tracing_subscriber::registry().with(layer_file);
+    #[cfg(debug_assertions)]
+    let layered_subscriber = layered_subscriber.with(
+        fmt::Layer::default()
+            .with_ansi(true)
+            .with_filter(EnvFilter::from_default_env()),
+    );
+    layered_subscriber.init();
+
+    Ok(guard)
 }
