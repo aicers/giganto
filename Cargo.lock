@@ -948,6 +948,8 @@ dependencies = [
  "tokio",
  "toml_edit 0.21.1",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "url",
  "warp",
  "x509-parser",
