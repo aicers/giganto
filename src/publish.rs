@@ -213,7 +213,7 @@ async fn handle_connection(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn request_stream(
     connection: Connection,
     stream_db: Database,

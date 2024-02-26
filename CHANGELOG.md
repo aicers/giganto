@@ -464,7 +464,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: <https://github.com/aicers/giganto/compare/0.19.0...tis>
+[Unreleased]: https://github.com/aicers/giganto/compare/0.19.0...tis
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0
 [0.17.0]: https://github.com/aicers/giganto/compare/0.16.0...0.17.0
