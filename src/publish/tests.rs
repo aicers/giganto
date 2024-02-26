@@ -20,9 +20,12 @@ use giganto_client::{
     publish::{
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
-        receive_hog_stream_start_message, receive_range_data, send_range_data_request,
-        send_stream_request,
-        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+        receive_hog_stream_start_message, receive_range_data, receive_url_collector_data,
+        receive_url_collector_stream_start_message, send_range_data_request, send_stream_request,
+        stream::{
+            NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord,
+            RequestUrlCollectorStream,
+        },
     },
 };
 use quinn::{Connection, Endpoint, SendStream};
@@ -1917,6 +1920,7 @@ async fn request_network_event_stream() {
 
     const HOG_TYPE: NodeType = NodeType::Hog;
     const CRUSHER_TYPE: NodeType = NodeType::Crusher;
+    const URL_COLLECTOR_TYPE: NodeType = NodeType::UrlCollector;
     const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
     const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
     const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;
@@ -1936,6 +1940,7 @@ async fn request_network_event_stream() {
     const SOURCE_HOG_ONE: &str = "src1";
     const SOURCE_HOG_TWO: &str = "src2";
     const SOURCE_CRUSHER_THREE: &str = "src3";
+    const SOURCE_URL_COLLECTOR_FOUR: &str = "src4";
     const POLICY_ID: u32 = 1;
 
     let _lock = get_token().lock().await;
@@ -1955,6 +1960,10 @@ async fn request_network_event_stream() {
         src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
         dst_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
         source: Some(String::from(SOURCE_CRUSHER_THREE)),
+    };
+    let url_collector_msg = RequestUrlCollectorStream {
+        start: 0,
+        source: Some(String::from(SOURCE_URL_COLLECTOR_FOUR)),
     };
     let pcap_sources = new_pcap_sources();
     let stream_direct_channels = new_stream_direct_channels();
@@ -2417,6 +2426,43 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
+
+        // direct http network event for url collector (src4)
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_HTTP,
+            URL_COLLECTOR_TYPE,
+            url_collector_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let http_start_msg =
+            receive_url_collector_stream_start_message(&mut (*send_http_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
+
+        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_URL_COLLECTOR_FOUR, "http");
+        let http_data = gen_conn_raw_event();
+
+        send_direct_stream(
+            &key,
+            &http_data,
+            send_http_time,
+            SOURCE_URL_COLLECTOR_FOUR,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_url_collector_data(&mut (*send_http_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(http_data, recv_data[20..]);
     }
 
     {
