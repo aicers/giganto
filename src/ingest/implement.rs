@@ -15,6 +15,7 @@ use giganto_client::ingest::{
 };
 use std::net::IpAddr;
 
+#[allow(unused)]
 pub trait EventFilter {
     fn data_type(&self) -> String;
     fn orig_addr(&self) -> Option<IpAddr>;
