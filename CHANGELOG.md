@@ -11,6 +11,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Modified logging behavior for debug and release builds.
 - Changed logs to stdout and file
+- Modify to extract kind/source correctly on export of `secu log`.
 
 ## [0.19.0+tis.0.1.0] - 2024-02-26
 
