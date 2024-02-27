@@ -840,6 +840,7 @@ pub async fn retain_periodically(
     loop {
         select! {
             _ = itv.tick() => {
+                info!("Begin to cleanup the database.");
                 let now = Utc::now();
                 let mut retention_timestamp = now
                     .timestamp_nanos_opt()
@@ -917,6 +918,7 @@ pub async fn retain_periodically(
                         break;
                     }
                 }
+                info!("Database cleanup completed.");
             },
             () = notify_shutdown.notified() => {
                 return Ok(());

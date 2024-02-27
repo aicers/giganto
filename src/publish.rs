@@ -103,6 +103,7 @@ impl Server {
                     let peer_idents = peer_idents.clone();
                     let certs = certs.clone();
                     tokio::spawn(async move {
+                        let remote = conn.remote_address();
                         if let Err(e) = handle_connection(
                             conn,
                             db,
@@ -116,7 +117,7 @@ impl Server {
                         )
                         .await
                         {
-                            error!("connection failed: {}", e);
+                            error!("connection failed: {}. {}", e, remote);
                         }
                     });
                 },
