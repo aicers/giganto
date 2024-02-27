@@ -981,8 +981,8 @@ impl JsonOutput<SecuLogJsonOutput> for SecuLog {
     fn convert_json_output(&self, timestamp: String, source: String) -> Result<SecuLogJsonOutput> {
         Ok(SecuLogJsonOutput {
             timestamp,
-            source: self.source.clone(),
-            kind: source,
+            source,
+            kind: self.kind.clone(),
             orig_addr: to_string_or_empty(self.orig_addr),
             orig_port: to_string_or_empty(self.orig_port),
             resp_addr: to_string_or_empty(self.resp_addr),
