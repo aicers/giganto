@@ -117,10 +117,11 @@ impl Server {
                     let shutdown_sig = shutdown_signal.clone();
                     let ack_trans_cnt= ack_transmission_cnt.clone();
                     tokio::spawn(async move {
+                        let remote = conn.remote_address();
                         if let Err(e) =
                             handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
                         {
-                            error!("connection failed: {e}");
+                            error!("connection failed: {e}. {remote}");
                         }
                     });
                 },
@@ -935,7 +936,7 @@ async fn handle_data<T>(
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(
-                            "Ingest: source = {source} type = {raw_event_kind:?} count = {count} size = {size}, duration = {}",
+                            "Ingest: {source}, {raw_event_kind:?}, count = {count}, size = {size}, duration = {}",
                             start.elapsed().as_secs()
                         );
                         count = 0;
