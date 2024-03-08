@@ -1,5 +1,3 @@
-#![allow(clippy::unused_async)]
-
 #[cfg(test)]
 mod tests;
 

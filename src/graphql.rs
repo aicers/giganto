@@ -146,6 +146,10 @@ pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub struct NodeName(pub String);
+pub struct ReloadNotify(Arc<Notify>); // reload config
+pub struct RebootNotify(Arc<Notify>); // reboot
+pub struct PowerOffNotify(Arc<Notify>); // shutdown
+pub struct TerminateNotify(Arc<Notify>); // stop
 
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
@@ -157,6 +161,9 @@ pub fn schema(
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
     config_reload: Arc<Notify>,
+    notify_reboot: Arc<Notify>,
+    notify_power_off: Arc<Notify>,
+    notify_terminate: Arc<Notify>,
     config_file_path: String,
     ack_transmission_cnt: AckTransmissionCount,
 ) -> Schema {
@@ -168,9 +175,12 @@ pub fn schema(
         .data(peers)
         .data(request_client_pool)
         .data(export_path)
-        .data(config_reload)
+        .data(ReloadNotify(config_reload))
         .data(config_file_path)
         .data(ack_transmission_cnt)
+        .data(TerminateNotify(notify_terminate))
+        .data(RebootNotify(notify_reboot))
+        .data(PowerOffNotify(notify_power_off))
         .finish()
 }
 
@@ -1540,6 +1550,9 @@ mod tests {
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
             let config_reload = Arc::new(Notify::new());
+            let notify_reboot = Arc::new(Notify::new());
+            let notify_power_off = Arc::new(Notify::new());
+            let notify_terminate = Arc::new(Notify::new());
             let schema = schema(
                 NodeName("giganto1".to_string()),
                 db.clone(),
@@ -1549,6 +1562,9 @@ mod tests {
                 request_client_pool,
                 export_dir.path().to_path_buf(),
                 config_reload,
+                notify_reboot,
+                notify_power_off,
+                notify_terminate,
                 "file_path".to_string(),
                 Arc::new(RwLock::new(1024)),
             );

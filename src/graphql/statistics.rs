@@ -110,7 +110,6 @@ async fn handle_statistics(
 
 #[Object]
 impl StatisticsQuery {
-    #[allow(clippy::unused_async)]
     async fn statistics<'ctx>(
         &self,
         ctx: &Context<'ctx>,

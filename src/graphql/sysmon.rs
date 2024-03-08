@@ -1,4 +1,3 @@
-#![allow(clippy::unused_async)]
 use super::{
     base64_engine, collect_exist_timestamp, events_vec_in_cluster, get_peekable_iter,
     get_timestamp_from_key, handle_paged_events,

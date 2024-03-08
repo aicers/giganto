@@ -24,7 +24,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::exit,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use storage::Database;
@@ -34,14 +34,14 @@ use tokio::{
     task,
     time::{self, sleep},
 };
-use tracing::{error, warn};
-use tracing::{info, metadata::LevelFilter};
+use tracing::{error, info, metadata::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
 };
 
 const ONE_DAY: u64 = 60 * 60 * 24;
+const WAIT_SHUTDOWN: u64 = 15;
 const USAGE: &str = "\
 USAGE:
     giganto [CONFIG]
@@ -108,6 +108,10 @@ async fn main() -> Result<()> {
         info!("{}", to_hms(dur));
         exit(0);
     }
+
+    let mut is_reboot = false;
+    let mut is_power_off = false;
+
     let database = storage::Database::open(&db_path, &db_options)?;
 
     if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
@@ -115,8 +119,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let notify_ctrlc = Arc::new(Notify::new());
-    let r = notify_ctrlc.clone();
+    let notify_terminate = Arc::new(Notify::new());
+    let r = notify_terminate.clone();
     if let Err(ctrlc::Error::System(e)) = ctrlc::set_handler(move || r.notify_one()) {
         return Err(anyhow!("failed to set signal handler: {}", e));
     }
@@ -132,9 +136,11 @@ async fn main() -> Result<()> {
         let ingest_sources = new_ingest_sources(&database);
         let runtime_ingest_sources = new_runtime_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
-        let (peers, peer_idents) = new_peers_data(settings.peers);
+        let (peers, peer_idents) = new_peers_data(settings.peers.clone());
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
+        let notify_reboot = Arc::new(Notify::new());
+        let notify_power_off = Arc::new(Notify::new());
         let mut notify_source_change = None;
         let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
 
@@ -147,9 +153,13 @@ async fn main() -> Result<()> {
             request_client_pool.clone(),
             settings.export_dir.clone(),
             notify_config_reload.clone(),
+            notify_reboot.clone(),
+            notify_power_off.clone(),
+            notify_terminate.clone(),
             settings.cfg_path.clone(),
             ack_transmission_cnt.clone(),
         );
+
         task::spawn(web::serve(
             schema,
             settings.graphql_address,
@@ -158,11 +168,14 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
         ));
 
+        let retain_flag = Arc::new(Mutex::new(false));
+
         task::spawn(storage::retain_periodically(
             time::Duration::from_secs(ONE_DAY),
             settings.retention,
             database.clone(),
             notify_shutdown.clone(),
+            retain_flag.clone(),
         ));
 
         if let Some(peer_address) = settings.peer_address {
@@ -205,12 +218,11 @@ async fn main() -> Result<()> {
 
         loop {
             select! {
-                () = notify_config_reload.notified() =>{
+                () = notify_config_reload.notified() => {
                     match Settings::from_file(&settings.cfg_path) {
                         Ok(new_settings) => {
                             settings = new_settings;
-                            notify_shutdown.notify_waiters();
-                            notify_shutdown.notified().await; // Wait for the shutdown to complete
+                            notify_and_wait_shutdown(notify_shutdown.clone()).await; // Wait for the shutdown to complete
                             break;
                         }
                         Err(e) => {
@@ -220,17 +232,54 @@ async fn main() -> Result<()> {
                         }
                     }
                 },
-                () = notify_ctrlc.notified() =>{
+                () = notify_terminate.notified() => {
                     info!("Termination signal: giganto daemon exit");
-                    notify_shutdown.notify_waiters();
+                    notify_and_wait_shutdown(notify_shutdown).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
-                    return Ok(())
+                    return Ok(());
                 }
-
+                () = notify_reboot.notified() => {
+                    info!("Restarting the system...");
+                    notify_and_wait_shutdown(notify_shutdown).await;
+                    is_reboot = true;
+                    break;
+                }
+                () = notify_power_off.notified() => {
+                    info!("Power off the system...");
+                    notify_and_wait_shutdown(notify_shutdown).await;
+                    is_power_off = true;
+                    break;
+                }
             }
+        }
+
+        if is_reboot || is_power_off {
+            loop {
+                {
+                    let retain_flag = retain_flag.lock().unwrap();
+                    if !*retain_flag {
+                        break;
+                    }
+                }
+                sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
+            }
+            database.shutdown()?;
+            info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
+            sleep(tokio::time::Duration::from_secs(WAIT_SHUTDOWN)).await;
+            break;
         }
         sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
     }
+
+    if is_reboot || is_power_off {
+        if is_reboot {
+            roxy::reboot().map_err(|e| anyhow!("cannot restart the system: {e}"))?;
+        }
+        if is_power_off {
+            roxy::power_off().map_err(|e| anyhow!("cannot power off the system: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Parses the command line arguments and returns the first argument.
@@ -380,4 +429,10 @@ fn init_tracing(path: &Path) -> Result<WorkerGuard> {
     layered_subscriber.init();
 
     Ok(guard)
+}
+
+/// Notifies all waiters of `notify_shutdown` and waits for ingest closed notification.
+pub async fn notify_and_wait_shutdown(notify_shutdown: Arc<Notify>) {
+    notify_shutdown.notify_waiters();
+    notify_shutdown.notified().await;
 }

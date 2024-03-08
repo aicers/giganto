@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added graphql query `ping` and mutation `stop`, `reboot`, `shutdown`.
+
 ### Changed
 
 - Modified logging behavior for debug and release builds.

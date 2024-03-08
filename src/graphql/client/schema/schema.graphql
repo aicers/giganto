@@ -635,6 +635,9 @@ type MqttRawEventEdge {
 type Mutation {
   setGigantoConfig(field: UserConfig!): String!
   setAckTransmissionCount(count: Int!): String!
+  stop: Boolean!
+  reboot: Boolean!
+  shutdown: Boolean!
 }
 
 type Netflow5RawEvent {
@@ -1293,6 +1296,7 @@ type Query {
   gigantoStatus: GigantoStatus!
   propertiesCf(filter: PropertyFilter!): Properties!
   gigantoConfig: GigantoConfig!
+  ping: Boolean!
   sources: [String!]!
   statistics(
     sources: [String!]!

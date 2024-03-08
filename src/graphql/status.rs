@@ -1,16 +1,14 @@
+use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
 #[cfg(debug_assertions)]
 use crate::storage::Database;
 use crate::AckTransmissionCount;
 use anyhow::{anyhow, Context as ct};
-use async_graphql::Context;
-use async_graphql::{InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    sync::Arc,
     time::Duration,
 };
-use tokio::sync::Notify;
 use toml_edit::{value, Document, InlineTable};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
@@ -188,6 +186,11 @@ impl GigantoStatusQuery {
             ack_transmission_cnt,
         })
     }
+
+    #[allow(clippy::unused_async)]
+    async fn ping(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 #[Object]
@@ -195,7 +198,7 @@ impl GigantoConfigMutation {
     #[allow(clippy::unused_async)]
     async fn set_giganto_config<'ctx>(
         &self,
-        ctx: &async_graphql::Context<'ctx>,
+        ctx: &Context<'ctx>,
         field: UserConfig,
     ) -> Result<String> {
         let cfg_path = ctx.data::<String>()?;
@@ -216,7 +219,9 @@ impl GigantoConfigMutation {
         insert_toml_peers(&mut doc, field.peer_list)?;
         write_toml_file(&doc, cfg_path)?;
 
-        let config_reload = ctx.data::<Arc<Notify>>()?.clone();
+        let reload_notify = ctx.data::<ReloadNotify>()?;
+        let config_reload = reload_notify.0.clone();
+
         tokio::spawn(async move {
             // Used to complete the response of a graphql Mutation.
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
@@ -226,10 +231,9 @@ impl GigantoConfigMutation {
         Ok("Done".to_string())
     }
 
-    #[allow(clippy::unused_async)]
     async fn set_ack_transmission_count<'ctx>(
         &self,
-        ctx: &async_graphql::Context<'ctx>,
+        ctx: &Context<'ctx>,
         count: u16,
     ) -> Result<String> {
         let cfg_path = ctx.data::<String>()?;
@@ -242,6 +246,33 @@ impl GigantoConfigMutation {
         *ack_cnt.write().await = count;
 
         Ok("Done".to_string())
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn stop<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+        let terminate_notify = ctx.data::<TerminateNotify>()?;
+        let notify_terminate = terminate_notify.0.clone();
+        notify_terminate.notify_one();
+
+        Ok(true)
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn reboot<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+        let reboot_notify = ctx.data::<RebootNotify>()?;
+        let notify_reboot = reboot_notify.0.clone();
+        notify_reboot.notify_one();
+
+        Ok(true)
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn shutdown<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+        let power_off_notify = ctx.data::<PowerOffNotify>()?;
+        let notify_power_off = power_off_notify.0.clone();
+        notify_power_off.notify_one();
+
+        Ok(true)
     }
 }
 
@@ -319,4 +350,20 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::graphql::tests::TestSchema;
+
+    #[tokio::test]
+    async fn test_ping() {
+        let schema = TestSchema::new();
+
+        let query = "{ ping }";
+
+        let res = schema.execute(query).await;
+
+        assert_eq!(res.data.to_string(), "{ping: true}");
+    }
 }

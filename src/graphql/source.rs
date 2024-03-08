@@ -7,7 +7,6 @@ pub(super) struct SourceQuery;
 
 #[Object]
 impl SourceQuery {
-    #[allow(clippy::unused_async)]
     async fn sources<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Vec<String>> {
         let mut total_source_list = HashSet::new();
         // Add current giganto's sources
