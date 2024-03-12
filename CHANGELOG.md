@@ -16,6 +16,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modified logging behavior for debug and release builds.
 - Changed logs to stdout and file
 - Modify to extract kind/source correctly on export of `secu log`.
+- Modify `retain_periodically()` function to run as a separate thread.
 
 ## [0.19.0] - 2024-02-22
 
