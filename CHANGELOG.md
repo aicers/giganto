@@ -17,6 +17,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed logs to stdout and file
 - Modify to extract kind/source correctly on export of `secu log`.
 - Modify `retain_periodically()` function to run as a separate thread.
+- Added the `.export` tag to the file being exported. This tag is removed after
+  the file is finished exporting.
 
 ## [0.19.0] - 2024-02-22
 

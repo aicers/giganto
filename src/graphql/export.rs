@@ -1528,10 +1528,18 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         filter.protocol,
         Local::now().format("%Y%m%d_%H%M%S"),
     );
-    let export_path = path.join(filename.replace(' ', ""));
-    let download_path = format!("{}@{}", export_path.display(), node_name.0);
 
-    export_by_protocol(db.clone(), filter, export_type, export_path)?;
+    let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
+    let export_done_path = path.join(filename.replace(' ', ""));
+    let download_path = format!("{}@{}", export_done_path.display(), node_name.0);
+
+    export_by_protocol(
+        db.clone(),
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    )?;
 
     Ok(download_path)
 }
@@ -1595,13 +1603,20 @@ fn export_by_protocol(
     db: Database,
     filter: &ExportFilter,
     export_type: String,
-    export_path: PathBuf,
+    export_done_path: PathBuf,
+    export_progress_path: PathBuf,
 ) -> Result<()> {
     let filter = filter.clone();
     match filter.protocol.as_str() {
         "conn" => tokio::spawn(async move {
             if let Ok(store) = db.conn_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1615,7 +1630,13 @@ fn export_by_protocol(
         }),
         "dns" => tokio::spawn(async move {
             if let Ok(store) = db.dns_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1629,7 +1650,13 @@ fn export_by_protocol(
         }),
         "http" => tokio::spawn(async move {
             if let Ok(store) = db.http_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1643,7 +1670,13 @@ fn export_by_protocol(
         }),
         "log" => tokio::spawn(async move {
             if let Ok(store) = db.log_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1657,7 +1690,13 @@ fn export_by_protocol(
         }),
         "rdp" => tokio::spawn(async move {
             if let Ok(store) = db.rdp_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1671,7 +1710,13 @@ fn export_by_protocol(
         }),
         "smtp" => tokio::spawn(async move {
             if let Ok(store) = db.smtp_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1685,7 +1730,13 @@ fn export_by_protocol(
         }),
         "periodic time series" => tokio::spawn(async move {
             if let Ok(store) = db.periodic_time_series_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1699,7 +1750,13 @@ fn export_by_protocol(
         }),
         "ntlm" => tokio::spawn(async move {
             if let Ok(store) = db.ntlm_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1713,7 +1770,13 @@ fn export_by_protocol(
         }),
         "kerberos" => tokio::spawn(async move {
             if let Ok(store) = db.kerberos_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1727,7 +1790,13 @@ fn export_by_protocol(
         }),
         "ssh" => tokio::spawn(async move {
             if let Ok(store) = db.ssh_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1741,7 +1810,13 @@ fn export_by_protocol(
         }),
         "dce rpc" => tokio::spawn(async move {
             if let Ok(store) = db.dce_rpc_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1755,7 +1830,13 @@ fn export_by_protocol(
         }),
         "op_log" => tokio::spawn(async move {
             if let Ok(store) = db.op_log_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1769,7 +1850,13 @@ fn export_by_protocol(
         }),
         "ftp" => tokio::spawn(async move {
             if let Ok(store) = db.ftp_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1783,7 +1870,13 @@ fn export_by_protocol(
         }),
         "mqtt" => tokio::spawn(async move {
             if let Ok(store) = db.mqtt_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1797,7 +1890,13 @@ fn export_by_protocol(
         }),
         "ldap" => tokio::spawn(async move {
             if let Ok(store) = db.ldap_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1811,7 +1910,13 @@ fn export_by_protocol(
         }),
         "tls" => tokio::spawn(async move {
             if let Ok(store) = db.tls_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1825,7 +1930,13 @@ fn export_by_protocol(
         }),
         "smb" => tokio::spawn(async move {
             if let Ok(store) = db.smb_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1839,7 +1950,13 @@ fn export_by_protocol(
         }),
         "nfs" => tokio::spawn(async move {
             if let Ok(store) = db.nfs_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1853,7 +1970,13 @@ fn export_by_protocol(
         }),
         "statistics" => tokio::spawn(async move {
             if let Ok(store) = db.statistics_store() {
-                match process_statistics_export(&store, &filter, &export_type, &export_path) {
+                match process_statistics_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1867,7 +1990,13 @@ fn export_by_protocol(
         }),
         "process create" => tokio::spawn(async move {
             if let Ok(store) = db.process_create_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1881,7 +2010,13 @@ fn export_by_protocol(
         }),
         "file create time" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_time_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1895,7 +2030,13 @@ fn export_by_protocol(
         }),
         "network_connect" => tokio::spawn(async move {
             if let Ok(store) = db.network_connect_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1909,7 +2050,13 @@ fn export_by_protocol(
         }),
         "process terminate" => tokio::spawn(async move {
             if let Ok(store) = db.process_terminate_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1923,7 +2070,13 @@ fn export_by_protocol(
         }),
         "image load" => tokio::spawn(async move {
             if let Ok(store) = db.image_load_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1937,7 +2090,13 @@ fn export_by_protocol(
         }),
         "file create" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1951,7 +2110,13 @@ fn export_by_protocol(
         }),
         "registry value set" => tokio::spawn(async move {
             if let Ok(store) = db.registry_value_set_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1965,7 +2130,13 @@ fn export_by_protocol(
         }),
         "registry key rename" => tokio::spawn(async move {
             if let Ok(store) = db.registry_key_rename_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1979,7 +2150,13 @@ fn export_by_protocol(
         }),
         "file create stream hash" => tokio::spawn(async move {
             if let Ok(store) = db.file_create_stream_hash_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -1993,7 +2170,13 @@ fn export_by_protocol(
         }),
         "pipe event" => tokio::spawn(async move {
             if let Ok(store) = db.pipe_event_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2007,7 +2190,13 @@ fn export_by_protocol(
         }),
         "dns query" => tokio::spawn(async move {
             if let Ok(store) = db.dns_query_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2021,7 +2210,13 @@ fn export_by_protocol(
         }),
         "file delete" => tokio::spawn(async move {
             if let Ok(store) = db.file_delete_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2035,7 +2230,13 @@ fn export_by_protocol(
         }),
         "process tamper" => tokio::spawn(async move {
             if let Ok(store) = db.process_tamper_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2049,7 +2250,13 @@ fn export_by_protocol(
         }),
         "file delete detected" => tokio::spawn(async move {
             if let Ok(store) = db.file_delete_detected_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2063,7 +2270,13 @@ fn export_by_protocol(
         }),
         "netflow5" => tokio::spawn(async move {
             if let Ok(store) = db.netflow5_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2077,7 +2290,13 @@ fn export_by_protocol(
         }),
         "netflow9" => tokio::spawn(async move {
             if let Ok(store) = db.netflow9_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2091,7 +2310,13 @@ fn export_by_protocol(
         }),
         "secu log" => tokio::spawn(async move {
             if let Ok(store) = db.secu_log_store() {
-                match process_export(&store, &filter, &export_type, &export_path) {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
                     Ok(result) => {
                         info!("{}", result);
                     }
@@ -2114,7 +2339,8 @@ fn process_export<T, N>(
     store: &RawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    export_path: &Path,
+    export_done_path: &Path,
+    export_progress_path: &Path,
 ) -> Result<String>
 where
     T: DeserializeOwned + Display + EventFilter + JsonOutput<N> + Send + Serialize,
@@ -2133,14 +2359,21 @@ where
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-    export_file(iter, filter, export_type, export_path)
+    export_file(
+        iter,
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    )
 }
 
 fn process_statistics_export(
     store: &RawEventStore<Statistics>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    export_path: &Path,
+    export_done_path: &Path,
+    export_progress_path: &Path,
 ) -> Result<String> {
     let mut iter_vec = Vec::new();
     for core in 0..MAX_CORE_SIZE {
@@ -2161,14 +2394,21 @@ fn process_statistics_export(
             iter_vec.push(iter);
         }
     }
-    export_statistic_file(iter_vec, filter, export_type, export_path)
+    export_statistic_file(
+        iter_vec,
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    )
 }
 
 fn export_file<I, T, N>(
     iter: I,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    path: &Path,
+    done_path: &Path,
+    progress_path: &Path,
 ) -> Result<String>
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + Send,
@@ -2176,7 +2416,7 @@ where
     N: Serialize,
 {
     // export file open
-    let mut writer = File::create(path)?;
+    let mut writer = File::create(progress_path)?;
     let mut invalid_data_cnt: u32 = 0;
 
     // check filter condition & write file
@@ -2191,16 +2431,18 @@ where
     if invalid_data_cnt > 1 {
         error!("failed to read database or invalid data #{invalid_data_cnt}");
     }
-    Ok(format!("export file success: {path:?}"))
+    fs::rename(progress_path, done_path)?;
+    Ok(format!("export file success: {done_path:?}"))
 }
 
 fn export_statistic_file(
     mut statistics_vec: Vec<Peekable<BoundaryIter<'_, Statistics>>>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    path: &Path,
+    done_path: &Path,
+    progress_path: &Path,
 ) -> Result<String> {
-    let mut writer = File::create(path)?;
+    let mut writer = File::create(progress_path)?;
 
     // store the first value of all iters in a comparison vector.
     let mut iter_next_values = Vec::with_capacity(statistics_vec.len());
@@ -2272,7 +2514,8 @@ fn export_statistic_file(
     if invalid_data_cnt > 1 {
         error!("failed to read database or invalid data #{invalid_data_cnt}");
     }
-    Ok(format!("export file success: {path:?}"))
+    fs::rename(progress_path, done_path)?;
+    Ok(format!("export file success: {done_path:?}"))
 }
 
 fn write_filtered_data_to_file<T, N>(
