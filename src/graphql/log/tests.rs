@@ -3,7 +3,7 @@ use crate::{
     graphql::{tests::TestSchema, TimeRange},
     storage::RawEventStore,
 };
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::DateTime;
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
 #[tokio::test]
@@ -22,14 +22,8 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
-                    Utc,
-                )),
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(3)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -55,10 +49,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(3)),
                 end: None,
             }),
             source: "src1".to_string(),
@@ -90,10 +81,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
-                    Utc,
-                )),
+                end: Some(DateTime::from_timestamp_nanos(4)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -123,14 +111,8 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
-                    Utc,
-                )),
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(3)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -156,10 +138,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(3)),
                 end: None,
             }),
             source: "src1".to_string(),
@@ -191,10 +170,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                end: Some(DateTime::from_timestamp_nanos(3)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -220,14 +196,8 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
-                    Utc,
-                )),
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(3)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -253,10 +223,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 2).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(2)),
                 end: None,
             }),
             source: "src1".to_string(),
@@ -284,10 +251,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 5).expect("valid value"),
-                    Utc,
-                )),
+                end: Some(DateTime::from_timestamp_nanos(5)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -317,14 +281,8 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
-                    Utc,
-                )),
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(4)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -350,10 +308,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 2).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(2)),
                 end: None,
             }),
             source: "src1".to_string(),
@@ -381,10 +336,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 4).expect("valid value"),
-                    Utc,
-                )),
+                end: Some(DateTime::from_timestamp_nanos(4)),
             }),
             source: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -536,14 +488,8 @@ async fn load_oplog() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 1).expect("valid value"),
-                    Utc,
-                )),
-                end: Some(DateTime::<Utc>::from_naive_utc_and_offset(
-                    NaiveDateTime::from_timestamp_opt(0, 3).expect("valid value"),
-                    Utc,
-                )),
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(3)),
             }),
             agent_id: "giganto@src 1".to_string(),
             log_level: Some("Info".to_string()),
