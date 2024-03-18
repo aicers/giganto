@@ -17,7 +17,7 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use giganto_client::{
     ingest::{
         log::{Log, OpLog, SecuLog},
@@ -1561,7 +1561,7 @@ impl ExportQuery {
             }
         }
         if !KIND_PROTOCOL.contains(&filter.protocol.as_str()) {
-            // check sysomon/network/time_series/netflow/statistics filter format
+            // check sysmon/network/time_series/netflow/statistics filter format
             if filter.kind.is_some() {
                 return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
@@ -2299,12 +2299,10 @@ where
     ) {
         Ok(true) => {
             let (source, timestamp) = parse_key(key)?;
-            let timestamp = {
-                let secs = timestamp / 1_000_000_000;
-                let nanosecs = u32::try_from(timestamp % 1_000_000_000).expect("< 1_000_000_000");
-                NaiveDateTime::from_timestamp_opt(secs, nanosecs)
-                    .map_or("-".to_string(), |s| s.format("%s%.9f").to_string())
-            };
+            let timestamp = DateTime::from_timestamp_nanos(timestamp)
+                .format("%s%.9f")
+                .to_string();
+
             match export_type {
                 "csv" => {
                     writeln!(writer, "{timestamp}\t{source}\t{value}")?;

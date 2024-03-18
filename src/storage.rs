@@ -7,7 +7,7 @@ use crate::{
     ingest::implement::EventFilter,
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
@@ -844,18 +844,12 @@ pub async fn retain_periodically(
     notify_shutdown: Arc<Notify>,
     running_flag: Arc<Mutex<bool>>,
 ) -> Result<()> {
-    const DEFAULT_FROM: i64 = 61_000_000_000;
+    const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
     const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
-    let from_timestamp = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDateTime::from_timestamp_opt(61, 0).expect("valid time"),
-        Utc,
-    )
-    .timestamp_nanos_opt()
-    .unwrap_or(DEFAULT_FROM)
-    .to_be_bytes();
+    let from_timestamp = DEFAULT_FROM_TIMESTAMP_NANOS.to_be_bytes();
     loop {
         select! {
             _ = itv.tick() => {
@@ -878,7 +872,7 @@ pub async fn retain_periodically(
                 }
 
                 loop {
-                    let retention_timestamp_vec = retention_timestamp.to_be_bytes().to_vec();
+                    let retention_timestamp_vec = retention_timestamp.to_be_bytes();
                     let sources = db.sources_store()?.names();
                     let all_store = db.retain_period_store()?;
 
