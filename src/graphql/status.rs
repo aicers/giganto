@@ -21,6 +21,7 @@ const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
 const CONFIG_PEER_ADDRESS: &str = "peer_address";
 const CONFIG_PEER_LIST: &str = "peers";
 const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
+pub const TEMP_TOML_POST_FIX: &str = ".temp.toml";
 
 pub trait TomlPeers {
     fn get_host_name(&self) -> String;
@@ -202,7 +203,8 @@ impl GigantoConfigMutation {
         field: UserConfig,
     ) -> Result<String> {
         let cfg_path = ctx.data::<String>()?;
-        let mut doc = read_toml_file(cfg_path)?;
+        let new_path = copy_toml_file(cfg_path)?;
+        let mut doc = read_toml_file(&new_path)?;
         insert_toml_element(CONFIG_INGEST_ADDRESS, &mut doc, field.ingest_address);
         insert_toml_element(CONFIG_PUBLISH_ADDRESS, &mut doc, field.publish_address);
         insert_toml_element(CONFIG_GRAPHQL_ADDRESS, &mut doc, field.graphql_address);
@@ -217,7 +219,7 @@ impl GigantoConfigMutation {
         insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
         insert_toml_element(CONFIG_PEER_ADDRESS, &mut doc, field.peer_address);
         insert_toml_peers(&mut doc, field.peer_list)?;
-        write_toml_file(&doc, cfg_path)?;
+        write_toml_file(&doc, &new_path)?;
 
         let reload_notify = ctx.data::<ReloadNotify>()?;
         let config_reload = reload_notify.0.clone();
@@ -274,6 +276,12 @@ impl GigantoConfigMutation {
 
         Ok(true)
     }
+}
+
+fn copy_toml_file(path: &str) -> Result<String> {
+    let new_path = format!("{path}{TEMP_TOML_POST_FIX}");
+    fs::copy(path, &new_path)?;
+    Ok(new_path)
 }
 
 pub fn read_toml_file(path: &str) -> Result<Document> {

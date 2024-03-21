@@ -8,7 +8,7 @@ mod storage;
 mod web;
 
 use crate::{
-    graphql::NodeName,
+    graphql::{status::TEMP_TOML_POST_FIX, NodeName},
     server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
     storage::migrate_data_dir,
 };
@@ -68,6 +68,9 @@ async fn main() -> Result<()> {
     } else {
         (Settings::new()?, false)
     };
+
+    let cfg_path = settings.cfg_path.clone();
+    let temp_path = format!("{cfg_path}{TEMP_TOML_POST_FIX}");
 
     let cert_pem = fs::read(&settings.cert).with_context(|| {
         format!(
@@ -231,15 +234,22 @@ async fn main() -> Result<()> {
         loop {
             select! {
                 () = notify_config_reload.notified() => {
-                    match Settings::from_file(&settings.cfg_path) {
-                        Ok(new_settings) => {
+                    match Settings::from_file(&temp_path) {
+                        Ok(mut new_settings) => {
+                            new_settings.cfg_path = cfg_path.clone();
                             settings = new_settings;
                             notify_and_wait_shutdown(notify_shutdown.clone()).await; // Wait for the shutdown to complete
+                            fs::rename(&temp_path, &cfg_path).unwrap_or_else(|e| {
+                                error!("Failed to rename the new configuration file: {e}");
+                            });
                             break;
                         }
                         Err(e) => {
                             error!("Failed to load the new configuration: {e:#}");
                             warn!("Run giganto with the previous config");
+                            fs::remove_file(&temp_path).unwrap_or_else(|e| {
+                                error!("Failed to remove the temporary file: {e}");
+                            });
                             continue;
                         }
                     }
