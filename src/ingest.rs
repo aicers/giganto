@@ -15,10 +15,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::{
     connection::server_handshake,
-    frame::{self, RecvError, SendError},
+    frame::{self, recv_raw, RecvError, SendError},
     ingest::{
         log::{Log, OpLog, SecuLog},
-        receive_event, receive_record_header,
+        receive_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
         Packet,
@@ -785,15 +785,12 @@ async fn handle_data<T>(
     let ack_time_notified = ack_time_notify.clone();
 
     let mut err_msg = None;
+    let stream_id = recv.id();
 
     #[cfg(feature = "benchmark")]
     let mut count = 0_usize;
     #[cfg(feature = "benchmark")]
     let mut size = 0_usize;
-    #[cfg(feature = "benchmark")]
-    let mut packet_size = 0_u64;
-    #[cfg(feature = "benchmark")]
-    let mut packet_count = 0_u64;
     #[cfg(feature = "benchmark")]
     let mut start = std::time::Instant::now();
 
@@ -818,124 +815,155 @@ async fn handle_data<T>(
             }
         }
     });
+    let mut buf: Vec<u8> = Vec::new();
+    let mut last_timestamp = 0;
     loop {
-        match receive_event(&mut recv).await {
-            Ok((raw_event, timestamp)) => {
-                if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
-                    && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
-                {
-                    if let Err(e) =
-                        send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await
-                    {
-                        err_msg = Some(format!("Failed to send ack timestamp: {e}"));
-                        break;
-                    }
-                    continue;
-                }
-                let key_builder = StorageKey::builder().start_key(&source);
-                let key_builder = match raw_event_kind {
-                    RawEventKind::Log => {
-                        let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Log".to_string());
-                            break;
-                        };
-                        key_builder
-                            .mid_key(Some(log.kind.as_bytes().to_vec()))
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::PeriodicTimeSeries => {
-                        let Ok(time_series) =
-                            bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
-                        else {
-                            err_msg = Some("Failed to deserialize PeriodicTimeSeries".to_string());
-                            break;
-                        };
-                        StorageKey::builder()
-                            .start_key(&time_series.id)
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::OpLog => {
-                        let Ok(op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize OpLog".to_string());
-                            break;
-                        };
-                        let agent_id = format!("{}@{source}", op_log.agent_name);
-                        StorageKey::builder()
-                            .start_key(&agent_id)
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::Packet => {
-                        let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Packet".to_string());
-                            break;
-                        };
-                        key_builder
-                            .mid_key(Some(timestamp.to_be_bytes().to_vec()))
-                            .end_key(packet.packet_timestamp)
-                    }
-                    RawEventKind::Statistics => {
-                        let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize Statistics".to_string());
-                            break;
-                        };
-                        #[cfg(feature = "benchmark")]
-                        {
-                            (packet_count, packet_size) = statistics
-                                .stats
-                                .iter()
-                                .fold((0, 0), |(sumc, sums), c| (sumc + c.1, sums + c.2));
-                        }
-                        key_builder
-                            .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
-                            .end_key(timestamp)
-                    }
-                    RawEventKind::SecuLog => {
-                        let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
-                            err_msg = Some("Failed to deserialize SecuLog".to_string());
-                            break;
-                        };
-                        key_builder
-                            .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
-                            .end_key(timestamp)
-                    }
-                    _ => key_builder.end_key(timestamp),
+        buf.clear();
+        match recv_raw(&mut recv, &mut buf).await {
+            Ok(()) => {
+                let Ok(recv_buf) = bincode::deserialize::<Vec<(i64, Vec<u8>)>>(&buf) else {
+                    err_msg = Some("Failed to deserialize received message".to_string());
+                    break;
                 };
-                let storage_key = key_builder.build();
-                store.append(&storage_key.key(), &raw_event)?;
-                if let Some(network_key) = network_key.as_ref() {
-                    if let Err(e) = send_direct_stream(
-                        network_key,
-                        &raw_event,
-                        timestamp,
-                        &source,
-                        stream_direct_channels.clone(),
-                    )
-                    .await
+                let mut recv_events_cnt: u16 = 0;
+                let mut recv_events_len = 0;
+                #[cfg(feature = "benchmark")]
+                let mut packet_size = 0_u64;
+                #[cfg(feature = "benchmark")]
+                let mut packet_count = 0_u64;
+                for (timestamp, raw_event) in recv_buf {
+                    last_timestamp = timestamp;
+                    if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
+                        && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                     {
-                        err_msg = Some(format!("Failed to send stream events: {e}"));
-                        break;
+                        if let Err(e) =
+                            send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp)
+                                .await
+                        {
+                            err_msg = Some(format!("Failed to send ack timestamp: {e}"));
+                            break;
+                        }
+                        continue;
+                    }
+                    let key_builder = StorageKey::builder().start_key(&source);
+                    let key_builder = match raw_event_kind {
+                        RawEventKind::Log => {
+                            let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
+                                err_msg = Some("Failed to deserialize Log".to_string());
+                                break;
+                            };
+                            key_builder
+                                .mid_key(Some(log.kind.as_bytes().to_vec()))
+                                .end_key(timestamp)
+                        }
+                        RawEventKind::PeriodicTimeSeries => {
+                            let Ok(time_series) =
+                                bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
+                            else {
+                                err_msg =
+                                    Some("Failed to deserialize PeriodicTimeSeries".to_string());
+                                break;
+                            };
+                            StorageKey::builder()
+                                .start_key(&time_series.id)
+                                .end_key(timestamp)
+                        }
+                        RawEventKind::OpLog => {
+                            let Ok(op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
+                                err_msg = Some("Failed to deserialize OpLog".to_string());
+                                break;
+                            };
+                            let agent_id = format!("{}@{source}", op_log.agent_name);
+                            StorageKey::builder()
+                                .start_key(&agent_id)
+                                .end_key(timestamp)
+                        }
+                        RawEventKind::Packet => {
+                            let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
+                                err_msg = Some("Failed to deserialize Packet".to_string());
+                                break;
+                            };
+                            key_builder
+                                .mid_key(Some(timestamp.to_be_bytes().to_vec()))
+                                .end_key(packet.packet_timestamp)
+                        }
+                        RawEventKind::Statistics => {
+                            let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event)
+                            else {
+                                err_msg = Some("Failed to deserialize Statistics".to_string());
+                                break;
+                            };
+                            #[cfg(feature = "benchmark")]
+                            {
+                                let (t_packet_count, t_packet_size) = statistics
+                                    .stats
+                                    .iter()
+                                    .fold((0, 0), |(sumc, sums), c| (sumc + c.1, sums + c.2));
+                                packet_count += t_packet_count;
+                                packet_size += t_packet_size;
+                            }
+                            key_builder
+                                .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
+                                .end_key(timestamp)
+                        }
+                        RawEventKind::SecuLog => {
+                            let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
+                                err_msg = Some("Failed to deserialize SecuLog".to_string());
+                                break;
+                            };
+                            key_builder
+                                .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
+                                .end_key(timestamp)
+                        }
+                        _ => key_builder.end_key(timestamp),
+                    };
+
+                    recv_events_cnt += 1;
+                    recv_events_len += raw_event.len();
+                    let storage_key = key_builder.build();
+                    store.append(&storage_key.key(), &raw_event)?;
+                    if let Some(network_key) = network_key.as_ref() {
+                        if let Err(e) = send_direct_stream(
+                            network_key,
+                            &raw_event,
+                            timestamp,
+                            &source,
+                            stream_direct_channels.clone(),
+                        )
+                        .await
+                        {
+                            err_msg = Some(format!("Failed to send stream events: {e}"));
+                            break;
+                        }
                     }
                 }
-                ack_cnt_rotation.fetch_add(1, Ordering::SeqCst);
-                ack_time_rotation.store(timestamp, Ordering::SeqCst);
+
+                if err_msg.is_some() {
+                    break;
+                }
+
+                ack_cnt_rotation.fetch_add(recv_events_cnt, Ordering::SeqCst);
+                ack_time_rotation.store(last_timestamp, Ordering::SeqCst);
                 if *ack_trans_cnt.read().await <= ack_cnt_rotation.load(Ordering::SeqCst) {
-                    send_ack_timestamp(&mut (*sender_rotation.lock().await), timestamp).await?;
+                    send_ack_timestamp(&mut (*sender_rotation.lock().await), last_timestamp)
+                        .await?;
                     ack_cnt_rotation.store(0, Ordering::SeqCst);
                     ack_time_notify.notify_one();
                     store.flush()?;
                 }
+
                 #[cfg(feature = "benchmark")]
                 {
                     if raw_event_kind == RawEventKind::Statistics {
                         count += usize::try_from(packet_count).unwrap_or_default();
                         size += usize::try_from(packet_size).unwrap_or_default();
                     } else {
-                        count += 1;
-                        size += raw_event.len();
+                        count += usize::from(recv_events_cnt);
+                        size += recv_events_len;
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(
-                            "Ingest: source = {source} type = {raw_event_kind:?} count = {count} size = {size}, duration = {}",
+                            "{source:?}, {stream_id:?}, {raw_event_kind:?}, count = {count}, size = {size}, duration = {}",
                             start.elapsed().as_secs()
                         );
                         count = 0;
