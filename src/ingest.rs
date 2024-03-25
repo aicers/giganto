@@ -822,8 +822,6 @@ async fn handle_data<T>(
     let mut buf: Vec<u8> = Vec::new();
     loop {
         buf.clear();
-        // match receive_event(&mut recv).await {
-        //     Ok((raw_event, timestamp)) => {
         match recv_raw(&mut recv, &mut buf).await {
             Ok(()) => {
                 let Ok(recv_buf) = bincode::deserialize::<Vec<(i64, Vec<u8>)>>(&buf) else {
