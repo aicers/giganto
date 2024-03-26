@@ -19,6 +19,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modify `retain_periodically()` function to run as a separate thread.
 - Added the `.export` tag to the file being exported. This tag is removed after
   the file is finished exporting.
+- Updated `set_giganto_config` function to record requested configuration changes
+  to a temporary toml file. Given the original configuration file name as
+  `giganto.toml`, the temporary file is named as `giganto.toml.temp.toml`.
+  - If the reload trigger succeeds, the new configuration is applied from the
+    temporary file; otherwise, the temporary file is deleted.
 
 ## [0.19.0] - 2024-02-22
 
