@@ -22,7 +22,6 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint};
-use std::path::PathBuf;
 use std::{
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -43,7 +42,7 @@ fn get_token() -> &'static Mutex<u32> {
 
 const CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const KEY_PATH: &str = "tests/certs/node1/key.pem";
-const CA_CERT_PATH: &str = "tests/certs/root.pem";
+const ROOT_PATH: &str = "tests/certs/root.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
 const PROTOCOL_VERSION: &str = "0.15.2";
@@ -76,13 +75,13 @@ fn server() -> Server {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     Server::new(
@@ -143,7 +142,7 @@ fn init_client() -> Endpoint {
     };
 
     let mut server_root = rustls::RootCertStore::empty();
-    let file = fs::read(CA_CERT_PATH).expect("Failed to read file");
+    let file = fs::read(ROOT_PATH).expect("Failed to read file");
     let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
         .expect("invalid PEM-encoded certificate")
         .into_iter()

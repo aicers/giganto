@@ -33,7 +33,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, OnceLock},
 };
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -44,7 +44,7 @@ fn get_token() -> &'static Mutex<u32> {
     TOKEN.get_or_init(|| Mutex::new(0))
 }
 
-const CA_CERT_PATH: &str = "tests/certs/root.pem";
+const ROOT_PATH: &str = "tests/certs/root.pem";
 const PROTOCOL_VERSION: &str = "0.17.0";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
@@ -93,13 +93,13 @@ fn server() -> Server {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     Server::new(
@@ -163,7 +163,7 @@ fn init_client() -> Endpoint {
     };
 
     let mut server_root = rustls::RootCertStore::empty();
-    let file = fs::read(CA_CERT_PATH).expect("Failed to read file");
+    let file = fs::read(ROOT_PATH).expect("Failed to read file");
     let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
         .expect("invalid PEM-encoded certificate")
         .into_iter()
@@ -718,13 +718,13 @@ async fn request_range_data_with_protocol() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -1717,13 +1717,13 @@ async fn request_range_data_with_log() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -1824,13 +1824,13 @@ async fn request_range_data_with_period_time_series() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -1970,13 +1970,13 @@ async fn request_network_event_stream() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -3641,13 +3641,13 @@ async fn request_raw_events() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -3727,12 +3727,12 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let root_pem = fs::read(ROOT_PATH).unwrap();
+        let root = to_root_cert(&root_pem).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
-            ca_certs,
+            root,
         });
 
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -3824,13 +3824,13 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -3943,12 +3943,12 @@ async fn request_range_data_with_log_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let root_pem = fs::read(ROOT_PATH).unwrap();
+        let root = to_root_cert(&root_pem).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
-            ca_certs,
+            root,
         });
 
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -4040,13 +4040,13 @@ async fn request_range_data_with_log_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -4148,12 +4148,12 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let root_pem = fs::read(ROOT_PATH).unwrap();
+        let root = to_root_cert(&root_pem).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
-            ca_certs,
+            root,
         });
 
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -4250,13 +4250,13 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(
@@ -4358,12 +4358,12 @@ async fn request_raw_events_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let root_pem = fs::read(ROOT_PATH).unwrap();
+        let root = to_root_cert(&root_pem).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
-            ca_certs,
+            root,
         });
 
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
@@ -4452,13 +4452,13 @@ async fn request_raw_events_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-    let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+    let root_pem = fs::read(ROOT_PATH).unwrap();
+    let root = to_root_cert(&root_pem).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
         key,
-        ca_certs,
+        root,
     });
 
     tokio::spawn(server().run(

@@ -24,6 +24,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `giganto.toml`, the temporary file is named as `giganto.toml.temp.toml`.
   - If the reload trigger succeeds, the new configuration is applied from the
     temporary file; otherwise, the temporary file is deleted.
+- Changed configuration field names.
+  - `ingest_address` to `ingest_srv_addr`.
+  - `publish_address` to `publish_srv_addr`.
+  - `graphql_address` to `graphql_srv_addr`.
+  - `roots` to `root` to handle using a single root.
 
 ## [0.19.0] - 2024-02-22
 
