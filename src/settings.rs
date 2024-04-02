@@ -4,9 +4,9 @@ use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
-const DEFAULT_INGEST_ADDRESS: &str = "[::]:38370";
-const DEFAULT_PUBLISH_ADDRESS: &str = "[::]:38371";
-const DEFAULT_GRAPHQL_ADDRESS: &str = "[::]:8442";
+const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
+const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
+const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8442";
 const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
@@ -16,19 +16,19 @@ const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub cert: PathBuf,       // Path to the certificate file
-    pub key: PathBuf,        // Path to the private key file
-    pub roots: Vec<PathBuf>, // Path to the rootCA file
+    pub cert: PathBuf, // Path to the certificate file
+    pub key: PathBuf,  // Path to the private key file
+    pub root: PathBuf, // Path to the rootCA file
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub ingest_address: SocketAddr, // IP address & port to ingest data
+    pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub publish_address: SocketAddr, // IP address & port to publish data
-    pub data_dir: PathBuf,   // DB storage path
+    pub publish_srv_addr: SocketAddr, // IP address & port to publish data
+    pub data_dir: PathBuf, // DB storage path
     #[serde(with = "humantime_serde")]
     pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub graphql_address: SocketAddr, // IP address & port to graphql
-    pub log_dir: PathBuf,    //giganto's syslog path
+    pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
+    pub log_dir: PathBuf, //giganto's syslog path
     pub export_dir: PathBuf, //giganto's export file path
 
     // db options
@@ -104,11 +104,11 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default cert dir")
         .set_default("key", key_path.to_str().expect("path to string"))
         .expect("default key dir")
-        .set_default("ingest_address", DEFAULT_INGEST_ADDRESS)
+        .set_default("ingest_srv_addr", DEFAULT_INGEST_SRV_ADDR)
         .expect("valid address")
-        .set_default("publish_address", DEFAULT_PUBLISH_ADDRESS)
+        .set_default("publish_srv_addr", DEFAULT_PUBLISH_SRV_ADDR)
         .expect("valid address")
-        .set_default("graphql_address", DEFAULT_GRAPHQL_ADDRESS)
+        .set_default("graphql_srv_addr", DEFAULT_GRAPHQL_SRV_ADDR)
         .expect("local address")
         .set_default("data_dir", db_path)
         .expect("data dir")

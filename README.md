@@ -32,10 +32,10 @@ In the config file, you can specify the following options:
 ```toml
 key = "key.pem"                            # path to private key file
 cert = "cert.pem"                          # path to certificate file
-roots = ["ca1.pem", "ca2.pem", "ca3.pem"]  # paths to CA certificate files
-ingest_address = "0.0.0.0:38370"           # address to listen for ingest QUIC
-publish_address = "0.0.0.0:38371"          # address to listen for publish QUIC
-graphql_address = "127.0.0.1:8442"         # giganto's graphql address
+root = "root.pem"                          # path to CA certificate file
+ingest_srv_addr = "0.0.0.0:38370"          # address to listen for ingest QUIC
+publish_srv_addr = "0.0.0.0:38371"         # address to listen for publish QUIC
+graphql_srv_addr = "127.0.0.1:8442"        # giganto's graphql address
 data_dir = "tests/data"                    # path to directory to store data
 retention = "100d"                         # retention period for data
 log_dir = "/data/logs/apps"                # path to giganto's syslog file

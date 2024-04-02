@@ -22,7 +22,7 @@ use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::exit,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -87,11 +87,17 @@ async fn main() -> Result<()> {
         )
     })?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root_cert = to_root_cert(&settings.roots)?;
+    let root_pem = fs::read(&settings.root).with_context(|| {
+        format!(
+            "failed to read root certificate file: {}",
+            settings.root.display()
+        )
+    })?;
+    let root_cert = to_root_cert(&root_pem)?;
     let certs = Arc::new(Certs {
         certs: cert.clone(),
         key: key.clone(),
-        ca_certs: root_cert.clone(),
+        root: root_cert.clone(),
     });
 
     let _guard = init_tracing(&settings.log_dir)?;
@@ -165,7 +171,7 @@ async fn main() -> Result<()> {
 
         task::spawn(web::serve(
             schema,
-            settings.graphql_address,
+            settings.graphql_srv_addr,
             cert_pem.clone(),
             key_pem.clone(),
             notify_shutdown.clone(),
@@ -207,7 +213,7 @@ async fn main() -> Result<()> {
             notify_source_change = Some(notify_source);
         }
 
-        let publish_server = publish::Server::new(settings.publish_address, &certs.clone());
+        let publish_server = publish::Server::new(settings.publish_srv_addr, &certs.clone());
         task::spawn(publish_server.run(
             database.clone(),
             pcap_sources.clone(),
@@ -219,7 +225,7 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
         ));
 
-        let ingest_server = ingest::Server::new(settings.ingest_address, &certs.clone());
+        let ingest_server = ingest::Server::new(settings.ingest_srv_addr, &certs.clone());
         task::spawn(ingest_server.run(
             database.clone(),
             pcap_sources,
@@ -362,24 +368,17 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
     }
 }
 
-fn to_root_cert(root_cert_paths: &Vec<PathBuf>) -> Result<rustls::RootCertStore> {
-    let mut root_files: Vec<Vec<u8>> = Vec::new();
-    for root in root_cert_paths {
-        let file = fs::read(root).expect("Failed to read file");
-        root_files.push(file);
+fn to_root_cert(pem: &[u8]) -> Result<rustls::RootCertStore> {
+    let mut root_cert = rustls::RootCertStore::empty();
+    let root_certs: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*pem)
+        .context("invalid PEM-encoded certificate")?
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect();
+    if let Some(cert) = root_certs.first() {
+        root_cert.add(cert).context("failed to add root cert")?;
     }
 
-    let mut root_cert = rustls::RootCertStore::empty();
-    for file in root_files {
-        let root_certs: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .context("invalid PEM-encoded certificate")?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_certs.first() {
-            root_cert.add(cert).context("failed to add root cert")?;
-        }
-    }
     Ok(root_cert)
 }
 

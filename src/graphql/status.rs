@@ -12,9 +12,9 @@ use std::{
 use toml_edit::{value, Document, InlineTable};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
-const CONFIG_INGEST_ADDRESS: &str = "ingest_address";
-pub const CONFIG_PUBLISH_ADDRESS: &str = "publish_address";
-pub const CONFIG_GRAPHQL_ADDRESS: &str = "graphql_address";
+const CONFIG_INGEST_SRV_ADDR: &str = "ingest_srv_addr";
+pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
+pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 const CONFIG_RETENTION: &str = "retention";
 const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
 const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
@@ -68,9 +68,9 @@ impl TomlPeers for PeerList {
 
 #[derive(SimpleObject, Debug)]
 struct GigantoConfig {
-    ingest_address: String,
-    publish_address: String,
-    graphql_address: String,
+    ingest_srv_addr: String,
+    publish_srv_addr: String,
+    graphql_srv_addr: String,
     retention: String,
     max_open_files: i32,
     max_mb_of_level_base: u64,
@@ -81,9 +81,9 @@ struct GigantoConfig {
 
 #[derive(InputObject)]
 struct UserConfig {
-    ingest_address: Option<String>,
-    publish_address: Option<String>,
-    graphql_address: Option<String>,
+    ingest_srv_addr: Option<String>,
+    publish_srv_addr: Option<String>,
+    graphql_srv_addr: Option<String>,
     retention: Option<String>,
     max_open_files: Option<i32>,
     max_mb_of_level_base: Option<u64>,
@@ -137,9 +137,9 @@ impl GigantoStatusQuery {
     async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
         let cfg_path = ctx.data::<String>()?;
         let doc = read_toml_file(cfg_path)?;
-        let ingest_address = parse_toml_element_to_string(CONFIG_INGEST_ADDRESS, &doc)?;
-        let publish_address = parse_toml_element_to_string(CONFIG_PUBLISH_ADDRESS, &doc)?;
-        let graphql_address = parse_toml_element_to_string(CONFIG_GRAPHQL_ADDRESS, &doc)?;
+        let ingest_srv_addr = parse_toml_element_to_string(CONFIG_INGEST_SRV_ADDR, &doc)?;
+        let publish_srv_addr = parse_toml_element_to_string(CONFIG_PUBLISH_SRV_ADDR, &doc)?;
+        let graphql_srv_addr = parse_toml_element_to_string(CONFIG_GRAPHQL_SRV_ADDR, &doc)?;
         let retention = parse_toml_element_to_string(CONFIG_RETENTION, &doc)?;
         let max_open_files = parse_toml_element_to_integer(CONFIG_MAX_OPEN_FILES, &doc)?;
         let max_mb_of_level_base =
@@ -176,9 +176,9 @@ impl GigantoStatusQuery {
         };
 
         Ok(GigantoConfig {
-            ingest_address,
-            publish_address,
-            graphql_address,
+            ingest_srv_addr,
+            publish_srv_addr,
+            graphql_srv_addr,
             retention,
             max_open_files,
             max_mb_of_level_base,
@@ -205,9 +205,9 @@ impl GigantoConfigMutation {
         let cfg_path = ctx.data::<String>()?;
         let new_path = copy_toml_file(cfg_path)?;
         let mut doc = read_toml_file(&new_path)?;
-        insert_toml_element(CONFIG_INGEST_ADDRESS, &mut doc, field.ingest_address);
-        insert_toml_element(CONFIG_PUBLISH_ADDRESS, &mut doc, field.publish_address);
-        insert_toml_element(CONFIG_GRAPHQL_ADDRESS, &mut doc, field.graphql_address);
+        insert_toml_element(CONFIG_INGEST_SRV_ADDR, &mut doc, field.ingest_srv_addr);
+        insert_toml_element(CONFIG_PUBLISH_SRV_ADDR, &mut doc, field.publish_srv_addr);
+        insert_toml_element(CONFIG_GRAPHQL_SRV_ADDR, &mut doc, field.graphql_srv_addr);
         insert_toml_element(CONFIG_RETENTION, &mut doc, field.retention);
         let convert_open_file = field.max_open_files.map(i64::from);
         insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, convert_open_file);

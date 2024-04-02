@@ -1,7 +1,7 @@
 use crate::{
     graphql::status::{
         insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file,
-        TomlPeers, CONFIG_GRAPHQL_ADDRESS, CONFIG_PUBLISH_ADDRESS,
+        TomlPeers, CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR,
     },
     server::{
         certificate_info, config_client, config_server, extract_cert_from_conn, Certs,
@@ -245,8 +245,8 @@ async fn connect(
 
 fn get_peer_ports(config_doc: &Document) -> (Option<u16>, Option<u16>) {
     (
-        get_port_from_config(CONFIG_GRAPHQL_ADDRESS, config_doc),
-        get_port_from_config(CONFIG_PUBLISH_ADDRESS, config_doc),
+        get_port_from_config(CONFIG_GRAPHQL_SRV_ADDR, config_doc),
+        get_port_from_config(CONFIG_PUBLISH_SRV_ADDR, config_doc),
     )
 }
 
@@ -737,7 +737,7 @@ pub mod tests {
         collections::{HashMap, HashSet},
         fs::{self, File},
         net::{IpAddr, Ipv6Addr, SocketAddr},
-        path::{Path, PathBuf},
+        path::Path,
         sync::{Arc, OnceLock},
     };
     use tempfile::TempDir;
@@ -751,7 +751,7 @@ pub mod tests {
 
     const CERT_PATH: &str = "tests/certs/node1/cert.pem";
     const KEY_PATH: &str = "tests/certs/node1/key.pem";
-    const CA_CERT_PATH: &str = "tests/certs/root.pem";
+    const ROOT_PATH: &str = "tests/certs/root.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
     const PROTOCOL_VERSION: &str = "0.19.0";
@@ -830,7 +830,7 @@ pub mod tests {
         };
 
         let mut server_root = rustls::RootCertStore::empty();
-        let file = fs::read(CA_CERT_PATH).expect("Failed to read file");
+        let file = fs::read(ROOT_PATH).expect("Failed to read file");
         let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
             .expect("invalid PEM-encoded certificate")
             .into_iter()
@@ -859,13 +859,13 @@ pub mod tests {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path: Vec<PathBuf> = vec![PathBuf::from(CA_CERT_PATH)];
-        let ca_certs = to_root_cert(&ca_cert_path).unwrap();
+        let root_pem = fs::read(ROOT_PATH).unwrap();
+        let root = to_root_cert(&root_pem).unwrap();
 
         let certs = Arc::new(Certs {
             certs: cert,
             key,
-            ca_certs,
+            root,
         });
 
         Peer::new(

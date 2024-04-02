@@ -1,9 +1,9 @@
 key = "key.pem"
 cert = "cert.pem"
-roots = ["ca1.pem", "ca2.pem", "ca3.pem"]
-ingest_address = "0.0.0.0:38370"
-publish_address = "0.0.0.0:38371"
-graphql_address = "127.0.0.1:8442"
+root = "root.pem"
+ingest_srv_addr = "0.0.0.0:38370"
+publish_srv_addr = "0.0.0.0:38371"
+graphql_srv_addr = "127.0.0.1:8442"
 data_dir = "tests/data"
 retention = "100d"
 log_dir = "/data/logs/apps"

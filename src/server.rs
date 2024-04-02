@@ -15,13 +15,12 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(5_000);
 pub struct Certs {
     pub certs: Vec<Certificate>,
     pub key: PrivateKey,
-    pub ca_certs: RootCertStore,
+    pub root: RootCertStore,
 }
 
 #[allow(clippy::module_name_repetitions)]
 pub fn config_server(certs: &Arc<Certs>) -> Result<ServerConfig> {
-    let client_auth =
-        rustls::server::AllowAnyAuthenticatedClient::new(certs.ca_certs.clone()).boxed();
+    let client_auth = rustls::server::AllowAnyAuthenticatedClient::new(certs.root.clone()).boxed();
     let server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_auth)
@@ -78,7 +77,7 @@ pub fn certificate_info(cert_info: &[Certificate]) -> Result<(String, String)> {
 pub fn config_client(certs: &Arc<Certs>) -> Result<ClientConfig> {
     let tls_config = rustls::ClientConfig::builder()
         .with_safe_defaults()
-        .with_root_certificates(certs.ca_certs.clone())
+        .with_root_certificates(certs.root.clone())
         .with_client_auth_cert(certs.certs.clone(), certs.key.clone())?;
 
     let mut transport = TransportConfig::default();
