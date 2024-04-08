@@ -426,7 +426,7 @@ async fn log_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
             res.data.to_string(),
-            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}],pageInfo: {{hasPreviousPage: false}}}}}}", base64_engine.encode("log 1"))
+            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}], pageInfo: {{hasPreviousPage: false}}}}}}", base64_engine.encode("log 1"))
         );
 }
 
@@ -469,7 +469,7 @@ async fn oplog_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{opLogRawEvents: {edges: [{node: {level: \"Info\",contents: \"oplog\"}}]}}"
+        "{opLogRawEvents: {edges: [{node: {level: \"Info\", contents: \"oplog\"}}]}}"
     );
 }
 

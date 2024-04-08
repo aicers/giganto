@@ -209,7 +209,7 @@ mod tests {
 
         assert_eq!(
             res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\",version: \"V3\"}}]}}"
+            "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\", version: \"V3\"}}]}}"
         );
     }
 
@@ -276,7 +276,7 @@ mod tests {
 
         assert_eq!(
             res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"peer_giganto_contents 1\",version: \"V3\"}}]}}"
+            "{secuLogRawEvents: {edges: [{node: {contents: \"peer_giganto_contents 1\", version: \"V3\"}}]}}"
         );
 
         mock.assert_async().await;

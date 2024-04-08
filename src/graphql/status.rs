@@ -9,7 +9,7 @@ use std::{
     io::Write,
     time::Duration,
 };
-use toml_edit::{value, Document, InlineTable};
+use toml_edit::{value, DocumentMut, InlineTable};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
 const CONFIG_INGEST_SRV_ADDR: &str = "ingest_srv_addr";
@@ -284,20 +284,20 @@ fn copy_toml_file(path: &str) -> Result<String> {
     Ok(new_path)
 }
 
-pub fn read_toml_file(path: &str) -> Result<Document> {
+pub fn read_toml_file(path: &str) -> Result<DocumentMut> {
     let toml = fs::read_to_string(path).context("toml not found")?;
-    let doc = toml.parse::<Document>()?;
+    let doc = toml.parse::<DocumentMut>()?;
     Ok(doc)
 }
 
-pub fn write_toml_file(doc: &Document, path: &str) -> Result<()> {
+pub fn write_toml_file(doc: &DocumentMut, path: &str) -> Result<()> {
     let output = doc.to_string();
     let mut config_file = OpenOptions::new().write(true).truncate(true).open(path)?;
     writeln!(config_file, "{output}")?;
     Ok(())
 }
 
-pub fn parse_toml_element_to_string(key: &str, doc: &Document) -> Result<String> {
+pub fn parse_toml_element_to_string(key: &str, doc: &DocumentMut) -> Result<String> {
     let Some(item) = doc.get(key) else {
         return Err(anyhow!("{} not found.", key).into());
     };
@@ -307,7 +307,7 @@ pub fn parse_toml_element_to_string(key: &str, doc: &Document) -> Result<String>
     Ok(value.to_string())
 }
 
-fn parse_toml_element_to_integer<T>(key: &str, doc: &Document) -> Result<T>
+fn parse_toml_element_to_integer<T>(key: &str, doc: &DocumentMut) -> Result<T>
 where
     T: std::convert::TryFrom<i64>,
 {
@@ -323,7 +323,7 @@ where
     Ok(value)
 }
 
-fn insert_toml_element<T>(key: &str, doc: &mut Document, input: Option<T>)
+fn insert_toml_element<T>(key: &str, doc: &mut DocumentMut, input: Option<T>)
 where
     T: std::convert::Into<toml_edit::Value>,
 {
@@ -332,7 +332,7 @@ where
     };
 }
 
-pub fn insert_toml_peers<T>(doc: &mut Document, input: Option<Vec<T>>) -> Result<()>
+pub fn insert_toml_peers<T>(doc: &mut DocumentMut, input: Option<Vec<T>>) -> Result<()>
 where
     T: TomlPeers,
 {

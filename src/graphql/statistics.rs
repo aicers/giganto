@@ -319,7 +319,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src 1\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
+            "{statistics: [{source: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
     }
 
@@ -412,7 +412,7 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
+            "{statistics: [{source: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 
         mock.assert_async().await;
@@ -520,7 +520,7 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"ingest src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"src 2\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]},{source: \"src 1\",stats: [{detail: [{protocol: \"Statistics\",bps: 24000000.0,pps: 10000.0}]}]}]}"
+            "{statistics: [{source: \"src2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"ingest src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 
         mock.assert_async().await;
