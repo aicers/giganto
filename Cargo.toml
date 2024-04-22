@@ -37,7 +37,7 @@ quote = "1.0"
 reqwest = { version = "0.11", features = ["rustls-tls", "json"] }
 rocksdb = "0.21"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.1" }
-rustls = "0.21"
+rustls = "0.23"
 rustls-pemfile = "1.0"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
