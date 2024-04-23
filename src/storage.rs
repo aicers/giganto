@@ -504,13 +504,17 @@ impl<'db, T> RawEventStore<'db, T> {
     ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
         let mut timestamps = timestamps.to_vec();
         timestamps.sort_unstable();
-        let keys = timestamps.iter().map(|timestamp| {
-            StorageKey::builder()
-                .start_key(source)
-                .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
-                .build()
-                .key()
-        });
+        let keys = timestamps
+            .iter()
+            .map(|timestamp| {
+                StorageKey::builder()
+                    .start_key(source)
+                    .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                    .build()
+                    .key()
+            })
+            .collect::<Vec<Vec<u8>>>();
+        let keys = keys.iter().map(std::vec::Vec::as_slice);
 
         let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = timestamps
             .iter()
@@ -531,13 +535,17 @@ impl<'db, T> RawEventStore<'db, T> {
     ) -> Vec<(i64, String, Vec<u8>)> {
         let mut timestamps = timestamps.to_vec();
         timestamps.sort_unstable();
-        let keys = timestamps.iter().map(|timestamp| {
-            StorageKey::builder()
-                .start_key(source)
-                .end_key(*timestamp)
-                .build()
-                .key()
-        });
+        let keys = timestamps
+            .iter()
+            .map(|timestamp| {
+                StorageKey::builder()
+                    .start_key(source)
+                    .end_key(*timestamp)
+                    .build()
+                    .key()
+            })
+            .collect::<Vec<Vec<u8>>>();
+        let keys = keys.iter().map(std::vec::Vec::as_slice);
 
         let result_vector: Vec<(i64, String, Vec<u8>)> = timestamps
             .iter()

@@ -41,7 +41,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{sources: [\"ingest src 1\",\"src 1\",\"src1\"]}"
+            "{sources: [\"ingest src 1\", \"src 1\", \"src1\"]}"
         );
     }
 
@@ -56,7 +56,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{sources: [\"ingest src 1\",\"ingest src 2\",\"src 1\",\"src 2\",\"src1\",\"src2\"]}"
+            "{sources: [\"ingest src 1\", \"ingest src 2\", \"src 1\", \"src 2\", \"src1\", \"src2\"]}"
         );
     }
 }

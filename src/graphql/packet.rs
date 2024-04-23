@@ -282,7 +282,7 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packet: \"AAECAw==\",packetTime: \"2023-01-20T00:00:00+00:00\",requestTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packet: \"AAECAw==\",packetTime: \"2023-01-20T00:00:01+00:00\",requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}");
+        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}");
 
         let query = r#"
         {
@@ -301,7 +301,7 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
+        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
 
         let query = r#"
         {
@@ -320,7 +320,7 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}},{node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
+        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
     }
 
     #[tokio::test]

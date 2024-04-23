@@ -34,7 +34,7 @@ use tokio::{
     },
     time::sleep,
 };
-use toml_edit::Document;
+use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 const PEER_VERSION_REQ: &str = ">=0.19.0,<0.20.0";
@@ -96,7 +96,7 @@ pub struct PeerConns {
     peer_sender: Sender<PeerIdentity>,
     local_address: SocketAddr,
     notify_source: Arc<Notify>,
-    config_doc: Document,
+    config_doc: DocumentMut,
     config_path: String,
 }
 
@@ -243,14 +243,14 @@ async fn connect(
     Ok((connection, send, recv))
 }
 
-fn get_peer_ports(config_doc: &Document) -> (Option<u16>, Option<u16>) {
+fn get_peer_ports(config_doc: &DocumentMut) -> (Option<u16>, Option<u16>) {
     (
         get_port_from_config(CONFIG_GRAPHQL_SRV_ADDR, config_doc),
         get_port_from_config(CONFIG_PUBLISH_SRV_ADDR, config_doc),
     )
 }
 
-fn get_port_from_config(config_key: &str, config_doc: &Document) -> Option<u16> {
+fn get_port_from_config(config_key: &str, config_doc: &DocumentMut) -> Option<u16> {
     parse_toml_element_to_string(config_key, config_doc)
         .ok()
         .and_then(|address_str| address_str.to_socket_addrs().ok())
@@ -570,7 +570,7 @@ async fn handle_request(
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     peers: Peers,
     sender: Sender<PeerIdentity>,
-    doc: Document,
+    doc: DocumentMut,
     path: String,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
@@ -682,7 +682,7 @@ async fn update_to_new_peer_list(
     local_address: SocketAddr,
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     sender: Sender<PeerIdentity>,
-    mut doc: Document,
+    mut doc: DocumentMut,
     path: &str,
 ) -> Result<()> {
     let mut is_change = false;
