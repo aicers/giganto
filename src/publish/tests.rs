@@ -44,7 +44,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const ROOT_PATH: &str = "tests/certs/root.pem";
-const PROTOCOL_VERSION: &str = "0.17.0";
+const PROTOCOL_VERSION: &str = "0.20.0";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";

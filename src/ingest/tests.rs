@@ -45,7 +45,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const ROOT_PATH: &str = "tests/certs/root.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.15.2";
+const PROTOCOL_VERSION: &str = "0.20.0";
 
 struct TestClient {
     conn: Connection,
