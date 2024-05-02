@@ -103,8 +103,12 @@ async fn main() -> Result<()> {
     let _guard = init_tracing(&settings.log_dir)?;
 
     let db_path = settings.data_dir.join("db");
-    let db_options =
-        crate::storage::DbOptions::new(settings.max_open_files, settings.max_mb_of_level_base);
+    let db_options = crate::storage::DbOptions::new(
+        settings.max_open_files,
+        settings.max_mb_of_level_base,
+        settings.num_of_thread,
+        settings.max_sub_compactions,
+    );
     if repair {
         let start = Instant::now();
         let (db_opts, _) = storage::rocksdb_options(&db_options);

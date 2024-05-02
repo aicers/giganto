@@ -11,7 +11,7 @@ export_dir = "tests/export"
 ack_transmission = 1024
 max_open_files = 8000
 max_mb_of_level_base = 512
-peer_address= "127.0.0.1:48383"
-peers=[
-	{ address = "127.0.0.1:60192", host_name = "node2"},
-]
+num_of_thread = 8
+max_sub_compactions = 2
+peer_address = "127.0.0.1:48383"
+peers = [{ address = "127.0.0.1:60192", host_name = "node2" }]
