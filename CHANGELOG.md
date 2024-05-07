@@ -10,6 +10,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added graphql query `ping` and mutation `stop`, `reboot`, `shutdown`.
+- Added rocksdb's `increase_parallelism` option. This option is set by
+  reading the value from `number_of_thread` in config file.
+- Added rocksdb's `set_max_subcompactions` option. This option is set by
+  reading the value from `max_sub_compactions` in config file.
 
 ### Changed
 
@@ -29,6 +33,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `publish_address` to `publish_srv_addr`.
   - `graphql_address` to `graphql_srv_addr`.
   - `roots` to `root` to handle using a single root.
+
+### Removed
+
+- Remove `max_background_jobs` rocksdb option. This option is automatically set
+  to the appropriate value when `increase_parallelism` is set.
 
 ## [0.19.0] - 2024-02-22
 

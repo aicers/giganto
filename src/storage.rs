@@ -121,6 +121,8 @@ pub struct CfProperties {
 pub struct DbOptions {
     max_open_files: i32,
     max_mb_of_level_base: u64,
+    num_of_thread: i32,
+    max_sub_compactions: u32,
 }
 
 impl Default for DbOptions {
@@ -128,15 +130,24 @@ impl Default for DbOptions {
         Self {
             max_open_files: 8000,
             max_mb_of_level_base: 512,
+            num_of_thread: 8,
+            max_sub_compactions: 2,
         }
     }
 }
 
 impl DbOptions {
-    pub fn new(max_open_files: i32, max_mb_of_level_base: u64) -> Self {
+    pub fn new(
+        max_open_files: i32,
+        max_mb_of_level_base: u64,
+        num_of_thread: i32,
+        max_sub_compactions: u32,
+    ) -> Self {
         DbOptions {
             max_open_files,
             max_mb_of_level_base,
+            num_of_thread,
+            max_sub_compactions,
         }
     }
 }
@@ -974,7 +985,8 @@ pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     db_opts.set_stats_dump_period_sec(3600);
     db_opts.set_max_total_wal_size(max_bytes);
     db_opts.set_manual_wal_flush(true);
-    db_opts.set_max_background_jobs(6);
+    db_opts.increase_parallelism(db_options.num_of_thread);
+    db_opts.set_max_subcompactions(db_options.max_sub_compactions);
 
     let mut cf_opts = Options::default();
     cf_opts.set_write_buffer_size((max_bytes / 4).try_into().expect("u64 to usize"));

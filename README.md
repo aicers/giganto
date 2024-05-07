@@ -30,20 +30,22 @@ giganto <path to config file>
 In the config file, you can specify the following options:
 
 ```toml
-key = "key.pem"                            # path to private key file
-cert = "cert.pem"                          # path to certificate file
-root = "root.pem"                          # path to CA certificate file
-ingest_srv_addr = "0.0.0.0:38370"          # address to listen for ingest QUIC
-publish_srv_addr = "0.0.0.0:38371"         # address to listen for publish QUIC
-graphql_srv_addr = "127.0.0.1:8442"        # giganto's graphql address
-data_dir = "tests/data"                    # path to directory to store data
-retention = "100d"                         # retention period for data
-log_dir = "/data/logs/apps"                # path to giganto's syslog file
-export_dir = "tests/export"                # path to giganto's export file
-max_open_files = 8000                      # db options max open files,
-max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1
+key = "key.pem"                            # path to private key file.
+cert = "cert.pem"                          # path to certificate file.
+root = "root.pem"                          # path to CA certificate file.
+ingest_srv_addr = "0.0.0.0:38370"          # address to listen for ingest QUIC.
+publish_srv_addr = "0.0.0.0:38371"         # address to listen for publish QUIC.
+graphql_srv_addr = "127.0.0.1:8442"        # giganto's graphql address.
+data_dir = "tests/data"                    # path to directory to store data.
+retention = "100d"                         # retention period for data.
+log_dir = "/data/logs/apps"                # path to giganto's syslog file.
+export_dir = "tests/export"                # path to giganto's export file.
+max_open_files = 8000                      # db options max open files.
+max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1.
+num_of_thread = 8                          # db options for background thread.
+max_sub_compactions = 2                    # db options for sub-compaction.
 ack_transmission = 1024                    # ack count for ingestion data.
-peer_address = "10.10.11.1:38383"          # address to listen for peers QUIC
+peer_address = "10.10.11.1:38383"          # address to listen for peers QUIC.
 peers=[{address = "10.10.12.1:38383", host_name = "ai"}]     # list of peer info.
 ```
 
@@ -76,7 +78,7 @@ cargo run -- tests/config.toml
 
 ## License
 
-Copyright 2022-2023 ClumL Inc.
+Copyright 2022-2024 ClumL Inc.
 
 Licensed under [Apache License, Version 2.0][apache-license] (the "License");
 you may not use this crate except in compliance with the License.
