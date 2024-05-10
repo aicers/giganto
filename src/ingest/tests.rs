@@ -8,13 +8,13 @@ use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{Duration, Utc};
 use giganto_client::{
     connection::client_handshake,
-    frame::recv_bytes,
+    frame::{recv_bytes, send_raw},
     ingest::{
         log::{Log, OpLog, OpLogLevel},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
-        receive_ack_timestamp, send_event, send_record_header,
+        receive_ack_timestamp, send_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
         Packet,
@@ -22,6 +22,7 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::{
     fs,
@@ -196,7 +197,7 @@ async fn conn() {
     send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_conn,
         Utc::now().timestamp_nanos_opt().unwrap(),
         conn_body,
@@ -245,7 +246,7 @@ async fn dns() {
     send_record_header(&mut send_dns, RAW_EVENT_KIND_DNS)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_dns,
         Utc::now().timestamp_nanos_opt().unwrap(),
         dns_body,
@@ -278,7 +279,7 @@ async fn log() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_log,
         Utc::now().timestamp_nanos_opt().unwrap(),
         log_body,
@@ -334,7 +335,7 @@ async fn http() {
     send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_http,
         Utc::now().timestamp_nanos_opt().unwrap(),
         http_body,
@@ -371,7 +372,7 @@ async fn rdp() {
     send_record_header(&mut send_rdp, RAW_EVENT_KIND_RDP)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_rdp,
         Utc::now().timestamp_nanos_opt().unwrap(),
         rdp_body,
@@ -407,7 +408,7 @@ async fn periodic_time_series() {
     )
     .await
     .unwrap();
-    send_event(
+    send_events(
         &mut send_periodic_time_series,
         Utc::now().timestamp_nanos_opt().unwrap(),
         periodic_time_series_body,
@@ -452,7 +453,7 @@ async fn smtp() {
     send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_smtp,
         Utc::now().timestamp_nanos_opt().unwrap(),
         smtp_body,
@@ -495,7 +496,7 @@ async fn ntlm() {
     send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_ntlm,
         Utc::now().timestamp_nanos_opt().unwrap(),
         ntlm_body,
@@ -540,7 +541,7 @@ async fn kerberos() {
     send_record_header(&mut send_kerberos, RAW_EVENT_KIND_KERBEROS)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_kerberos,
         Utc::now().timestamp_nanos_opt().unwrap(),
         kerberos_body,
@@ -591,7 +592,7 @@ async fn ssh() {
     send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_ssh,
         Utc::now().timestamp_nanos_opt().unwrap(),
         ssh_body,
@@ -631,7 +632,7 @@ async fn dce_rpc() {
     send_record_header(&mut send_dce_rpc, RAW_EVENT_KIND_DCE_RPC)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_dce_rpc,
         Utc::now().timestamp_nanos_opt().unwrap(),
         dce_rpc_body,
@@ -668,7 +669,7 @@ async fn op_log() {
     send_record_header(&mut send_op_log, RAW_EVENT_KIND_OPLOG)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_op_log,
         Utc::now().timestamp_nanos_opt().unwrap(),
         op_log_body,
@@ -705,7 +706,7 @@ async fn packet() {
     send_record_header(&mut send_packet, RAW_EVENT_KIND_PACKET)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_packet,
         Utc::now().timestamp_nanos_opt().unwrap(),
         packet_body,
@@ -756,7 +757,7 @@ async fn ftp() {
     send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_ftp,
         Utc::now().timestamp_nanos_opt().unwrap(),
         ftp_body,
@@ -798,7 +799,7 @@ async fn mqtt() {
     send_record_header(&mut send_mqtt, RAW_EVENT_KIND_MQTT)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_mqtt,
         Utc::now().timestamp_nanos_opt().unwrap(),
         mqtt_body,
@@ -841,7 +842,7 @@ async fn ldap() {
     send_record_header(&mut send_ldap, RAW_EVENT_KIND_LDAP)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_ldap,
         Utc::now().timestamp_nanos_opt().unwrap(),
         ldap_body,
@@ -895,7 +896,7 @@ async fn tls() {
     send_record_header(&mut send_tls, RAW_EVENT_KIND_TLS)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_tls,
         Utc::now().timestamp_nanos_opt().unwrap(),
         tls_body,
@@ -942,7 +943,7 @@ async fn smb() {
     send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_smb,
         Utc::now().timestamp_nanos_opt().unwrap(),
         smb_body,
@@ -980,7 +981,7 @@ async fn nfs() {
     send_record_header(&mut send_nfs, RAW_EVENT_KIND_NFS)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_nfs,
         Utc::now().timestamp_nanos_opt().unwrap(),
         nfs_body,
@@ -1013,7 +1014,7 @@ async fn statistics() {
     send_record_header(&mut send_statistics, RAW_EVENT_KIND_STATISTICS)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_statistics,
         Utc::now().timestamp_nanos_opt().unwrap(),
         statistics_body,
@@ -1049,23 +1050,17 @@ async fn ack_info() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    send_event(
-        &mut send_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        log_body,
-    )
-    .await
-    .unwrap();
+    let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    send_events(&mut send_log, timestamp, log_body)
+        .await
+        .unwrap();
 
-    let mut last_timestamp: i64 = 0;
-    for _ in 0..1023 {
+    for i in 0..1023 {
         let log_body: Log = Log {
             kind: String::from("Hello Server I am Log"),
             log: vec![0; 10],
         };
-
-        last_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        send_event(&mut send_log, last_timestamp, log_body)
+        send_events(&mut send_log, timestamp + i64::from(i + 1), log_body)
             .await
             .unwrap();
     }
@@ -1075,7 +1070,7 @@ async fn ack_info() {
     send_log.finish().await.expect("failed to shutdown stream");
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
-    assert_eq!(last_timestamp, recv_timestamp);
+    assert_eq!(timestamp + 1023, recv_timestamp);
 }
 
 #[tokio::test]
@@ -1094,7 +1089,7 @@ async fn one_short_reproduce_channel_close() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    send_event(
+    send_events(
         &mut send_log,
         CHANNEL_CLOSE_TIMESTAMP,
         CHANNEL_CLOSE_MESSAGE,
@@ -1128,4 +1123,15 @@ fn run_server(db_dir: TempDir) -> JoinHandle<()> {
         Some(Arc::new(Notify::new())),
         Arc::new(RwLock::new(1024)),
     ))
+}
+
+async fn send_events<T: Serialize>(
+    send: &mut quinn::SendStream,
+    timestamp: i64,
+    msg: T,
+) -> anyhow::Result<()> {
+    let msg_buf = bincode::serialize(&msg)?;
+    let buf = bincode::serialize(&vec![(timestamp, msg_buf)])?;
+    send_raw(send, &buf).await?;
+    Ok(())
 }
