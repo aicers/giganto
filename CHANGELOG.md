@@ -33,6 +33,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `publish_address` to `publish_srv_addr`.
   - `graphql_address` to `graphql_srv_addr`.
   - `roots` to `root` to handle using a single root.
+- Update dependency for security vulnerabilities.
+  - Update rustls to version `0.21.12`.
+  - Update h2 to version `0.3.26`.
 
 ### Removed
 
