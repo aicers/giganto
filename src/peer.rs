@@ -37,7 +37,7 @@ use tokio::{
 use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
-const PEER_VERSION_REQ: &str = ">=0.19.0,<0.20.0";
+const PEER_VERSION_REQ: &str = ">=0.19.0,<0.21.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
@@ -754,7 +754,7 @@ pub mod tests {
     const ROOT_PATH: &str = "tests/certs/root.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.19.0";
+    const PROTOCOL_VERSION: &str = "0.20.0";
 
     pub struct TestClient {
         send: SendStream,

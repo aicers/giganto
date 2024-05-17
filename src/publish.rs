@@ -56,7 +56,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.17.0,<0.20.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.17.0,<0.21.0";
 
 pub struct Server {
     server_config: ServerConfig,

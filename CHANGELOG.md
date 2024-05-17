@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.20.0] - 2024-05-17
 
 ### Added
 
@@ -36,6 +36,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Update dependency for security vulnerabilities.
   - Update rustls to version `0.21.12`.
   - Update h2 to version `0.3.26`.
+- Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.21.0"
+- Changed `INGEST_VERSION_REQ` to ">=0.15.0,<0.21.0"
+- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.21.0"
 
 ### Removed
 
@@ -495,7 +498,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.19.0...main
+[0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0
 [0.17.0]: https://github.com/aicers/giganto/compare/0.16.0...0.17.0
