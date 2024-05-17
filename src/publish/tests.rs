@@ -26,7 +26,6 @@ use giganto_client::{
     },
 };
 use quinn::{Connection, Endpoint, SendStream};
-use serde::Serialize;
 use serial_test::serial;
 use std::{
     cell::RefCell,
@@ -1690,15 +1689,6 @@ async fn request_range_data_with_log() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SOURCE: &str = "src1";
     const KIND: &str = "Hello";
-
-    #[derive(Serialize)]
-    struct RequestRangeMessage {
-        source: String,
-        kind: String,
-        start: i64,
-        end: i64,
-        count: usize,
-    }
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -3914,15 +3904,6 @@ async fn request_range_data_with_log_giganto_cluster() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SOURCE: &str = "src2";
     const KIND: &str = "Hello";
-
-    #[derive(Serialize)]
-    struct RequestRangeMessage {
-        source: String,
-        kind: String,
-        start: i64,
-        end: i64,
-        count: usize,
-    }
 
     let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
 

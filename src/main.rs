@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
                 () = notify_config_reload.notified() => {
                     match Settings::from_file(&temp_path) {
                         Ok(mut new_settings) => {
-                            new_settings.cfg_path = cfg_path.clone();
+                            new_settings.cfg_path.clone_from(&cfg_path);
                             settings = new_settings;
                             notify_and_wait_shutdown(notify_shutdown.clone()).await; // Wait for the shutdown to complete
                             fs::rename(&temp_path, &cfg_path).unwrap_or_else(|e| {
