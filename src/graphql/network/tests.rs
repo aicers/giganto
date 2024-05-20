@@ -150,6 +150,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
+        conn_state: "sf".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -207,6 +208,7 @@ async fn conn_with_data_giganto_cluster() {
                             "origPort": 46378,
                             "respPort": 443,
                             "proto": 6,
+                            "connState": "-",
                             "service": "-",
                             "duration": 324234,
                             "origBytes": 0,
@@ -220,7 +222,6 @@ async fn conn_with_data_giganto_cluster() {
         }
     }
     "#;
-
     let mock = peer_server
         .mock("POST", "/graphql")
         .with_status(200)
@@ -670,6 +671,8 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i
         orig_mime_types: Vec::new(),
         resp_filenames: Vec::new(),
         resp_mime_types: Vec::new(),
+        post_body: Vec::new(),
+        state: String::new(),
     };
     let ser_http_body = bincode::serialize(&http_body).unwrap();
 
@@ -753,7 +756,12 @@ async fn http_with_data_giganto_cluster() {
                             "respMimeTypes": [
                                 "text/plain",
                                 "text/plain"
-                                ]
+                            ],
+                            "postBody": [
+                                200,
+                                300
+                            ],
+                            "state": "OK"
                             }
                         }
                     ]
@@ -1061,6 +1069,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i
         to: "to".to_string(),
         subject: "subject".to_string(),
         agent: "agent".to_string(),
+        state: String::new(),
     };
     let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
 
@@ -1111,7 +1120,8 @@ async fn smtp_with_data_giganto_cluster() {
                             "from": "sender@example.com",
                             "to": "recipient@example.com",
                             "subject": "Test Email",
-                            "agent": "SMTP Client 1.0"
+                            "agent": "SMTP Client 1.0",
+                            "state": "OK"
                         }
                     }
                 ]
@@ -1191,10 +1201,8 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
-        server_nb_computer_name: "NB".to_string(),
-        server_dns_computer_name: "dns".to_string(),
-        server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
+        protocol: "protocol".to_string(),
     };
     let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
 
@@ -1243,10 +1251,8 @@ async fn ntlm_with_data_giganto_cluster() {
                             "username": "john_doe",
                             "hostname": "client_machine",
                             "domainname": "example.com",
-                            "serverNbComputerName": "server_nb_computer",
-                            "serverDnsComputerName": "server_dns_computer",
-                            "serverTreeName": "server_tree",
-                            "success": "true"
+                            "success": "true",
+                            "protocol": "6"
                         }
                     }
                 ]
@@ -1467,10 +1473,6 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64
         resp_port: 80,
         proto: 17,
         last_time: 1,
-        version: 01,
-        auth_success: "auth_success".to_string(),
-        auth_attempts: 3,
-        direction: "direction".to_string(),
         client: "client".to_string(),
         server: "server".to_string(),
         cipher_alg: "cipher_alg".to_string(),
@@ -1478,7 +1480,12 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64
         compression_alg: "compression_alg".to_string(),
         kex_alg: "kex_alg".to_string(),
         host_key_alg: "host_key_alg".to_string(),
-        host_key: "host_key".to_string(),
+        hassh_algorithms: "hassh_algorithms".to_string(),
+        hassh: "hassh".to_string(),
+        hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+        hassh_server: "hassh_server".to_string(),
+        client_shka: "client_shka".to_string(),
+        server_shka: "server_shka".to_string(),
     };
     let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
 
@@ -1524,10 +1531,6 @@ async fn ssh_with_data_giganto_cluster() {
                             "respPort": 54321,
                             "proto": 6,
                             "lastTime": 987654321,
-                            "version": 2,
-                            "authSuccess": "true",
-                            "authAttempts": 3,
-                            "direction": "inbound",
                             "client": "ssh_client",
                             "server": "ssh_server",
                             "cipherAlg": "aes256-ctr",
@@ -1535,7 +1538,12 @@ async fn ssh_with_data_giganto_cluster() {
                             "compressionAlg": "none",
                             "kexAlg": "diffie-hellman-group14-sha1",
                             "hostKeyAlg": "ssh-rsa",
-                            "hostKey": "ssh_host_key"
+                            "hasshAlgorithms": "hassh_algorithms",
+                            "hassh": "hassh",
+                            "hasshServerAlgorithms": "hassh_server_algorithms",
+                            "hasshServer": "hassh_server",
+                            "clientShka": "client_shka",
+                            "serverShka": "server_shka"
                         }
                     }
                 ]
@@ -2177,7 +2185,10 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64
         alpn_protocol: "alpn_protocol".to_string(),
         ja3: "ja3".to_string(),
         version: "version".to_string(),
+        client_cipher_suites: vec![771, 769, 770],
+        client_extensions: vec![0, 1, 2],
         cipher: 10,
+        extensions: vec![0, 1],
         ja3s: "ja3s".to_string(),
         serial: "serial".to_string(),
         subject_country: "sub_country".to_string(),
@@ -2240,7 +2251,21 @@ async fn tls_with_data_giganto_cluster() {
                             "alpnProtocol": "h2",
                             "ja3": "aabbccddeeff",
                             "version": "TLSv1.2",
+                            "clientCipherSuites": [
+                                771,
+                                769,
+                                770
+                            ],
+                            "clientExtensions": [
+                                0,
+                                1,
+                                2
+                            ],
                             "cipher": 256,
+                            "extensions": [
+                                0,
+                                1
+                            ],
                             "ja3S": "1122334455",
                             "serial": "1234567890",
                             "subjectCountry": "US",

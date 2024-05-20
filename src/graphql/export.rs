@@ -97,6 +97,7 @@ struct ConnJsonOutput {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
+    conn_state: String,
     duration: i64,
     service: String,
     orig_bytes: u64,
@@ -160,6 +161,8 @@ struct HttpJsonOutput {
     orig_mime_types: Vec<String>,
     resp_filenames: Vec<String>,
     resp_mime_types: Vec<String>,
+    post_body: Vec<u8>,
+    state: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -191,6 +194,7 @@ struct SmtpJsonOutput {
     to: String,
     subject: String,
     agent: String,
+    state: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -206,10 +210,8 @@ struct NtlmJsonOutput {
     username: String,
     hostname: String,
     domainname: String,
-    server_nb_computer_name: String,
-    server_dns_computer_name: String,
-    server_tree_name: String,
     success: String,
+    protocol: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -243,10 +245,6 @@ struct SshJsonOutput {
     resp_port: u16,
     proto: u8,
     last_time: i64,
-    version: i64,
-    auth_success: String,
-    auth_attempts: i64,
-    direction: String,
     client: String,
     server: String,
     cipher_alg: String,
@@ -254,7 +252,12 @@ struct SshJsonOutput {
     compression_alg: String,
     kex_alg: String,
     host_key_alg: String,
-    host_key: String,
+    hassh_algorithms: String,
+    hassh: String,
+    hassh_server_algorithms: String,
+    hassh_server: String,
+    client_shka: String,
+    server_shka: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -348,7 +351,10 @@ struct TlsJsonOutput {
     alpn_protocol: String,
     ja3: String,
     version: String,
+    client_cipher_suites: Vec<u16>,
+    client_extensions: Vec<u16>,
     cipher: u16,
+    extensions: Vec<u16>,
     ja3s: String,
     serial: String,
     subject_country: String,
@@ -773,7 +779,9 @@ convert_json_output!(
     orig_filenames,
     orig_mime_types,
     resp_filenames,
-    resp_mime_types
+    resp_mime_types,
+    post_body,
+    state
 );
 
 convert_json_output!(RdpJsonOutput, Rdp, cookie);
@@ -786,7 +794,8 @@ convert_json_output!(
     from,
     to,
     subject,
-    agent
+    agent,
+    state
 );
 
 convert_json_output!(
@@ -795,10 +804,8 @@ convert_json_output!(
     username,
     hostname,
     domainname,
-    server_nb_computer_name,
-    server_dns_computer_name,
-    server_tree_name,
-    success
+    success,
+    protocol
 );
 
 convert_json_output!(
@@ -818,10 +825,6 @@ convert_json_output!(
 convert_json_output!(
     SshJsonOutput,
     Ssh,
-    version,
-    auth_success,
-    auth_attempts,
-    direction,
     client,
     server,
     cipher_alg,
@@ -829,7 +832,12 @@ convert_json_output!(
     compression_alg,
     kex_alg,
     host_key_alg,
-    host_key
+    hassh_algorithms,
+    hassh,
+    hassh_server_algorithms,
+    hassh_server,
+    client_shka,
+    server_shka
 );
 
 convert_json_output!(
@@ -860,7 +868,10 @@ convert_json_output!(
     alpn_protocol,
     ja3,
     version,
+    client_cipher_suites,
+    client_extensions,
     cipher,
+    extensions,
     ja3s,
     serial,
     subject_country,
@@ -904,6 +915,7 @@ impl JsonOutput<ConnJsonOutput> for Conn {
             resp_addr: self.resp_addr.to_string(),
             resp_port: self.resp_port,
             proto: self.proto,
+            conn_state: self.conn_state.clone(),
             duration: self.duration,
             service: self.service.clone(),
             orig_bytes: self.orig_bytes,

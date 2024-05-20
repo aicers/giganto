@@ -22,6 +22,7 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -45,7 +46,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const ROOT_PATH: &str = "tests/certs/root.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.20.0";
+const PROTOCOL_VERSION: &str = "0.21.0-alpha.1";
 
 struct TestClient {
     conn: Connection,
@@ -108,53 +109,27 @@ fn init_client() -> Endpoint {
         .extension()
         .map_or(false, |x| x == "der")
     {
-        rustls::PrivateKey(key)
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
     } else {
-        let pkcs8 =
-            rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
-        match pkcs8.into_iter().next() {
-            Some(x) => rustls::PrivateKey(x),
-            None => {
-                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                    .expect("malformed PKCS #1 private key");
-                match rsa.into_iter().next() {
-                    Some(x) => rustls::PrivateKey(x),
-                    None => {
-                        panic!(
-                            "no private keys found. Private key doesn't exist in default test folder"
-                        );
-                    }
-                }
-            }
-        }
+        rustls_pemfile::private_key(&mut &*key)
+            .expect("malformed PKCS #1 private key")
+            .expect("no private keys found")
     };
+
     let cert_chain = if Path::new(CERT_PATH)
         .extension()
         .map_or(false, |x| x == "der")
     {
-        vec![rustls::Certificate(cert)]
+        vec![CertificateDer::from(cert)]
     } else {
         rustls_pemfile::certs(&mut &*cert)
+            .collect::<Result<_, _>>()
             .expect("invalid PEM-encoded certificate")
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect()
     };
-
-    let mut server_root = rustls::RootCertStore::empty();
-    let file = fs::read(ROOT_PATH).expect("Failed to read file");
-    let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-        .expect("invalid PEM-encoded certificate")
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
-
-    if let Some(cert) = root_cert.get(0) {
-        server_root.add(cert).expect("Failed to add cert");
-    }
+    let root = fs::read(ROOT_PATH).expect("Failed to read file");
+    let server_root = to_root_cert(&root).unwrap();
 
     let client_crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(server_root)
         .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
@@ -162,7 +137,10 @@ fn init_client() -> Endpoint {
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
             .expect("Failed to create endpoint");
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+            .expect("Failed to generate QuicClientConfig"),
+    )));
     endpoint
 }
 
@@ -172,6 +150,7 @@ async fn conn() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
+
     run_server(db_dir);
 
     let client = TestClient::new().await;
@@ -184,6 +163,7 @@ async fn conn() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
+        conn_state: "sf".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -203,7 +183,7 @@ async fn conn() {
     .await
     .unwrap();
 
-    send_conn.finish().await.expect("failed to shutdown stream");
+    send_conn.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"conn_done");
     client.endpoint.wait_idle().await;
@@ -252,7 +232,7 @@ async fn dns() {
     .await
     .unwrap();
 
-    send_dns.finish().await.expect("failed to shutdown stream");
+    send_dns.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"dns_done");
     client.endpoint.wait_idle().await;
@@ -285,7 +265,7 @@ async fn log() {
     .await
     .unwrap();
 
-    send_log.finish().await.expect("failed to shutdown stream");
+    send_log.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
@@ -328,6 +308,8 @@ async fn http() {
         orig_mime_types: Vec::new(),
         resp_filenames: Vec::new(),
         resp_mime_types: Vec::new(),
+        post_body: Vec::new(),
+        state: String::new(),
     };
 
     send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
@@ -341,7 +323,7 @@ async fn http() {
     .await
     .unwrap();
 
-    send_http.finish().await.expect("failed to shutdown stream");
+    send_http.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"http_done");
     client.endpoint.wait_idle().await;
@@ -378,7 +360,7 @@ async fn rdp() {
     .await
     .unwrap();
 
-    send_rdp.finish().await.expect("failed to shutdown stream");
+    send_rdp.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
@@ -416,7 +398,6 @@ async fn periodic_time_series() {
 
     send_periodic_time_series
         .finish()
-        .await
         .expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"periodic_time_series_done");
@@ -446,6 +427,7 @@ async fn smtp() {
         to: "to".to_string(),
         subject: "subject".to_string(),
         agent: "agent".to_string(),
+        state: String::new(),
     };
 
     send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
@@ -459,7 +441,7 @@ async fn smtp() {
     .await
     .unwrap();
 
-    send_smtp.finish().await.expect("failed to shutdown stream");
+    send_smtp.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"smtp_done");
     client.endpoint.wait_idle().await;
@@ -485,10 +467,8 @@ async fn ntlm() {
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
-        server_nb_computer_name: "NB".to_string(),
-        server_dns_computer_name: "dns".to_string(),
-        server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
+        protocol: "protocol".to_string(),
     };
 
     send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
@@ -502,7 +482,7 @@ async fn ntlm() {
     .await
     .unwrap();
 
-    send_ntlm.finish().await.expect("failed to shutdown stream");
+    send_ntlm.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ntlm_done");
     client.endpoint.wait_idle().await;
@@ -547,10 +527,7 @@ async fn kerberos() {
     .await
     .unwrap();
 
-    send_kerberos
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_kerberos.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"kerberos_done");
     client.endpoint.wait_idle().await;
@@ -573,10 +550,6 @@ async fn ssh() {
         resp_port: 80,
         proto: 17,
         last_time: 1,
-        version: 01,
-        auth_success: "auth_success".to_string(),
-        auth_attempts: 3,
-        direction: "direction".to_string(),
         client: "client".to_string(),
         server: "server".to_string(),
         cipher_alg: "cipher_alg".to_string(),
@@ -584,7 +557,12 @@ async fn ssh() {
         compression_alg: "compression_alg".to_string(),
         kex_alg: "kex_alg".to_string(),
         host_key_alg: "host_key_alg".to_string(),
-        host_key: "host_key".to_string(),
+        hassh_algorithms: "hassh_algorithms".to_string(),
+        hassh: "hassh".to_string(),
+        hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+        hassh_server: "hassh_server".to_string(),
+        client_shka: "client_shka".to_string(),
+        server_shka: "server_shka".to_string(),
     };
 
     send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
@@ -598,7 +576,7 @@ async fn ssh() {
     .await
     .unwrap();
 
-    send_ssh.finish().await.expect("failed to shutdown stream");
+    send_ssh.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ssh_done");
     client.endpoint.wait_idle().await;
@@ -638,10 +616,7 @@ async fn dce_rpc() {
     .await
     .unwrap();
 
-    send_dce_rpc
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_dce_rpc.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"dce_rpc_done");
     client.endpoint.wait_idle().await;
@@ -675,10 +650,7 @@ async fn op_log() {
     .await
     .unwrap();
 
-    send_op_log
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_op_log.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"oplog_done");
     client.endpoint.wait_idle().await;
@@ -712,10 +684,7 @@ async fn packet() {
     .await
     .unwrap();
 
-    send_packet
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_packet.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"packet_done");
     client.endpoint.wait_idle().await;
@@ -763,7 +732,7 @@ async fn ftp() {
     .await
     .unwrap();
 
-    send_ftp.finish().await.expect("failed to shutdown stream");
+    send_ftp.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ftp_done");
     client.endpoint.wait_idle().await;
@@ -805,7 +774,7 @@ async fn mqtt() {
     .await
     .unwrap();
 
-    send_mqtt.finish().await.expect("failed to shutdown stream");
+    send_mqtt.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"mqtt_done");
     client.endpoint.wait_idle().await;
@@ -848,7 +817,7 @@ async fn ldap() {
     .await
     .unwrap();
 
-    send_ldap.finish().await.expect("failed to shutdown stream");
+    send_ldap.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"ldap_done");
     client.endpoint.wait_idle().await;
@@ -875,7 +844,10 @@ async fn tls() {
         alpn_protocol: "alpn_protocol".to_string(),
         ja3: "ja3".to_string(),
         version: "version".to_string(),
+        client_cipher_suites: vec![771, 769, 770],
+        client_extensions: vec![0, 1, 2],
         cipher: 10,
+        extensions: vec![0, 1],
         ja3s: "ja3s".to_string(),
         serial: "serial".to_string(),
         subject_country: "sub_country".to_string(),
@@ -902,7 +874,7 @@ async fn tls() {
     .await
     .unwrap();
 
-    send_tls.finish().await.expect("failed to shutdown stream");
+    send_tls.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"tls_done");
     client.endpoint.wait_idle().await;
@@ -949,7 +921,7 @@ async fn smb() {
     .await
     .unwrap();
 
-    send_smb.finish().await.expect("failed to shutdown stream");
+    send_smb.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"smb_done");
     client.endpoint.wait_idle().await;
@@ -987,7 +959,7 @@ async fn nfs() {
     .await
     .unwrap();
 
-    send_nfs.finish().await.expect("failed to shutdown stream");
+    send_nfs.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"nfs_done");
     client.endpoint.wait_idle().await;
@@ -1020,10 +992,7 @@ async fn statistics() {
     .await
     .unwrap();
 
-    send_statistics
-        .finish()
-        .await
-        .expect("failed to shutdown stream");
+    send_statistics.finish().expect("failed to shutdown stream");
 
     client.conn.close(0u32.into(), b"statistics_done");
     client.endpoint.wait_idle().await;
@@ -1071,7 +1040,7 @@ async fn ack_info() {
 
     let recv_timestamp = receive_ack_timestamp(&mut recv_log).await.unwrap();
 
-    send_log.finish().await.expect("failed to shutdown stream");
+    send_log.finish().expect("failed to shutdown stream");
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
     assert_eq!(last_timestamp, recv_timestamp);
@@ -1105,7 +1074,7 @@ async fn one_short_reproduce_channel_close() {
     recv_bytes(&mut recv_log, &mut ts_buf).await.unwrap();
     let recv_timestamp = i64::from_be_bytes(ts_buf);
 
-    send_log.finish().await.expect("failed to shutdown stream");
+    send_log.finish().expect("failed to shutdown stream");
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
     assert_eq!(CHANNEL_CLOSE_TIMESTAMP, recv_timestamp);

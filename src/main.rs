@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
-use rustls::{Certificate, PrivateKey};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     let root_cert = to_root_cert(&root_pem)?;
     let certs = Arc::new(Certs {
         certs: cert.clone(),
-        key: key.clone(),
+        key: key.clone_key(),
         root: root_cert.clone(),
     });
 
@@ -352,37 +352,34 @@ fn version() -> String {
     format!("giganto {}", env!("CARGO_PKG_VERSION"))
 }
 
-fn to_cert_chain(pem: &[u8]) -> Result<Vec<Certificate>> {
-    let certs = rustls_pemfile::certs(&mut &*pem).context("cannot parse certificate chain")?;
-    if certs.is_empty() {
-        return Err(anyhow!("no certificate found"));
-    }
-    Ok(certs.into_iter().map(Certificate).collect())
+fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
+    let certs = rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<_, _>>()
+        .context("cannot parse certificate chain")?;
+    Ok(certs)
 }
 
-fn to_private_key(pem: &[u8]) -> Result<PrivateKey> {
+fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
     match rustls_pemfile::read_one(&mut &*pem)
         .context("cannot parse private key")?
         .ok_or_else(|| anyhow!("empty private key"))?
     {
-        rustls_pemfile::Item::PKCS8Key(key) | rustls_pemfile::Item::RSAKey(key) => {
-            Ok(PrivateKey(key))
-        }
+        rustls_pemfile::Item::Pkcs1Key(key) => Ok(key.into()),
+        rustls_pemfile::Item::Pkcs8Key(key) => Ok(key.into()),
         _ => Err(anyhow!("unknown private key format")),
     }
 }
 
 fn to_root_cert(pem: &[u8]) -> Result<rustls::RootCertStore> {
     let mut root_cert = rustls::RootCertStore::empty();
-    let root_certs: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*pem)
-        .context("invalid PEM-encoded certificate")?
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
+    let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<_, _>>()
+        .context("invalid PEM-encoded certificate")?;
     if let Some(cert) = root_certs.first() {
-        root_cert.add(cert).context("failed to add root cert")?;
+        root_cert
+            .add(cert.to_owned())
+            .context("failed to add root cert")?;
     }
-
     Ok(root_cert)
 }
 

@@ -26,6 +26,7 @@ use giganto_client::{
     },
 };
 use quinn::{Connection, Endpoint, SendStream};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
 use std::{
     cell::RefCell,
@@ -44,7 +45,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const ROOT_PATH: &str = "tests/certs/root.pem";
-const PROTOCOL_VERSION: &str = "0.20.0";
+const PROTOCOL_VERSION: &str = "0.21.0-alpha.1";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -128,53 +129,27 @@ fn init_client() -> Endpoint {
         .extension()
         .map_or(false, |x| x == "der")
     {
-        rustls::PrivateKey(key)
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
     } else {
-        let pkcs8 =
-            rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
-        match pkcs8.into_iter().next() {
-            Some(x) => rustls::PrivateKey(x),
-            None => {
-                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                    .expect("malformed PKCS #1 private key");
-                match rsa.into_iter().next() {
-                    Some(x) => rustls::PrivateKey(x),
-                    None => {
-                        panic!(
-                            "no private keys found. Private key doesn't exist in default test folder"
-                        );
-                    }
-                }
-            }
-        }
+        rustls_pemfile::private_key(&mut &*key)
+            .expect("malformed PKCS #1 private key")
+            .expect("no private keys found")
     };
+
     let cert_chain = if Path::new(NODE1_CERT_PATH)
         .extension()
         .map_or(false, |x| x == "der")
     {
-        vec![rustls::Certificate(cert)]
+        vec![CertificateDer::from(cert)]
     } else {
         rustls_pemfile::certs(&mut &*cert)
+            .collect::<Result<_, _>>()
             .expect("invalid PEM-encoded certificate")
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect()
     };
-
-    let mut server_root = rustls::RootCertStore::empty();
-    let file = fs::read(ROOT_PATH).expect("Failed to read file");
-    let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-        .expect("invalid PEM-encoded certificate")
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
-
-    if let Some(cert) = root_cert.get(0) {
-        server_root.add(cert).expect("Failed to add cert");
-    }
+    let root = fs::read(ROOT_PATH).expect("Failed to read file");
+    let server_root = to_root_cert(&root).unwrap();
 
     let client_crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(server_root)
         .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
@@ -182,7 +157,10 @@ fn init_client() -> Endpoint {
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
             .expect("Failed to create endpoint");
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+            .expect("Failed to generate QuicClientConfig"),
+    )));
     endpoint
 }
 
@@ -206,6 +184,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
+        conn_state: "sf".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -284,6 +263,8 @@ fn gen_http_raw_event() -> Vec<u8> {
         orig_mime_types: Vec::new(),
         resp_filenames: Vec::new(),
         resp_mime_types: Vec::new(),
+        post_body: Vec::new(),
+        state: String::new(),
     };
 
     bincode::serialize(&http_body).unwrap()
@@ -303,6 +284,7 @@ fn gen_smtp_raw_event() -> Vec<u8> {
         to: "safe1@einsis.com".to_string(),
         subject: "hello giganto".to_string(),
         agent: "giganto".to_string(),
+        state: String::new(),
     };
 
     bincode::serialize(&smtp_body).unwrap()
@@ -319,10 +301,8 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
-        server_nb_computer_name: "NB".to_string(),
-        server_dns_computer_name: "dns".to_string(),
-        server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
+        protocol: "protocol".to_string(),
     };
 
     bincode::serialize(&ntlm_body).unwrap()
@@ -358,10 +338,6 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         resp_port: 80,
         proto: 17,
         last_time: 1,
-        version: 01,
-        auth_success: "auth_success".to_string(),
-        auth_attempts: 3,
-        direction: "direction".to_string(),
         client: "client".to_string(),
         server: "server".to_string(),
         cipher_alg: "cipher_alg".to_string(),
@@ -369,7 +345,12 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         compression_alg: "compression_alg".to_string(),
         kex_alg: "kex_alg".to_string(),
         host_key_alg: "host_key_alg".to_string(),
-        host_key: "host_key".to_string(),
+        hassh_algorithms: "hassh_algorithms".to_string(),
+        hassh: "hassh".to_string(),
+        hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+        hassh_server: "hassh_server".to_string(),
+        client_shka: "client_shka".to_string(),
+        server_shka: "server_shka".to_string(),
     };
 
     bincode::serialize(&ssh_body).unwrap()
@@ -486,7 +467,10 @@ fn gen_tls_raw_event() -> Vec<u8> {
         alpn_protocol: "alpn_protocol".to_string(),
         ja3: "ja3".to_string(),
         version: "version".to_string(),
+        client_cipher_suites: vec![771, 769, 770],
+        client_extensions: vec![0, 1, 2],
         cipher: 10,
+        extensions: vec![0, 1],
         ja3s: "ja3s".to_string(),
         serial: "serial".to_string(),
         subject_country: "sub_country".to_string(),

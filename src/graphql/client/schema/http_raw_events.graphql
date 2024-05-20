@@ -36,6 +36,8 @@ query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 origMimeTypes
                 respFilenames
                 respMimeTypes
+                postBody
+                state
             }
         }
     }

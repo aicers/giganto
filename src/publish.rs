@@ -56,7 +56,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.17.0,<0.21.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -134,7 +134,7 @@ impl Server {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
-    conn: quinn::Connecting,
+    conn: quinn::Incoming,
     db: Database,
     pcap_sources: PcapSources,
     stream_direct_channels: StreamDirectChannels,
@@ -1842,7 +1842,7 @@ where
         )
     }
     send_range_data::<T>(send, None).await?;
-    send.finish().await?;
+    send.finish()?;
     Ok(())
 }
 
@@ -1983,7 +1983,7 @@ where
     }
 
     send_range_data::<T>(send, None).await?;
-    send.finish().await?;
+    send.finish()?;
     Ok(())
 }
 

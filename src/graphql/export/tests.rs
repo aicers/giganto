@@ -133,6 +133,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
+        conn_state: "sf".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -307,6 +308,8 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i
         orig_mime_types: Vec::new(),
         resp_filenames: Vec::new(),
         resp_mime_types: Vec::new(),
+        post_body: Vec::new(),
+        state: String::new(),
     };
     let ser_http_body = bincode::serialize(&http_body).unwrap();
 
@@ -450,6 +453,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i
         to: "to".to_string(),
         subject: "subject".to_string(),
         agent: "agent".to_string(),
+        state: String::new(),
     };
     let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
 
@@ -521,10 +525,8 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
-        server_nb_computer_name: "NB".to_string(),
-        server_dns_computer_name: "dns".to_string(),
-        server_tree_name: "tree".to_string(),
         success: "tf".to_string(),
+        protocol: "protocol".to_string(),
     };
     let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
 
@@ -669,10 +671,6 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64
         resp_port: 80,
         proto: 6,
         last_time: 1,
-        version: 01,
-        auth_success: "auth_success".to_string(),
-        auth_attempts: 3,
-        direction: "direction".to_string(),
         client: "client".to_string(),
         server: "server".to_string(),
         cipher_alg: "cipher_alg".to_string(),
@@ -680,7 +678,12 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64
         compression_alg: "compression_alg".to_string(),
         kex_alg: "kex_alg".to_string(),
         host_key_alg: "host_key_alg".to_string(),
-        host_key: "host_key".to_string(),
+        hassh_algorithms: "hassh_algorithms".to_string(),
+        hassh: "hassh".to_string(),
+        hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+        hassh_server: "hassh_server".to_string(),
+        client_shka: "client_shka".to_string(),
+        server_shka: "server_shka".to_string(),
     };
     let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
 
@@ -1243,7 +1246,10 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64
         alpn_protocol: "alpn_protocol".to_string(),
         ja3: "ja3".to_string(),
         version: "version".to_string(),
+        client_cipher_suites: vec![771, 769, 770],
+        client_extensions: vec![0, 1, 2],
         cipher: 10,
+        extensions: vec![0, 1],
         ja3s: "ja3s".to_string(),
         serial: "serial".to_string(),
         subject_country: "sub_country".to_string(),
