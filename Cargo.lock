@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "giganto"
-version = "0.20.0+tis.0.2.0-alpha.1"
+version = "0.20.0+tis.0.2.0"
 dependencies = [
  "anyhow",
  "async-graphql",
