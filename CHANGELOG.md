@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.20.0+tis.0.2.0] - 2024-05-24
 
 ### Added
 
@@ -13,7 +13,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Change to receive events in a unit of 100.
+- Change to receive events in unit of 10 for packets or 100 for protocol events.
 
 ## [0.20.0] - 2024-05-17
 
@@ -508,7 +508,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.20.0...tis
+[0.20.0+tis.0.2.0]: https://github.com/aicers/giganto/compare/0.20.0...0.20.0+tis.0.2.0
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0
