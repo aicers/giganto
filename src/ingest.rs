@@ -51,7 +51,7 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.15.0,<0.21.0";
+const INGEST_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.21.0";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 
@@ -140,7 +140,7 @@ impl Server {
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn handle_connection(
-    conn: quinn::Connecting,
+    conn: quinn::Incoming,
     db: Database,
     pcap_sources: PcapSources,
     sender: Sender<SourceInfo>,
@@ -153,7 +153,7 @@ async fn handle_connection(
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
         Ok((mut send, _)) => {
             info!("Compatible version");
-            send.finish().await?;
+            send.finish()?;
         }
         Err(e) => {
             info!("Incompatible version");
@@ -951,7 +951,7 @@ async fn handle_data<T>(
                     break;
                 }
             }
-            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
+            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly(_))) => {
                 store.flush()?;
                 handler.abort();
                 break;

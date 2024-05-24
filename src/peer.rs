@@ -37,7 +37,7 @@ use tokio::{
 use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
-const PEER_VERSION_REQ: &str = ">=0.19.0,<0.21.0";
+const PEER_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
@@ -428,7 +428,7 @@ async fn client_connection(
 
 #[allow(clippy::too_many_lines)]
 async fn server_connection(
-    conn: quinn::Connecting,
+    conn: quinn::Incoming,
     peer_conn_info: PeerConns,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
@@ -733,6 +733,7 @@ pub mod tests {
     };
     use giganto_client::connection::client_handshake;
     use quinn::{Connection, Endpoint, RecvStream, SendStream};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::{
         collections::{HashMap, HashSet},
         fs::{self, File},
@@ -754,7 +755,7 @@ pub mod tests {
     const ROOT_PATH: &str = "tests/certs/root.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.20.0";
+    const PROTOCOL_VERSION: &str = "0.21.0-alpha.1";
 
     pub struct TestClient {
         send: SendStream,
@@ -796,53 +797,28 @@ pub mod tests {
             .extension()
             .map_or(false, |x| x == "der")
         {
-            rustls::PrivateKey(key)
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
         } else {
-            let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
-                .expect("malformed PKCS #8 private key");
-            match pkcs8.into_iter().next() {
-                Some(x) => rustls::PrivateKey(x),
-                None => {
-                    let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                        .expect("malformed PKCS #1 private key");
-                    match rsa.into_iter().next() {
-                        Some(x) => rustls::PrivateKey(x),
-                        None => {
-                            panic!(
-                                "no private keys found. Private key doesn't exist in default test folder"
-                            );
-                        }
-                    }
-                }
-            }
+            rustls_pemfile::private_key(&mut &*key)
+                .expect("malformed PKCS #1 private key")
+                .expect("no private keys found")
         };
+
         let cert_chain = if Path::new(CERT_PATH)
             .extension()
             .map_or(false, |x| x == "der")
         {
-            vec![rustls::Certificate(cert)]
+            vec![CertificateDer::from(cert)]
         } else {
             rustls_pemfile::certs(&mut &*cert)
+                .collect::<Result<_, _>>()
                 .expect("invalid PEM-encoded certificate")
-                .into_iter()
-                .map(rustls::Certificate)
-                .collect()
         };
 
-        let mut server_root = rustls::RootCertStore::empty();
-        let file = fs::read(ROOT_PATH).expect("Failed to read file");
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .expect("invalid PEM-encoded certificate")
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-
-        if let Some(cert) = root_cert.get(0) {
-            server_root.add(cert).expect("Failed to add cert");
-        }
+        let root = fs::read(ROOT_PATH).expect("Failed to read file");
+        let server_root = to_root_cert(&root).unwrap();
 
         let client_crypto = rustls::ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(server_root)
             .with_client_auth_cert(cert_chain, pv_key)
             .expect("the server root, cert chain or private key are not valid");
@@ -850,7 +826,10 @@ pub mod tests {
         let mut endpoint =
             quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
                 .expect("Failed to create endpoint");
-        endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+        endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+                .expect("Failed to generate QuicClientConfig"),
+        )));
         endpoint
     }
 

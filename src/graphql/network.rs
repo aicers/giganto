@@ -129,6 +129,7 @@ struct ConnRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
+    conn_state: String,
     duration: i64,
     service: String,
     orig_bytes: u64,
@@ -136,6 +137,7 @@ struct ConnRawEvent {
     orig_pkts: u64,
     resp_pkts: u64,
 }
+
 #[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
@@ -191,6 +193,8 @@ struct HttpRawEvent {
     orig_mime_types: Vec<String>,
     resp_filenames: Vec<String>,
     resp_mime_types: Vec<String>,
+    post_body: Vec<u8>,
+    state: String,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -222,6 +226,7 @@ struct SmtpRawEvent {
     to: String,
     subject: String,
     agent: String,
+    state: String,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -237,10 +242,8 @@ struct NtlmRawEvent {
     username: String,
     hostname: String,
     domainname: String,
-    server_nb_computer_name: String,
-    server_dns_computer_name: String,
-    server_tree_name: String,
     success: String,
+    protocol: String,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -274,10 +277,6 @@ struct SshRawEvent {
     resp_port: u16,
     proto: u8,
     last_time: i64,
-    version: i64,
-    auth_success: String,
-    auth_attempts: i64,
-    direction: String,
     client: String,
     server: String,
     cipher_alg: String,
@@ -285,7 +284,12 @@ struct SshRawEvent {
     compression_alg: String,
     kex_alg: String,
     host_key_alg: String,
-    host_key: String,
+    hassh_algorithms: String,
+    hassh: String,
+    hassh_server_algorithms: String,
+    hassh_server: String,
+    client_shka: String,
+    server_shka: String,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -379,7 +383,10 @@ struct TlsRawEvent {
     alpn_protocol: String,
     ja3: String,
     version: String,
+    client_cipher_suites: Vec<u16>,
+    client_extensions: Vec<u16>,
     cipher: u16,
+    extensions: Vec<u16>,
     #[graphql_client_type(from_name = "ja3_s")]
     ja3s: String,
     serial: String,
@@ -536,6 +543,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
+            conn_state: val.conn_state,
             duration: val.duration,
             service: val.service,
             orig_bytes: val.orig_bytes,
@@ -594,7 +602,9 @@ from_key_value!(
     orig_filenames,
     orig_mime_types,
     resp_filenames,
-    resp_mime_types
+    resp_mime_types,
+    post_body,
+    state
 );
 from_key_value!(RdpRawEvent, Rdp, cookie);
 
@@ -615,7 +625,17 @@ from_key_value!(
     ttl
 );
 
-from_key_value!(SmtpRawEvent, Smtp, mailfrom, date, from, to, subject, agent);
+from_key_value!(
+    SmtpRawEvent,
+    Smtp,
+    mailfrom,
+    date,
+    from,
+    to,
+    subject,
+    agent,
+    state
+);
 
 from_key_value!(
     NtlmRawEvent,
@@ -623,10 +643,8 @@ from_key_value!(
     username,
     hostname,
     domainname,
-    server_nb_computer_name,
-    server_dns_computer_name,
-    server_tree_name,
-    success
+    success,
+    protocol
 );
 
 from_key_value!(
@@ -646,10 +664,6 @@ from_key_value!(
 from_key_value!(
     SshRawEvent,
     Ssh,
-    version,
-    auth_success,
-    auth_attempts,
-    direction,
     client,
     server,
     cipher_alg,
@@ -657,7 +671,12 @@ from_key_value!(
     compression_alg,
     kex_alg,
     host_key_alg,
-    host_key
+    hassh_algorithms,
+    hassh,
+    hassh_server_algorithms,
+    hassh_server,
+    client_shka,
+    server_shka
 );
 
 from_key_value!(DceRpcRawEvent, DceRpc, rtt, named_pipe, endpoint, operation);
@@ -692,7 +711,10 @@ from_key_value!(
     alpn_protocol,
     ja3,
     version,
+    client_cipher_suites,
+    client_extensions,
     cipher,
+    extensions,
     ja3s,
     serial,
     subject_country,

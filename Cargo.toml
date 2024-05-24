@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.20.0"
+version = "0.21.0-alpha.1"
 edition = "2021"
 
 [lib]
@@ -23,22 +23,25 @@ data-encoding = "2.4"
 deluxe = "0.5"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.15.2" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.17.0" }
 graphql_client = "0.14"
 humantime = "2.1"
 humantime-serde = "1"
 libc = "0.2"
 num_enum = "0.7"
 num-traits = "0.2"
-pcap = "1"
+pcap = "2"
 proc-macro2 = "1.0"
-quinn = "0.10"
+quinn = { version = "0.11", features = ["ring"] }
 quote = "1.0"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 rocksdb = "0.22"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.1" }
-rustls = "0.21"
-rustls-pemfile = "1.0"
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
+rustls-pemfile = "2.0"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

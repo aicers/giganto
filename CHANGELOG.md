@@ -5,6 +5,27 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Update giganto-client to version `0.17.0`. Updating to this version results
+  in the following changes.
+  - Bump dependencies.
+    - Update quinn to version `0.11`.
+    - Update rustls to version `0.23`.
+  - Fixed code and structures based on changes to the conn, http, smtp, ntlm,
+    ssh, tls protocols field.
+  - Update the compatibility version of the quic communication modules.
+    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
+    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
+    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
+  - Fixed code related to migration.
+    - Changed `COMPATIBLE_VERSION_REQ` to “>=0.21.0-alpha.1,<0.22.0”
+    - Added migration function in `migrate_0_19_to_0_21_0_alpha_1`. This feature
+      change values for conn, http, smtp, ntlm, ssh, tls protocol's fields in
+      versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
+
 ## [0.20.0] - 2024-05-17
 
 ### Added
@@ -498,6 +519,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.20.0...main
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0

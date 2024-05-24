@@ -5,6 +5,7 @@ type ConnRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
+  connState: String!
   duration: Int!
   service: String!
   origBytes: Int!
@@ -369,9 +370,9 @@ type FtpRawEventEdge {
 }
 
 type GigantoConfig {
-  ingestAddress: String!
-  publishAddress: String!
-  graphqlAddress: String!
+  ingestSrvAddr: String!
+  publishSrvAddr: String!
+  graphqlSrvAddr: String!
   retention: String!
   maxOpenFiles: Int!
   maxMbOfLevelBase: Int!
@@ -417,6 +418,8 @@ type HttpRawEvent {
   origMimeTypes: [String!]!
   respFilenames: [String!]!
   respMimeTypes: [String!]!
+  postBody: [Int!]!
+  state: String!
 }
 
 type HttpRawEventConnection {
@@ -864,10 +867,8 @@ type NtlmRawEvent {
   username: String!
   hostname: String!
   domainname: String!
-  serverNbComputerName: String!
-  serverDnsComputerName: String!
-  serverTreeName: String!
   success: String!
+  protocol: String!
 }
 
 type NtlmRawEventConnection {
@@ -1655,6 +1656,7 @@ type SmtpRawEvent {
   to: String!
   subject: String!
   agent: String!
+  state: String!
 }
 
 type SmtpRawEventConnection {
@@ -1685,10 +1687,6 @@ type SshRawEvent {
   respPort: Int!
   proto: Int!
   lastTime: Int!
-  version: Int!
-  authSuccess: String!
-  authAttempts: Int!
-  direction: String!
   client: String!
   server: String!
   cipherAlg: String!
@@ -1696,7 +1694,12 @@ type SshRawEvent {
   compressionAlg: String!
   kexAlg: String!
   hostKeyAlg: String!
-  hostKey: String!
+  hasshAlgorithms: String!
+  hassh: String!
+  hasshServerAlgorithms: String!
+  hasshServer: String!
+  clientShka: String!
+  serverShka: String!
 }
 
 type SshRawEventConnection {
@@ -1820,7 +1823,10 @@ type TlsRawEvent {
   alpnProtocol: String!
   ja3: String!
   version: String!
+  clientCipherSuites: [Int!]!
+  clientExtensions: [Int!]!
   cipher: Int!
+  extensions: [Int!]!
   ja3S: String!
   serial: String!
   subjectCountry: String!
@@ -1857,9 +1863,9 @@ type TlsRawEventEdge {
 }
 
 input UserConfig {
-  ingestAddress: String
-  publishAddress: String
-  graphqlAddress: String
+  ingestSrvAddr: String
+  publishSrvAddr: String
+  graphqlSrvAddr: String
   retention: String
   maxOpenFiles: Int
   maxMbOfLevelBase: Int

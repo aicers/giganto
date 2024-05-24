@@ -17,6 +17,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
+                    connState
                     service
                     duration
                     origBytes
@@ -73,6 +74,8 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origMimeTypes
                     respFilenames
                     respMimeTypes
+                    postBody
+                    state
                 }
                 ... on RdpRawEvent {
                     timestamp
@@ -95,10 +98,8 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     username
                     hostname
                     domainname
-                    serverNbComputerName
-                    serverDnsComputerName
-                    serverTreeName
                     success
+                    protocol
                 }
                 ... on KerberosRawEvent {
                     timestamp
@@ -126,10 +127,6 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     respPort
                     proto
                     lastTime
-                    version
-                    authSuccess
-                    authAttempts
-                    direction
                     client
                     server
                     cipherAlg
@@ -137,7 +134,12 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     compressionAlg
                     kexAlg
                     hostKeyAlg
-                    hostKey
+                    hasshAlgorithms
+                    hassh
+                    hasshServerAlgorithms
+                    hasshServer
+                    clientShka
+                    serverShka
                 }
                 ... on DceRpcRawEvent {
                     timestamp
@@ -216,7 +218,10 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     alpnProtocol
                     ja3
                     version
+                    clientCipherSuites
+                    clientExtensions
                     cipher
+                    extensions
                     ja3S
                     serial
                     subjectCountry
@@ -276,6 +281,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     to
                     subject
                     agent
+                    state
                 }
             }
         }

@@ -19,10 +19,8 @@ query NtlmRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 username
                 hostname
                 domainname
-                serverNbComputerName
-                serverDnsComputerName
-                serverTreeName
                 success
+                protocol
             }
         }
     }

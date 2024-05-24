@@ -20,7 +20,10 @@ query TlsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 alpnProtocol
                 ja3
                 version
+                clientCipherSuites
+                clientExtensions
                 cipher
+                extensions
                 ja3S
                 serial
                 subjectCountry

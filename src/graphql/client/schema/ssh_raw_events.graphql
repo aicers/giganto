@@ -16,10 +16,6 @@ query SshRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 respPort
                 proto
                 lastTime
-                version
-                authSuccess
-                authAttempts
-                direction
                 client
                 server
                 cipherAlg
@@ -27,7 +23,12 @@ query SshRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 compressionAlg
                 kexAlg
                 hostKeyAlg
-                hostKey
+                hasshAlgorithms
+                hassh
+                hasshServerAlgorithms
+                hasshServer
+                clientShka
+                serverShka
             }
         }
     }
