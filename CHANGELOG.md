@@ -25,6 +25,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     - Added migration function in `migrate_0_19_to_0_21_0_alpha_1`. This feature
       change values for conn, http, smtp, ntlm, ssh, tls protocol's fields in
       versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
+- Change to receive events in a unit of 100.
 
 ## [0.20.0] - 2024-05-17
 
