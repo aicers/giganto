@@ -1531,16 +1531,20 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     let path = ctx.data::<PathBuf>()?;
     let node_name = ctx.data::<NodeName>()?;
 
-    // set export file path
+    // set export filename & file path
     if !path.exists() {
         fs::create_dir_all(path)?;
     }
+
     let filename = format!(
-        "{}_{}.{export_type}",
+        "{}_{}{}.{export_type}",
         filter.protocol,
+        filter
+            .kind
+            .as_ref()
+            .map_or(String::new(), |k| format!("{k}_")),
         Local::now().format("%Y%m%d_%H%M%S"),
     );
-
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));
     let download_path = format!("{}@{}", export_done_path.display(), node_name.0);

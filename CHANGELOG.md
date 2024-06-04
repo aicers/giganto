@@ -27,6 +27,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
       versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
 - Change to receive events in a unit of 100.
 - Change the rustls crypto library setting to `aws-lc-rs`.
+- Fixed to append the kind value to the filename when extracting a file for a
+  protocol for which a kind value exists.
 
 ## [0.20.0] - 2024-05-17
 
