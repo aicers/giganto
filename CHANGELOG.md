@@ -5,6 +5,13 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Fixed to append the kind value to the filename when extracting a file for a
+  protocol for which a kind value exists.
+
 ## [0.20.0+tis.0.2.0] - 2024-05-24
 
 ### Added
@@ -508,6 +515,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.20.0+tis.0.2.0...main
 [0.20.0+tis.0.2.0]: https://github.com/aicers/giganto/compare/0.20.0...0.20.0+tis.0.2.0
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
