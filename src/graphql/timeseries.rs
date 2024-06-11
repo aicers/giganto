@@ -1,15 +1,17 @@
-use super::{get_timestamp_from_key, load_connection, FromKeyValue};
-use crate::{
-    graphql::{RawEventFilter, TimeRange},
-    storage::{Database, KeyExtractor},
-};
+use std::{fmt::Debug, net::IpAddr};
+
 use async_graphql::{
     connection::{query, Connection},
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
-use std::{fmt::Debug, net::IpAddr};
+
+use super::{get_timestamp_from_key, load_connection, FromKeyValue};
+use crate::{
+    graphql::{RawEventFilter, TimeRange},
+    storage::{Database, KeyExtractor},
+};
 
 #[derive(Default)]
 pub(super) struct TimeSeriesQuery;
@@ -103,8 +105,9 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
+
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn time_series_empty() {

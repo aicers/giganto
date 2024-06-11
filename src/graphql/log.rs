@@ -1,6 +1,18 @@
 #[cfg(test)]
 mod tests;
 
+use std::{fmt::Debug, net::IpAddr};
+
+use anyhow::anyhow;
+use async_graphql::{
+    connection::{query, Connection},
+    Context, InputObject, Object, Result, SimpleObject,
+};
+use chrono::{DateTime, Utc};
+use giganto_client::ingest::log::{Log, OpLog};
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
+
 use super::{
     base64_engine,
     client::derives::{log_raw_events, LogRawEvents},
@@ -12,16 +24,6 @@ use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
 };
-use anyhow::anyhow;
-use async_graphql::{
-    connection::{query, Connection},
-    Context, InputObject, Object, Result, SimpleObject,
-};
-use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::{Log, OpLog};
-use giganto_proc_macro::ConvertGraphQLEdgesNode;
-use graphql_client::GraphQLQuery;
-use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct LogQuery;

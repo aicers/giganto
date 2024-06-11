@@ -1,6 +1,18 @@
 //! Routines to check the database format version and migrate it if necessary.
 mod migration_structures;
 
+use std::{
+    fs::{create_dir_all, File},
+    io::{Read, Write},
+    path::Path,
+};
+
+use anyhow::{anyhow, Context, Result};
+use giganto_client::ingest::log::SecuLog;
+use semver::{Version, VersionReq};
+use serde::de::DeserializeOwned;
+use tracing::info;
+
 use self::migration_structures::{
     ConnBeforeV21, HttpBeforeV12, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21,
     TlsBeforeV21,
@@ -14,16 +26,6 @@ use crate::{
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
     },
 };
-use anyhow::{anyhow, Context, Result};
-use giganto_client::ingest::log::SecuLog;
-use semver::{Version, VersionReq};
-use serde::de::DeserializeOwned;
-use std::{
-    fs::{create_dir_all, File},
-    io::{Read, Write},
-    path::Path,
-};
-use tracing::info;
 
 const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
 
@@ -286,6 +288,15 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::IpAddr;
+
+    use chrono::Utc;
+    use giganto_client::ingest::{
+        log::SecuLog,
+        netflow::{Netflow5, Netflow9},
+    };
+    use semver::{Version, VersionReq};
+
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::{
         migration::migration_structures::{
@@ -295,13 +306,6 @@ mod tests {
         Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Ntlm as NtlmFromV21,
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
     };
-    use chrono::Utc;
-    use giganto_client::ingest::{
-        log::SecuLog,
-        netflow::{Netflow5, Netflow9},
-    };
-    use semver::{Version, VersionReq};
-    use std::net::IpAddr;
 
     #[test]
     fn version() {

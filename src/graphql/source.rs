@@ -1,6 +1,8 @@
-use crate::{peer::Peers, IngestSources};
-use async_graphql::{Context, Object, Result};
 use std::collections::HashSet;
+
+use async_graphql::{Context, Object, Result};
+
+use crate::{peer::Peers, IngestSources};
 
 #[derive(Default)]
 pub(super) struct SourceQuery;

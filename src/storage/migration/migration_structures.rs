@@ -1,9 +1,11 @@
+use std::net::IpAddr;
+
+use serde::{Deserialize, Serialize};
+
 use crate::storage::{
     Conn as ConnFromV21, Http as HttpFromV21, Ntlm as NtlmFromV21, Smtp as SmtpFromV21,
     Ssh as SshFromV21, Tls as TlsFromV21,
 };
-use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 
 #[derive(Deserialize, Serialize)]
 pub struct HttpBeforeV12 {

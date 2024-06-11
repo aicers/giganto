@@ -1,3 +1,11 @@
+use std::{fmt::Debug, net::IpAddr};
+
+use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
+use chrono::{DateTime, Utc};
+use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
+
 use super::{
     check_address, check_contents, check_port, get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster, FromKeyValue,
@@ -12,12 +20,6 @@ use crate::{
     },
     storage::{Database, KeyExtractor},
 };
-use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
-use chrono::{DateTime, Utc};
-use giganto_client::ingest::netflow::{Netflow5, Netflow9};
-use giganto_proc_macro::ConvertGraphQLEdgesNode;
-use graphql_client::GraphQLQuery;
-use std::{fmt::Debug, net::IpAddr};
 
 static TCP_FLAGS: [(u8, &str); 8] = [
     (0x01, "FIN"),
