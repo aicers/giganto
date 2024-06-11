@@ -1,5 +1,6 @@
-use crate::graphql::tests::TestSchema;
-use crate::storage::RawEventStore;
+use std::mem;
+use std::net::IpAddr;
+
 use chrono::{Duration, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLog, OpLogLevel},
@@ -8,8 +9,9 @@ use giganto_client::ingest::{
     },
     timeseries::PeriodicTimeSeries,
 };
-use std::mem;
-use std::net::IpAddr;
+
+use crate::graphql::tests::TestSchema;
+use crate::storage::RawEventStore;
 
 #[tokio::test]
 async fn invalid_query() {

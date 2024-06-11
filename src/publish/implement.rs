@@ -1,6 +1,7 @@
+use std::{net::IpAddr, vec};
+
 use anyhow::{bail, Result};
 use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
-use std::{net::IpAddr, vec};
 
 pub trait RequestStreamMessage {
     fn channel_key(&self, source: Option<String>, record_type: &str) -> Result<Vec<String>>;

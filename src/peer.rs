@@ -1,3 +1,32 @@
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+    time::Duration,
+};
+
+use anyhow::{anyhow, bail, Context, Result};
+use giganto_client::{
+    connection::{client_handshake, server_handshake},
+    frame::{self, recv_bytes, recv_raw, send_bytes},
+};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use quinn::{
+    ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::{
+    select,
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Notify, RwLock,
+    },
+    time::sleep,
+};
+use toml_edit::DocumentMut;
+use tracing::{error, info, warn};
+
 use crate::{
     graphql::status::{
         insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file,
@@ -9,33 +38,6 @@ use crate::{
     },
     IngestSources,
 };
-use anyhow::{anyhow, bail, Context, Result};
-use giganto_client::{
-    connection::{client_handshake, server_handshake},
-    frame::{self, recv_bytes, recv_raw, send_bytes},
-};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use quinn::{
-    ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
-};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    mem,
-    net::{SocketAddr, ToSocketAddrs},
-    sync::Arc,
-    time::Duration,
-};
-use tokio::{
-    select,
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Notify, RwLock,
-    },
-    time::sleep,
-};
-use toml_edit::DocumentMut;
-use tracing::{error, info, warn};
 
 const PEER_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
@@ -725,15 +727,6 @@ async fn update_to_new_source_list(
 
 #[cfg(test)]
 pub mod tests {
-    use super::Peer;
-    use crate::{
-        peer::{receive_peer_data, request_init_info, PeerCode, PeerIdentity},
-        server::Certs,
-        to_cert_chain, to_private_key, to_root_cert, PeerInfo,
-    };
-    use giganto_client::connection::client_handshake;
-    use quinn::{Connection, Endpoint, RecvStream, SendStream};
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::{
         collections::{HashMap, HashSet},
         fs::{self, File},
@@ -741,8 +734,19 @@ pub mod tests {
         path::Path,
         sync::{Arc, OnceLock},
     };
+
+    use giganto_client::connection::client_handshake;
+    use quinn::{Connection, Endpoint, RecvStream, SendStream};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, RwLock};
+
+    use super::Peer;
+    use crate::{
+        peer::{receive_peer_data, request_init_info, PeerCode, PeerIdentity},
+        server::Certs,
+        to_cert_chain, to_private_key, to_root_cert, PeerInfo,
+    };
 
     fn get_token() -> &'static Mutex<u32> {
         static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();

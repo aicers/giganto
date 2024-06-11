@@ -18,7 +18,7 @@ jobs:
     - uses: actions/checkout@v2
     - uses: ./.github/cache-cargo
     - name: Check formatting
-      run: cargo fmt -- --check
+      run: cargo fmt -- --check --config group_imports=StdExternalCrate
     - name: Clippy
       run: cargo clippy -- -D warnings -W clippy::pedantic
     - name: Detect Cargo.lock changes
