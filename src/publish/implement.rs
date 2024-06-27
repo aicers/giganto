@@ -18,7 +18,7 @@ impl RequestStreamMessage for RequestHogStream {
                 .iter()
                 .map(|target_source| {
                     let mut key = String::new();
-                    key.push_str(NodeType::Hog.convert_to_str());
+                    key.push_str(&NodeType::Hog.to_string());
                     key.push('\0');
                     key.push_str(source.as_ref().unwrap());
                     key.push('\0');
@@ -56,7 +56,7 @@ impl RequestStreamMessage for RequestCrusherStream {
     fn channel_key(&self, _source: Option<String>, record_type: &str) -> Result<Vec<String>> {
         if let Some(ref target_source) = self.source {
             let mut crusher_key = String::new();
-            crusher_key.push_str(NodeType::Crusher.convert_to_str());
+            crusher_key.push_str(&NodeType::Crusher.to_string());
             crusher_key.push('\0');
             crusher_key.push_str(&self.id);
             crusher_key.push('\0');

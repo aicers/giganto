@@ -27,7 +27,7 @@ use crate::{
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
 const BYTE_TO_BIT: u64 = 8;
-const STATS_ALLOWED_KINDS: [RawEventKind; 16] = [
+const STATS_ALLOWED_KINDS: [RawEventKind; 18] = [
     RawEventKind::Conn,
     RawEventKind::Dns,
     RawEventKind::Rdp,
@@ -43,6 +43,8 @@ const STATS_ALLOWED_KINDS: [RawEventKind; 16] = [
     RawEventKind::Tls,
     RawEventKind::Smb,
     RawEventKind::Nfs,
+    RawEventKind::Bootp,
+    RawEventKind::Dhcp,
     RawEventKind::Statistics,
 ];
 

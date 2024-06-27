@@ -24,6 +24,8 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     respBytes
                     origPkts
                     respPkts
+                    origL2Bytes
+                    respL2Bytes
                 }
                 ... on DnsRawEvent {
                     timestamp
@@ -282,6 +284,53 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     subject
                     agent
                     state
+                }
+                ... on BootpRawEvent {
+                    timestamp
+                    origAddr
+                    respAddr
+                    origPort
+                    respPort
+                    proto
+                    lastTime
+                    op
+                    htype
+                    hops
+                    xid
+                    ciaddr
+                    yiaddr
+                    siaddr
+                    giaddr
+                    chwaddr
+                    sname
+                    file
+                }
+                ... on DhcpRawEvent {
+                    timestamp
+                    origAddr
+                    respAddr
+                    origPort
+                    respPort
+                    proto
+                    lastTime
+                    msgType
+                    ciaddr
+                    yiaddr
+                    siaddr
+                    giaddr
+                    subnetMask
+                    router
+                    domainNameServer
+                    reqIpAddr
+                    leaseTime
+                    serverId
+                    paramReqList
+                    message
+                    renewalTime
+                    rebindingTime
+                    classId
+                    clientIdType
+                    clientId
                 }
             }
         }

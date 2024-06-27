@@ -14,8 +14,8 @@ use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, HttpBeforeV12, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21,
-    TlsBeforeV21,
+    ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpBeforeV12, HttpFromV12BeforeV21, NtlmBeforeV21,
+    SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
 use super::Database;
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0-alpha.2,<0.22.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -62,6 +62,12 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
             VersionReq::parse(">=0.19.0,<0.21.0-alpha.1").expect("valid version requirement"),
             Version::parse("0.21.0-alpha.1").expect("valid version"),
             migrate_0_19_to_0_21_0_alpha_1,
+        ),
+        (
+            VersionReq::parse(">=0.21.0-alpha.1,<0.21.0-alpha.2")
+                .expect("valid version requirement"),
+            Version::parse("0.21.0-alpha.2").expect("valid version"),
+            migrate_0_21_0_alpha_1_to_0_21_0_alpha_2,
         ),
     ];
 
@@ -242,13 +248,26 @@ fn migrate_0_19_to_0_21_0_alpha_1(db: &Database) -> Result<()> {
     let store = db.conn_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<ConnBeforeV21>(&val)?;
-        let convert_new: ConnFromV21 = old.into();
+        let old = bincode::deserialize::<ConnBeforeV21A1>(&val)?;
+        let convert_new: ConnFromV21A1BeforeV21A2 = old.into();
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
     info!("conn migration complete");
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn migrate_0_21_0_alpha_1_to_0_21_0_alpha_2(db: &Database) -> Result<()> {
+    let store = db.conn_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<ConnFromV21A1BeforeV21A2>(&val)?;
+        let convert_new: ConnFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
     Ok(())
 }
 
@@ -300,8 +319,8 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::{
         migration::migration_structures::{
-            ConnBeforeV21, HttpBeforeV12, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21,
-            SshBeforeV21, TlsBeforeV21,
+            ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpBeforeV12, HttpFromV12BeforeV21,
+            NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
         },
         Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Ntlm as NtlmFromV21,
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
@@ -572,7 +591,7 @@ mod tests {
         key.extend(timestamp.to_be_bytes());
 
         // insert old conn raw data
-        let old_conn = ConnBeforeV21 {
+        let old_conn = ConnBeforeV21A1 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -717,8 +736,8 @@ mod tests {
         //check conn migration
         let raw_event = conn_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::deserialize::<ConnFromV21>(&val).unwrap();
-        let new_conn = ConnFromV21 {
+        let store_conn = bincode::deserialize::<ConnFromV21A1BeforeV21A2>(&val).unwrap();
+        let new_conn = ConnFromV21A1BeforeV21A2 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -871,5 +890,64 @@ mod tests {
             last_alert: 13,
         };
         assert_eq!(new_tls, store_tls);
+    }
+
+    #[test]
+    fn migrate_0_21_0_alpha_1_to_0_21_0_alpha_2() {
+        // open temp db & store
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let conn_store = db.conn_store().unwrap();
+
+        // generate key
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let source = "src1";
+        let mut key = Vec::with_capacity(source.len() + 1 + std::mem::size_of::<i64>());
+        key.extend_from_slice(source.as_bytes());
+        key.push(0);
+        key.extend(timestamp.to_be_bytes());
+
+        // insert old conn raw data
+        let old_conn = ConnFromV21A1BeforeV21A2 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: String::new(),
+            duration: 1,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+        };
+        let ser_old_conn = bincode::serialize(&old_conn).unwrap();
+        conn_store.append(&key, &ser_old_conn).unwrap();
+
+        //migration 0.21.0-alpha.1 to 0.21.0-alpha.2
+        super::migrate_0_21_0_alpha_1_to_0_21_0_alpha_2(&db).unwrap();
+
+        //check conn migration
+        let raw_event = conn_store.iter_forward().next().unwrap();
+        let (_, val) = raw_event.expect("Failed to read Database");
+        let store_conn = bincode::deserialize::<ConnFromV21>(&val).unwrap();
+        let new_conn = ConnFromV21 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: String::new(),
+            duration: 1,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+            resp_l2_bytes: 0,
+            orig_l2_bytes: 0,
+        };
+        assert_eq!(new_conn, store_conn);
     }
 }

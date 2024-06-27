@@ -9,7 +9,8 @@ use async_graphql::{
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
+    Ssh, Tls,
 };
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
@@ -23,21 +24,23 @@ use super::{
     Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter,
 };
 use crate::graphql::client::derives::{
-    conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
-    kerberos_raw_events, ldap_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
-    ntlm_raw_events, rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
+    bootp_raw_events, conn_raw_events, dce_rpc_raw_events, dhcp_raw_events, dns_raw_events,
+    ftp_raw_events, http_raw_events, kerberos_raw_events, ldap_raw_events, mqtt_raw_events,
+    network_raw_events, nfs_raw_events, ntlm_raw_events, rdp_raw_events, search_bootp_raw_events,
+    search_conn_raw_events, search_dce_rpc_raw_events, search_dhcp_raw_events,
     search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
     search_kerberos_raw_events, search_ldap_raw_events, search_mqtt_raw_events,
     search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events, search_smb_raw_events,
     search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
-    smtp_raw_events, ssh_raw_events, tls_raw_events, ConnRawEvents, DceRpcRawEvents, DnsRawEvents,
-    FtpRawEvents, HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
-    NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
-    SearchConnRawEvents, SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
-    SearchHttpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents,
-    SearchNfsRawEvents, SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
-    SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
-    SshRawEvents, TlsRawEvents,
+    smtp_raw_events, ssh_raw_events, tls_raw_events, BootpRawEvents, ConnRawEvents,
+    DceRpcRawEvents, DhcpRawEvents, DnsRawEvents, FtpRawEvents, HttpRawEvents, KerberosRawEvents,
+    LdapRawEvents, MqttRawEvents, NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents,
+    NtlmRawEvents, RdpRawEvents, SearchBootpRawEvents, SearchConnRawEvents, SearchDceRpcRawEvents,
+    SearchDhcpRawEvents, SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents,
+    SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents,
+    SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents,
+    SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents,
+    TlsRawEvents,
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
 
@@ -138,6 +141,8 @@ struct ConnRawEvent {
     resp_bytes: u64,
     orig_pkts: u64,
     resp_pkts: u64,
+    orig_l2_bytes: u64,
+    resp_l2_bytes: u64,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -442,6 +447,59 @@ struct NfsRawEvent {
     write_files: Vec<String>,
 }
 
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [bootp_raw_events::BootpRawEventsBootpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnBootpRawEvent])]
+struct BootpRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    op: u8,
+    htype: u8,
+    hops: u8,
+    xid: u32,
+    ciaddr: String,
+    yiaddr: String,
+    siaddr: String,
+    giaddr: String,
+    chwaddr: Vec<u8>,
+    sname: String,
+    file: String,
+}
+
+#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEvent])]
+struct DhcpRawEvent {
+    timestamp: DateTime<Utc>,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    msg_type: u8,
+    ciaddr: String,
+    yiaddr: String,
+    siaddr: String,
+    giaddr: String,
+    subnet_mask: String,
+    router: Vec<String>,
+    domain_name_server: Vec<String>,
+    req_ip_addr: String,
+    lease_time: u32,
+    server_id: String,
+    param_req_list: Vec<u8>,
+    message: String,
+    renewal_time: u32,
+    rebinding_time: u32,
+    class_id: Vec<u8>,
+    client_id_type: u8,
+    client_id: Vec<u8>,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum NetworkRawEvents {
@@ -460,6 +518,8 @@ enum NetworkRawEvents {
     SmbRawEvent(SmbRawEvent),
     NfsRawEvent(NfsRawEvent),
     SmtpRawEvent(SmtpRawEvent),
+    BootpRawEvent(BootpRawEvent),
+    DhcpRawEvent(DhcpRawEvent),
 }
 
 impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for NetworkRawEvents {
@@ -510,6 +570,12 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
             network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::SmtpRawEvent(event) => {
                 NetworkRawEvents::SmtpRawEvent(event.into())
             }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::BootpRawEvent(event) => {
+                NetworkRawEvents::BootpRawEvent(event.into())
+            }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::DhcpRawEvent(event) => {
+                NetworkRawEvents::DhcpRawEvent(event.into())
+            }
         }
     }
 }
@@ -552,6 +618,8 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_bytes: val.resp_bytes,
             orig_pkts: val.orig_pkts,
             resp_pkts: val.resp_pkts,
+            orig_l2_bytes: val.orig_l2_bytes,
+            resp_l2_bytes: val.resp_l2_bytes,
         })
     }
 }
@@ -578,6 +646,67 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             file: val.file,
             file_size: val.file_size,
             file_id: val.file_id,
+        })
+    }
+}
+
+impl FromKeyValue<Bootp> for BootpRawEvent {
+    fn from_key_value(key: &[u8], val: Bootp) -> Result<Self> {
+        Ok(BootpRawEvent {
+            timestamp: get_timestamp_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_addr: val.resp_addr.to_string(),
+            resp_port: val.resp_port,
+            proto: val.proto,
+            last_time: val.last_time,
+            op: val.op,
+            htype: val.htype,
+            hops: val.hops,
+            xid: val.xid,
+            ciaddr: val.ciaddr.to_string(),
+            yiaddr: val.yiaddr.to_string(),
+            siaddr: val.siaddr.to_string(),
+            giaddr: val.giaddr.to_string(),
+            chwaddr: val.chwaddr.clone(),
+            sname: val.sname.clone(),
+            file: val.file.clone(),
+        })
+    }
+}
+
+impl FromKeyValue<Dhcp> for DhcpRawEvent {
+    fn from_key_value(key: &[u8], val: Dhcp) -> Result<Self> {
+        Ok(DhcpRawEvent {
+            timestamp: get_timestamp_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_addr: val.resp_addr.to_string(),
+            resp_port: val.resp_port,
+            proto: val.proto,
+            last_time: val.last_time,
+            msg_type: val.msg_type,
+            ciaddr: val.ciaddr.to_string(),
+            yiaddr: val.yiaddr.to_string(),
+            siaddr: val.siaddr.to_string(),
+            giaddr: val.giaddr.to_string(),
+            subnet_mask: val.subnet_mask.to_string(),
+            router: val.router.iter().map(ToString::to_string).collect(),
+            domain_name_server: val
+                .domain_name_server
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            req_ip_addr: val.req_ip_addr.to_string(),
+            lease_time: val.lease_time,
+            server_id: val.server_id.to_string(),
+            param_req_list: val.param_req_list.clone(),
+            message: val.message.clone(),
+            renewal_time: val.renewal_time,
+            rebinding_time: val.rebinding_time,
+            class_id: val.class_id.clone(),
+            client_id_type: val.client_id_type,
+            client_id: val.client_id.clone(),
         })
     }
 }
@@ -958,6 +1087,34 @@ async fn handle_paged_nfs_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
+async fn handle_paged_bootp_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, BootpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.bootp_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_dhcp_raw_events<'ctx>(
+    ctx: &Context<'ctx>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, DhcpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.dhcp_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 async fn handle_network_raw_events<'ctx>(
     ctx: &Context<'ctx>,
     filter: NetworkFilter,
@@ -1018,6 +1175,12 @@ async fn handle_network_raw_events<'ctx>(
             let (smtp_iter, _) =
                 get_peekable_iter(&db.smtp_store()?, &filter, &after, &before, first, last)?;
 
+            let (bootp_iter, _) =
+                get_peekable_iter(&db.bootp_store()?, &filter, &after, &before, first, last)?;
+
+            let (dhcp_iter, _) =
+                get_peekable_iter(&db.dhcp_store()?, &filter, &after, &before, first, last)?;
+
             let mut is_forward: bool = true;
             if before.is_some() || last.is_some() {
                 is_forward = false;
@@ -1039,6 +1202,8 @@ async fn handle_network_raw_events<'ctx>(
                 smb_iter,
                 nfs_iter,
                 smtp_iter,
+                bootp_iter,
+                dhcp_iter,
                 size,
                 is_forward,
             )
@@ -1453,6 +1618,58 @@ impl NetworkQuery {
         )
     }
 
+    async fn bootp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, BootpRawEvent>> {
+        let handler = handle_paged_bootp_raw_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            BootpRawEvents,
+            bootp_raw_events::Variables,
+            bootp_raw_events::ResponseData,
+            bootp_raw_events
+        )
+    }
+
+    async fn dhcp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, DhcpRawEvent>> {
+        let handler = handle_paged_dhcp_raw_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            DhcpRawEvents,
+            dhcp_raw_events::Variables,
+            dhcp_raw_events::ResponseData,
+            dhcp_raw_events
+        )
+    }
+
     async fn network_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -1506,6 +1723,7 @@ impl NetworkQuery {
             search_conn_raw_events
         )
     }
+
     async fn search_dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -1891,6 +2109,62 @@ impl NetworkQuery {
             search_nfs_raw_events
         )
     }
+
+    async fn search_bootp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.bootp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Bootp>(&exist_data, filter))
+        };
+
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
+            handler,
+            SearchBootpRawEvents,
+            search_bootp_raw_events::Variables,
+            search_bootp_raw_events::ResponseData,
+            search_bootp_raw_events
+        )
+    }
+
+    async fn search_dhcp_raw_events<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.dhcp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+            Ok(collect_exist_timestamp::<Dhcp>(&exist_data, filter))
+        };
+
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.source,
+            handler,
+            SearchDhcpRawEvents,
+            search_dhcp_raw_events::Variables,
+            search_dhcp_raw_events::ResponseData,
+            search_dhcp_raw_events
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1910,6 +2184,8 @@ fn network_connection(
     mut smb_iter: Peekable<FilteredIter<Smb>>,
     mut nfs_iter: Peekable<FilteredIter<Nfs>>,
     mut smtp_iter: Peekable<FilteredIter<Smtp>>,
+    mut bootp_iter: Peekable<FilteredIter<Bootp>>,
+    mut dhcp_iter: Peekable<FilteredIter<Dhcp>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -1934,6 +2210,8 @@ fn network_connection(
     let mut smb_data = smb_iter.next();
     let mut nfs_data = nfs_iter.next();
     let mut smtp_data = smtp_iter.next();
+    let mut bootp_data = bootp_iter.next();
+    let mut dhcp_data = dhcp_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -2026,20 +2304,35 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
-        let selected =
-            if is_forward {
-                timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
-                    kerberos_ts.min(ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(
-                        mqtt_ts.min(ldap_ts.min(tls_ts.min(smb_ts.min(nfs_ts.min(smtp_ts))))),
-                    )))),
-                ))))))
-            } else {
-                timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
-                    kerberos_ts.max(ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(
-                        mqtt_ts.max(ldap_ts.max(tls_ts.max(smb_ts.max(nfs_ts.max(smtp_ts))))),
-                    )))),
-                ))))))
-            };
+        let bootp_ts = if let Some((ref key, _)) = bootp_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let dhcp_ts = if let Some((ref key, _)) = dhcp_data {
+            get_timestamp_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let selected = if is_forward {
+            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
+                kerberos_ts.min(
+                    ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(mqtt_ts.min(ldap_ts.min(
+                        tls_ts.min(smb_ts.min(nfs_ts.min(smtp_ts.min(bootp_ts.min(dhcp_ts))))),
+                    ))))),
+                ),
+            ))))))
+        } else {
+            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
+                kerberos_ts.max(
+                    ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(mqtt_ts.max(ldap_ts.max(
+                        tls_ts.max(smb_ts.max(nfs_ts.max(smtp_ts.max(bootp_ts.max(dhcp_ts))))),
+                    ))))),
+                ),
+            ))))))
+        };
 
         match selected {
             _ if selected == conn_ts => {
@@ -2181,6 +2474,26 @@ fn network_connection(
                     smtp_data = smtp_iter.next();
                 };
             }
+            _ if selected == bootp_ts => {
+                if let Some((key, value)) = bootp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::BootpRawEvent(BootpRawEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    bootp_data = bootp_iter.next();
+                };
+            }
+            _ if selected == dhcp_ts => {
+                if let Some((key, value)) = dhcp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::DhcpRawEvent(DhcpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    dhcp_data = dhcp_iter.next();
+                };
+            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -2198,7 +2511,9 @@ fn network_connection(
                 && tls_data.is_none()
                 && smb_data.is_none()
                 && nfs_data.is_none()
-                && smtp_data.is_none())
+                && smtp_data.is_none()
+                && bootp_data.is_none()
+                && dhcp_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -2215,6 +2530,8 @@ fn network_connection(
                 || smb_data.is_some()
                 || nfs_data.is_some()
                 || smtp_data.is_some()
+                || bootp_data.is_some()
+                || dhcp_data.is_some()
             {
                 has_next_value = true;
             }
@@ -2251,6 +2568,8 @@ impl_from_giganto_range_structs_for_graphql_client!(
     tls_raw_events,
     nfs_raw_events,
     smb_raw_events,
+    bootp_raw_events,
+    dhcp_raw_events,
     search_conn_raw_events,
     search_dce_rpc_raw_events,
     search_dns_raw_events,
@@ -2265,7 +2584,9 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_smb_raw_events,
     search_smtp_raw_events,
     search_ssh_raw_events,
-    search_tls_raw_events
+    search_tls_raw_events,
+    search_bootp_raw_events,
+    search_dhcp_raw_events
 );
 
 impl_from_giganto_network_filter_for_graphql_client!(
@@ -2284,7 +2605,9 @@ impl_from_giganto_network_filter_for_graphql_client!(
     ldap_raw_events,
     tls_raw_events,
     nfs_raw_events,
-    smb_raw_events
+    smb_raw_events,
+    bootp_raw_events,
+    dhcp_raw_events
 );
 
 impl_from_giganto_search_filter_for_graphql_client!(
@@ -2302,5 +2625,7 @@ impl_from_giganto_search_filter_for_graphql_client!(
     search_smb_raw_events,
     search_smtp_raw_events,
     search_ssh_raw_events,
-    search_tls_raw_events
+    search_tls_raw_events,
+    search_bootp_raw_events,
+    search_dhcp_raw_events
 );

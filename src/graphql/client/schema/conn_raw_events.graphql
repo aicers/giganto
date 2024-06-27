@@ -22,6 +22,8 @@ query ConnRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 respBytes
                 origPkts
                 respPkts
+                origL2Bytes
+                respL2Bytes
             }
         }
     }

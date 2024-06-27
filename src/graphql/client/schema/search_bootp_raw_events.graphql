@@ -1,0 +1,3 @@
+query SearchBootpRawEvents($filter: SearchFilter!){
+    searchBootpRawEvents(filter: $filter)
+}

@@ -14,7 +14,8 @@ use giganto_client::{
     ingest::{
         log::Log,
         network::{
-            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
+            Smtp, Ssh, Tls,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -47,7 +48,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const ROOT_PATH: &str = "tests/certs/root.pem";
-const PROTOCOL_VERSION: &str = "0.21.0-alpha.1";
+const PROTOCOL_VERSION: &str = "0.21.0-alpha.2";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -197,6 +198,8 @@ fn gen_conn_raw_event() -> Vec<u8> {
         resp_bytes: 295,
         orig_pkts: 397,
         resp_pkts: 511,
+        orig_l2_bytes: 21515,
+        resp_l2_bytes: 27889,
     };
 
     bincode::serialize(&conn_body).unwrap()
@@ -534,6 +537,67 @@ fn gen_nfs_raw_event() -> Vec<u8> {
     bincode::serialize(&nfs_body).unwrap()
 }
 
+fn gen_bootp_raw_event() -> Vec<u8> {
+    let bootp_body = Bootp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        op: 0,
+        htype: 0,
+        hops: 0,
+        xid: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        chwaddr: vec![0, 1, 2],
+        sname: "sname".to_string(),
+        file: "file".to_string(),
+    };
+
+    bincode::serialize(&bootp_body).unwrap()
+}
+
+fn gen_dhcp_raw_event() -> Vec<u8> {
+    let dhcp_body = Dhcp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        msg_type: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
+        router: vec![
+            "192.168.1.11".parse::<IpAddr>().unwrap(),
+            "192.168.1.22".parse::<IpAddr>().unwrap(),
+        ],
+        domain_name_server: vec![
+            "192.168.1.33".parse::<IpAddr>().unwrap(),
+            "192.168.1.44".parse::<IpAddr>().unwrap(),
+        ],
+        req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+        lease_time: 1,
+        server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+        param_req_list: vec![0, 1, 2],
+        message: "message".to_string(),
+        renewal_time: 1,
+        rebinding_time: 1,
+        class_id: vec![0, 1, 2],
+        client_id_type: 1,
+        client_id: vec![0, 1, 2],
+    };
+
+    bincode::serialize(&dhcp_body).unwrap()
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(source, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
@@ -670,6 +734,20 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64
     ser_nfs_body
 }
 
+fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_bootp_body = gen_bootp_raw_event();
+    store.append(&key, &ser_bootp_body).unwrap();
+    ser_bootp_body
+}
+
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(source, None, timestamp);
+    let ser_dhcp_body = gen_dhcp_raw_event();
+    store.append(&key, &ser_dhcp_body).unwrap();
+    ser_dhcp_body
+}
+
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
@@ -689,6 +767,8 @@ async fn request_range_data_with_protocol() {
     const TLS_KIND: &str = "tls";
     const SMB_KIND: &str = "smb";
     const NFS_KIND: &str = "nfs";
+    const BOOTP_KIND: &str = "bootp";
+    const DHCP_KIND: &str = "dhcp";
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1670,6 +1750,134 @@ async fn request_range_data_with_protocol() {
         );
     }
 
+    // bootp protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let bootp_store = db.bootp_store().unwrap();
+        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let bootp_data = bincode::deserialize::<Bootp>(&insert_bootp_raw_event(
+            &bootp_store,
+            SOURCE,
+            send_bootp_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("valid date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(BOOTP_KIND),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Bootp::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            bootp_data.response_data(send_bootp_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
+    // dhcp protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let dhcp_store = db.dhcp_store().unwrap();
+        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let dhcp_data = bincode::deserialize::<Dhcp>(&insert_dhcp_raw_event(
+            &dhcp_store,
+            SOURCE,
+            send_dhcp_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("valid date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            source: String::from(SOURCE),
+            kind: String::from(DHCP_KIND),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Dhcp::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            dhcp_data.response_data(send_dhcp_time, SOURCE).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
     publish.conn.close(0u32.into(), b"publish_protocol_done");
     publish.endpoint.wait_idle().await;
 }
@@ -1912,6 +2120,8 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_TLS: RequestStreamRecord = RequestStreamRecord::Tls;
     const NETWORK_STREAM_SMB: RequestStreamRecord = RequestStreamRecord::Smb;
     const NETWORK_STREAM_NFS: RequestStreamRecord = RequestStreamRecord::Nfs;
+    const NETWORK_STREAM_BOOTP: RequestStreamRecord = RequestStreamRecord::Bootp;
+    const NETWORK_STREAM_DHCP: RequestStreamRecord = RequestStreamRecord::Dhcp;
 
     const SOURCE_HOG_ONE: &str = "src1";
     const SOURCE_HOG_TWO: &str = "src2";
@@ -3592,6 +3802,225 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(send_nfs_time, recv_timestamp);
         assert_eq!(nfs_data, recv_data);
+    }
+
+    {
+        let bootp_store = db.bootp_store().unwrap();
+
+        // direct bootp network event for hog (src1,src2)
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_BOOTP,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_bootp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let bootp_start_msg =
+            receive_hog_stream_start_message(&mut (*send_bootp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
+
+        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "bootp");
+        let bootp_data = gen_bootp_raw_event();
+
+        send_direct_stream(
+            &key,
+            &bootp_data,
+            send_bootp_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_bootp_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(bootp_data, recv_data[20..]);
+
+        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "bootp");
+        let bootp_data = gen_bootp_raw_event();
+
+        send_direct_stream(
+            &key,
+            &bootp_data,
+            send_bootp_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_bootp_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(bootp_data, recv_data[20..]);
+
+        // database bootp network event for crusher
+        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let bootp_data =
+            insert_bootp_raw_event(&bootp_store, SOURCE_CRUSHER_THREE, send_bootp_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_BOOTP,
+            CRUSHER_TYPE,
+            crusher_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_bootp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let bootp_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_bootp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(bootp_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_bootp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_bootp_time, recv_timestamp);
+        assert_eq!(bootp_data, recv_data);
+
+        //direct bootp network event for crusher
+        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "bootp");
+        let bootp_data = gen_bootp_raw_event();
+        send_direct_stream(
+            &key,
+            &bootp_data,
+            send_bootp_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_bootp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_bootp_time, recv_timestamp);
+        assert_eq!(bootp_data, recv_data);
+    }
+
+    {
+        let dhcp_store = db.dhcp_store().unwrap();
+
+        // direct dhcp network event for hog (src1,src2)
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_DHCP,
+            HOG_TYPE,
+            hog_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_dhcp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let dhcp_start_msg =
+            receive_hog_stream_start_message(&mut (*send_dhcp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
+
+        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_HOG_ONE, "dhcp");
+        let dhcp_data = gen_dhcp_raw_event();
+
+        send_direct_stream(
+            &key,
+            &dhcp_data,
+            send_dhcp_time,
+            SOURCE_HOG_ONE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_dhcp_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(dhcp_data, recv_data[20..]);
+
+        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_HOG_TWO, "dhcp");
+        let dhcp_data = gen_dhcp_raw_event();
+
+        send_direct_stream(
+            &key,
+            &dhcp_data,
+            send_dhcp_time,
+            SOURCE_HOG_TWO,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_hog_data(&mut (*send_dhcp_stream.borrow_mut()))
+            .await
+            .unwrap();
+        assert_eq!(dhcp_data, recv_data[20..]);
+
+        // database dhcp network event for crusher
+        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let dhcp_data = insert_dhcp_raw_event(&dhcp_store, SOURCE_CRUSHER_THREE, send_dhcp_time);
+
+        send_stream_request(
+            &mut publish.send,
+            NETWORK_STREAM_DHCP,
+            CRUSHER_TYPE,
+            crusher_msg.clone(),
+        )
+        .await
+        .unwrap();
+
+        let send_dhcp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+
+        let dhcp_start_msg =
+            receive_crusher_stream_start_message(&mut (*send_dhcp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(dhcp_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_dhcp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_dhcp_time, recv_timestamp);
+        assert_eq!(dhcp_data, recv_data);
+
+        //direct dhcp network event for crusher
+        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dhcp");
+        let dhcp_data = gen_dhcp_raw_event();
+        send_direct_stream(
+            &key,
+            &dhcp_data,
+            send_dhcp_time,
+            SOURCE_CRUSHER_THREE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_crusher_data(&mut (*send_dhcp_stream.borrow_mut()))
+                .await
+                .unwrap();
+        assert_eq!(send_dhcp_time, recv_timestamp);
+        assert_eq!(dhcp_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");

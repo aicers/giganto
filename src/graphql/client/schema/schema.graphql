@@ -1,3 +1,44 @@
+type BootpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  op: Int!
+  htype: Int!
+  hops: Int!
+  xid: Int!
+  ciaddr: String!
+  yiaddr: String!
+  siaddr: String!
+  giaddr: String!
+  chwaddr: [Int!]!
+  sname: String!
+  file: String!
+}
+
+type BootpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [BootpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [BootpRawEvent!]!
+}
+
+# An edge in a connection.
+type BootpRawEventEdge {
+  # The item at the end of the edge
+  node: BootpRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
 type ConnRawEvent {
   timestamp: DateTime!
   origAddr: String!
@@ -12,6 +53,8 @@ type ConnRawEvent {
   respBytes: Int!
   origPkts: Int!
   respPkts: Int!
+  origL2Bytes: Int!
+  respL2Bytes: Int!
 }
 
 type ConnRawEventConnection {
@@ -68,6 +111,54 @@ type DceRpcRawEventConnection {
 type DceRpcRawEventEdge {
   # The item at the end of the edge
   node: DceRpcRawEvent!
+
+  # A cursor for use in pagination
+  cursor: String!
+}
+
+type DhcpRawEvent {
+  timestamp: DateTime!
+  origAddr: String!
+  origPort: Int!
+  respAddr: String!
+  respPort: Int!
+  proto: Int!
+  lastTime: Int!
+  msgType: Int!
+  ciaddr: String!
+  yiaddr: String!
+  siaddr: String!
+  giaddr: String!
+  subnetMask: String!
+  router: [String!]!
+  domainNameServer: [String!]!
+  reqIpAddr: String!
+  leaseTime: Int!
+  serverId: String!
+  paramReqList: [Int!]!
+  message: String!
+  renewalTime: Int!
+  rebindingTime: Int!
+  classId: [Int!]!
+  clientIdType: Int!
+  clientId: [Int!]!
+}
+
+type DhcpRawEventConnection {
+  # Information to aid in pagination.
+  pageInfo: PageInfo!
+
+  # A list of edges.
+  edges: [DhcpRawEventEdge!]!
+
+  # A list of nodes.
+  nodes: [DhcpRawEvent!]!
+}
+
+# An edge in a connection.
+type DhcpRawEventEdge {
+  # The item at the end of the edge
+  node: DhcpRawEvent!
 
   # A cursor for use in pagination
   cursor: String!
@@ -803,6 +894,8 @@ union NetworkRawEvents =
   | SmbRawEvent
   | NfsRawEvent
   | SmtpRawEvent
+  | BootpRawEvent
+  | DhcpRawEvent
 
 type NetworkRawEventsConnection {
   # Information to aid in pagination.
@@ -1256,6 +1349,20 @@ type Query {
     first: Int
     last: Int
   ): NfsRawEventConnection!
+  bootpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): BootpRawEventConnection!
+  dhcpRawEvents(
+    filter: NetworkFilter!
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): DhcpRawEventConnection!
   networkRawEvents(
     filter: NetworkFilter!
     after: String
@@ -1278,6 +1385,8 @@ type Query {
   searchTlsRawEvents(filter: SearchFilter!): [DateTime!]!
   searchSmbRawEvents(filter: SearchFilter!): [DateTime!]!
   searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
+  searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
   export(exportType: String!, filter: ExportFilter!): String!
   packets(
     filter: PacketFilter!
