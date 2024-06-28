@@ -35,6 +35,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     requests are submitted.
   - Add `--config group_imports=StdExternalCrate` to the CI process like:
     - `cargo fmt -- --check --config group_imports=StdExternalCrate`
+- Update giganto-client to version `0.19.0`. Updating to this version results
+  in the following changes.
+  - Support bootp, dhcp events.
+  - Fixed code and structures based on changes to the conn protocols field.
+  - Update the compatibility version of the quic communication modules.
+    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
+    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
+    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
+  - Fixed code related to migration.
+    - Changed `COMPATIBLE_VERSION_REQ` to “>=0.21.0-alpha.2,<0.22.0”
+    - Added migration function in `migrate_0_21_0_alpha_1_to_0_21_0_alpha_2`.
+      This feature performs migration for changes to the conn protocol field
+      in version `0.21.0-alpha.2`.
 
 ## [0.20.0] - 2024-05-17
 

@@ -1,0 +1,3 @@
+query SearchDhcpRawEvents($filter: SearchFilter!){
+    searchDhcpRawEvents(filter: $filter)
+}

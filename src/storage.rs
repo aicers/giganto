@@ -17,7 +17,7 @@ pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
-    network::{DceRpc, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Rdp, Smb},
+    network::{Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Rdp, Smb},
     statistics::Statistics,
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -43,7 +43,7 @@ use crate::{
     ingest::implement::EventFilter,
 };
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
     "conn",
     "dns",
     "log",
@@ -64,6 +64,8 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "tls",
     "smb",
     "nfs",
+    "bootp",
+    "dhcp",
     "process create",
     "file create time",
     "network connect",
@@ -198,22 +200,17 @@ impl Database {
         } else {
             "invalid".to_string()
         };
-        let size = if let Some(u) = self.db.property_int_value_cf(
-            &self.get_cf_handle(cf_name)?,
-            properties::ESTIMATE_LIVE_DATA_SIZE,
-        )? {
-            u
-        } else {
-            0
-        };
-        let num_keys = if let Some(n) = self
+        let size = self
+            .db
+            .property_int_value_cf(
+                &self.get_cf_handle(cf_name)?,
+                properties::ESTIMATE_LIVE_DATA_SIZE,
+            )?
+            .unwrap_or_default();
+        let num_keys = self
             .db
             .property_int_value_cf(&self.get_cf_handle(cf_name)?, properties::ESTIMATE_NUM_KEYS)?
-        {
-            n
-        } else {
-            0
-        };
+            .unwrap_or_default();
 
         Ok(CfProperties {
             estimate_live_data_size: size,
@@ -369,6 +366,18 @@ impl Database {
     /// Returns the store for nfs
     pub fn nfs_store(&self) -> Result<RawEventStore<Nfs>> {
         let cf = self.get_cf_handle("nfs")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for bootp
+    pub fn bootp_store(&self) -> Result<RawEventStore<Bootp>> {
+        let cf = self.get_cf_handle("bootp")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for dhcp
+    pub fn dhcp_store(&self) -> Result<RawEventStore<Dhcp>> {
+        let cf = self.get_cf_handle("dhcp")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 

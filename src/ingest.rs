@@ -54,7 +54,7 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.21.0";
+const INGEST_VERSION_REQ: &str = ">=0.21.0-alpha.2,<0.22.0";
 
 type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
 
@@ -511,6 +511,34 @@ async fn handle_request(
                 Some(NetworkKey::new(&source, "nfs")),
                 source,
                 db.nfs_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
+        RawEventKind::Bootp => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::Bootp,
+                Some(NetworkKey::new(&source, "bootp")),
+                source,
+                db.bootp_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
+        RawEventKind::Dhcp => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::Dhcp,
+                Some(NetworkKey::new(&source, "dhcp")),
+                source,
+                db.dhcp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
                 ack_trans_cnt,

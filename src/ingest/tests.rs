@@ -13,7 +13,8 @@ use giganto_client::{
     ingest::{
         log::{Log, OpLog, OpLogLevel},
         network::{
-            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
+            Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
@@ -49,7 +50,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const ROOT_PATH: &str = "tests/certs/root.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.21.0-alpha.1";
+const PROTOCOL_VERSION: &str = "0.21.0-alpha.2";
 
 struct TestClient {
     conn: Connection,
@@ -177,6 +178,8 @@ async fn conn() {
         resp_bytes: 295,
         orig_pkts: 397,
         resp_pkts: 511,
+        orig_l2_bytes: 21515,
+        resp_l2_bytes: 27889,
     };
 
     send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
@@ -972,6 +975,112 @@ async fn nfs() {
     client.endpoint.wait_idle().await;
 }
 
+#[tokio::test]
+async fn bootp() {
+    const RAW_EVENT_KIND_BOOTP: RawEventKind = RawEventKind::Bootp;
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_bootp, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let bootp_body = Bootp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        op: 0,
+        htype: 0,
+        hops: 0,
+        xid: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        chwaddr: vec![0, 1, 2],
+        sname: "sname".to_string(),
+        file: "file".to_string(),
+    };
+
+    send_record_header(&mut send_bootp, RAW_EVENT_KIND_BOOTP)
+        .await
+        .unwrap();
+    send_events(
+        &mut send_bootp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        bootp_body,
+    )
+    .await
+    .unwrap();
+
+    send_bootp.finish().expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"bootp_done");
+    client.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn dhcp() {
+    const RAW_EVENT_KIND_DHCP: RawEventKind = RawEventKind::Dhcp;
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_dhcp, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let dhcp_body = Dhcp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        msg_type: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
+        router: vec![
+            "192.168.1.11".parse::<IpAddr>().unwrap(),
+            "192.168.1.22".parse::<IpAddr>().unwrap(),
+        ],
+        domain_name_server: vec![
+            "192.168.1.33".parse::<IpAddr>().unwrap(),
+            "192.168.1.44".parse::<IpAddr>().unwrap(),
+        ],
+        req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+        lease_time: 1,
+        server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+        param_req_list: vec![0, 1, 2],
+        message: "message".to_string(),
+        renewal_time: 1,
+        rebinding_time: 1,
+        class_id: vec![0, 1, 2],
+        client_id_type: 1,
+        client_id: vec![0, 1, 2],
+    };
+
+    send_record_header(&mut send_dhcp, RAW_EVENT_KIND_DHCP)
+        .await
+        .unwrap();
+    send_events(
+        &mut send_dhcp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        dhcp_body,
+    )
+    .await
+    .unwrap();
+
+    send_dhcp.finish().expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"dhcp_done");
+    client.endpoint.wait_idle().await;
+}
 #[tokio::test]
 async fn statistics() {
     const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;

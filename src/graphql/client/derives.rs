@@ -64,6 +64,22 @@ pub struct RdpRawEvents;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/bootp_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct BootpRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/dhcp_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct DhcpRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
     query_path = "src/graphql/client/schema/periodic_time_series.graphql",
     response_derives = "Clone, Default, PartialEq"
 )]
@@ -396,6 +412,22 @@ pub struct SearchSmbRawEvents;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct SearchNfsRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_bootp_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchBootpRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_dhcp_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchDhcpRawEvents;
 
 #[derive(GraphQLQuery)]
 #[graphql(

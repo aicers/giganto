@@ -5,7 +5,8 @@ use chrono::{Duration, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLog, OpLogLevel},
     network::{
-        Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
+        Ssh, Tls,
     },
     timeseries::PeriodicTimeSeries,
 };
@@ -142,6 +143,8 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i
         resp_bytes: 295,
         orig_pkts: 397,
         resp_pkts: 511,
+        orig_l2_bytes: 21515,
+        resp_l2_bytes: 27889,
     };
     let ser_conn_body = bincode::serialize(&conn_body).unwrap();
 
@@ -1418,4 +1421,175 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64
     let ser_nfs_body = bincode::serialize(&nfs_body).unwrap();
 
     store.append(&key, &ser_nfs_body).unwrap();
+}
+
+#[tokio::test]
+async fn export_bootp() {
+    let schema = TestSchema::new();
+    let store = schema.db.bootp_store().unwrap();
+
+    insert_bootp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(
+        &store,
+        "ingest src 1",
+        Utc::now().timestamp_nanos_opt().unwrap(),
+    );
+
+    // export csv file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "bootp",
+                sourceId: "src1",
+                time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            ,exportType:"csv")
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.data.to_string().contains("bootp"));
+
+    // export json file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "bootp",
+                sourceId: "ingest src 1",
+                time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            ,exportType:"json")
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.data.to_string().contains("bootp"));
+}
+
+fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, source: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(source.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let bootp_body = Bootp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        op: 0,
+        htype: 0,
+        hops: 0,
+        xid: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        chwaddr: vec![0, 1, 2],
+        sname: "sname".to_string(),
+        file: "file".to_string(),
+    };
+    let ser_bootp_body = bincode::serialize(&bootp_body).unwrap();
+
+    store.append(&key, &ser_bootp_body).unwrap();
+}
+
+#[tokio::test]
+async fn export_dhcp() {
+    let schema = TestSchema::new();
+    let store = schema.db.dhcp_store().unwrap();
+
+    insert_dhcp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(
+        &store,
+        "ingest src 1",
+        Utc::now().timestamp_nanos_opt().unwrap(),
+    );
+
+    // export csv file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "dhcp",
+                sourceId: "src1",
+                time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            ,exportType:"csv")
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.data.to_string().contains("dhcp"));
+
+    // export json file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "dhcp",
+                sourceId: "ingest src 1",
+                time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            ,exportType:"json")
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.data.to_string().contains("dhcp"));
+}
+
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(source.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let dhcp_body = Dhcp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        last_time: 1,
+        msg_type: 0,
+        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
+        router: vec![
+            "192.168.1.11".parse::<IpAddr>().unwrap(),
+            "192.168.1.22".parse::<IpAddr>().unwrap(),
+        ],
+        domain_name_server: vec![
+            "192.168.1.33".parse::<IpAddr>().unwrap(),
+            "192.168.1.44".parse::<IpAddr>().unwrap(),
+        ],
+        req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+        lease_time: 1,
+        server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+        param_req_list: vec![0, 1, 2],
+        message: "message".to_string(),
+        renewal_time: 1,
+        rebinding_time: 1,
+        class_id: vec![0, 1, 2],
+        client_id_type: 1,
+        client_id: vec![0, 1, 2],
+    };
+    let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
+
+    store.append(&key, &ser_dhcp_body).unwrap();
 }

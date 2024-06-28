@@ -19,8 +19,8 @@ use giganto_client::{
         log::{Log, OpLog, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
-            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb,
-            Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass,
+            Qtype, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -51,7 +51,7 @@ use crate::{
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
 
-const ADDRESS_PROTOCOL: [&str; 16] = [
+const ADDRESS_PROTOCOL: [&str; 18] = [
     "conn",
     "dns",
     "http",
@@ -67,6 +67,8 @@ const ADDRESS_PROTOCOL: [&str; 16] = [
     "tls",
     "smb",
     "nfs",
+    "bootp",
+    "dhcp",
     "network connect",
 ];
 const AGENT_PROTOCOL: [&str; 14] = [
@@ -106,6 +108,8 @@ struct ConnJsonOutput {
     resp_bytes: u64,
     orig_pkts: u64,
     resp_pkts: u64,
+    orig_l2_bytes: u64,
+    resp_l2_bytes: u64,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -407,6 +411,59 @@ struct NfsJsonOutput {
     last_time: i64,
     read_files: Vec<String>,
     write_files: Vec<String>,
+}
+
+#[derive(Serialize, Debug)]
+struct BootpJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    op: u8,
+    htype: u8,
+    hops: u8,
+    xid: u32,
+    ciaddr: String,
+    yiaddr: String,
+    siaddr: String,
+    giaddr: String,
+    chwaddr: Vec<u8>,
+    sname: String,
+    file: String,
+}
+
+#[derive(Serialize, Debug)]
+struct DhcpJsonOutput {
+    timestamp: String,
+    source: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    last_time: i64,
+    msg_type: u8,
+    ciaddr: String,
+    yiaddr: String,
+    siaddr: String,
+    giaddr: String,
+    subnet_mask: String,
+    router: Vec<String>,
+    domain_name_server: Vec<String>,
+    req_ip_addr: String,
+    lease_time: u32,
+    server_id: String,
+    param_req_list: Vec<u8>,
+    message: String,
+    renewal_time: u32,
+    rebinding_time: u32,
+    class_id: Vec<u8>,
+    client_id_type: u8,
+    client_id: Vec<u8>,
 }
 
 #[derive(Serialize, Debug)]
@@ -924,6 +981,8 @@ impl JsonOutput<ConnJsonOutput> for Conn {
             resp_bytes: self.resp_bytes,
             orig_pkts: self.orig_pkts,
             resp_pkts: self.resp_pkts,
+            orig_l2_bytes: self.orig_l2_bytes,
+            resp_l2_bytes: self.resp_l2_bytes,
         })
     }
 }
@@ -1051,6 +1110,69 @@ impl JsonOutput<MqttJsonOutput> for Mqtt {
             connack_reason: self.connack_reason,
             subscribe: self.subscribe.clone(),
             suback_reason: to_vec_string(&self.suback_reason),
+        })
+    }
+}
+
+impl JsonOutput<BootpJsonOutput> for Bootp {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<BootpJsonOutput> {
+        Ok(BootpJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            last_time: self.last_time,
+            op: self.op,
+            htype: self.htype,
+            hops: self.hops,
+            xid: self.xid,
+            ciaddr: self.ciaddr.to_string(),
+            yiaddr: self.yiaddr.to_string(),
+            siaddr: self.siaddr.to_string(),
+            giaddr: self.giaddr.to_string(),
+            chwaddr: self.chwaddr.clone(),
+            sname: self.sname.clone(),
+            file: self.file.clone(),
+        })
+    }
+}
+
+impl JsonOutput<DhcpJsonOutput> for Dhcp {
+    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DhcpJsonOutput> {
+        Ok(DhcpJsonOutput {
+            timestamp,
+            source,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            last_time: self.last_time,
+            msg_type: self.msg_type,
+            ciaddr: self.ciaddr.to_string(),
+            yiaddr: self.yiaddr.to_string(),
+            siaddr: self.siaddr.to_string(),
+            giaddr: self.giaddr.to_string(),
+            subnet_mask: self.subnet_mask.to_string(),
+            router: self.router.iter().map(ToString::to_string).collect(),
+            domain_name_server: self
+                .domain_name_server
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            req_ip_addr: self.req_ip_addr.to_string(),
+            lease_time: self.lease_time,
+            server_id: self.server_id.to_string(),
+            param_req_list: self.param_req_list.clone(),
+            message: self.message.clone(),
+            renewal_time: self.renewal_time,
+            rebinding_time: self.rebinding_time,
+            class_id: self.class_id.clone(),
+            client_id_type: self.client_id_type,
+            client_id: self.client_id.clone(),
         })
     }
 }
@@ -1968,6 +2090,46 @@ fn export_by_protocol(
         }),
         "nfs" => tokio::spawn(async move {
             if let Ok(store) = db.nfs_store() {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "bootp" => tokio::spawn(async move {
+            if let Ok(store) = db.bootp_store() {
+                match process_export(
+                    &store,
+                    &filter,
+                    &export_type,
+                    &export_done_path,
+                    &export_progress_path,
+                ) {
+                    Ok(result) => {
+                        info!("{}", result);
+                    }
+                    Err(e) => {
+                        error!("Failed to export file: {:?}", e);
+                    }
+                }
+            } else {
+                error!("Failed to open db store");
+            }
+        }),
+        "dhcp" => tokio::spawn(async move {
+            if let Ok(store) = db.dhcp_store() {
                 match process_export(
                     &store,
                     &filter,

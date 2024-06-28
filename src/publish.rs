@@ -3,6 +3,7 @@ pub mod implement;
 mod tests;
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -14,7 +15,8 @@ use giganto_client::frame::send_raw;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
+    Ssh, Tls,
 };
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -58,7 +60,7 @@ use crate::server::{
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::{IngestSources, PcapSources, StreamDirectChannels};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.21.0-alpha.1,<0.22.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.21.0-alpha.2,<0.22.0";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -725,6 +727,47 @@ where
                 error!("Failed to open nfs store");
             }
         }
+        RequestStreamRecord::Bootp => {
+            if let Ok(store) = db.bootp_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    kind,
+                    node_type,
+                    stream_direct_channels,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open bootp store");
+            }
+        }
+        RequestStreamRecord::Dhcp => {
+            if let Ok(store) = db.dhcp_store() {
+                if let Err(e) = send_stream(
+                    store,
+                    conn,
+                    record_type,
+                    request_msg,
+                    source,
+                    kind,
+                    node_type,
+                    stream_direct_channels,
+                )
+                .await
+                {
+                    error!("Failed to send network stream : {}", e);
+                }
+            } else {
+                error!("Failed to open dhcp store");
+            }
+        }
+
         RequestStreamRecord::FileCreate => {
             if let Ok(store) = db.file_create_store() {
                 if let Err(e) = send_stream(
@@ -783,7 +826,7 @@ pub async fn send_direct_stream(
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
-            if req_key.contains(NodeType::Hog.convert_to_str()) {
+            if req_key.contains(&NodeType::Hog.to_string()) {
                 let source_bytes = bincode::serialize(&source)?;
                 let source_len = u32::try_from(source_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&source_len);
@@ -810,11 +853,11 @@ async fn send_stream<T, N>(
     stream_direct_channels: StreamDirectChannels,
 ) -> Result<()>
 where
-    T: EventFilter + Serialize + DeserializeOwned,
+    T: EventFilter + Serialize + DeserializeOwned + Display,
     N: RequestStreamMessage,
 {
     let mut sender = conn.open_uni().await?;
-    let channel_keys = msg.channel_key(source, record_type.convert_to_str())?;
+    let channel_keys = msg.channel_key(source, &record_type.to_string())?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let channel_remove_keys = channel_keys.clone();
@@ -1150,6 +1193,32 @@ async fn handle_request(
                     process_range_data::<Nfs, u8>(
                         &mut send,
                         db.nfs_store().context("Failed to open nfs store")?,
+                        msg,
+                        ingest_sources,
+                        peers,
+                        peer_idents,
+                        certs.clone(),
+                        false,
+                    )
+                    .await?;
+                }
+                RawEventKind::Bootp => {
+                    process_range_data::<Bootp, u8>(
+                        &mut send,
+                        db.bootp_store().context("Failed to open bootp store")?,
+                        msg,
+                        ingest_sources,
+                        peers,
+                        peer_idents,
+                        certs.clone(),
+                        false,
+                    )
+                    .await?;
+                }
+                RawEventKind::Dhcp => {
+                    process_range_data::<Dhcp, u8>(
+                        &mut send,
+                        db.dhcp_store().context("Failed to open dhcp store")?,
                         msg,
                         ingest_sources,
                         peers,
@@ -1576,6 +1645,30 @@ async fn handle_request(
                     process_raw_events::<Nfs, u8>(
                         &mut send,
                         db.nfs_store()?,
+                        msg,
+                        ingest_sources,
+                        peers,
+                        peer_idents,
+                        certs.clone(),
+                    )
+                    .await?;
+                }
+                RawEventKind::Bootp => {
+                    process_raw_events::<Bootp, u8>(
+                        &mut send,
+                        db.bootp_store()?,
+                        msg,
+                        ingest_sources,
+                        peers,
+                        peer_idents,
+                        certs.clone(),
+                    )
+                    .await?;
+                }
+                RawEventKind::Dhcp => {
+                    process_raw_events::<Dhcp, u8>(
+                        &mut send,
+                        db.dhcp_store()?,
                         msg,
                         ingest_sources,
                         peers,
