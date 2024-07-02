@@ -1,13 +1,11 @@
 #![allow(clippy::module_name_repetitions)]
 
-use super::TIMESTAMP_SIZE;
-use crate::{
-    graphql::{
-        client::derives::{statistics as stats, Statistics as Stats},
-        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client, TimeRange,
-    },
-    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
+use std::{
+    collections::{HashMap, HashSet},
+    iter::Peekable,
+    str::FromStr,
 };
+
 use anyhow::anyhow;
 use async_graphql::{Context, Error, Object, Result, SimpleObject};
 use giganto_client::{ingest::statistics::Statistics, RawEventKind};
@@ -16,12 +14,16 @@ use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
-use std::{
-    collections::{HashMap, HashSet},
-    iter::Peekable,
-    str::FromStr,
-};
 use tracing::error;
+
+use super::TIMESTAMP_SIZE;
+use crate::{
+    graphql::{
+        client::derives::{statistics as stats, Statistics as Stats},
+        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client, TimeRange,
+    },
+    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
+};
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
 const BYTE_TO_BIT: u64 = 8;
@@ -287,10 +289,12 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use std::net::SocketAddr;
+
     use chrono::Utc;
     use giganto_client::{ingest::statistics::Statistics, RawEventKind};
-    use std::net::SocketAddr;
+
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn test_statistics() {

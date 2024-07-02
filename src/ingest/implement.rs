@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use giganto_client::ingest::{
     log::{Log, OpLog, OpLogLevel, SecuLog},
     netflow::{Netflow5, Netflow9},
@@ -13,7 +15,6 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
     Packet,
 };
-use std::net::IpAddr;
 
 #[allow(unused)]
 pub trait EventFilter {

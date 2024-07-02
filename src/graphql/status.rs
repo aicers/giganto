@@ -1,15 +1,17 @@
-use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
-#[cfg(debug_assertions)]
-use crate::storage::Database;
-use crate::AckTransmissionCount;
-use anyhow::{anyhow, Context as ct};
-use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
     time::Duration,
 };
+
+use anyhow::{anyhow, Context as ct};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use toml_edit::{value, DocumentMut, InlineTable};
+
+use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
+#[cfg(debug_assertions)]
+use crate::storage::Database;
+use crate::AckTransmissionCount;
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
 const CONFIG_INGEST_SRV_ADDR: &str = "ingest_srv_addr";

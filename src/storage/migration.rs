@@ -1,21 +1,23 @@
 //! Routines to check the database format version and migrate it if necessary.
-use super::Database;
-use crate::{
-    graphql::TIMESTAMP_SIZE,
-    ingest::implement::EventFilter,
-    storage::{RawEventStore, StorageKey},
-};
-use anyhow::{anyhow, Context, Result};
-use giganto_client::ingest::log::SecuLog;
-use semver::{Version, VersionReq};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs::{create_dir_all, File},
     io::{Read, Write},
     net::IpAddr,
     path::Path,
 };
+
+use anyhow::{anyhow, Context, Result};
+use giganto_client::ingest::log::SecuLog;
+use semver::{Version, VersionReq};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::info;
+
+use super::Database;
+use crate::{
+    graphql::TIMESTAMP_SIZE,
+    ingest::implement::EventFilter,
+    storage::{RawEventStore, StorageKey},
+};
 
 const COMPATIBLE_VERSION_REQ: &str = ">=0.19.0,<0.21.0";
 
@@ -285,8 +287,8 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::COMPATIBLE_VERSION_REQ;
-    use crate::storage::{Database, DbOptions, StorageKey};
+    use std::net::IpAddr;
+
     use chrono::Utc;
     use giganto_client::ingest::{
         log::SecuLog,
@@ -295,7 +297,9 @@ mod tests {
     };
     use semver::{Version, VersionReq};
     use serde::{Deserialize, Serialize};
-    use std::net::IpAddr;
+
+    use super::COMPATIBLE_VERSION_REQ;
+    use crate::storage::{Database, DbOptions, StorageKey};
 
     #[test]
     fn version() {

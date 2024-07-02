@@ -2,10 +2,15 @@
 
 mod migration;
 
-use crate::{
-    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
-    ingest::implement::EventFilter,
+use std::{
+    collections::HashSet,
+    marker::PhantomData,
+    ops::Deref,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::{
@@ -31,16 +36,13 @@ use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBIteratorWithThreadMode, Options, ReadOptions, DB,
 };
 use serde::de::DeserializeOwned;
-use std::{
-    collections::HashSet,
-    marker::PhantomData,
-    ops::Deref,
-    path::Path,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
 use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
+
+use crate::{
+    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
+    ingest::implement::EventFilter,
+};
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 37] = [
     "conn",
@@ -197,22 +199,17 @@ impl Database {
         } else {
             "invalid".to_string()
         };
-        let size = if let Some(u) = self.db.property_int_value_cf(
-            &self.get_cf_handle(cf_name)?,
-            properties::ESTIMATE_LIVE_DATA_SIZE,
-        )? {
-            u
-        } else {
-            0
-        };
-        let num_keys = if let Some(n) = self
+        let size = self
+            .db
+            .property_int_value_cf(
+                &self.get_cf_handle(cf_name)?,
+                properties::ESTIMATE_LIVE_DATA_SIZE,
+            )?
+            .unwrap_or_default();
+        let num_keys = self
             .db
             .property_int_value_cf(&self.get_cf_handle(cf_name)?, properties::ESTIMATE_NUM_KEYS)?
-        {
-            n
-        } else {
-            0
-        };
+            .unwrap_or_default();
 
         Ok(CfProperties {
             estimate_live_data_size: size,
