@@ -553,7 +553,7 @@ fn gen_bootp_raw_event() -> Vec<u8> {
         yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
         siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
         giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
-        chwaddr: vec![0, 1, 2],
+        chaddr: vec![0, 1, 2],
         sname: "sname".to_string(),
         file: "file".to_string(),
     };
