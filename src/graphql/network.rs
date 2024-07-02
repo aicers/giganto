@@ -465,7 +465,7 @@ struct BootpRawEvent {
     yiaddr: String,
     siaddr: String,
     giaddr: String,
-    chwaddr: Vec<u8>,
+    chaddr: Vec<u8>,
     sname: String,
     file: String,
 }
@@ -668,7 +668,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             yiaddr: val.yiaddr.to_string(),
             siaddr: val.siaddr.to_string(),
             giaddr: val.giaddr.to_string(),
-            chwaddr: val.chwaddr.clone(),
+            chaddr: val.chaddr.clone(),
             sname: val.sname.clone(),
             file: val.file.clone(),
         })

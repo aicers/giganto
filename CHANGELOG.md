@@ -48,6 +48,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     - Added migration function in `migrate_0_21_0_alpha_1_to_0_21_0_alpha_2`.
       This feature performs migration for changes to the conn protocol field
       in version `0.21.0-alpha.2`.
+- Rename `chwaddr` to `chaddr` because the field names within the `Bootp` structure
+  of the giganto-client have changed.
 
 ## [0.20.0] - 2024-05-17
 

@@ -301,7 +301,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     yiaddr
                     siaddr
                     giaddr
-                    chwaddr
+                    chaddr
                     sname
                     file
                 }

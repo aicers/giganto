@@ -24,7 +24,7 @@ query BootpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $
                 yiaddr
                 siaddr
                 giaddr
-                chwaddr
+                chaddr
                 sname
                 file
             }

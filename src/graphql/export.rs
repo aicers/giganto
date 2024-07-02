@@ -431,7 +431,7 @@ struct BootpJsonOutput {
     yiaddr: String,
     siaddr: String,
     giaddr: String,
-    chwaddr: Vec<u8>,
+    chaddr: Vec<u8>,
     sname: String,
     file: String,
 }
@@ -1133,7 +1133,7 @@ impl JsonOutput<BootpJsonOutput> for Bootp {
             yiaddr: self.yiaddr.to_string(),
             siaddr: self.siaddr.to_string(),
             giaddr: self.giaddr.to_string(),
-            chwaddr: self.chwaddr.clone(),
+            chaddr: self.chaddr.clone(),
             sname: self.sname.clone(),
             file: self.file.clone(),
         })
