@@ -1,3 +1,11 @@
+use std::{fmt::Debug, net::IpAddr};
+
+use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
+use chrono::{DateTime, Utc};
+use giganto_client::ingest::log::SecuLog;
+use giganto_proc_macro::ConvertGraphQLEdgesNode;
+use graphql_client::GraphQLQuery;
+
 use super::{
     check_address, check_contents, check_port, get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster, FromKeyValue,
@@ -10,12 +18,6 @@ use crate::{
     },
     storage::{Database, KeyExtractor},
 };
-use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
-use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::SecuLog;
-use giganto_proc_macro::ConvertGraphQLEdgesNode;
-use graphql_client::GraphQLQuery;
-use std::{fmt::Debug, net::IpAddr};
 
 #[derive(Default)]
 pub(super) struct SecurityLogQuery;
@@ -175,10 +177,12 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
+    use giganto_client::ingest::log::SecuLog;
+
     use crate::graphql::tests::TestSchema;
     use crate::storage::RawEventStore;
-    use giganto_client::ingest::log::SecuLog;
-    use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_secu_log_event() {

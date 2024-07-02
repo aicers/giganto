@@ -1,10 +1,11 @@
+use chrono::DateTime;
+use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
+
 use super::{base64_engine, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
 use crate::{
     graphql::{tests::TestSchema, TimeRange},
     storage::RawEventStore,
 };
-use chrono::DateTime;
-use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
 #[tokio::test]
 async fn load_time_range() {

@@ -1,7 +1,8 @@
+use std::{sync::Arc, time::Duration};
+
 use anyhow::{bail, Context, Result};
 use quinn::{ClientConfig, Connection, ServerConfig, TransportConfig};
 use rustls::{Certificate, PrivateKey, RootCertStore};
-use std::{sync::Arc, time::Duration};
 use tracing::info;
 use x509_parser::nom::Parser;
 

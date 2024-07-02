@@ -7,18 +7,6 @@ mod settings;
 mod storage;
 mod web;
 
-use crate::{
-    graphql::{status::TEMP_TOML_POST_FIX, NodeName},
-    server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
-    storage::migrate_data_dir,
-};
-use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
-use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
-use quinn::Connection;
-use rocksdb::DB;
-use rustls::{Certificate, PrivateKey};
-use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
@@ -27,6 +15,14 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, Utc};
+use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
+use quinn::Connection;
+use rocksdb::DB;
+use rustls::{Certificate, PrivateKey};
+use settings::Settings;
 use storage::Database;
 use tokio::{
     runtime, select,
@@ -38,6 +34,12 @@ use tracing::{error, info, metadata::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+};
+
+use crate::{
+    graphql::{status::TEMP_TOML_POST_FIX, NodeName},
+    server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
+    storage::migrate_data_dir,
 };
 
 const ONE_DAY: u64 = 60 * 60 * 24;

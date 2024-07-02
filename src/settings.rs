@@ -1,8 +1,10 @@
 //! Configurations for the application.
-use crate::peer::PeerIdentity;
+use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
+
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
-use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
+
+use crate::peer::PeerIdentity;
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";

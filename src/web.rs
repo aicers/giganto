@@ -1,9 +1,11 @@
-use crate::graphql::Schema;
-use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+
+use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use tokio::{sync::Notify, task};
 use tracing::info;
 use warp::{http::Response as HttpResponse, Filter};
+
+use crate::graphql::Schema;
 
 /// Runs the GraphQL server.
 ///
