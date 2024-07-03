@@ -1,5 +1,5 @@
-query SmbRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    smbRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+query SmbRawEvents($filter: NetworkOptFilter, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean){
+    smbRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -10,6 +10,7 @@ query SmbRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
             cursor
             node {
                 timestamp
+                source
                 origAddr
                 respAddr
                 origPort

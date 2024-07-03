@@ -1,5 +1,5 @@
-query LdapRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    ldapRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+query LdapRawEvents($filter: NetworkOptFilter, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean){
+    ldapRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -10,6 +10,7 @@ query LdapRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
             cursor
             node {
                 timestamp
+                source
                 origAddr
                 respAddr
                 origPort

@@ -124,6 +124,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -279,6 +280,8 @@ impl StatisticsQuery {
 - Giganto Cluster 사용법
   - 다음과 같이 `request_all_peers_if_source_is_none` 으로 시작하는 macro
     variant를 호출하면 됩니다.
+  - 쿼리의 Filter 구조체가 Option으로 변경됨에 따라 변환을 위한 표현식도 또한
+    `filter.map(std::convert::Into::into)` 로 변경해 주면 됩니다.
 
 ```rust
 pub struct NetflowFilter {
@@ -297,20 +300,20 @@ impl NetflowQuery {
     async fn netflow5_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        mut filter: NetflowFilter,
+        filter: Option<NetflowFilter>, // check!
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
         request_from_peer: Option<bool>,
     ) -> Result<Connection<String, Netflow5RawEvent>> {
-        filter.kind = Some("netflow5".to_string());
         let handler = handle_netflow5_raw_events;
 
         paged_events_in_cluster!(
             request_all_peers_if_source_is_none  // here!
             ctx,
             filter,
+            filter.map(std::convert::Into::into), // here!
             after,
             before,
             first,

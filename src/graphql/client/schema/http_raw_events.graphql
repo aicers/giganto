@@ -1,5 +1,5 @@
-query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    httpRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+query HttpRawEvents($filter: NetworkOptFilter, $after: String, $before: String, $first: Int, $last: Int, $requestFromPeer: Boolean){
+    httpRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last, requestFromPeer: $requestFromPeer){
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -10,6 +10,7 @@ query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
             cursor
             node {
                 timestamp
+                source
                 origAddr
                 respAddr
                 origPort

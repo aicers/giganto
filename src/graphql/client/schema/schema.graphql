@@ -1,5 +1,6 @@
 type ConnRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -40,6 +41,7 @@ scalar DateTime
 
 type DceRpcRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -107,6 +109,7 @@ type DnsEventEventEdge {
 
 type DnsRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -328,6 +331,7 @@ type FileDeleteEventEdge {
 
 type FtpRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -391,6 +395,7 @@ type GigantoStatus {
 
 type HttpRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -491,6 +496,7 @@ input IpRange {
 
 type KerberosRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -530,6 +536,7 @@ type KerberosRawEventEdge {
 
 type LdapRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -598,6 +605,7 @@ type LogRawEventEdge {
 
 type MqttRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -784,6 +792,15 @@ input NetworkFilter {
   agentId: String
 }
 
+input NetworkOptFilter {
+  time: TimeRange
+  source: String
+  origAddr: IpRange
+  respAddr: IpRange
+  origPort: PortRange
+  respPort: PortRange
+}
+
 union NetworkRawEvents =
     ConnRawEvent
   | DnsRawEvent
@@ -823,6 +840,7 @@ type NetworkRawEventsEdge {
 
 type NfsRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -855,6 +873,7 @@ type NfsRawEventEdge {
 
 type NtlmRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1151,109 +1170,124 @@ type Query {
     last: Int
   ): OpLogRawEventConnection!
   connRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): ConnRawEventConnection!
   dnsRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): DnsRawEventConnection!
   httpRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): HttpRawEventConnection!
   rdpRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): RdpRawEventConnection!
   smtpRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): SmtpRawEventConnection!
   ntlmRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): NtlmRawEventConnection!
   kerberosRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): KerberosRawEventConnection!
   sshRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): SshRawEventConnection!
   dceRpcRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): DceRpcRawEventConnection!
   ftpRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): FtpRawEventConnection!
   mqttRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): MqttRawEventConnection!
   ldapRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): LdapRawEventConnection!
   tlsRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): TlsRawEventConnection!
   smbRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): SmbRawEventConnection!
   nfsRawEvents(
-    filter: NetworkFilter!
+    filter: NetworkOptFilter
     after: String
     before: String
     first: Int
     last: Int
+    requestFromPeer: Boolean
   ): NfsRawEventConnection!
   networkRawEvents(
     filter: NetworkFilter!
@@ -1448,6 +1482,7 @@ type Query {
 
 type RdpRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1602,6 +1637,7 @@ type SecuLogRawEventEdge {
 
 type SmbRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1643,6 +1679,7 @@ type SmbRawEventEdge {
 
 type SmtpRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1679,6 +1716,7 @@ type SmtpRawEventEdge {
 
 type SshRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1810,6 +1848,7 @@ input TimeSeriesFilter {
 
 type TlsRawEvent {
   timestamp: DateTime!
+  source: String!
   origAddr: String!
   origPort: Int!
   respAddr: String!

@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod tests;
 
@@ -16,33 +17,84 @@ use graphql_client::GraphQLQuery;
 
 use super::{
     base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
-    events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key, handle_paged_events,
+    events_vec_in_cluster, get_peekable_iter, get_source_from_key, get_timestamp_from_key,
+    handle_paged_events, handle_paged_events_for_all_source,
     impl_from_giganto_network_filter_for_graphql_client,
+    impl_from_giganto_network_option_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
     impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
-    Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter,
-};
-use crate::graphql::client::derives::{
-    conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
-    kerberos_raw_events, ldap_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
-    ntlm_raw_events, rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
-    search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
-    search_kerberos_raw_events, search_ldap_raw_events, search_mqtt_raw_events,
-    search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events, search_smb_raw_events,
-    search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
-    smtp_raw_events, ssh_raw_events, tls_raw_events, ConnRawEvents, DceRpcRawEvents, DnsRawEvents,
-    FtpRawEvents, HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
-    NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
-    SearchConnRawEvents, SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
-    SearchHttpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents,
-    SearchNfsRawEvents, SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
-    SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
-    SshRawEvents, TlsRawEvents,
+    Engine, FromKeyValue, NetworkFilter, NetworkOptFilter, NodeCompare, RawEventFilter,
+    SearchFilter,
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
+use crate::{
+    graphql::client::derives::{
+        conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
+        kerberos_raw_events, ldap_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
+        ntlm_raw_events, rdp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
+        search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
+        search_kerberos_raw_events, search_ldap_raw_events, search_mqtt_raw_events,
+        search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events,
+        search_smb_raw_events, search_smtp_raw_events, search_ssh_raw_events,
+        search_tls_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events, tls_raw_events,
+        ConnRawEvents, DceRpcRawEvents, DnsRawEvents, FtpRawEvents, HttpRawEvents,
+        KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+        NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
+        SearchConnRawEvents, SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
+        SearchHttpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents,
+        SearchNfsRawEvents, SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
+        SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
+        SshRawEvents, TlsRawEvents,
+    },
+    IngestSources,
+};
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
+
+impl KeyExtractor for NetworkOptFilter {
+    // source always exists in the condition that calls `get_start_key`.
+    fn get_start_key(&self) -> &str {
+        self.source.as_ref().unwrap()
+    }
+
+    // network event don't use mid key
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+}
+
+impl RawEventFilter for NetworkOptFilter {
+    fn check(
+        &self,
+        orig_addr: Option<IpAddr>,
+        resp_addr: Option<IpAddr>,
+        orig_port: Option<u16>,
+        resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
+        _text: Option<String>,
+        _source: Option<String>,
+        _agent_id: Option<String>,
+    ) -> Result<bool> {
+        if check_address(&self.orig_addr, orig_addr)?
+            && check_address(&self.resp_addr, resp_addr)?
+            && check_port(&self.orig_port, orig_port)
+            && check_port(&self.resp_port, resp_port)
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
 
 impl KeyExtractor for NetworkFilter {
     fn get_start_key(&self) -> &str {
@@ -126,6 +178,7 @@ impl RawEventFilter for SearchFilter {
 #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 struct ConnRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -143,6 +196,7 @@ struct ConnRawEvent {
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
 struct DnsRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -167,6 +221,7 @@ struct DnsRawEvent {
 #[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
 struct HttpRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -199,6 +254,7 @@ struct HttpRawEvent {
 #[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
 struct RdpRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -212,6 +268,7 @@ struct RdpRawEvent {
 #[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
 struct SmtpRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -230,6 +287,7 @@ struct SmtpRawEvent {
 #[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
 struct NtlmRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -249,6 +307,7 @@ struct NtlmRawEvent {
 #[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
 struct KerberosRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -270,6 +329,7 @@ struct KerberosRawEvent {
 #[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
 struct SshRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -294,6 +354,7 @@ struct SshRawEvent {
 #[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
 struct DceRpcRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -310,6 +371,7 @@ struct DceRpcRawEvent {
 #[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
 struct FtpRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -334,6 +396,7 @@ struct FtpRawEvent {
 #[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
 struct MqttRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -352,6 +415,7 @@ struct MqttRawEvent {
 #[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
 struct LdapRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -371,6 +435,7 @@ struct LdapRawEvent {
 #[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
 struct TlsRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -402,6 +467,7 @@ struct TlsRawEvent {
 #[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
 struct SmbRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -425,6 +491,7 @@ struct SmbRawEvent {
 #[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
 struct NfsRawEvent {
     timestamp: DateTime<Utc>,
+    source: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -512,8 +579,10 @@ macro_rules! from_key_value {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
                 let timestamp = get_timestamp_from_key(key)?;
+                let source = get_source_from_key(key)?;
                 Ok(Self {
                     timestamp,
+                    source,
                     orig_addr: val.orig_addr.to_string(),
                     resp_addr: val.resp_addr.to_string(),
                     orig_port: val.orig_port,
@@ -533,6 +602,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
     fn from_key_value(key: &[u8], val: Conn) -> Result<Self> {
         Ok(ConnRawEvent {
             timestamp: get_timestamp_from_key(key)?,
+            source: get_source_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -552,6 +622,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
     fn from_key_value(key: &[u8], val: Ftp) -> Result<Self> {
         Ok(FtpRawEvent {
             timestamp: get_timestamp_from_key(key)?,
+            source: get_source_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -728,9 +799,42 @@ from_key_value!(
 
 from_key_value!(NfsRawEvent, Nfs, read_files, write_files);
 
+macro_rules! impl_node_compare_trait {
+    ($($node_type:ty),*) => {
+        $(
+            impl NodeCompare for $node_type {
+                fn source(&self) -> &str{
+                    &self.source
+                }
+                fn time(&self) -> DateTime<Utc>{
+                    self.timestamp
+                }
+            }
+        )*
+    };
+}
+
+impl_node_compare_trait!(
+    ConnRawEvent,
+    DnsRawEvent,
+    HttpRawEvent,
+    RdpRawEvent,
+    SmtpRawEvent,
+    NtlmRawEvent,
+    KerberosRawEvent,
+    SshRawEvent,
+    DceRpcRawEvent,
+    FtpRawEvent,
+    MqttRawEvent,
+    LdapRawEvent,
+    TlsRawEvent,
+    NfsRawEvent,
+    SmbRawEvent
+);
+
 async fn handle_paged_conn_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -738,13 +842,19 @@ async fn handle_paged_conn_raw_events<'ctx>(
 ) -> Result<Connection<String, ConnRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.conn_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_dns_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -752,13 +862,19 @@ async fn handle_paged_dns_raw_events<'ctx>(
 ) -> Result<Connection<String, DnsRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.dns_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_http_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -766,13 +882,19 @@ async fn handle_paged_http_raw_events<'ctx>(
 ) -> Result<Connection<String, HttpRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.http_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_rdp_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -780,13 +902,19 @@ async fn handle_paged_rdp_raw_events<'ctx>(
 ) -> Result<Connection<String, RdpRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.rdp_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_smtp_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -794,13 +922,19 @@ async fn handle_paged_smtp_raw_events<'ctx>(
 ) -> Result<Connection<String, SmtpRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.smtp_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_ntlm_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -808,13 +942,19 @@ async fn handle_paged_ntlm_raw_events<'ctx>(
 ) -> Result<Connection<String, NtlmRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.ntlm_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_kerberos_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -822,13 +962,19 @@ async fn handle_paged_kerberos_raw_events<'ctx>(
 ) -> Result<Connection<String, KerberosRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.kerberos_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_ssh_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -836,13 +982,19 @@ async fn handle_paged_ssh_raw_events<'ctx>(
 ) -> Result<Connection<String, SshRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.ssh_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_dce_rpc_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -850,12 +1002,18 @@ async fn handle_paged_dce_rpc_raw_events<'ctx>(
 ) -> Result<Connection<String, DceRpcRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.dce_rpc_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 async fn handle_paged_ftp_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -863,13 +1021,19 @@ async fn handle_paged_ftp_raw_events<'ctx>(
 ) -> Result<Connection<String, FtpRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.ftp_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_mqtt_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>, // TODO: fix this
@@ -877,13 +1041,19 @@ async fn handle_paged_mqtt_raw_events<'ctx>(
 ) -> Result<Connection<String, MqttRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.mqtt_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_ldap_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>, // TODO: fix this
     first: Option<i32>,
@@ -891,13 +1061,19 @@ async fn handle_paged_ldap_raw_events<'ctx>(
 ) -> Result<Connection<String, LdapRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.ldap_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_tls_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -905,12 +1081,19 @@ async fn handle_paged_tls_raw_events<'ctx>(
 ) -> Result<Connection<String, TlsRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.tls_store()?;
-    handle_paged_events(store, filter, after, before, first, last).await
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
+
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_smb_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -918,13 +1101,19 @@ async fn handle_paged_smb_raw_events<'ctx>(
 ) -> Result<Connection<String, SmbRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.smb_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_paged_nfs_raw_events<'ctx>(
     ctx: &Context<'ctx>,
-    filter: NetworkFilter,
+    filter: Option<NetworkOptFilter>,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -932,8 +1121,14 @@ async fn handle_paged_nfs_raw_events<'ctx>(
 ) -> Result<Connection<String, NfsRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.nfs_store()?;
+    let sources = ctx.data::<IngestSources>()?;
+    let filter = filter.unwrap_or_default();
 
-    handle_paged_events(store, filter, after, before, first, last).await
+    if filter.source.is_some() {
+        handle_paged_events(store, filter, after, before, first, last).await
+    } else {
+        handle_paged_events_for_all_source(store, sources, filter, after, before, first, last).await
+    }
 }
 
 async fn handle_network_raw_events<'ctx>(
@@ -1030,22 +1225,25 @@ impl NetworkQuery {
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, ConnRawEvent>> {
         let handler = handle_paged_conn_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             ConnRawEvents,
             conn_raw_events::Variables,
@@ -1057,22 +1255,25 @@ impl NetworkQuery {
     async fn dns_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, DnsRawEvent>> {
         let handler = handle_paged_dns_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             DnsRawEvents,
             dns_raw_events::Variables,
@@ -1084,22 +1285,25 @@ impl NetworkQuery {
     async fn http_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, HttpRawEvent>> {
         let handler = handle_paged_http_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             HttpRawEvents,
             http_raw_events::Variables,
@@ -1111,22 +1315,25 @@ impl NetworkQuery {
     async fn rdp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, RdpRawEvent>> {
         let handler = handle_paged_rdp_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             RdpRawEvents,
             rdp_raw_events::Variables,
@@ -1138,22 +1345,25 @@ impl NetworkQuery {
     async fn smtp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, SmtpRawEvent>> {
         let handler = handle_paged_smtp_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             SmtpRawEvents,
             smtp_raw_events::Variables,
@@ -1165,22 +1375,25 @@ impl NetworkQuery {
     async fn ntlm_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, NtlmRawEvent>> {
         let handler = handle_paged_ntlm_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             NtlmRawEvents,
             ntlm_raw_events::Variables,
@@ -1192,22 +1405,25 @@ impl NetworkQuery {
     async fn kerberos_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, KerberosRawEvent>> {
         let handler = handle_paged_kerberos_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             KerberosRawEvents,
             kerberos_raw_events::Variables,
@@ -1219,22 +1435,25 @@ impl NetworkQuery {
     async fn ssh_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, SshRawEvent>> {
         let handler = handle_paged_ssh_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             SshRawEvents,
             ssh_raw_events::Variables,
@@ -1246,22 +1465,25 @@ impl NetworkQuery {
     async fn dce_rpc_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, DceRpcRawEvent>> {
         let handler = handle_paged_dce_rpc_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             DceRpcRawEvents,
             dce_rpc_raw_events::Variables,
@@ -1273,22 +1495,25 @@ impl NetworkQuery {
     async fn ftp_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, FtpRawEvent>> {
         let handler = handle_paged_ftp_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             FtpRawEvents,
             ftp_raw_events::Variables,
@@ -1300,22 +1525,25 @@ impl NetworkQuery {
     async fn mqtt_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, MqttRawEvent>> {
         let handler = handle_paged_mqtt_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             MqttRawEvents,
             mqtt_raw_events::Variables,
@@ -1327,22 +1555,25 @@ impl NetworkQuery {
     async fn ldap_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, LdapRawEvent>> {
         let handler = handle_paged_ldap_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             LdapRawEvents,
             ldap_raw_events::Variables,
@@ -1354,22 +1585,25 @@ impl NetworkQuery {
     async fn tls_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, TlsRawEvent>> {
         let handler = handle_paged_tls_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             TlsRawEvents,
             tls_raw_events::Variables,
@@ -1381,22 +1615,25 @@ impl NetworkQuery {
     async fn smb_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, SmbRawEvent>> {
         let handler = handle_paged_smb_raw_events;
 
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             SmbRawEvents,
             smb_raw_events::Variables,
@@ -1408,21 +1645,25 @@ impl NetworkQuery {
     async fn nfs_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: NetworkFilter,
+        filter: Option<NetworkOptFilter>,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
+        request_from_peer: Option<bool>,
     ) -> Result<Connection<String, NfsRawEvent>> {
         let handler = handle_paged_nfs_raw_events;
+
         paged_events_in_cluster!(
+            request_all_peers_if_source_is_none
             ctx,
             filter,
-            filter.source,
+            filter.map(std::convert::Into::into),
             after,
             before,
             first,
             last,
+            request_from_peer,
             handler,
             NfsRawEvents,
             nfs_raw_events::Variables,
@@ -1445,6 +1686,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1873,21 +2115,21 @@ impl NetworkQuery {
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn network_connection(
-    mut conn_iter: Peekable<FilteredIter<Conn>>,
-    mut dns_iter: Peekable<FilteredIter<Dns>>,
-    mut http_iter: Peekable<FilteredIter<Http>>,
-    mut rdp_iter: Peekable<FilteredIter<Rdp>>,
-    mut ntlm_iter: Peekable<FilteredIter<Ntlm>>,
-    mut kerberos_iter: Peekable<FilteredIter<Kerberos>>,
-    mut ssh_iter: Peekable<FilteredIter<Ssh>>,
-    mut dce_rpc_iter: Peekable<FilteredIter<DceRpc>>,
-    mut ftp_iter: Peekable<FilteredIter<Ftp>>,
-    mut mqtt_iter: Peekable<FilteredIter<Mqtt>>,
-    mut ldap_iter: Peekable<FilteredIter<Ldap>>,
-    mut tls_iter: Peekable<FilteredIter<Tls>>,
-    mut smb_iter: Peekable<FilteredIter<Smb>>,
-    mut nfs_iter: Peekable<FilteredIter<Nfs>>,
-    mut smtp_iter: Peekable<FilteredIter<Smtp>>,
+    mut conn_iter: Peekable<FilteredIter<Conn, NetworkFilter>>,
+    mut dns_iter: Peekable<FilteredIter<Dns, NetworkFilter>>,
+    mut http_iter: Peekable<FilteredIter<Http, NetworkFilter>>,
+    mut rdp_iter: Peekable<FilteredIter<Rdp, NetworkFilter>>,
+    mut ntlm_iter: Peekable<FilteredIter<Ntlm, NetworkFilter>>,
+    mut kerberos_iter: Peekable<FilteredIter<Kerberos, NetworkFilter>>,
+    mut ssh_iter: Peekable<FilteredIter<Ssh, NetworkFilter>>,
+    mut dce_rpc_iter: Peekable<FilteredIter<DceRpc, NetworkFilter>>,
+    mut ftp_iter: Peekable<FilteredIter<Ftp, NetworkFilter>>,
+    mut mqtt_iter: Peekable<FilteredIter<Mqtt, NetworkFilter>>,
+    mut ldap_iter: Peekable<FilteredIter<Ldap, NetworkFilter>>,
+    mut tls_iter: Peekable<FilteredIter<Tls, NetworkFilter>>,
+    mut smb_iter: Peekable<FilteredIter<Smb, NetworkFilter>>,
+    mut nfs_iter: Peekable<FilteredIter<Nfs, NetworkFilter>>,
+    mut smtp_iter: Peekable<FilteredIter<Smtp, NetworkFilter>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -2246,8 +2488,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_tls_raw_events
 );
 
-impl_from_giganto_network_filter_for_graphql_client!(
-    network_raw_events,
+impl_from_giganto_network_option_filter_for_graphql_client!(
     conn_raw_events,
     dns_raw_events,
     http_raw_events,
@@ -2264,6 +2505,8 @@ impl_from_giganto_network_filter_for_graphql_client!(
     nfs_raw_events,
     smb_raw_events
 );
+
+impl_from_giganto_network_filter_for_graphql_client!(network_raw_events);
 
 impl_from_giganto_search_filter_for_graphql_client!(
     search_conn_raw_events,
