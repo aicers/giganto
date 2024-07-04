@@ -997,7 +997,7 @@ dependencies = [
  "reqwest",
  "rocksdb",
  "roxy",
- "rustls 0.23.6",
+ "rustls 0.23.10",
  "rustls-pemfile",
  "semver",
  "serde",
@@ -2289,7 +2289,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.6",
+ "rustls 0.23.10",
  "thiserror",
  "tokio",
  "tracing",
@@ -2305,7 +2305,7 @@ dependencies = [
  "rand",
  "ring",
  "rustc-hash",
- "rustls 0.23.6",
+ "rustls 0.23.10",
  "rustls-platform-verifier",
  "slab",
  "thiserror",
@@ -2599,9 +2599,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.6"
+version = "0.23.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94cf0812de1f0cee6b163ce35c2f57b90e1ef5a2bed57bcf07c16475bac8c852"
+checksum = "05cff451f60db80f490f3c182b77c35260baace73209e9cdbbe526bfe3a4d402"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -2653,7 +2653,7 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls 0.23.6",
+ "rustls 0.23.10",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
  "rustls-webpki",
@@ -2671,9 +2671,9 @@ checksum = "84e217e7fdc8466b5b35d30f8c0a30febd29173df4a3a0c2115d306b9c4117ad"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.102.3"
+version = "0.102.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3bce581c0dd41bce533ce695a1437fa16a7ab5ac3ccfa99fe1a620a7885eabf"
+checksum = "f9a6fccd794a42c2c105b513a2f62bc3fd8f3ba57a4593677ceb0bd035164d78"
 dependencies = [
  "aws-lc-rs",
  "ring",
