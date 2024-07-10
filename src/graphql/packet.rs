@@ -163,6 +163,7 @@ impl PacketQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,

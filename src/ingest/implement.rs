@@ -16,7 +16,6 @@ use giganto_client::ingest::{
     Packet,
 };
 
-#[allow(unused)]
 pub trait EventFilter {
     fn data_type(&self) -> String;
     fn orig_addr(&self) -> Option<IpAddr>;

@@ -721,6 +721,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -748,6 +749,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -775,6 +777,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -802,6 +805,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -829,6 +833,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -856,6 +861,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -883,6 +889,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -910,6 +917,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -937,6 +945,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -964,6 +973,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -990,6 +1000,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1016,6 +1027,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1042,6 +1054,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1068,6 +1081,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1490,6 +1504,7 @@ impl SysmonQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             after,
             before,
@@ -1676,20 +1691,20 @@ async fn handle_sysmon_events<'ctx>(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn sysmon_connection(
-    mut process_create_iter: Peekable<FilteredIter<ProcessCreate>>,
-    mut file_create_time_iter: Peekable<FilteredIter<FileCreationTimeChanged>>,
-    mut network_connect_iter: Peekable<FilteredIter<NetworkConnection>>,
-    mut process_terminate_iter: Peekable<FilteredIter<ProcessTerminated>>,
-    mut image_load_iter: Peekable<FilteredIter<ImageLoaded>>,
-    mut file_create_iter: Peekable<FilteredIter<FileCreate>>,
-    mut registry_value_set_iter: Peekable<FilteredIter<RegistryValueSet>>,
-    mut registry_key_rename_iter: Peekable<FilteredIter<RegistryKeyValueRename>>,
-    mut file_create_stream_hash_iter: Peekable<FilteredIter<FileCreateStreamHash>>,
-    mut pipe_event_iter: Peekable<FilteredIter<PipeEvent>>,
-    mut dns_query_iter: Peekable<FilteredIter<DnsEvent>>,
-    mut file_delete_iter: Peekable<FilteredIter<FileDelete>>,
-    mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering>>,
-    mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected>>,
+    mut process_create_iter: Peekable<FilteredIter<ProcessCreate, NetworkFilter>>,
+    mut file_create_time_iter: Peekable<FilteredIter<FileCreationTimeChanged, NetworkFilter>>,
+    mut network_connect_iter: Peekable<FilteredIter<NetworkConnection, NetworkFilter>>,
+    mut process_terminate_iter: Peekable<FilteredIter<ProcessTerminated, NetworkFilter>>,
+    mut image_load_iter: Peekable<FilteredIter<ImageLoaded, NetworkFilter>>,
+    mut file_create_iter: Peekable<FilteredIter<FileCreate, NetworkFilter>>,
+    mut registry_value_set_iter: Peekable<FilteredIter<RegistryValueSet, NetworkFilter>>,
+    mut registry_key_rename_iter: Peekable<FilteredIter<RegistryKeyValueRename, NetworkFilter>>,
+    mut file_create_stream_hash_iter: Peekable<FilteredIter<FileCreateStreamHash, NetworkFilter>>,
+    mut pipe_event_iter: Peekable<FilteredIter<PipeEvent, NetworkFilter>>,
+    mut dns_query_iter: Peekable<FilteredIter<DnsEvent, NetworkFilter>>,
+    mut file_delete_iter: Peekable<FilteredIter<FileDelete, NetworkFilter>>,
+    mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering, NetworkFilter>>,
+    mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected, NetworkFilter>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, SysmonEvents>> {

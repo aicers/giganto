@@ -16,10 +16,10 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::{Read, Seek, SeekFrom, Write},
-    net::IpAddr,
-    net::SocketAddr,
+    iter::Peekable,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
@@ -40,7 +40,7 @@ use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
 use tempfile::tempfile;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, RwLock};
 use tracing::error;
 
 use crate::{
@@ -87,6 +87,18 @@ pub struct IpRange {
 pub struct PortRange {
     pub start: Option<u16>,
     pub end: Option<u16>,
+}
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject, Serialize, Clone, Default)]
+pub struct NetworkOptFilter {
+    pub time: Option<TimeRange>,
+    #[serde(skip)]
+    pub source: Option<String>,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
 }
 
 #[allow(clippy::module_name_repetitions)]
@@ -140,8 +152,9 @@ pub trait FromKeyValue<T>: Sized {
     fn from_key_value(key: &[u8], value: T) -> Result<Self>;
 }
 
-pub trait NodeSource {
+pub trait NodeCompare {
     fn source(&self) -> &str;
+    fn time(&self) -> DateTime<Utc>;
 }
 
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
@@ -447,6 +460,14 @@ pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error
     Err(anyhow!("invalid database key length"))
 }
 
+pub fn get_source_from_key(key: &[u8]) -> Result<String, anyhow::Error> {
+    if key.len() > TIMESTAMP_SIZE {
+        let source = String::from_utf8(key[..(key.len() - (TIMESTAMP_SIZE + 1))].into())?;
+        return Ok(source);
+    }
+    Err(anyhow!("invalid database key length"))
+}
+
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
@@ -454,7 +475,10 @@ fn get_peekable_iter<'c, T>(
     before: &Option<String>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<(std::iter::Peekable<FilteredIter<'c, T>>, usize)>
+) -> Result<(
+    std::iter::Peekable<FilteredIter<'c, T, NetworkFilter>>,
+    usize,
+)>
 where
     T: DeserializeOwned + EventFilter,
 {
@@ -471,6 +495,7 @@ where
     Ok((filtered_iter, size))
 }
 
+#[allow(clippy::type_complexity)]
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
@@ -478,7 +503,7 @@ fn get_filtered_iter<'c, T>(
     before: &Option<String>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<(FilteredIter<'c, T>, Option<Vec<u8>>, usize)>
+) -> Result<(FilteredIter<'c, T, NetworkFilter>, Option<Vec<u8>>, usize)>
 where
     T: DeserializeOwned + EventFilter,
 {
@@ -710,6 +735,232 @@ where
         },
     )
     .await
+}
+
+async fn handle_paged_events_for_all_source<N, T>(
+    store: RawEventStore<'_, T>,
+    sources: &Arc<RwLock<HashSet<String>>>,
+    filter: NetworkOptFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned + EventFilter + Clone,
+{
+    query(
+        after,
+        before,
+        first,
+        last,
+        |after, before, first, last| async move {
+            let mut all_source_iter: Vec<Peekable<FilteredIter<T, NetworkOptFilter>>> = Vec::new();
+            // check event size
+            let size = if before.is_some() {
+                if after.is_some() {
+                    return Err("cannot use both `after` and `before`".into());
+                }
+                if first.is_some() {
+                    return Err("'before' and 'first' cannot be specified simultaneously".into());
+                }
+                last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE)
+            } else if after.is_some() {
+                if before.is_some() {
+                    return Err("cannot use both `after` and `before`".into());
+                }
+                if last.is_some() {
+                    return Err("'after' and 'last' cannot be specified simultaneously".into());
+                }
+                first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE)
+            } else if last.is_some() {
+                if first.is_some() {
+                    return Err("first and last cannot be used together".into());
+                }
+                last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE)
+            } else {
+                first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE)
+            };
+
+            // generate all source's event iterator
+            for source in sources.read().await.iter() {
+                let mut result_iter = get_peekable_iter_for_all_source(
+                    &store, &filter, source, &after, &before, last,
+                )?;
+                if result_iter.peek().is_some() {
+                    all_source_iter.push(result_iter);
+                }
+            }
+            let is_forward = before.is_none() && last.is_none();
+
+            load_connection_for_all_source(all_source_iter, size, is_forward)
+        },
+    )
+    .await
+}
+
+fn get_peekable_iter_for_all_source<'c, T>(
+    store: &RawEventStore<'c, T>,
+    filter: &'c NetworkOptFilter,
+    source: &str,
+    after: &Option<String>,
+    before: &Option<String>,
+    last: Option<usize>,
+) -> Result<std::iter::Peekable<FilteredIter<'c, T, NetworkOptFilter>>>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let (filtered_iter, cursor) =
+        get_filtered_iter_for_all_source(store, filter, source, after, before, last)?;
+    let mut filtered_iter = filtered_iter.peekable();
+    if let Some(cursor) = cursor {
+        if let Some((key, _)) = filtered_iter.peek() {
+            if key.as_ref() == cursor {
+                filtered_iter.next();
+            }
+        }
+    }
+    Ok(filtered_iter)
+}
+
+#[allow(clippy::type_complexity)]
+fn get_filtered_iter_for_all_source<'c, T>(
+    store: &RawEventStore<'c, T>,
+    filter: &'c NetworkOptFilter,
+    source: &str,
+    after: &Option<String>,
+    before: &Option<String>,
+    last: Option<usize>,
+) -> Result<(FilteredIter<'c, T, NetworkOptFilter>, Option<Vec<u8>>)>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let (iter, cursor) = if let Some(before) = before {
+        let cursor = base64_engine.decode(before)?;
+
+        let key_builder = StorageKey::builder().start_key(source);
+        // Generate a from_key by extracting only the timestamp to account for cursors from other sources.
+        let cursor_timestamp =
+            i64::from_be_bytes(cursor[(cursor.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let from_key = key_builder.clone().end_key(cursor_timestamp).build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
+
+        (FilteredIter::new(iter, filter), Some(cursor))
+    } else if let Some(after) = after {
+        let cursor = base64_engine.decode(after)?;
+
+        let key_builder = StorageKey::builder().start_key(source);
+        // Generate a from_key by extracting only the timestamp to account for cursors from other sources.
+        let cursor_timestamp =
+            i64::from_be_bytes(cursor[(cursor.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let from_key = key_builder.clone().end_key(cursor_timestamp).build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        (FilteredIter::new(iter, filter), Some(cursor))
+    } else if last.is_some() {
+        let key_builder = StorageKey::builder().start_key(source);
+        let from_key = key_builder
+            .clone()
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
+        (FilteredIter::new(iter, filter), None)
+    } else {
+        let key_builder = StorageKey::builder().start_key(source);
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        (FilteredIter::new(iter, filter), None)
+    };
+
+    Ok((iter, cursor))
+}
+
+fn load_connection_for_all_source<N, T>(
+    mut all_source_iter: Vec<Peekable<FilteredIter<T, NetworkOptFilter>>>,
+    size: usize,
+    is_forward: bool,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned + EventFilter + Clone,
+{
+    let mut result_vec: Vec<Edge<String, N, _>> = Vec::new();
+    let mut candidate_event_hash = HashMap::new();
+    let mut has_previous_page: bool = false;
+    let mut has_next_page: bool = false;
+    let mut has_next_value: bool = false;
+
+    for (idx, iter) in all_source_iter.iter_mut().enumerate() {
+        if let Some(event_data) = iter.next() {
+            candidate_event_hash.insert(idx, event_data);
+        }
+    }
+
+    loop {
+        let (idx, key, event) = {
+            if is_forward {
+                let Some((idx, (key, event))) = candidate_event_hash
+                    .iter()
+                    .min_by_key(|(_, (key, _))| &key[(key.len() - TIMESTAMP_SIZE)..])
+                else {
+                    break;
+                };
+                (*idx, key, event)
+            } else {
+                let Some((idx, (key, event))) = candidate_event_hash
+                    .iter()
+                    .max_by_key(|(_, (key, _))| &key[(key.len() - TIMESTAMP_SIZE)..])
+                else {
+                    break;
+                };
+                (*idx, key, event)
+            }
+        };
+        result_vec.push(Edge::new(
+            base64_engine.encode(key),
+            N::from_key_value(key, event.clone())?,
+        ));
+
+        if let Some(candidate_event) = all_source_iter.get_mut(idx).unwrap().next() {
+            candidate_event_hash.insert(idx, candidate_event.clone());
+        } else {
+            candidate_event_hash.remove(&idx);
+        }
+
+        if result_vec.len() >= size || candidate_event_hash.is_empty() {
+            if !candidate_event_hash.is_empty() {
+                has_next_value = true;
+            }
+            if is_forward {
+                has_next_page = has_next_value;
+            } else {
+                result_vec.reverse();
+                has_previous_page = has_next_value;
+            }
+            break;
+        }
+    }
+    let mut connection: Connection<String, N> = Connection::new(has_previous_page, has_next_page);
+    connection.edges.extend(result_vec);
+
+    Ok(connection)
 }
 
 // This macro helps to reduce boilerplate for handling
@@ -947,6 +1198,7 @@ pub(crate) use events_vec_in_cluster;
 macro_rules! paged_events_in_cluster {
     ($ctx:expr,
      $filter:expr,
+     $filter_into:expr,
      $source:expr,
      $after:expr,
      $before:expr,
@@ -967,13 +1219,13 @@ macro_rules! paged_events_in_cluster {
                 Some(peer_addr) => {
                     type QueryVariables = $variables_type;
                     let request_body = $graphql_query_type::build_query(QueryVariables {
-                        filter: $filter.into(),
-                        after: $after,
-                        before: $before,
-                        first: $first.map(std::convert::Into::into),
-                        last: $last.map(std::convert::Into::into),
-                        $($($query_arg: $query_arg_from),*)*
-                    });
+                            filter: $filter_into,
+                            after: $after,
+                            before: $before,
+                            first: $first.map(std::convert::Into::into),
+                            last: $last.map(std::convert::Into::into),
+                            $($($query_arg: $query_arg_from),*)*
+                        });
 
                     let response_to_result_converter = |resp_data: Option<$response_data_type>| {
                         if let Some(data) = resp_data {
@@ -1022,6 +1274,7 @@ macro_rules! paged_events_in_cluster {
     (request_all_peers_if_source_is_none
      $ctx:expr,
      $filter:expr,
+     $into:expr,
      $after:expr,
      $before:expr,
      $first:expr,
@@ -1036,11 +1289,18 @@ macro_rules! paged_events_in_cluster {
             return $handler($ctx, $filter, $after, $before, $first, $last).await;
         }
 
-        match &$filter.source {
+        let source = if let Some(ref filter_info) = $filter {
+            filter_info.source.clone()
+        } else {
+            None
+        };
+
+        match source {
             Some(source) => {
                 paged_events_in_cluster!(
                     $ctx,
                     $filter,
+                    $into,
                     source,
                     $after,
                     $before,
@@ -1052,7 +1312,6 @@ macro_rules! paged_events_in_cluster {
                     $response_data_type,
                     $field_name,
                     with_extra_query_args (request_from_peer := Some(true))
-
                 )
             }
             None => {
@@ -1072,7 +1331,7 @@ macro_rules! paged_events_in_cluster {
                     $before,
                     $first,
                     $last,
-                    $request_from_peer,
+                    Some(true),
                     $graphql_query_type,
                     $variables_type,
                     $response_data_type,
@@ -1083,11 +1342,11 @@ macro_rules! paged_events_in_cluster {
                     tokio::join!(current_giganto_result_fut, peer_results_fut);
 
                 let current_giganto_result = current_giganto_result
-                    .map_err(|_| Error::new("Current giganto failed to get result"))?;
+                    .map_err(|_| async_graphql::Error::new("Current giganto failed to get result"))?;
 
                 let peer_results: Vec<_> = peer_results
                     .into_iter()
-                    .map(|result| result.map_err(|e| Error::new(format!("Peer giganto failed to respond {e:?}"))))
+                    .map(|result| result.map_err(|e| async_graphql::Error::new(format!("Peer giganto failed to respond {e:?}"))))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(crate::graphql::combine_results(
@@ -1103,7 +1362,6 @@ macro_rules! paged_events_in_cluster {
 }
 pub(crate) use paged_events_in_cluster;
 
-#[allow(unused)]
 fn combine_results<N>(
     current_giganto_result: Connection<String, N>,
     peer_results: Vec<Connection<String, N>>,
@@ -1112,9 +1370,9 @@ fn combine_results<N>(
     last: Option<i32>,
 ) -> Connection<String, N>
 where
-    N: OutputType + NodeSource,
+    N: OutputType + NodeCompare,
 {
-    let (has_next_page_combined, has_prev_page_combined) = peer_results.iter().fold(
+    let (has_prev_page_combined, has_next_page_combined) = peer_results.iter().fold(
         (
             current_giganto_result.has_previous_page,
             current_giganto_result.has_next_page,
@@ -1140,14 +1398,12 @@ where
     connection_to_return
 }
 
-#[allow(unused)]
 #[derive(PartialEq)]
 enum TakeDirection {
     First,
     Last,
 }
 
-#[allow(unused)]
 fn sort_and_trunk_edges<N>(
     mut edges: Vec<Edge<String, N, EmptyFields>>,
     before: &Option<String>,
@@ -1155,7 +1411,7 @@ fn sort_and_trunk_edges<N>(
     last: Option<i32>,
 ) -> Vec<Edge<String, N, EmptyFields>>
 where
-    N: OutputType + NodeSource,
+    N: OutputType + NodeCompare,
 {
     let (take_direction, get_len) = if before.is_some() || last.is_some() {
         (
@@ -1169,11 +1425,12 @@ where
         )
     };
 
-    // Sort by `cursor`, and then `source`. Since each node in giganto may have
-    // conflicting `cursor` values, we need a secondary sort key.
+    // Sort by `timestamp`, and then `source`. Since each node in giganto may have
+    // conflicting `timestamp` values, we need a secondary sort key.
     edges.sort_unstable_by(|a, b| {
-        a.cursor
-            .cmp(&b.cursor)
+        a.node
+            .time()
+            .cmp(&b.node.time())
             .then_with(|| a.node.source().cmp(b.node.source()))
     });
 
@@ -1314,7 +1571,6 @@ where
         .map(|graphql_res| response_to_result_converter(graphql_res.data))
 }
 
-#[allow(unused_macros)]
 macro_rules! request_all_peers_for_paged_events_fut {
     ($ctx:expr,
      $filter:expr,
@@ -1370,7 +1626,7 @@ macro_rules! request_all_peers_for_paged_events_fut {
         .map(|peer_endpoint| {
                 type QueryVariables = $variables_type;
                 let request_body = $graphql_query_type::build_query(QueryVariables {
-                    filter: $filter.clone().into(),
+                    filter: $filter.clone().map(std::convert::Into::into),
                     after: $after.clone(),
                     before: $before.clone(),
                     first: $first.map(std::convert::Into::into),
@@ -1469,6 +1725,26 @@ macro_rules! impl_from_giganto_range_structs_for_graphql_client {
 }
 pub(crate) use impl_from_giganto_range_structs_for_graphql_client;
 
+macro_rules! impl_from_giganto_network_option_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<NetworkOptFilter> for $autogen_mod::NetworkOptFilter {
+                fn from(filter: NetworkOptFilter) -> Self {
+                    Self {
+                        time: filter.time.map(Into::into),
+                        source: filter.source,
+                        orig_addr: filter.orig_addr.map(Into::into),
+                        resp_addr: filter.resp_addr.map(Into::into),
+                        orig_port: filter.orig_port.map(Into::into),
+                        resp_port: filter.resp_port.map(Into::into)
+                    }
+                }
+            }
+        )*
+    };
+}
+pub(crate) use impl_from_giganto_network_option_filter_for_graphql_client;
+
 macro_rules! impl_from_giganto_network_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -1526,11 +1802,11 @@ mod tests {
         connection::{Edge, EmptyFields},
         EmptySubscription, SimpleObject,
     };
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use tokio::sync::{Notify, RwLock};
 
     use super::{schema, sort_and_trunk_edges, NodeName};
-    use crate::graphql::{Mutation, NodeSource, Query};
+    use crate::graphql::{Mutation, NodeCompare, Query};
     use crate::peer::{PeerInfo, Peers};
     use crate::storage::{Database, DbOptions};
     use crate::{new_pcap_sources, IngestSources};
@@ -1627,54 +1903,60 @@ mod tests {
         timestamp: DateTime<Utc>,
     }
 
-    impl NodeSource for TestNode {
+    impl NodeCompare for TestNode {
         fn source(&self) -> &str {
             &self.source
+        }
+        fn time(&self) -> DateTime<Utc> {
+            self.timestamp
         }
     }
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
+        let time_1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
+        let time_2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 2).unwrap();
+        let time_3 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 3).unwrap();
         vec![
             Edge::new(
                 "warn_001".to_string(),
                 TestNode {
                     source: "src7".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_1,
                 },
             ),
             Edge::new(
                 "danger_001".to_string(),
                 TestNode {
                     source: "src4".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_1,
                 },
             ),
             Edge::new(
                 "danger_002".to_string(),
                 TestNode {
                     source: "src5".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_2,
                 },
             ),
             Edge::new(
                 "info_001".to_string(),
                 TestNode {
                     source: "src1".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_2,
                 },
             ),
             Edge::new(
                 "info_002".to_string(),
                 TestNode {
                     source: "src2".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_3,
                 },
             ),
             Edge::new(
                 "info_003".to_string(),
                 TestNode {
                     source: "src3".to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: time_3,
                 },
             ),
         ]
@@ -1688,40 +1970,34 @@ mod tests {
 
         let result = sort_and_trunk_edges(edges_fixture(), &None, None, None);
         assert_eq!(result.len(), 6);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
-        assert_eq!(result[0].cursor, "danger_001".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
-
-        let result = sort_and_trunk_edges(edges_fixture(), &None, Some(5), None);
-        assert_eq!(result.len(), 5);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
+        let result = sort_and_trunk_edges(edges_fixture(), &None, Some(5), None);
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0].cursor, "danger_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_002".to_string());
+
         let result = sort_and_trunk_edges(edges_fixture(), &None, Some(10), None);
         assert_eq!(result.len(), 6);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
         let result = sort_and_trunk_edges(edges_fixture(), &None, None, Some(5));
         assert_eq!(result.len(), 5);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
-        assert_eq!(result[0].cursor, "danger_002".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[0].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
         let result = sort_and_trunk_edges(edges_fixture(), &None, None, Some(10));
         assert_eq!(result.len(), 6);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
         let result =
             sort_and_trunk_edges(edges_fixture(), &Some("zebra_001".to_string()), None, None);
         assert_eq!(result.len(), 6);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
         let result = sort_and_trunk_edges(
             edges_fixture(),
@@ -1730,9 +2006,8 @@ mod tests {
             Some(5),
         );
         assert_eq!(result.len(), 5);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
-        assert_eq!(result[0].cursor, "danger_002".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[0].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
         let result = sort_and_trunk_edges(
             edges_fixture(),
@@ -1741,8 +2016,7 @@ mod tests {
             Some(10),
         );
         assert_eq!(result.len(), 6);
-        assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
-        assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+        assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
     }
 }

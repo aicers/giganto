@@ -40,7 +40,7 @@ use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
+    graphql::{RawEventFilter, TIMESTAMP_SIZE},
     ingest::implement::EventFilter,
 };
 
@@ -762,20 +762,24 @@ where
     }
 }
 
-pub struct FilteredIter<'d, T> {
+pub struct FilteredIter<'d, T, F> {
     inner: BoundaryIter<'d, T>,
-    filter: &'d NetworkFilter,
+    filter: &'d F,
 }
 
-impl<'d, T> FilteredIter<'d, T> {
-    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d NetworkFilter) -> Self {
+impl<'d, T, F> FilteredIter<'d, T, F>
+where
+    F: RawEventFilter,
+{
+    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d F) -> Self {
         Self { inner, filter }
     }
 }
 
-impl<'d, T> Iterator for FilteredIter<'d, T>
+impl<'d, T, F> Iterator for FilteredIter<'d, T, F>
 where
     T: DeserializeOwned + EventFilter,
+    F: RawEventFilter,
 {
     type Item = KeyValue<T>;
 

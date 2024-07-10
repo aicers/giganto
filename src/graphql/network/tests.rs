@@ -204,6 +204,7 @@ async fn conn_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "ingest src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
@@ -457,6 +458,7 @@ async fn dns_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
@@ -718,6 +720,7 @@ async fn http_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
@@ -974,6 +977,7 @@ async fn rdp_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
@@ -1102,6 +1106,7 @@ async fn smtp_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 25,
@@ -1236,6 +1241,7 @@ async fn ntlm_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.1.200",
                             "origPort": 12345,
@@ -1373,6 +1379,7 @@ async fn kerberos_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.1.200",
                             "origPort": 12345,
@@ -1520,6 +1527,7 @@ async fn ssh_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 22,
@@ -1657,6 +1665,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 135,
@@ -1793,6 +1802,7 @@ async fn ftp_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 21,
@@ -1933,6 +1943,7 @@ async fn mqtt_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 1883,
@@ -2071,6 +2082,7 @@ async fn ldap_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 389,
@@ -2232,6 +2244,7 @@ async fn tls_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 443,
@@ -2381,6 +2394,7 @@ async fn smb_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.77",
                             "origPort": 445,
@@ -2514,6 +2528,7 @@ async fn nfs_with_data_giganto_cluster() {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
                             "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "source": "src 2",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 2049,

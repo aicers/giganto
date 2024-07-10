@@ -17,6 +17,23 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     requests are submitted.
   - Add `--config group_imports=StdExternalCrate` to the CI process like:
     - `cargo fmt -- --check --config group_imports=StdExternalCrate`
+- Modified network event search queries. The modifications are as follows.
+  - Changed the type of filter from `NetworkFilter` to `Option<NetworkOptFilter>`.
+  - Added `request_from_peer` as a parameter to the queries.
+  - Added `request_all_peers_if_source_is_one`,`request_from_peer` to the
+    `paged_events_in_cluster` macro so that requests for all sources can also
+    be processed.
+  - Added the `source` field to the network event search result structure to
+    know which source the event is from.
+- Changed the sorting of event search results for the all source from `cursor`,
+  `source` to `timestamp`, `source`.
+
+### Added
+
+- Added a `NetworkOptFilter` structure to allow network event search queries
+  to request all sources.
+- Added `handle_paged_events_for_all_source`, `get_peekable_iter_for_all_source`,
+  `load_connection_for_all_source` functions for all source search.
 
 ## [0.20.0+tis.0.2.0] - 2024-05-24
 
