@@ -25,6 +25,7 @@ directories = "5.0"
 futures-util = "0.3"
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "cc83f71" }
 graphql_client = "0.14"
+humantime-serde = "1"
 libc = "0.2"
 num_enum = "0.7"
 num-traits = "0.2"
