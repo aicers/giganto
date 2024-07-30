@@ -205,8 +205,8 @@ async fn main() -> Result<()> {
                 });
         });
 
-        if let Some(peer_address) = settings.peer_address {
-            let peer_server = peer::Peer::new(peer_address, &certs.clone())?;
+        if let Some(addr_to_peers) = settings.addr_to_peers {
+            let peer_server = peer::Peer::new(addr_to_peers, &certs.clone())?;
             let notify_source = Arc::new(Notify::new());
             task::spawn(peer_server.run(
                 ingest_sources.clone(),

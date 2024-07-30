@@ -20,14 +20,14 @@ pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 const CONFIG_RETENTION: &str = "retention";
 const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
 const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
-const CONFIG_PEER_ADDRESS: &str = "peer_address";
+const CONFIG_ADDR_TO_PEERS: &str = "addr_to_peers";
 const CONFIG_PEER_LIST: &str = "peers";
 const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
 pub const TEMP_TOML_POST_FIX: &str = ".temp.toml";
 
 pub trait TomlPeers {
-    fn get_host_name(&self) -> String;
-    fn get_address(&self) -> String;
+    fn get_hostname(&self) -> String;
+    fn get_addr(&self) -> String;
 }
 
 #[derive(SimpleObject, Debug)]
@@ -55,16 +55,16 @@ struct Properties {
 #[derive(InputObject, SimpleObject, Debug)]
 #[graphql(input_name = "InputPeerList")]
 pub struct PeerList {
-    pub address: String,
-    pub host_name: String,
+    pub addr: String,
+    pub hostname: String,
 }
 
 impl TomlPeers for PeerList {
-    fn get_host_name(&self) -> String {
-        self.host_name.clone()
+    fn get_hostname(&self) -> String {
+        self.hostname.clone()
     }
-    fn get_address(&self) -> String {
-        self.address.clone()
+    fn get_addr(&self) -> String {
+        self.addr.clone()
     }
 }
 
@@ -76,7 +76,7 @@ struct GigantoConfig {
     retention: String,
     max_open_files: i32,
     max_mb_of_level_base: u64,
-    peer_address: String,
+    addr_to_peers: String,
     peer_list: Vec<PeerList>,
     ack_transmission_cnt: u16,
 }
@@ -89,7 +89,7 @@ struct UserConfig {
     retention: Option<String>,
     max_open_files: Option<i32>,
     max_mb_of_level_base: Option<u64>,
-    peer_address: Option<String>,
+    addr_to_peers: Option<String>,
     peer_list: Option<Vec<PeerList>>,
     ack_transmission_cnt: Option<u16>,
 }
@@ -104,9 +104,9 @@ pub(super) struct GigantoConfigMutation;
 impl GigantoStatusQuery {
     async fn giganto_status(&self) -> Result<GigantoStatus> {
         let usg = roxy::resource_usage().await;
-        let host_name = roxy::hostname();
+        let hostname = roxy::hostname();
         let usg = GigantoStatus {
-            name: host_name,
+            name: hostname,
             cpu_usage: usg.cpu_usage,
             total_memory: usg.total_memory,
             used_memory: usg.used_memory,
@@ -148,7 +148,7 @@ impl GigantoStatusQuery {
             parse_toml_element_to_integer(CONFIG_MAX_MB_OF_LEVEL_BASE, &doc)?;
         let ack_transmission_cnt = parse_toml_element_to_integer(CONFIG_ACK_TRANSMISSION, &doc)?;
         let mut peer_list = Vec::new();
-        let peer_address = if doc.get(CONFIG_PEER_ADDRESS).is_some() {
+        let addr_to_peers = if doc.get(CONFIG_ADDR_TO_PEERS).is_some() {
             let peers_value = doc
                 .get(CONFIG_PEER_LIST)
                 .context("peers not found")?
@@ -156,23 +156,22 @@ impl GigantoStatusQuery {
                 .context("invalid peers format")?;
             for peer in peers_value {
                 if let Some(peer_data) = peer.as_inline_table() {
-                    let (Some(address_val), Some(host_name_val)) =
-                        (peer_data.get("address"), peer_data.get("host_name"))
+                    let (Some(addr_val), Some(hostname_val)) =
+                        (peer_data.get("addr"), peer_data.get("hostname"))
                     else {
-                        return Err(anyhow!("Invalid address/hostname Value format").into());
+                        return Err(anyhow!("Invalid `addr`, `hostname` Value format").into());
                     };
-                    let (Some(address), Some(host_name)) =
-                        (address_val.as_str(), host_name_val.as_str())
+                    let (Some(addr), Some(hostname)) = (addr_val.as_str(), hostname_val.as_str())
                     else {
-                        return Err(anyhow!("Invalid address/hostname String format").into());
+                        return Err(anyhow!("Invalid `addr`, `hostname` String format").into());
                     };
                     peer_list.push(PeerList {
-                        address: address.to_string(),
-                        host_name: host_name.to_string(),
+                        addr: addr.to_string(),
+                        hostname: hostname.to_string(),
                     });
                 }
             }
-            parse_toml_element_to_string(CONFIG_PEER_ADDRESS, &doc)?
+            parse_toml_element_to_string(CONFIG_ADDR_TO_PEERS, &doc)?
         } else {
             String::new()
         };
@@ -184,7 +183,7 @@ impl GigantoStatusQuery {
             retention,
             max_open_files,
             max_mb_of_level_base,
-            peer_address,
+            addr_to_peers,
             peer_list,
             ack_transmission_cnt,
         })
@@ -219,7 +218,7 @@ impl GigantoConfigMutation {
         insert_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &mut doc, convert_level_base);
         let convert_ack_trans_cnt = field.ack_transmission_cnt.map(i64::from);
         insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
-        insert_toml_element(CONFIG_PEER_ADDRESS, &mut doc, field.peer_address);
+        insert_toml_element(CONFIG_ADDR_TO_PEERS, &mut doc, field.addr_to_peers);
         insert_toml_peers(&mut doc, field.peer_list)?;
         write_toml_file(&doc, &new_path)?;
 
@@ -345,15 +344,15 @@ where
         array.clear();
         for peer in peer_list {
             let mut table = InlineTable::new();
-            if let (Some(address), Some(host_name)) = (
-                value(peer.get_address()).as_value(),
-                value(peer.get_host_name()).as_value(),
+            if let (Some(addr), Some(hostname)) = (
+                value(peer.get_addr()).as_value(),
+                value(peer.get_hostname()).as_value(),
             ) {
-                table.insert("address", address.clone());
-                table.insert("host_name", host_name.clone());
+                table.insert("addr", addr.clone());
+                table.insert("hostname", hostname.clone());
             } else {
                 return Err(
-                    anyhow!("insert failed: peer's address/hostname option not found.").into(),
+                    anyhow!("insert failed: peer's `addr`, `hostname` option not found.").into(),
                 );
             }
             array.push(table);

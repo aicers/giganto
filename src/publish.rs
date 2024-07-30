@@ -349,10 +349,10 @@ async fn process_pcap_extract(
                     let peer_idents_guard = peer_idents.read().await;
                     let peer_ident = peer_idents_guard
                         .iter()
-                        .find(|idents| idents.address.eq(&peer_addr));
+                        .find(|idents| idents.addr.eq(&peer_addr));
 
                     if let Some(peer_ident) = peer_ident {
-                        peer_ident.host_name.clone()
+                        peer_ident.hostname.clone()
                     } else {
                         error!("Peer giganto's server name cannot be identitified. addr: {peer_addr}, source: {}", filter.source);
                         continue;
@@ -1946,13 +1946,13 @@ async fn is_current_giganto_in_charge(ingest_sources: IngestSources, source: &St
 }
 
 async fn peer_in_charge_publish_addr(peers: Peers, source: &String) -> Option<SocketAddr> {
-    peers.read().await.iter().find_map(|(peer_address, peer_info)| {
+    peers.read().await.iter().find_map(|(addr_to_peers, peer_info)| {
         peer_info
             .ingest_sources
             .contains(source)
             .then(|| {
                 SocketAddr::new(
-                    peer_address.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                    addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
                     peer_info.publish_port.expect("Peer's publish port must be valid, because it is validated when peer giganto started."),
                 )
             })
@@ -2221,10 +2221,10 @@ async fn peer_name(peer_idents: PeerIdents, peer_addr: &SocketAddr) -> Result<St
     let peer_idents_guard = peer_idents.read().await;
     let peer_ident = peer_idents_guard
         .iter()
-        .find(|idents| idents.address.eq(peer_addr));
+        .find(|idents| idents.addr.eq(peer_addr));
 
     match peer_ident {
-        Some(peer_ident) => Ok(peer_ident.host_name.clone()),
+        Some(peer_ident) => Ok(peer_ident.hostname.clone()),
         None => bail!("Peer giganto's server name cannot be identitified"),
     }
 }

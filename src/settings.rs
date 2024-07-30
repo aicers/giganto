@@ -9,7 +9,7 @@ use crate::peer::PeerIdentity;
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
 const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8442";
-const DEFAULT_INVALID_PEER_ADDRESS: &str = "254.254.254.254:38383";
+const DEFAULT_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
@@ -46,7 +46,7 @@ pub struct Settings {
 
     // peers
     #[serde(deserialize_with = "deserialize_peer_addr")]
-    pub peer_address: Option<SocketAddr>, // IP address & port for peer connection
+    pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
     // ack transmission interval
@@ -134,7 +134,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max subcompactions")
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
         .expect("default config dir")
-        .set_default("peer_address", DEFAULT_INVALID_PEER_ADDRESS)
+        .set_default("addr_to_peers", DEFAULT_INVALID_ADDR_TO_PEERS)
         .expect("default ack transmission")
         .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)
         .expect("ack_transmission")
@@ -156,7 +156,7 @@ where
 
 /// Deserializes a giganto's peer socket address.
 ///
-/// `Ok(None)` is returned if the address is an empty string or there is no `peer_address`
+/// `Ok(None)` is returned if the address is an empty string or there is no `addr_to_peers`
 ///  option in the configuration file.
 ///
 /// # Errors
@@ -168,7 +168,7 @@ where
 {
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
         // Cluster mode is only available if there is a value for 'Peer Address' in the configuration file.
-        if addr == DEFAULT_INVALID_PEER_ADDRESS || addr.is_empty() {
+        if addr == DEFAULT_INVALID_ADDR_TO_PEERS || addr.is_empty() {
             Ok(None)
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {

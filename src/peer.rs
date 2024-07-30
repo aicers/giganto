@@ -68,17 +68,17 @@ pub enum PeerCode {
 #[allow(clippy::module_name_repetitions)]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct PeerIdentity {
-    pub address: SocketAddr,
-    pub host_name: String,
+    pub addr: SocketAddr,
+    pub hostname: String,
 }
 
 impl TomlPeers for PeerIdentity {
-    fn get_host_name(&self) -> String {
-        self.host_name.clone()
+    fn get_hostname(&self) -> String {
+        self.hostname.clone()
     }
 
-    fn get_address(&self) -> String {
-        self.address.to_string()
+    fn get_addr(&self) -> String {
+        self.addr.to_string()
     }
 }
 
@@ -95,7 +95,7 @@ pub struct PeerConns {
     // and `publish_port` belonging to that peer;
     // e.g. { ("10.20.0.2", PeerInfo { ("ingest_node1", "ingest_node2"),  8443, 38371 }), }
     peers: Peers,
-    peer_sender: Sender<PeerIdentity>,
+    peer_sender: Sender<PeerIdentity>, // pita
     local_address: SocketAddr,
     notify_source: Arc<Notify>,
     config_doc: DocumentMut,
@@ -239,7 +239,7 @@ async fn connect(
     peer_info: &PeerIdentity,
 ) -> Result<(Connection, SendStream, RecvStream)> {
     let connection = client_endpoint
-        .connect(peer_info.address, &peer_info.host_name)?
+        .connect(peer_info.addr, &peer_info.hostname)?
         .await?;
     let (send, recv) = client_handshake(&connection, env!("CARGO_PKG_VERSION")).await?;
     Ok((connection, send, recv))
@@ -297,8 +297,8 @@ async fn client_connection(
                 // Add my peer info to the peer list.
                 let mut send_peer_list = peer_conn_info.peer_identities.read().await.clone();
                 send_peer_list.insert(PeerIdentity {
-                    address: peer_conn_info.local_address,
-                    host_name: local_host_name.clone(),
+                    addr: peer_conn_info.local_address,
+                    hostname: local_host_name.clone(),
                 });
 
                 // Exchange peer list/source list.
@@ -413,7 +413,7 @@ async fn client_connection(
                         | ConnectionError::TimedOut => {
                             warn!(
                                 "Retry connection to {} after {PEER_RETRY_INTERVAL} seconds.",
-                                peer_info.address,
+                                peer_info.addr,
                             );
                             sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
                             continue 'connection;
@@ -690,11 +690,11 @@ async fn update_to_new_peer_list(
     let mut is_change = false;
     for recv_peer_info in recv_peer_list {
         let is_changed = if cfg!(debug_assertions) {
-            !((local_address.ip() == recv_peer_info.address.ip()
-                && local_address.port() == recv_peer_info.address.port())
+            !((local_address.ip() == recv_peer_info.addr.ip()
+                && local_address.port() == recv_peer_info.addr.port())
                 || peer_list.read().await.contains(&recv_peer_info))
         } else {
-            local_address.ip() != recv_peer_info.address.ip()
+            local_address.ip() != recv_peer_info.addr.ip()
                 && !peer_list.read().await.contains(&recv_peer_info)
         };
         if is_changed {
@@ -871,8 +871,8 @@ pub mod tests {
         let peer_name = String::from("einsis_peer");
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
-            address: peer_addr,
-            host_name: peer_name.clone(),
+            addr: peer_addr,
+            hostname: peer_name.clone(),
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -914,8 +914,8 @@ pub mod tests {
 
         // compare server's peer list/source list
         assert!(recv_peer_list.contains(&PeerIdentity {
-            address: peer_addr,
-            host_name: peer_name,
+            addr: peer_addr,
+            hostname: peer_name,
         }));
         assert!(recv_source_list.ingest_sources.contains(&source_name));
 

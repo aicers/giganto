@@ -4158,8 +4158,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
-            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            host_name: NODE1_HOST.to_string(),
+            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            hostname: NODE1_HOST.to_string(),
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4222,10 +4222,10 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         },
     )])));
     let mut peer_identities = HashSet::new();
-    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        address: peer_address.clone(),
-        host_name: NODE2_HOST.to_string(),
+        addr: addr_to_peers.clone(),
+        hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4365,8 +4365,8 @@ async fn request_range_data_with_log_giganto_cluster() {
 
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
-            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            host_name: NODE1_HOST.to_string(),
+            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            hostname: NODE1_HOST.to_string(),
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4429,10 +4429,10 @@ async fn request_range_data_with_log_giganto_cluster() {
         },
     )])));
     let mut peer_identities = HashSet::new();
-    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        address: peer_address.clone(),
-        host_name: NODE2_HOST.to_string(),
+        addr: addr_to_peers.clone(),
+        hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4570,8 +4570,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
-            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            host_name: NODE1_HOST.to_string(),
+            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            hostname: NODE1_HOST.to_string(),
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4639,10 +4639,10 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     )])));
 
     let mut peer_identities = HashSet::new();
-    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        address: peer_address.clone(),
-        host_name: NODE2_HOST.to_string(),
+        addr: addr_to_peers.clone(),
+        hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4780,8 +4780,8 @@ async fn request_raw_events_giganto_cluster() {
 
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
-            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            host_name: NODE1_HOST.to_string(),
+            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
+            hostname: NODE1_HOST.to_string(),
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
@@ -4841,10 +4841,10 @@ async fn request_raw_events_giganto_cluster() {
     )])));
 
     let mut peer_identities = HashSet::new();
-    let peer_address = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
+    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        address: peer_address.clone(),
-        host_name: NODE2_HOST.to_string(),
+        addr: addr_to_peers.clone(),
+        hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
