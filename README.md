@@ -45,8 +45,8 @@ max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 
 num_of_thread = 8                          # db options for background thread.
 max_sub_compactions = 2                    # db options for sub-compaction.
 ack_transmission = 1024                    # ack count for ingestion data.
-peer_address = "10.10.11.1:38383"          # address to listen for peers QUIC.
-peers=[{address = "10.10.12.1:38383", host_name = "ai"}]     # list of peer info.
+addr_to_peers = "10.10.11.1:38383"          # address to listen for peers QUIC.
+peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]     # list of peer info.
 ```
 
 By default, giganto reads the config file from the following directories:
@@ -64,7 +64,7 @@ These values assume you've used all the way up to level 6, so the actual values 
 change if you want to grow your data further at the level base.
 So if it's less than `512`MB, it's recommended to set default value of `512`MB.
 
-If there is no `peer_address` option in the configuration file, it runs in
+If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
 
 ## Test

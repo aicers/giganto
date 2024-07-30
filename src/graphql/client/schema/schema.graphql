@@ -574,8 +574,8 @@ type ImageLoadedEventEdge {
 }
 
 input InputPeerList {
-  address: String!
-  hostName: String!
+  addr: String!
+  hostname: String!
 }
 
 input IpRange {
@@ -1070,8 +1070,8 @@ type Pcap {
 }
 
 type PeerList {
-  address: String!
-  hostName: String!
+  addr: String!
+  hostname: String!
 }
 
 type PipeEventEvent {

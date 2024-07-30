@@ -50,6 +50,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
       in version `0.21.0-alpha.2`.
 - Rename `chwaddr` to `chaddr` because the field names within the `Bootp` structure
   of the giganto-client have changed.
+- Changed cluster realted configuration field names.
+  - `peer_address` to `addr_to_peers`
+  - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
 
 ## [0.20.0] - 2024-05-17
 
