@@ -53,6 +53,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed cluster realted configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
+- Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
 
 ## [0.20.0] - 2024-05-17
 
