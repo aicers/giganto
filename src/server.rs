@@ -70,6 +70,13 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
 }
 
 pub fn certificate_info(cert_info: &[CertificateDer]) -> Result<(String, String)> {
+    certificate_info_default(cert_info, true)
+}
+
+pub fn certificate_info_default(
+    cert_info: &[CertificateDer],
+    is_print_connected_client_name: bool,
+) -> Result<(String, String)> {
     let Some(cert) = cert_info.first() else {
         bail!("no certificate in identity");
     };
@@ -85,7 +92,9 @@ pub fn certificate_info(cert_info: &[CertificateDer]) -> Result<(String, String)
         .and_then(|cn| cn.as_str().ok())
         .context("the subject of the certificate is not valid")?;
     if subject.contains('@') {
-        info!("Connected client name : {subject}");
+        if is_print_connected_client_name {
+            info!("Connected client name : {subject}");
+        }
         let parsed = subject.split('@').collect::<Vec<&str>>();
 
         Ok((String::from(parsed[0]), String::from(parsed[1])))

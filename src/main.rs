@@ -38,7 +38,7 @@ use tracing_subscriber::{
 
 use crate::{
     graphql::{status::TEMP_TOML_POST_FIX, NodeName},
-    server::{certificate_info, Certs, SERVER_REBOOT_DELAY},
+    server::{certificate_info_default, Certs, SERVER_REBOOT_DELAY},
     storage::migrate_data_dir,
 };
 
@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
         let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
 
         let schema = graphql::schema(
-            NodeName(certificate_info(&cert)?.1),
+            NodeName(certificate_info_default(&cert, false)?.1),
             database.clone(),
             pcap_sources.clone(),
             ingest_sources.clone(),
