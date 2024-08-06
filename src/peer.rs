@@ -33,8 +33,8 @@ use crate::{
         TomlPeers, CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR,
     },
     server::{
-        certificate_info, config_client, config_server, extract_cert_from_conn, Certs,
-        SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+        certificate_info, certificate_info_default, config_client, config_server,
+        extract_cert_from_conn, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
     IngestSources,
 };
@@ -111,7 +111,7 @@ pub struct Peer {
 
 impl Peer {
     pub fn new(local_address: SocketAddr, certs: &Arc<Certs>) -> Result<Self> {
-        let (_, local_host_name) = certificate_info(certs.certs.as_slice())?;
+        let (_, local_host_name) = certificate_info_default(certs.certs.as_slice(), false)?;
 
         let server_config =
             config_server(certs).expect("server configuration error with cert, key or root");
