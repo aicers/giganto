@@ -34,6 +34,10 @@ type ConnRawEventEdge {
   cursor: String!
 }
 
+type TotalCount {
+  totalCount: Int!
+}
+
 # Implement the DateTime<Utc> scalar
 #
 # The input/output is a string in RFC3339 format.
@@ -1169,6 +1173,11 @@ type Query {
     first: Int
     last: Int
   ): OpLogRawEventConnection!
+  totalCount(
+    protocol: String!
+    filter: NetworkOptFilter
+    requestFromPeer: Boolean
+  ): TotalCount!
   connRawEvents(
     filter: NetworkOptFilter
     after: String

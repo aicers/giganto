@@ -1115,6 +1115,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchProcessCreateEvents,
@@ -1145,6 +1146,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFileCreateTimeEvents,
@@ -1174,6 +1176,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchNetworkConnectEvents,
@@ -1203,6 +1206,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchProcessTerminateEvents,
@@ -1229,6 +1233,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchImageLoadEvents,
@@ -1256,6 +1261,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFileCreateEvents,
@@ -1285,6 +1291,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchRegistryValueSetEvents,
@@ -1314,6 +1321,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchRegistryKeyRenameEvents,
@@ -1344,6 +1352,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFileCreateStreamHashEvents,
@@ -1370,6 +1379,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchPipeEventEvents,
@@ -1396,6 +1406,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchDnsQueryEvents,
@@ -1423,6 +1434,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFileDeleteEvents,
@@ -1452,6 +1464,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchProcessTamperEvents,
@@ -1481,6 +1494,7 @@ impl SysmonQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFileDeleteDetectedEvents,

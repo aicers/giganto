@@ -28,6 +28,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed the sorting of event search results for the all source from `cursor`,
   `source` to `timestamp`, `source`.
 - Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
+- Modified `events_in_cluster` macro.
+  - Added `filter_into` expression to also support `total_count` query.
+  - Added macro pattern to return the sum of all source request results.
 
 ### Added
 
@@ -35,6 +38,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   to request all sources.
 - Added `handle_paged_events_for_all_source`, `get_peekable_iter_for_all_source`,
   `load_connection_for_all_source` functions for all source search.
+- Added `total_count` GraphQL query to return the number of events for a specific
+  filter condition.
 
 ## [0.20.0+tis.0.2.0] - 2024-05-24
 
