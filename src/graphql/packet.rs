@@ -183,6 +183,7 @@ impl PacketQuery {
         events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             Pcaps,

@@ -19,7 +19,7 @@
     - [2-3] 1번서버는 3번서버로부터 응답을 받은 것을 파싱하여, 유저에게
       최종적으로 응답합니다.
 
-- 한편, 조금 더 복잡한 시나리오도 2가지 존재합니다.
+- 한편, 조금 더 복잡한 시나리오도 3가지 존재합니다.
   - [3] 유저가 1번서버에게 ingest-src-[1,4,5] 데이터를 달라고 요청하는 경우
     - 이 경우, 1번서버는 자신의 DB에서 데이터를 찾는 동시에, 2번서버에게 GraphQL
       질의를 던지고 응답을 받습니다. 1번서버는 위의 결과물을 합쳐서 유저에게
@@ -28,6 +28,11 @@
     - 이 경우, 1번서버는 자신의 DB에서 데이터를 찾는 동시에, 모든 서버에게
       GraphQL 질의를 던지고 응답을 받습니다. 1번서버는 결과물을 합쳐서 유저에게
       최종적으로 응답합니다.
+  - [5] 유저가 1번서버에게 모든 ingest-src-[] 데이터를 달라고 요청하면 1번서버가
+    모든 결과를 더해서 하나의 결과로 응답하는 경우
+    - 이 경우, 1번서버는 자신의 DB에서 데이터를 찾는 동시에, 모든 서버에게
+      GraphQL 질의를 던지고 응답을 받습니다. 1번서버는 모든 결과물을 더한 뒤
+      하나의 결과를 유저에게 최종적으로 응답합니다.
 
 ## 신규 API 작성 시 확인할 CHECKPOINT
 
@@ -324,6 +329,73 @@ impl NetflowQuery {
             netflow5_raw_events::Variables,
             netflow5_raw_events::ResponseData,
             netflow5_raw_events
+        )
+    }
+}
+```
+
+### CASE [5] 유저가 1번서버에게 모든 ingest-src-[1..=9] 데이터를 달라고 요청후 합쳐진 하나의 결과로 응답 받는 경우
+
+- 특징
+  - GraphQL API 상 source에 대한 argument 혹은 nested argument로 존재하는
+    `source`가 `Option<String>` 이고 이 값이 `Option::None`인 경우, 이 API가
+    모든 `source`에 대한 데이터를 응답해주도록 약속한 API인 경우입니다.
+
+- Giganto Cluster 사용법
+  - 다음과 같이 `request_all_peers_and_return_sum` 으로 시작하는 macro
+    variant를 호출하면 됩니다.
+
+```rust
+pub struct NetworkOptFilter {
+    pub time: Option<TimeRange>,
+    #[serde(skip)]
+    pub source: Option<String>,
+    orig_addr: Option<IpRange>,
+    resp_addr: Option<IpRange>,
+    orig_port: Option<PortRange>,
+    resp_port: Option<PortRange>,
+}
+impl NetworkQuery {
+    async fn total_count<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        protocol: String,
+        filter: Option<NetworkOptFilter>,
+        request_from_peer: Option<bool>,
+    ) -> Result<TotalCount> {
+        if !TOTAL_COUNT_PROTOCOL.contains(&protocol.as_str()) {
+            return Err(anyhow!("Invalid protocol").into());
+        }
+
+        let sources = ctx.data::<IngestSources>()?;
+        let mut sources = sources
+            .read()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<String>>();
+        if let Some(ref filter) = filter {
+            if let Some(ref source) = filter.source {
+                sources = vec![source.clone()];
+            }
+        }
+
+        let handler = handle_total_count;
+
+        events_in_cluster!(
+            request_all_peers_and_return_sum
+            ctx,
+            filter,
+            filter.map(std::convert::Into::into),
+            request_from_peer,
+            handler,
+            TotalCounts,
+            total_counts::Variables,
+            total_counts::ResponseData,
+            total_count,
+            TotalCount,
+            with_extra_handler_args (&protocol, &sources),
+            with_extra_query_args (protocol := protocol.clone())
         )
     }
 }

@@ -16,6 +16,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     iter::Peekable,
     net::{IpAddr, SocketAddr},
+    ops::Add,
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
@@ -969,6 +970,7 @@ where
 // Below is detailed explanation of arguments:
 // * `$ctx` - The context of the GraphQL query.
 // * `$filter` - The filter of the query.
+// * `$filter_into` - The into conversion expression of a filter.
 // * `$source` - The source of the query.
 // * `$handler` - The handler to be carried out by the current giganto if it is
 //   in charge.
@@ -994,6 +996,7 @@ where
 macro_rules! events_in_cluster {
     ($ctx:expr,
      $filter:expr,
+     $filter_into:expr,
      $source:expr,
      $handler:ident,
      $graphql_query_type:ident,
@@ -1005,7 +1008,7 @@ macro_rules! events_in_cluster {
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
         type QueryVariables = $variables_type;
         if crate::graphql::is_current_giganto_in_charge($ctx, &$source).await {
-            $handler($ctx, &$filter, $($($handler_arg)*)*)
+            $handler($ctx, &$filter, $($($handler_arg),*)*)
         } else {
             let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$source).await;
 
@@ -1013,7 +1016,7 @@ macro_rules! events_in_cluster {
                 Some(peer_addr) => {
                     #[allow(clippy::redundant_field_names)]
                     let request_body = $graphql_query_type::build_query(QueryVariables {
-                        filter: $filter.into(),
+                        filter: $filter_into,
                         $($($query_arg: $query_arg_from),*)*
                     });
                     let response_to_result_converter = |resp_data: Option<$response_data_type>| {
@@ -1129,6 +1132,87 @@ macro_rules! events_in_cluster {
             (false, false) => Ok(Vec::new()),
         }
     }};
+
+    // This macro variant is for the case where user does not specify `source`
+    // in the filter. In this case, the current giganto will request all peers
+    // for the result and return the sum.
+
+    // This macro has the same arguments as the primary macro variant, except
+    // these arguments:
+    // * `$request_from_peer` - Whether the request comes from a peer giganto.
+    (request_all_peers_and_return_sum
+     $ctx:expr,
+     $filter:expr,
+     $filter_into:expr,
+     $request_from_peer:expr,
+     $handler:ident,
+     $graphql_query_type:ident,
+     $variables_type:ty,
+     $response_data_type:path,
+     $field_name:ident,
+     $result_type:tt
+     $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
+     $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
+        if $request_from_peer.unwrap_or_default() {
+            return $handler($ctx, &$filter, $($($handler_arg),*)*)
+        }
+
+        let source = if let Some(ref filter_info) = $filter {
+            filter_info.source.clone()
+        } else {
+            None
+        };
+
+        match source {
+            Some(source) => {
+                events_in_cluster!(
+                    $ctx,
+                    $filter,
+                    $filter_into,
+                    source,
+                    $handler,
+                    $graphql_query_type,
+                    $variables_type,
+                    $response_data_type,
+                    $field_name,
+                    $result_type
+                    $(, with_extra_handler_args ($($handler_arg),*))?
+                    $(, with_extra_query_args (
+                        $($query_arg := $query_arg_from),*,
+                        request_from_peer := Some(true)
+                    ))?
+                )
+            }
+            None => {
+                let current_giganto_result = $handler($ctx, &$filter, $($($handler_arg),*)*);
+
+                let peer_results= crate::graphql::request_all_peers_for_events_fut!(
+                    $ctx,
+                    $filter,
+                    Some(true),
+                    $graphql_query_type,
+                    $variables_type,
+                    $response_data_type,
+                    $field_name,
+                    $result_type,
+                    $($($query_arg := $query_arg_from),*)*
+                ).await;
+
+                let current_giganto_result = current_giganto_result
+                .map_err(|_| async_graphql::Error::new("Current giganto failed to get result"))?;
+
+                let peer_results = peer_results
+                .into_iter()
+                .map(|result| result.map_err(|e| async_graphql::Error::new(format!("Peer giganto failed to respond {e:?}"))))
+                .collect::<Result<Vec<$result_type>>>()?;
+
+                Ok(crate::graphql::sum_results(
+                    current_giganto_result,
+                    &peer_results,
+                ))
+            }
+        }
+    }};
 }
 pub(crate) use events_in_cluster;
 
@@ -1138,6 +1222,7 @@ pub(crate) use events_in_cluster;
 macro_rules! events_vec_in_cluster {
     ($ctx:expr,
      $filter:expr,
+     $filter_into:expr,
      $source:expr,
      $handler:ident,
      $graphql_query_type:ident,
@@ -1147,6 +1232,7 @@ macro_rules! events_vec_in_cluster {
         crate::graphql::events_in_cluster!(
             $ctx,
             $filter,
+            $filter_into,
             $source,
             $handler,
             $graphql_query_type,
@@ -1169,6 +1255,7 @@ pub(crate) use events_vec_in_cluster;
 // Below is detailed explanation of arguments:
 // * `$ctx` - The context of the GraphQL query.
 // * `$filter` - The filter of the query.
+// * `$filter_into` - The into conversion expression of a filter.
 // * `$source` - The source of the query.
 // * `$after` - The cursor of the last edge of the previous page.
 // * `$before` - The cursor of the first edge of the next page.
@@ -1270,7 +1357,7 @@ macro_rules! paged_events_in_cluster {
     (request_all_peers_if_source_is_none
      $ctx:expr,
      $filter:expr,
-     $into:expr,
+     $filter_into:expr,
      $after:expr,
      $before:expr,
      $first:expr,
@@ -1296,7 +1383,7 @@ macro_rules! paged_events_in_cluster {
                 paged_events_in_cluster!(
                     $ctx,
                     $filter,
-                    $into,
+                    $filter_into,
                     source,
                     $after,
                     $before,
@@ -1357,6 +1444,16 @@ macro_rules! paged_events_in_cluster {
     }};
 }
 pub(crate) use paged_events_in_cluster;
+
+fn sum_results<N>(current_giganto_result: N, peer_results: &[N]) -> N
+where
+    N: OutputType + Add<Output = N> + Copy,
+{
+    let total_count = peer_results
+        .iter()
+        .fold(current_giganto_result, |value, result| value + *result);
+    total_count
+}
 
 fn combine_results<N>(
     current_giganto_result: Connection<String, N>,
@@ -1640,8 +1737,63 @@ macro_rules! request_all_peers_for_paged_events_fut {
         futures_util::future::join_all(peer_requests)
     }};
 }
-#[allow(unused_imports)]
 pub(crate) use request_all_peers_for_paged_events_fut;
+
+macro_rules! request_all_peers_for_events_fut {
+    ($ctx:expr,
+     $filter:expr,
+     $request_from_peer:expr,
+     $graphql_query_type:ident,
+     $variables_type:ty,
+     $response_data_type:path,
+     $field_name:ident,
+     $result_type:tt
+     $(, $query_arg:tt := $query_arg_from:expr)* ) => {{
+        let peer_graphql_endpoints = match $ctx.data_opt::<crate::peer::Peers>() {
+            Some(peers) => {
+                peers
+                    .read()
+                    .await
+                    .iter()
+                    .map(|(peer_address, peer_info)| {
+                        std::net::SocketAddr::new(
+                            peer_address.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                            peer_info.graphql_port.expect("Peer's graphql port must be valid, because it is validated when peer giganto started."),
+                        )
+                    }).collect()
+            }
+            None => Vec::new(),
+        };
+
+        let response_to_result_converter = |resp_data: Option<$response_data_type>| {
+            resp_data.map_or_else($result_type::new, |resp_data| {
+                resp_data.$field_name.into()
+            })
+        };
+
+        let peer_requests = peer_graphql_endpoints
+        .into_iter()
+        .map(|peer_endpoint| {
+                type QueryVariables = $variables_type;
+                let request_body = $graphql_query_type::build_query(QueryVariables {
+                    filter: $filter.clone().map(std::convert::Into::into),
+                    request_from_peer: $request_from_peer.into(),
+                    $(
+                        $query_arg: $query_arg_from,
+                    )*
+                });
+                crate::graphql::request_peer(
+                    $ctx,
+                    peer_endpoint,
+                    request_body,
+                    response_to_result_converter,
+                )
+            });
+
+        futures_util::future::join_all(peer_requests)
+    }};
+}
+pub(crate) use request_all_peers_for_events_fut;
 
 macro_rules! request_selected_peers_for_events_fut {
     ($ctx:expr,

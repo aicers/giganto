@@ -1591,6 +1591,7 @@ impl ExportQuery {
         events_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source_id,
             handler,
             Exports,
