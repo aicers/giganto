@@ -1,0 +1,5 @@
+query TotalCount($protocol:String!, $filter: NetworkOptFilter, $requestFromPeer: Boolean) {
+    totalCount(protocol: $protocol, filter: $filter, requestFromPeer: $requestFromPeer) {
+        totalCount
+    }
+}

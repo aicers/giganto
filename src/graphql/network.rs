@@ -2,8 +2,9 @@
 #[cfg(test)]
 mod tests;
 
-use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
+use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr, ops::Add};
 
+use anyhow::anyhow;
 use async_graphql::{
     connection::{query, Connection, Edge},
     Context, Object, Result, SimpleObject, Union,
@@ -14,11 +15,13 @@ use giganto_client::ingest::network::{
 };
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
+use rocksdb::Direction;
+use serde::de::DeserializeOwned;
 
 use super::{
     base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
-    events_vec_in_cluster, get_peekable_iter, get_source_from_key, get_timestamp_from_key,
-    handle_paged_events, handle_paged_events_for_all_source,
+    events_in_cluster, events_vec_in_cluster, get_peekable_iter, get_source_from_key,
+    get_timestamp_from_key, handle_paged_events, handle_paged_events_for_all_source,
     impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_network_option_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
@@ -26,7 +29,6 @@ use super::{
     Engine, FromKeyValue, NetworkFilter, NetworkOptFilter, NodeCompare, RawEventFilter,
     SearchFilter,
 };
-use crate::storage::{Database, FilteredIter, KeyExtractor};
 use crate::{
     graphql::client::derives::{
         conn_raw_events, dce_rpc_raw_events, dns_raw_events, ftp_raw_events, http_raw_events,
@@ -37,17 +39,26 @@ use crate::{
         search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events,
         search_smb_raw_events, search_smtp_raw_events, search_ssh_raw_events,
         search_tls_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events, tls_raw_events,
-        ConnRawEvents, DceRpcRawEvents, DnsRawEvents, FtpRawEvents, HttpRawEvents,
-        KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+        total_count as total_counts, ConnRawEvents, DceRpcRawEvents, DnsRawEvents, FtpRawEvents,
+        HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
         NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
         SearchConnRawEvents, SearchDceRpcRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
         SearchHttpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents,
         SearchNfsRawEvents, SearchNtlmRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
         SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
-        SshRawEvents, TlsRawEvents,
+        SshRawEvents, TlsRawEvents, TotalCount as TotalCounts,
     },
     IngestSources,
 };
+use crate::{
+    ingest::implement::EventFilter,
+    storage::{Database, FilteredIter, KeyExtractor, RawEventStore, StorageKey},
+};
+
+const TOTAL_COUNT_PROTOCOL: [&str; 15] = [
+    "conn", "dns", "http", "rdp", "smtp", "ntlm", "kerberos", "ssh", "dce rpc", "ftp", "mqtt",
+    "ldap", "tls", "smb", "nfs",
+];
 
 #[derive(Default)]
 pub(super) struct NetworkQuery;
@@ -500,6 +511,30 @@ struct NfsRawEvent {
     last_time: i64,
     read_files: Vec<String>,
     write_files: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone, Copy, Debug, ConvertGraphQLEdgesNode)]
+#[graphql_client_type(names = [total_counts::TotalCountTotalCount, ])]
+struct TotalCount {
+    total_count: usize,
+}
+
+impl TotalCount {
+    fn new() -> Self {
+        Self {
+            total_count: usize::MIN,
+        }
+    }
+}
+
+impl Add for TotalCount {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            total_count: self.total_count + other.total_count,
+        }
+    }
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -1220,8 +1255,180 @@ async fn handle_network_raw_events<'ctx>(
     .await
 }
 
+fn handle_total_count(
+    ctx: &Context<'_>,
+    filter: &Option<NetworkOptFilter>,
+    protocol: &str,
+    sources: &[String],
+) -> Result<TotalCount> {
+    let db = ctx.data::<Database>()?;
+    let filter = filter.clone().unwrap_or_default();
+
+    let total_count = match protocol {
+        "conn" => {
+            let store = db.conn_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "dns" => {
+            let store = db.dns_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "http" => {
+            let store = db.http_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "rdp" => {
+            let store = db.rdp_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "smtp" => {
+            let store = db.smtp_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "ntlm" => {
+            let store = db.ntlm_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "kerberos" => {
+            let store = db.kerberos_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "ssh" => {
+            let store = db.ssh_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "dce rpc" => {
+            let store = db.dce_rpc_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "ftp" => {
+            let store = db.ftp_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "mqtt" => {
+            let store = db.mqtt_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "ldap" => {
+            let store = db.ldap_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "tls" => {
+            let store = db.tls_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "smb" => {
+            let store = db.smb_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        "nfs" => {
+            let store = db.nfs_store()?;
+            get_total_count(&store, sources, &filter)
+        }
+        none => {
+            return Err(anyhow!("{}: Unknown protocol", none).into());
+        }
+    };
+
+    Ok(total_count)
+}
+
+fn get_total_count<T>(
+    store: &RawEventStore<'_, T>,
+    sources: &[String],
+    filter: &NetworkOptFilter,
+) -> TotalCount
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let total_count = sources
+        .iter()
+        .map(|source| {
+            // generate storage search key
+            let key_builder = StorageKey::builder()
+                .start_key(source)
+                .mid_key(filter.get_mid_key());
+            let from_key = key_builder
+                .clone()
+                .lower_closed_bound_end_key(filter.get_range_end_key().0)
+                .build();
+            let to_key = key_builder
+                .upper_open_bound_end_key(filter.get_range_end_key().1)
+                .build();
+            let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+            let mut count: usize = 0;
+            for item in iter {
+                if item.is_err() {
+                    continue;
+                }
+                let item = item.expect("not error value");
+                match filter.check(
+                    item.1.orig_addr(),
+                    item.1.resp_addr(),
+                    item.1.orig_port(),
+                    item.1.resp_port(),
+                    item.1.log_level(),
+                    item.1.log_contents(),
+                    item.1.text(),
+                    item.1.source(),
+                    item.1.agent_id(),
+                ) {
+                    Ok(true) => count += 1,
+                    Ok(false) | Err(_) => {}
+                }
+            }
+            count
+        })
+        .sum();
+    TotalCount { total_count }
+}
+
 #[Object]
 impl NetworkQuery {
+    async fn total_count<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        protocol: String,
+        filter: Option<NetworkOptFilter>,
+        request_from_peer: Option<bool>,
+    ) -> Result<TotalCount> {
+        if !TOTAL_COUNT_PROTOCOL.contains(&protocol.as_str()) {
+            return Err(anyhow!("Invalid protocol").into());
+        }
+
+        // Create a source list for count the total count.
+        let sources = ctx.data::<IngestSources>()?;
+        let mut sources = sources
+            .read()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<String>>();
+        if let Some(ref filter) = filter {
+            if let Some(ref source) = filter.source {
+                sources = vec![source.clone()];
+            }
+        }
+
+        let handler = handle_total_count;
+
+        events_in_cluster!(
+            request_all_peers_and_return_sum
+            ctx,
+            filter,
+            filter.map(std::convert::Into::into),
+            request_from_peer,
+            handler,
+            TotalCounts,
+            total_counts::Variables,
+            total_counts::ResponseData,
+            total_count,
+            TotalCount,
+            with_extra_handler_args (&protocol, &sources),
+            with_extra_query_args (protocol := protocol.clone())
+        )
+    }
+
     async fn conn_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
@@ -1718,6 +1925,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchConnRawEvents,
@@ -1744,6 +1952,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchDnsRawEvents,
@@ -1770,6 +1979,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchHttpRawEvents,
@@ -1797,6 +2007,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchRdpRawEvents,
@@ -1824,6 +2035,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchSmtpRawEvents,
@@ -1851,6 +2063,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchNtlmRawEvents,
@@ -1878,6 +2091,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchKerberosRawEvents,
@@ -1906,6 +2120,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchSshRawEvents,
@@ -1934,6 +2149,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchDceRpcRawEvents,
@@ -1962,6 +2178,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchFtpRawEvents,
@@ -1990,6 +2207,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchMqttRawEvents,
@@ -2018,6 +2236,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchLdapRawEvents,
@@ -2046,6 +2265,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchTlsRawEvents,
@@ -2075,6 +2295,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchSmbRawEvents,
@@ -2103,6 +2324,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
+            filter.into(),
             filter.source,
             handler,
             SearchNfsRawEvents,
@@ -2471,6 +2693,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     tls_raw_events,
     nfs_raw_events,
     smb_raw_events,
+    total_counts,
     search_conn_raw_events,
     search_dce_rpc_raw_events,
     search_dns_raw_events,
@@ -2503,7 +2726,8 @@ impl_from_giganto_network_option_filter_for_graphql_client!(
     ldap_raw_events,
     tls_raw_events,
     nfs_raw_events,
-    smb_raw_events
+    smb_raw_events,
+    total_counts
 );
 
 impl_from_giganto_network_filter_for_graphql_client!(network_raw_events);
