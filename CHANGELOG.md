@@ -27,6 +27,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     know which source the event is from.
 - Changed the sorting of event search results for the all source from `cursor`,
   `source` to `timestamp`, `source`.
+- Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
 
 ### Added
 
