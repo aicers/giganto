@@ -3676,3 +3676,82 @@ async fn search_nfs_with_data() {
         "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
 }
+
+#[tokio::test]
+async fn total_count() {
+    let schema = TestSchema::new();
+    let store = schema.db.conn_store().unwrap();
+
+    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        totalCount(
+            protocol: "conn"
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                source: "src 1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+            }
+        ) {
+            totalCount
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{totalCount: {totalCount: 2}}");
+}
+
+#[tokio::test]
+async fn total_count_with_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        totalCount(
+            protocol: "conn"
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                source: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+            }
+        ) {
+            totalCount
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+          "totalCount": {
+            "totalCount": 10
+          }
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(res.data.to_string(), "{totalCount: {totalCount: 10}}");
+
+    mock.assert_async().await;
+}
