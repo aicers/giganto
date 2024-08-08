@@ -11,10 +11,6 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-#[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd;
-#[cfg(target_os = "linux")]
-use std::os::unix::io::AsRawFd;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     io::{Read, Seek, SeekFrom, Write},
@@ -39,7 +35,7 @@ use num_traits::AsPrimitive;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
-use tempfile::tempfile;
+use tempfile::NamedTempFile;
 use tokio::sync::{Notify, RwLock};
 use tracing::error;
 
@@ -598,10 +594,10 @@ where
 }
 
 fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
-    let mut temp_file = tempfile()?;
-    let fd = temp_file.as_raw_fd();
+    let mut temp_file = NamedTempFile::new()?;
+    let file_path = temp_file.path();
     let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
-    let mut file = unsafe { new_pcap.savefile_raw_fd(fd)? };
+    let mut file = new_pcap.savefile(file_path)?;
 
     for packet in packets {
         let len = u32::try_from(packet.packet.len()).unwrap_or_default();
