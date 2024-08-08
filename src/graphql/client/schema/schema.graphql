@@ -156,7 +156,7 @@ type DnsRawEventEdge {
 
 input ExportFilter {
   protocol: String!
-  sourceId: String!
+  sourceId: String
   agentName: String
   agentId: String
   kind: String

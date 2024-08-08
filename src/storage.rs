@@ -471,6 +471,7 @@ impl Database {
     }
 }
 
+#[derive(Clone)]
 pub struct RawEventStore<'db, T> {
     db: &'db DB,
     cf: &'db ColumnFamily,
