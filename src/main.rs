@@ -18,6 +18,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
+use clap::Parser;
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
@@ -39,22 +40,12 @@ use tracing_subscriber::{
 use crate::{
     graphql::{status::TEMP_TOML_POST_FIX, NodeName},
     server::{subject_from_cert, Certs, SERVER_REBOOT_DELAY},
+    settings::Args,
     storage::migrate_data_dir,
 };
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const WAIT_SHUTDOWN: u64 = 15;
-const USAGE: &str = "\
-USAGE:
-    giganto [CONFIG]
-
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-
-ARG:
-    <CONFIG>    A TOML config file
-";
 
 pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type IngestSources = Arc<RwLock<HashSet<String>>>;
@@ -65,36 +56,25 @@ pub type AckTransmissionCount = Arc<RwLock<u16>>;
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (mut settings, repair) = if let Some((config_filename, repair)) = parse() {
-        (Settings::from_file(&config_filename)?, repair)
+    let args = Args::parse();
+    let mut settings = if let Some(config_filename) = args.config {
+        Settings::from_file(&config_filename)?
     } else {
-        (Settings::new()?, false)
+        Settings::new()?
     };
 
     let cfg_path = settings.cfg_path.clone();
     let temp_path = format!("{cfg_path}{TEMP_TOML_POST_FIX}");
 
-    let cert_pem = fs::read(&settings.cert).with_context(|| {
-        format!(
-            "failed to read certificate file: {}",
-            settings.cert.display()
-        )
-    })?;
+    let cert_pem = fs::read(&args.cert)
+        .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
     let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
     assert!(!cert.is_empty());
-    let key_pem = fs::read(&settings.key).with_context(|| {
-        format!(
-            "failed to read private key file: {}",
-            settings.key.display()
-        )
-    })?;
+    let key_pem = fs::read(&args.key)
+        .with_context(|| format!("failed to read private key file: {}", args.key))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root_pem = fs::read(&settings.root).with_context(|| {
-        format!(
-            "failed to read root certificate file: {}",
-            settings.root.display()
-        )
-    })?;
+    let root_pem = fs::read(&args.root)
+        .with_context(|| format!("failed to read root certificate file: {}", args.root))?;
     let root_cert = to_root_cert(&root_pem)?;
     let certs = Arc::new(Certs {
         certs: cert.clone(),
@@ -111,7 +91,7 @@ async fn main() -> Result<()> {
         settings.num_of_thread,
         settings.max_sub_compactions,
     );
-    if repair {
+    if args.repair {
         let start = Instant::now();
         let (db_opts, _) = storage::rocksdb_options(&db_options);
         info!("repair db start.");
@@ -314,44 +294,6 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Parses the command line arguments and returns the first argument.
-#[allow(unused_assignments)]
-fn parse() -> Option<(String, bool)> {
-    let mut args = env::args();
-    let mut repair = false;
-    args.next()?;
-    let arg = args.next()?;
-    let repair_opt = args.next();
-    if let Some(str) = repair_opt {
-        match str.as_str() {
-            "--repair" => repair = true,
-            _ => eprintln!("Error: too many arguments"),
-        }
-    }
-
-    if arg == "--help" || arg == "-h" {
-        println!("{}", version());
-        println!();
-        print!("{USAGE}");
-        exit(0);
-    }
-    if arg == "--version" || arg == "-V" {
-        println!("{}", version());
-        exit(0);
-    }
-    if arg.starts_with('-') {
-        eprintln!("Error: unknown option: {arg}");
-        eprintln!("\n{USAGE}");
-        exit(1);
-    }
-
-    Some((arg, repair))
-}
-
-fn version() -> String {
-    format!("giganto {}", env!("CARGO_PKG_VERSION"))
 }
 
 fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {

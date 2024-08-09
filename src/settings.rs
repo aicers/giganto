@@ -1,6 +1,7 @@
 //! Configurations for the application.
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
+use clap::Parser;
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 
@@ -17,12 +18,30 @@ const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
 const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
 
+#[derive(Parser, Debug)]
+pub struct Args {
+    /// Path to the local configuration TOML file
+    #[arg(short, value_name = "CONFIG_PATH")]
+    pub config: Option<String>,
+    /// Path to the certificate file
+    #[arg(long, value_name = "CERT_PATH")]
+    pub cert: String,
+    /// Path to the key file
+    #[arg(long, value_name = "KEY_PATH")]
+    pub key: String,
+    /// Path to the root CA file
+    #[arg(long, value_name = "ROOT_PATH")]
+    pub root: String,
+    /// Central management server "hostname@address"
+    pub central_server: String,
+    /// Enable the repair mode
+    #[arg(long)]
+    pub repair: bool,
+}
+
 /// The application settings.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub cert: PathBuf, // Path to the certificate file
-    pub key: PathBuf,  // Path to the private key file
-    pub root: PathBuf, // Path to the rootCA file
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
@@ -32,7 +51,7 @@ pub struct Settings {
     pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
-    pub log_dir: PathBuf, //giganto's syslog path
+    pub log_dir: PathBuf,  //giganto's syslog path
     pub export_dir: PathBuf, //giganto's export file path
 
     // db options
@@ -101,15 +120,9 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .to_str()
         .expect("unreachable export path");
     let config_dir = dirs.config_dir();
-    let cert_path = config_dir.join("cert.pem");
-    let key_path = config_dir.join("key.pem");
     let config_path = config_dir.join("config.toml");
 
     Config::builder()
-        .set_default("cert", cert_path.to_str().expect("path to string"))
-        .expect("default cert dir")
-        .set_default("key", key_path.to_str().expect("path to string"))
-        .expect("default key dir")
         .set_default("ingest_srv_addr", DEFAULT_INGEST_SRV_ADDR)
         .expect("valid address")
         .set_default("publish_srv_addr", DEFAULT_PUBLISH_SRV_ADDR)

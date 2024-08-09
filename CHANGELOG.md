@@ -49,7 +49,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
       in version `0.21.0-alpha.2`.
 - Rename `chwaddr` to `chaddr` because the field names within the `Bootp` structure
   of the giganto-client have changed.
-- Changed cluster realted configuration field names.
+- Changed cluster related configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
 - Removed `unsafe` block in `write_run_tcpdump` while creating a temporary file.
@@ -68,6 +68,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   integers beyond `i32`.
 - Changed the `from_key_value` macro to additionally receive `str_num_field`
   for `StringNumber` conversion.
+- Changed to support command line interface.
+  - Removed `cert`, `key`, `root` fields from config file.
 
 ## [0.20.0] - 2024-05-17
 
