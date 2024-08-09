@@ -46,7 +46,7 @@ export_dir = "tests/export"                # path to giganto's export file.
 max_open_files = 8000                      # db options max open files.
 max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1.
 num_of_thread = 8                          # db options for background thread.
-max_sub_compactions = 2                    # db options for sub-compaction.
+max_subcompactions = 2                    # db options for sub-compaction.
 ack_transmission = 1024                    # ack count for ingestion data.
 addr_to_peers = "10.10.11.1:38383"          # address to listen for peers QUIC.
 peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]     # list of peer info.

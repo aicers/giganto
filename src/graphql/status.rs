@@ -18,8 +18,13 @@ const CONFIG_INGEST_SRV_ADDR: &str = "ingest_srv_addr";
 pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
 pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 const CONFIG_RETENTION: &str = "retention";
+const CONFIG_DATA_DIR: &str = "data_dir";
+const CONFIG_LOG_DIR: &str = "log_dir";
+const CONFIG_EXPORT_DIR: &str = "export_dir";
 const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
 const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
+const CONFIG_NUM_OF_THREAD: &str = "num_of_thread";
+const CONFIG_MAX_SUBCOMPACTIONS: &str = "max_subcompactions";
 const CONFIG_ADDR_TO_PEERS: &str = "addr_to_peers";
 const CONFIG_PEER_LIST: &str = "peers";
 const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
@@ -74,10 +79,18 @@ struct GigantoConfig {
     publish_srv_addr: String,
     graphql_srv_addr: String,
     retention: String,
+    data_dir: String,
+    log_dir: String,
+    export_dir: String,
+
     max_open_files: i32,
     max_mb_of_level_base: u64,
+    num_of_thread: i32,
+    max_subcompactions: u32,
+
     addr_to_peers: String,
     peer_list: Vec<PeerList>,
+
     ack_transmission_cnt: u16,
 }
 
@@ -130,9 +143,14 @@ impl GigantoStatusQuery {
         let publish_srv_addr = parse_toml_element_to_string(CONFIG_PUBLISH_SRV_ADDR, &doc)?;
         let graphql_srv_addr = parse_toml_element_to_string(CONFIG_GRAPHQL_SRV_ADDR, &doc)?;
         let retention = parse_toml_element_to_string(CONFIG_RETENTION, &doc)?;
+        let data_dir = parse_toml_element_to_string(CONFIG_DATA_DIR, &doc)?;
+        let log_dir = parse_toml_element_to_string(CONFIG_LOG_DIR, &doc)?;
+        let export_dir = parse_toml_element_to_string(CONFIG_EXPORT_DIR, &doc)?;
         let max_open_files = parse_toml_element_to_integer(CONFIG_MAX_OPEN_FILES, &doc)?;
         let max_mb_of_level_base =
             parse_toml_element_to_integer(CONFIG_MAX_MB_OF_LEVEL_BASE, &doc)?;
+        let num_of_thread = parse_toml_element_to_integer(CONFIG_NUM_OF_THREAD, &doc)?;
+        let max_subcompactions = parse_toml_element_to_integer(CONFIG_MAX_SUBCOMPACTIONS, &doc)?;
         let ack_transmission_cnt = parse_toml_element_to_integer(CONFIG_ACK_TRANSMISSION, &doc)?;
         let mut peer_list = Vec::new();
         let addr_to_peers = if doc.get(CONFIG_ADDR_TO_PEERS).is_some() {
@@ -168,8 +186,13 @@ impl GigantoStatusQuery {
             publish_srv_addr,
             graphql_srv_addr,
             retention,
+            data_dir,
+            log_dir,
+            export_dir,
             max_open_files,
             max_mb_of_level_base,
+            num_of_thread,
+            max_subcompactions,
             addr_to_peers,
             peer_list,
             ack_transmission_cnt,

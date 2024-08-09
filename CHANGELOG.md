@@ -57,6 +57,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed to support command line interface.
   - Removed `cert`, `key`, `root` fields from config file.
 - Changed `set_giganto_config` to receive toml-string with full configuration.
+- Update `giganto_config` to respond full configuration.
 
 ## [0.20.0] - 2024-05-17
 
@@ -66,7 +67,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added rocksdb's `increase_parallelism` option. This option is set by
   reading the value from `number_of_thread` in config file.
 - Added rocksdb's `set_max_subcompactions` option. This option is set by
-  reading the value from `max_sub_compactions` in config file.
+  reading the value from `max_subcompactions` in config file.
 
 ### Changed
 

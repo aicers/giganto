@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         settings.max_open_files,
         settings.max_mb_of_level_base,
         settings.num_of_thread,
-        settings.max_sub_compactions,
+        settings.max_subcompactions,
     );
     if args.repair {
         let start = Instant::now();

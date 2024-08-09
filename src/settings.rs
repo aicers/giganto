@@ -58,7 +58,7 @@ pub struct Settings {
     pub max_open_files: i32,
     pub max_mb_of_level_base: u64,
     pub num_of_thread: i32,
-    pub max_sub_compactions: u32,
+    pub max_subcompactions: u32,
 
     // config file path
     pub cfg_path: String,
@@ -143,7 +143,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max mb of level base")
         .set_default("num_of_thread", DEFAULT_NUM_OF_THREAD)
         .expect("default number of thread")
-        .set_default("max_sub_compactions", DEFAULT_MAX_SUBCOMPACTIONS)
+        .set_default("max_subcompactions", DEFAULT_MAX_SUBCOMPACTIONS)
         .expect("default max subcompactions")
         .set_default("cfg_path", config_path.to_str().expect("path to string"))
         .expect("default config dir")
