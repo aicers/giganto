@@ -50,10 +50,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
       in version `0.21.0-alpha.2`.
 - Rename `chwaddr` to `chaddr` because the field names within the `Bootp` structure
   of the giganto-client have changed.
-- Changed cluster realted configuration field names.
+- Changed cluster related configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
-- Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
+- Removed `unsafe` block in `write_run_tcpdump` while creating a temporary file.
+- Changed to support command line interface.
+  - Removed `cert`, `key`, `root` fields from config file.
+- Changed `set_giganto_config` to receive toml-string with full configuration.
+- Update `giganto_config` to respond full configuration.
 
 ## [0.20.0] - 2024-05-17
 
@@ -63,7 +67,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added rocksdb's `increase_parallelism` option. This option is set by
   reading the value from `number_of_thread` in config file.
 - Added rocksdb's `set_max_subcompactions` option. This option is set by
-  reading the value from `max_sub_compactions` in config file.
+  reading the value from `max_subcompactions` in config file.
 
 ### Changed
 
