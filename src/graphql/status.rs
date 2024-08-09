@@ -81,19 +81,6 @@ struct GigantoConfig {
     ack_transmission_cnt: u16,
 }
 
-#[derive(InputObject)]
-struct UserConfig {
-    ingest_srv_addr: Option<String>,
-    publish_srv_addr: Option<String>,
-    graphql_srv_addr: Option<String>,
-    retention: Option<String>,
-    max_open_files: Option<i32>,
-    max_mb_of_level_base: Option<u64>,
-    addr_to_peers: Option<String>,
-    peer_list: Option<Vec<PeerList>>,
-    ack_transmission_cnt: Option<u16>,
-}
-
 #[derive(Default)]
 pub(super) struct GigantoStatusQuery;
 
@@ -201,26 +188,12 @@ impl GigantoConfigMutation {
     async fn set_giganto_config<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        field: UserConfig,
+        config: String,
     ) -> Result<String> {
         let cfg_path = ctx.data::<String>()?;
         let new_path = copy_toml_file(cfg_path)?;
-        let mut doc = read_toml_file(&new_path)?;
-        insert_toml_element(CONFIG_INGEST_SRV_ADDR, &mut doc, field.ingest_srv_addr);
-        insert_toml_element(CONFIG_PUBLISH_SRV_ADDR, &mut doc, field.publish_srv_addr);
-        insert_toml_element(CONFIG_GRAPHQL_SRV_ADDR, &mut doc, field.graphql_srv_addr);
-        insert_toml_element(CONFIG_RETENTION, &mut doc, field.retention);
-        let convert_open_file = field.max_open_files.map(i64::from);
-        insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, convert_open_file);
-        let convert_level_base = field
-            .max_mb_of_level_base
-            .and_then(|x| i64::try_from(x).ok());
-        insert_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &mut doc, convert_level_base);
-        let convert_ack_trans_cnt = field.ack_transmission_cnt.map(i64::from);
-        insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
-        insert_toml_element(CONFIG_ADDR_TO_PEERS, &mut doc, field.addr_to_peers);
-        insert_toml_peers(&mut doc, field.peer_list)?;
-        write_toml_file(&doc, &new_path)?;
+
+        fs::write(new_path, config)?;
 
         let reload_notify = ctx.data::<ReloadNotify>()?;
         let config_reload = reload_notify.0.clone();

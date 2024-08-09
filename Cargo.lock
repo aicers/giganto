@@ -1063,6 +1063,7 @@ dependencies = [
  "syn 2.0.77",
  "tempfile",
  "tokio",
+ "toml",
  "toml_edit 0.22.20",
  "tracing",
  "tracing-appender",
