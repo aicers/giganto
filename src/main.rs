@@ -73,23 +73,21 @@ async fn main() -> Result<()> {
     let key_pem = fs::read(&args.key)
         .with_context(|| format!("failed to read private key file: {}", args.key))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root_pem = fs::read(&args.root)
-        .with_context(|| format!("failed to read root certificate file: {}", args.root))?;
-    let root_cert = to_root_cert(&root_pem)?;
+    let root_cert = to_root_cert(&args.ca_certs)?;
     let certs = Arc::new(Certs {
         certs: cert.clone(),
         key: key.clone_key(),
         root: root_cert.clone(),
     });
 
-    let _guard = init_tracing(&settings.log_dir)?;
+    let _guard = init_tracing(&settings.config.log_dir)?;
 
-    let db_path = settings.data_dir.join("db");
+    let db_path = settings.config.data_dir.join("db");
     let db_options = crate::storage::DbOptions::new(
-        settings.max_open_files,
-        settings.max_mb_of_level_base,
-        settings.num_of_thread,
-        settings.max_sub_compactions,
+        settings.config.max_open_files,
+        settings.config.max_mb_of_level_base,
+        settings.config.num_of_thread,
+        settings.config.max_sub_compactions,
     );
     if args.repair {
         let start = Instant::now();
@@ -109,7 +107,7 @@ async fn main() -> Result<()> {
 
     let database = storage::Database::open(&db_path, &db_options)?;
 
-    if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
+    if let Err(e) = migrate_data_dir(&settings.config.data_dir, &database) {
         error!("migration failed: {e}");
         return Ok(());
     }
@@ -131,13 +129,13 @@ async fn main() -> Result<()> {
         let ingest_sources = new_ingest_sources(&database);
         let runtime_ingest_sources = new_runtime_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
-        let (peers, peer_idents) = new_peers_data(settings.peers.clone());
+        let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
         let notify_power_off = Arc::new(Notify::new());
         let mut notify_source_change = None;
-        let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
+        let ack_transmission_cnt = new_ack_transmission_count(settings.config.ack_transmission);
 
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
@@ -146,7 +144,7 @@ async fn main() -> Result<()> {
             ingest_sources.clone(),
             peers.clone(),
             request_client_pool.clone(),
-            settings.export_dir.clone(),
+            settings.config.export_dir.clone(),
             notify_config_reload.clone(),
             notify_reboot.clone(),
             notify_power_off.clone(),
@@ -157,7 +155,7 @@ async fn main() -> Result<()> {
 
         task::spawn(web::serve(
             schema,
-            settings.graphql_srv_addr,
+            settings.config.graphql_srv_addr,
             cert_pem.clone(),
             key_pem.clone(),
             notify_shutdown.clone(),
@@ -175,7 +173,7 @@ async fn main() -> Result<()> {
                 .expect("Cannot create runtime for retain_periodically.")
                 .block_on(storage::retain_periodically(
                     time::Duration::from_secs(ONE_DAY),
-                    settings.retention,
+                    settings.config.retention,
                     db,
                     notify_shutdown_copy,
                     running_flag,
@@ -185,7 +183,7 @@ async fn main() -> Result<()> {
                 });
         });
 
-        if let Some(addr_to_peers) = settings.addr_to_peers {
+        if let Some(addr_to_peers) = settings.config.addr_to_peers {
             let peer_server = peer::Peer::new(addr_to_peers, &certs.clone())?;
             let notify_source = Arc::new(Notify::new());
             task::spawn(peer_server.run(
@@ -199,7 +197,7 @@ async fn main() -> Result<()> {
             notify_source_change = Some(notify_source);
         }
 
-        let publish_server = publish::Server::new(settings.publish_srv_addr, &certs.clone());
+        let publish_server = publish::Server::new(settings.config.publish_srv_addr, &certs.clone());
         task::spawn(publish_server.run(
             database.clone(),
             pcap_sources.clone(),
@@ -211,7 +209,7 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
         ));
 
-        let ingest_server = ingest::Server::new(settings.ingest_srv_addr, &certs.clone());
+        let ingest_server = ingest::Server::new(settings.config.ingest_srv_addr, &certs.clone());
         task::spawn(ingest_server.run(
             database.clone(),
             pcap_sources,
@@ -314,16 +312,27 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
     }
 }
 
-fn to_root_cert(pem: &[u8]) -> Result<rustls::RootCertStore> {
-    let mut root_cert = rustls::RootCertStore::empty();
-    let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
-        .collect::<Result<_, _>>()
-        .context("invalid PEM-encoded certificate")?;
-    if let Some(cert) = root_certs.first() {
-        root_cert
-            .add(cert.to_owned())
-            .context("failed to add root cert")?;
+fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
+    let mut ca_certs_files = Vec::new();
+
+    for ca_cert in ca_certs_paths {
+        let file = fs::read(ca_cert)
+            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
+
+        ca_certs_files.push(file);
     }
+    let mut root_cert = rustls::RootCertStore::empty();
+    for file in ca_certs_files {
+        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+            .collect::<Result<_, _>>()
+            .context("invalid PEM-encoded certificate")?;
+        if let Some(cert) = root_certs.first() {
+            root_cert
+                .add(cert.to_owned())
+                .context("failed to add root cert")?;
+        }
+    }
+
     Ok(root_cert)
 }
 

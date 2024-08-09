@@ -1041,6 +1041,7 @@ dependencies = [
  "futures-util",
  "giganto-client",
  "graphql_client",
+ "humantime",
  "humantime-serde",
  "libc",
  "mockito",

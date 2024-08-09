@@ -24,13 +24,15 @@ processing and real-time analytics.
 You can run giganto by invoking the following command:
 
 ```sh
-giganto --cert <CERT_PATH> --key <KEY_PATH> --ca <CA_PATH> <CENTRAL_SERVER>
+giganto --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_CERT_PATH> \
+--ca-certs <CA_CERT_PATH>
 ```
 
 If you want to run giganto with local configuration file,
 
 ```sh
-giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca <CA_PATH> <CENTRAL_SERVER>
+giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
+<CA_CERT_PATH> --ca-certs <CA_CERT_PATH>
 ```
 
 In the config file, you can specify the following options:
@@ -76,8 +78,8 @@ Run giganto with the prepared configuration file. (Settings to use the
 certificate/key from the tests folder.)
 
 ```sh
-cargo run -- -c tests/node1/config.toml --cert tests/node1/cert.pem \
---key tests/node1/key.pem --root tests/root.pem hostname@address
+cargo run -- -c tests/config.toml --cert tests/certs/node1/cert.pem \
+--key tests/certs/node1/key.pem --ca-certs tests/certs/ca_cert.pem
 ```
 
 ## License

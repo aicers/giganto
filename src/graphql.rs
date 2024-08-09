@@ -1543,7 +1543,11 @@ mod tests {
     }
 
     impl TestSchema {
-        fn setup(ingest_sources: IngestSources, peers: Peers) -> Self {
+        fn setup(
+            ingest_sources: IngestSources,
+            peers: Peers,
+            config_file_path: Option<String>,
+        ) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sources = new_pcap_sources();
@@ -1565,7 +1569,7 @@ mod tests {
                 notify_reboot,
                 notify_power_off,
                 notify_terminate,
-                "file_path".to_string(),
+                config_file_path.unwrap_or("file_path".to_string()),
                 Arc::new(RwLock::new(1024)),
             );
 
@@ -1585,7 +1589,7 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sources, peers)
+            Self::setup(ingest_sources, peers, None)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
@@ -1608,7 +1612,19 @@ mod tests {
                 },
             )])));
 
-            Self::setup(ingest_sources, peers)
+            Self::setup(ingest_sources, peers, None)
+        }
+
+        pub fn new_with_config_file_path(path: String) -> Self {
+            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SOURCES
+                    .into_iter()
+                    .map(|source| source.to_string())
+                    .collect::<HashSet<String>>(),
+            ));
+
+            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+            Self::setup(ingest_sources, peers, Some(path))
         }
 
         pub async fn execute(&self, query: &str) -> async_graphql::Response {
