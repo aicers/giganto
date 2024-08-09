@@ -24,15 +24,18 @@ processing and real-time analytics.
 You can run giganto by invoking the following command:
 
 ```sh
-giganto <path to config file>
+giganto --cert <CERT_PATH> --key <KEY_PATH> --ca <CA_PATH> <CENTRAL_SERVER>
+```
+
+If you want to run giganto with local configuration file,
+
+```sh
+giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca <CA_PATH> <CENTRAL_SERVER>
 ```
 
 In the config file, you can specify the following options:
 
 ```toml
-key = "key.pem"                            # path to private key file.
-cert = "cert.pem"                          # path to certificate file.
-root = "root.pem"                          # path to CA certificate file.
 ingest_srv_addr = "0.0.0.0:38370"          # address to listen for ingest QUIC.
 publish_srv_addr = "0.0.0.0:38371"         # address to listen for publish QUIC.
 graphql_srv_addr = "127.0.0.1:8442"        # giganto's graphql address.
@@ -73,7 +76,8 @@ Run giganto with the prepared configuration file. (Settings to use the
 certificate/key from the tests folder.)
 
 ```sh
-cargo run -- tests/config.toml
+cargo run -- -c tests/node1/config.toml --cert tests/node1/cert.pem \
+--key tests/node1/key.pem --root tests/root.pem hostname@address
 ```
 
 ## License
