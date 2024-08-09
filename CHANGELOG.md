@@ -56,6 +56,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Removed `unsafe` block in `write_run_tcpdump` while creating a temporary file.
 - Changed to support command line interface.
   - Removed `cert`, `key`, `root` fields from config file.
+- Changed `set_giganto_config` to receive toml-string with full configuration.
 
 ## [0.20.0] - 2024-05-17
 
