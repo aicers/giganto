@@ -14,8 +14,8 @@ use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpBeforeV12, HttpFromV12BeforeV21, NtlmBeforeV21,
-    SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+    ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21,
+    SshBeforeV21, TlsBeforeV21,
 };
 use super::Database;
 use crate::{
@@ -43,16 +43,6 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
     }
 
     let migration: Vec<(_, _, fn(_) -> Result<_, _>)> = vec![
-        (
-            VersionReq::parse(">=0.10.0,<0.12.0").expect("valid version requirement"),
-            Version::parse("0.12.0").expect("valid version"),
-            migrate_0_10_to_0_12,
-        ),
-        (
-            VersionReq::parse(">=0.12.0,<0.13.0").expect("valid version requirement"),
-            Version::parse("0.13.0").expect("valid version"),
-            migrate_0_12_to_0_13_0,
-        ),
         (
             VersionReq::parse(">=0.13.0,<0.19.0").expect("valid version requirement"),
             Version::parse("0.19.0").expect("valid version"),
@@ -122,31 +112,6 @@ fn read_version_file(path: &Path) -> Result<Version> {
         .read_to_string(&mut ver)
         .context("cannot read VERSION")?;
     Version::parse(&ver).context("cannot parse VERSION")
-}
-
-#[allow(clippy::too_many_lines)]
-fn migrate_0_10_to_0_12(db: &Database) -> Result<()> {
-    let store = db.http_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<HttpBeforeV12>(&val)?;
-        let convert_new: HttpFromV12BeforeV21 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-
-    Ok(())
-}
-
-// Remove old statistics data because it's overwritten
-// by the data of other core of same machine.
-fn migrate_0_12_to_0_13_0(db: &Database) -> Result<()> {
-    let store = db.statistics_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, _) = raw_event.context("Failed to read Database")?;
-        store.delete(&key)?;
-    }
-    Ok(())
 }
 
 // Delete the netflow5/netflow5/secuLog data in the old key and insert it with the new key.
@@ -319,8 +284,8 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::{
         migration::migration_structures::{
-            ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpBeforeV12, HttpFromV12BeforeV21,
-            NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+            ConnBeforeV21A1, ConnFromV21A1BeforeV21A2, HttpFromV12BeforeV21, NtlmBeforeV21,
+            SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
         },
         Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Ntlm as NtlmFromV21,
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
@@ -346,89 +311,6 @@ mod tests {
         };
 
         assert!(!compatible.matches(&breaking));
-    }
-
-    #[test]
-    fn migrate_0_10_to_0_12() {
-        // open temp db & store
-        let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let store = db.http_store().unwrap();
-
-        // insert old http raw data
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let source = "src1";
-        let mut key = Vec::with_capacity(source.len() + 1 + std::mem::size_of::<i64>());
-        key.extend_from_slice(source.as_bytes());
-        key.push(0);
-        key.extend(timestamp.to_be_bytes());
-
-        let old_http = HttpBeforeV12 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            method: "POST".to_string(),
-            host: "einsis".to_string(),
-            uri: "/einsis.gif".to_string(),
-            referrer: "einsis.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-        };
-        let ser_old_http = bincode::serialize(&old_http).unwrap();
-
-        store.append(&key, &ser_old_http).unwrap();
-
-        //migration 0.10.0 to 0.12.0
-        super::migrate_0_10_to_0_12(&db).unwrap();
-
-        //check migration
-        let raw_event = store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_http = bincode::deserialize::<HttpFromV12BeforeV21>(&val).unwrap();
-
-        let new_http = HttpFromV12BeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            method: "POST".to_string(),
-            host: "einsis".to_string(),
-            uri: "/einsis.gif".to_string(),
-            referrer: "einsis.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-        };
-
-        assert_eq!(new_http, store_http);
     }
 
     #[test]

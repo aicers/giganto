@@ -6,33 +6,6 @@ use crate::storage::{
     Conn as ConnFromV21, Http as HttpFromV21, Ntlm as NtlmFromV21, Smtp as SmtpFromV21,
     Ssh as SshFromV21, Tls as TlsFromV21,
 };
-
-#[derive(Deserialize, Serialize)]
-pub struct HttpBeforeV12 {
-    pub orig_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_addr: IpAddr,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub last_time: i64,
-    pub method: String,
-    pub host: String,
-    pub uri: String,
-    pub referrer: String,
-    pub version: String,
-    pub user_agent: String,
-    pub request_len: usize,
-    pub response_len: usize,
-    pub status_code: u16,
-    pub status_msg: String,
-    pub username: String,
-    pub password: String,
-    pub cookie: String,
-    pub content_encoding: String,
-    pub content_type: String,
-    pub cache_control: String,
-}
-
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct HttpFromV12BeforeV21 {
     pub orig_addr: IpAddr,
@@ -175,39 +148,6 @@ pub struct TlsBeforeV21 {
     pub issuer_org_unit_name: String,
     pub issuer_common_name: String,
     pub last_alert: u8,
-}
-
-impl From<HttpBeforeV12> for HttpFromV12BeforeV21 {
-    fn from(input: HttpBeforeV12) -> Self {
-        Self {
-            orig_addr: input.orig_addr,
-            orig_port: input.orig_port,
-            resp_addr: input.resp_addr,
-            resp_port: input.resp_port,
-            proto: input.proto,
-            last_time: input.last_time,
-            method: input.method,
-            host: input.host,
-            uri: input.uri,
-            referrer: input.referrer,
-            version: input.version,
-            user_agent: input.user_agent,
-            request_len: input.request_len,
-            response_len: input.response_len,
-            status_code: input.status_code,
-            status_msg: input.status_msg,
-            username: input.username,
-            password: input.password,
-            cookie: input.cookie,
-            content_encoding: input.content_encoding,
-            content_type: input.content_type,
-            cache_control: input.cache_control,
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-        }
-    }
 }
 
 impl From<ConnBeforeV21A1> for ConnFromV21A1BeforeV21A2 {
