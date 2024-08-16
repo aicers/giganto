@@ -54,7 +54,7 @@ use crate::graphql::TIMESTAMP_SIZE;
 use crate::ingest::{implement::EventFilter, NetworkKey};
 use crate::peer::{PeerIdents, Peers};
 use crate::server::{
-    certificate_info, config_client, config_server, extract_cert_from_conn, Certs,
+    config_client, config_server, extract_cert_from_conn, subject_from_cert_verbose, Certs,
     SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
@@ -161,7 +161,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (_, source) = certificate_info(&extract_cert_from_conn(&connection)?)?;
+    let (_, source) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
 
     tokio::spawn({
         let certs = certs.clone();

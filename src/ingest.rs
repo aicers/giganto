@@ -41,8 +41,8 @@ use x509_parser::nom::AsBytes;
 
 use crate::publish::send_direct_stream;
 use crate::server::{
-    certificate_info, config_server, extract_cert_from_conn, Certs, SERVER_CONNNECTION_DELAY,
-    SERVER_ENDPOINT_DELAY,
+    config_server, extract_cert_from_conn, subject_from_cert_verbose, Certs,
+    SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 use crate::{
@@ -165,7 +165,7 @@ async fn handle_connection(
         }
     };
 
-    let (agent, source) = certificate_info(&extract_cert_from_conn(&connection)?)?;
+    let (agent, source) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
     let rep = agent.contains("reproduce");
 
     if !rep {

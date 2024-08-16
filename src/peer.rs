@@ -33,8 +33,8 @@ use crate::{
         TomlPeers, CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR,
     },
     server::{
-        certificate_info, certificate_info_default, config_client, config_server,
-        extract_cert_from_conn, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+        config_client, config_server, extract_cert_from_conn, subject_from_cert,
+        subject_from_cert_verbose, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
     IngestSources,
 };
@@ -111,7 +111,7 @@ pub struct Peer {
 
 impl Peer {
     pub fn new(local_address: SocketAddr, certs: &Arc<Certs>) -> Result<Self> {
-        let (_, local_host_name) = certificate_info_default(certs.certs.as_slice(), false)?;
+        let (_, local_host_name) = subject_from_cert(certs.certs.as_slice())?;
 
         let server_config =
             config_server(certs).expect("server configuration error with cert, key or root");
@@ -668,7 +668,7 @@ async fn check_for_duplicate_connections(
     peer_conn: Arc<RwLock<HashMap<String, Connection>>>,
 ) -> Result<(String, String)> {
     let remote_addr = connection.remote_address().ip().to_string();
-    let (_, remote_host_name) = certificate_info(&extract_cert_from_conn(connection)?)?;
+    let (_, remote_host_name) = subject_from_cert_verbose(&extract_cert_from_conn(connection)?)?;
     if peer_conn.read().await.contains_key(&remote_host_name) {
         connection.close(
             quinn::VarInt::from_u32(0),
