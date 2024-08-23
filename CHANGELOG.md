@@ -17,11 +17,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Fixed code and structures based on changes to the conn, http, smtp, ntlm,
     ssh, tls protocols field.
   - Update the compatibility version of the quic communication modules.
-    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
-    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
-    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22."
+    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
+    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
+    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
   - Fixed code related to migration.
-    - Changed `COMPATIBLE_VERSION_REQ` to “>=0.21.0-alpha.1,<0.22.0”
+    - Changed `COMPATIBLE_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
     - Added migration function in `migrate_0_19_to_0_21_0_alpha_1`. This feature
       change values for conn, http, smtp, ntlm, ssh, tls protocol's fields in
       versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
@@ -33,15 +33,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     This command must be applied automatically or manually before all future pull
     requests are submitted.
   - Add `--config group_imports=StdExternalCrate` to the CI process like:
-    - `cargo fmt -- --check --config group_imports=StdExternalCrate`
+    - `cargo fmt -- --check --config group_imports=StdExternalCrate`.
 - Update giganto-client to version `0.19.0`. Updating to this version results
   in the following changes.
-  - Support bootp, dhcp events.
+  - Support bootp and dhcp events.
   - Fixed code and structures based on changes to the conn protocols field.
   - Update the compatibility version of the quic communication modules.
-    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
-    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
-    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22."
+    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
+    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
+    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
   - Fixed code related to migration.
     - Changed `COMPATIBLE_VERSION_REQ` to “>=0.21.0-alpha.2,<0.22.0”
     - Added migration function in `migrate_0_21_0_alpha_1_to_0_21_0_alpha_2`.
@@ -52,7 +52,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed cluster realted configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
-- Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
+- Removed `unsafe` block in `write_run_tcpdump` while creating a temporary file.
 - Remove migration code less than `0.15.3`
 - In `BootpRawEvent`, `ConnRawEvent`, `DceRpcRawEvent`, `DhcpRawEvent`,
   `DnsEventEvent`, `DnsRawEvent`, `FileCreateEvent`,
@@ -73,7 +73,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Added graphql query `ping` and mutation `stop`, `reboot`, `shutdown`.
+- Added GraphQL API `ping` and mutation `stop`, `reboot`, `shutdown`.
 - Added rocksdb's `increase_parallelism` option. This option is set by
   reading the value from `number_of_thread` in config file.
 - Added rocksdb's `set_max_subcompactions` option. This option is set by
@@ -82,9 +82,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Modified logging behavior for debug and release builds.
-- Changed logs to stdout and file
+- Changed logs to stdout and file.
 - Modify to extract kind/source correctly on export of `secu log`.
-- Modify `retain_periodically()` function to run as a separate thread.
+- Modify `retain_periodically` function to run as a separate thread.
 - Added the `.export` tag to the file being exported. This tag is removed after
   the file is finished exporting.
 - Updated `set_giganto_config` function to record requested configuration changes
@@ -100,9 +100,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Update dependency for security vulnerabilities.
   - Update rustls to version `0.21.12`.
   - Update h2 to version `0.3.26`.
-- Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.21.0"
-- Changed `INGEST_VERSION_REQ` to ">=0.15.0,<0.21.0"
-- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.21.0"
+- Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.21.0".
+- Changed `INGEST_VERSION_REQ` to ">=0.15.0,<0.21.0".
+- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.21.0".
 
 ### Removed
 
@@ -119,14 +119,13 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Modify the `sources` query to return results that also include
+- Modify the `sources` GraphQL API to return results that also include
   sources from its peers.
 - Changed the prefix of the `Netflow5`/`Netflow9`/`SecuLog` db key to source.
-- Modify the related queries as the db key of `Netflow5`/`Netflow9`/`SecuLog`
-  is changed to source.(`netflow5_raw_events`/`netflow9_raw_events`/
-  `secu_log_raw_events`)
-- Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.20.0"
-- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.20.0"
+- Modify the related GraphQL APIs as the db keys for `Netflow5`/`Netflow9`/`SecuLog`
+  have been changed to `Netflow5RawEvent`, `Netflow9RawEvent`, and `SecuLogRawEvent`
+- Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.20.0".
+- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.20.0".
 
 ## [0.18.0] - 2024-02-16
 
@@ -144,8 +143,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added the ability to filter via `agent_id` in the filter of a GraphQL query
   requesting a sysmon events.
-- Added `SmtpRawEvent` to the return value union of `network_raw_events` GraphQL
-  query.
+- Added `SmtpRawEvent` to the return value union of `networkRawEvents` GraphQL
+  API.
 - Added `RunTimeIngestSources` type that checks for information from source
   that is connected to ingest in real time. This type is not currently used,
   but may be used in the future to provide real-time connection information.
@@ -153,14 +152,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Modify GraphQL schema file due to the addition of the `agent_id` field.
-- Changed `PEER_VERSION_REQ` to ">=0.17.0,<0.18.0"
-- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.18.0"
-- Modify `export` query to set the extension of the extract file according to
-  the export type.
+- Changed `PEER_VERSION_REQ` to ">=0.17.0,<0.18.0".
+- Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.18.0".
+- Modify `export` GraphQL API to set the extension of the extract file according
+  to the export type.
 
 ### Fixed
 
-- Fix the part of the `export` query about validating filters for protocols.
+- Fix the part of the `export` query in the GraphQL API about validating filters
+  for protocols.
 - Fix to initialize `ingest_sources` value from `sources` cf on giganto startup.
   This change is intended to ensure that `IngestSources` provide all source
   information for stored data and `RunTimeIngestSources` provide real-time
@@ -174,11 +174,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   receive raw events. This change ensures that data is saved in all cases where the
   `handle_data` function terminates, such as when an `error` occurs.
 - Added functionality to control the sending of acknowledgments.
-  - Set the `ack transmission count` by reading from the config file.
+  - Set the `AckTransmissionCount` by reading from the config file.
   - Changed the type of ack transmission count checked in `ingest` from `const u16`
     to `AckTransmissionCount`(`Arc<RwLock<u16>>`).
-  - Added `set_ack_transmission_count` GraphQL query to set the ack transmission
-    count.This query changes the `AckTransmissionCount` used in ingest and
+  - Added `setAckTransmissionCount` GraphQL API to set the ack transmission
+    count. This query changes the `AckTransmissionCount` used in ingest and
     `ack_transmission` in the config file to the input `count` value.
 - Added documentation for implementing cluster-supported GraphQL APIs in
   `docs/guide-giganto-cluster-graphql.md`.
@@ -190,32 +190,32 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Modify the `set_giganto_config` and `giganto_config` GraphQL queries to
-  read/write the ack transmission count.
-- Modify the `set_giganto_config` and `giganto_config` GraphQL queries so that
-  the fields that take integers read/write the config file for their respective
-  types.
-- Modify the `giganto_config` query so that config files that work in standalone
-  mode can also be read correctly.
-- Changed `export` GraphQL query's response value format from `{export_path}` to
-  `{export_path}@{giganto_node_name}`
+- Modify the `setGigantoConfig` and `gigantoConfig` queries in the GraphQL API
+  to read/write the ack transmission count.
+- Modify the `setGigantoConfig` and `gigantoConfig` query in the GraphQL API so
+  that the fields that take integers read/write the config file for their
+  respective types.
+- Modify the `gigantoConfig` query in the GraphQL API so that config files that
+  work in standalone mode can also be read correctly.
+- Changed `export` GraphQL API's response value format from `{export_path}` to
+  `{export_path}@{giganto_node_name}`.
 - Changed logging from `tracing` to `log-broker`.
-- Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0"
-- Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0"
+- Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0".
+- Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0".
 - Added giganto cluster support for GraphQL and publish message requests.
-- Added `request_from_peer: Option<bool>` argument to GraphQL endpoints:
-  `netflow5_raw_events`, `netflow9_raw_events`, `secu_log_raw_events`,
+- Added `requestFromPeer` argument to GraphQL API:
+  `netflow5RawEvents`, `netflow9RawEvents`, `secuLogRawEvents`,
   `statistics`.
 
 ### Fixed
 
-- Fix `retain_periodically`
+- Fix `retain_periodically`.
 
 ## [0.15.4] - 2023-11-22
 
 ### Added
 
-- Added GraphQL query `sysmon_events` to retrieve all sysmon events at once.
+- Added GraphQL API `sysmonEvents` to retrieve all sysmon events at once.
 
 ### Changed
 
@@ -226,7 +226,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Rename type aliases `PacketSources` to `PcapSources`, `Sources` to
   `IngestSources`, and `StreamDirectChannel` to `StreamDirectChannels`;
   And move their definition location from `ingest.rs` to `main.rs`.
-- Modified `retain_periodically`
+- Modified `retain_periodically`.
   - When disk usage exceeds `USAGE_THRESHOLD` delete old data until disk usage
     is reduced to `USAGE_LOW`.
   - Supports all column families.
@@ -240,7 +240,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Changed `check_address` and `check_port` to have a close ended search where
   it will only return the events that contain the address or port for single
-  input
+  input.
 
 ## [0.15.2] - 2023-11-09
 
@@ -259,8 +259,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Updated giganto-client to 0.15.0
-- Changed minimum/maximum version to 0.15.0 <= version < 0.16.0
+- Updated giganto-client to 0.15.0.
+- Changed minimum/maximum version to 0.15.0 <= version < 0.16.0.
 
 ## [0.14.0] - 2023-11-07
 
@@ -270,7 +270,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Support `NetflowV5`, `NetflowV9` events. These events does not streamed
   to Hog or Crusher.
 - Support `Seculog` events.
-  - In graphql, `Seculog` requires its kind.
+  - The `secuLogRawEvents` GraphQL API requires its kind.
     `wapples`, `mf2`, `sniper`, `aiwaf`, `tg`, `vforce`, `srx`, `sonicwall`
     `fgt`, `shadowwall`, `axgate`, `ubuntu`, `nginx`
 
@@ -282,13 +282,13 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Fix potential bug in `retain_periodically`
+- Fix potential bug in `retain_periodically`.
 
 ## [0.13.1] - 2023-09-18
 
 ### Changed
 
-- Change the `statistics` Graphql Api.
+- Change the `statistics` GraphQL API.
   - Removed `core` as an argument to the query. Also changed the condition of
     source to allow searching for `multiple sources`.
   - Provides statistics data by `source`/`time`/`protocol`.
@@ -306,7 +306,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add GraphQL query `statistics` to read data from `statistics` store.
+- Add GraphQL API `statistics` to read data from `statistics` store.
   The result format is `Protocol/Size/Count`.
   - `Protocol`: target protocol name like `Statistics`, `Http`, `Dns`.
     `Statistics` is the input traffic statistics of the collector device.
@@ -319,7 +319,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `StorageKey`: A structure that stores lookup keys generated by `StorageKeyBuilder`.
   - `KeyExtractor`: A trait for calling the value to be set by the key.
 - Supports 14 sysmon events.
-- Added `search sysmon event` Graphql Api for `sysmon` supported by giganto.
+- Added `search[sysmon type]Events` GraphQL APIs for sysmon event supported by giganto.
 
 ### Changed
 
@@ -329,24 +329,24 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   overwrite statistics data from other core of same machine.
   When Giganto is loading with old DB version, the old data will be removed
   because it's possible to be overwritten by other core's data.
-- Change `export` query to support `statistics` store.
+- Change `export` GraphQL API to support `statistics` store.
   This change makes it possible to export statistics data of only core 0 of
   the collector device. This will be fixed in next change.
 - Remove unused `time()` from `RawEventFilter` trait.
-- Modify to use `Networkfilter` in `sysmon raw event` Graphql Api.
+- Modify to use `Networkfilter` in GraphQL APIs requesting sysmon events.
 - Modify statistics migration version to 0.13.0 from 0.12.4.
 
 ### Fixed
 
 - Fixed to only generate the `collect_records` error message when an error event
   exists, and applied the same change to `export`.
-- Fixed to `export` query for export `statistic data` for all `cores`.
+- Fixed `export` GraphQL API to export statistics data for all cores.
 
 ## [0.12.3] - 2023-07-10
 
 ### Changed
 
-- Fixed fields of `FtpRawEvent`, `FtpJsonOutput`
+- Fixed fields of `FtpRawEvent` and `FtpJsonOutput`.
 - Modified `collect_records` to continue collecting even if error data is
   included in the data.
 
@@ -368,7 +368,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Supports the TLS protocol.
 - Added migration functionality in `0.12.0`. This feature adds values for new fields
   (`orig_filenames`, `orig_mime_types`, `resp_filenames`, `resp_mime_types`) to
-  `http raw event` in versions 0.12.0 and earlier.
+  `Http` in versions 0.12.0 and earlier.
 
 ## [0.12.0] - 2023-06-20
 
@@ -395,7 +395,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Modify the certificate verification.
 - Update quinn to version 0.10 and rustls to version 0.21 for giganto-client
-  version 0.7.0
+  version 0.7.0.
 
 ## [0.10.2] - 2023-05-12
 
@@ -424,7 +424,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add a publish API to return the source, raw_events
   from the source, timestamps for REconverge.
 - Supports the FTP protocol.
-- Add a GraphQL API to search http events
+- Add a GraphQL API for `searchHttpRawEvents`.
 
 ## [0.9.0] - 2023-04-03
 
@@ -441,7 +441,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add Giganto Restart processing.
-- Add more fields to `dns`, `conn`, `http`
+- Add more fields to `Dns`, `Conn`, `Http`.
 - Add common fields to network events.
 - Publish support Packet request/response through QUIC.
 - Add Packet store.
@@ -458,7 +458,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Create giganto's communication part as a separate crate. (giganto-client)
 - Move init tracing to giganto-client crate for oplog logging.
 - Fix packet logic in ingest.
-- Rocksdb compression type has changed to Lz4, zstd from snappy
+- Rocksdb compression type has changed to Lz4, zstd from snappy.
 - Move giganto-client to separate repo [giganto-client](https://github.com/aicers/giganto-client).
 
 ## [0.7.0] - 2023-01-04
@@ -468,7 +468,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add export file to GraphQL API. (`csv`, `json` format support)
 - Add `Statistics` column family. Receive and save traffic statistics from Piglet.
 - Save Giganto's `syslog` to a path written to `log_dir` in configuration file.
-- Add `Oplog` (Operation log)
+- Add `Oplog`. (Operation log)
 
 ### Changed
 
