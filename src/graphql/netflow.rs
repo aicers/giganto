@@ -1,6 +1,8 @@
 use std::{fmt::Debug, net::IpAddr};
 
-use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{
+    connection::Connection, Context, InputObject, Object, Result, SimpleObject, StringNumber,
+};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -100,8 +102,8 @@ pub struct Netflow5RawEvent {
     next_hop: String,
     input: u16,
     output: u16,
-    d_pkts: u32,
-    d_octets: u32,
+    d_pkts: StringNumber<u32>,
+    d_octets: StringNumber<u32>,
     first: String, // milliseconds
     last: String,  // milliseconds
     src_port: u16,
@@ -113,7 +115,7 @@ pub struct Netflow5RawEvent {
     dst_as: u16,
     src_mask: u8,
     dst_mask: u8,
-    sequence: u32,
+    sequence: StringNumber<u32>,
     engine_type: u8,
     engine_id: u8,
     sampling_mode: String,
@@ -129,8 +131,8 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
             next_hop: val.next_hop.to_string(),
             input: val.input,
             output: val.output,
-            d_pkts: val.d_pkts,
-            d_octets: val.d_octets,
+            d_pkts: StringNumber(val.d_pkts),
+            d_octets: StringNumber(val.d_octets),
             first: millis_to_secs(val.first),
             last: millis_to_secs(val.last),
             src_port: val.src_port,
@@ -142,7 +144,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
             dst_as: val.dst_as,
             src_mask: val.src_mask,
             dst_mask: val.dst_mask,
-            sequence: val.sequence,
+            sequence: StringNumber(val.sequence),
             engine_type: val.engine_type,
             engine_id: val.engine_id,
             sampling_mode: format!("{:x}", val.sampling_mode),
@@ -156,8 +158,8 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
     timestamp: DateTime<Utc>,
-    sequence: u32,
-    source_id: u32,
+    sequence: StringNumber<u32>,
+    source_id: StringNumber<u32>,
     template_id: u16,
     orig_addr: String,
     orig_port: u16,
@@ -171,8 +173,8 @@ impl FromKeyValue<Netflow9> for Netflow9RawEvent {
     fn from_key_value(key: &[u8], val: Netflow9) -> Result<Self> {
         Ok(Netflow9RawEvent {
             timestamp: get_timestamp_from_key(key)?,
-            sequence: val.sequence,
-            source_id: val.source_id,
+            sequence: StringNumber(val.sequence),
+            source_id: StringNumber(val.source_id),
             template_id: val.template_id,
             orig_addr: val.orig_addr.to_string(),
             orig_port: val.orig_port,

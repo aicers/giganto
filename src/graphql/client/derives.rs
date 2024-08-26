@@ -1,9 +1,15 @@
 #![allow(clippy::enum_variant_names)]
 
+use async_graphql::StringNumber;
 use chrono::{DateTime as ChronoDateTime, Utc};
 use graphql_client::GraphQLQuery;
 
 type DateTime = ChronoDateTime<Utc>;
+
+type StringNumberU32 = StringNumber<u32>;
+type StringNumberI64 = StringNumber<i64>;
+type StringNumberU64 = StringNumber<u64>;
+type StringNumberUSize = StringNumber<usize>;
 
 #[derive(GraphQLQuery)]
 #[graphql(

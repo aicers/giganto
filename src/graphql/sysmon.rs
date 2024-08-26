@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, iter::Peekable};
 
 use async_graphql::{
     connection::{query, Connection, Edge},
-    Context, Object, Result, SimpleObject, Union,
+    Context, Object, Result, SimpleObject, StringNumber, Union,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::sysmon::{
@@ -54,7 +54,7 @@ struct ProcessCreateEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     file_version: String,
     description: String,
@@ -65,12 +65,12 @@ struct ProcessCreateEvent {
     current_directory: String,
     user: String,
     logon_guid: String,
-    logon_id: u32,
-    terminal_session_id: u32,
+    logon_id: StringNumber<u32>,
+    terminal_session_id: StringNumber<u32>,
     integrity_level: String,
     hashes: Vec<String>,
     parent_process_guid: String,
-    parent_process_id: u32,
+    parent_process_id: StringNumber<u32>,
     parent_image: String,
     parent_command_line: String,
     parent_user: String,
@@ -83,11 +83,11 @@ struct FileCreationTimeChangedEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     target_filename: String,
-    creation_utc_time: i64,
-    previous_creation_utc_time: i64,
+    creation_utc_time: StringNumber<i64>,
+    previous_creation_utc_time: StringNumber<i64>,
     user: String,
 }
 
@@ -98,7 +98,7 @@ struct NetworkConnectionEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     user: String,
     protocol: String,
@@ -122,7 +122,7 @@ struct ProcessTerminatedEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     user: String,
 }
@@ -134,7 +134,7 @@ struct ImageLoadedEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     image_loaded: String,
     file_version: String,
@@ -156,10 +156,10 @@ struct FileCreateEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     target_filename: String,
-    creation_utc_time: i64,
+    creation_utc_time: StringNumber<i64>,
     user: String,
 }
 
@@ -171,7 +171,7 @@ struct RegistryValueSetEvent {
     agent_id: String,
     event_type: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     target_object: String,
     details: String,
@@ -186,7 +186,7 @@ struct RegistryKeyValueRenameEvent {
     agent_id: String,
     event_type: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     target_object: String,
     new_name: String,
@@ -200,10 +200,10 @@ struct FileCreateStreamHashEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     target_filename: String,
-    creation_utc_time: i64,
+    creation_utc_time: StringNumber<i64>,
     hash: Vec<String>,
     contents: String,
     user: String,
@@ -217,7 +217,7 @@ struct PipeEventEvent {
     agent_id: String,
     event_type: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     pipe_name: String,
     image: String,
     user: String,
@@ -230,9 +230,9 @@ struct DnsEventEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     query_name: String,
-    query_status: u32,
+    query_status: StringNumber<u32>,
     query_results: Vec<String>, // divided by ';'
     image: String,
     user: String,
@@ -245,7 +245,7 @@ struct FileDeleteEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     user: String,
     image: String,
     target_filename: String,
@@ -261,7 +261,7 @@ struct ProcessTamperingEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     image: String,
     tamper_type: String, // type
     user: String,
@@ -274,7 +274,7 @@ struct FileDeleteDetectedEvent {
     agent_name: String,
     agent_id: String,
     process_guid: String,
-    process_id: u32,
+    process_id: StringNumber<u32>,
     user: String,
     image: String,
     target_filename: String,
@@ -323,7 +323,7 @@ impl From<sysmon_events_module::SysmonEventsSysmonEventsEdgesNode> for SysmonEve
 }
 
 macro_rules! from_key_value {
-    ($to:ty, $from:ty, $($fields:ident),*) => {
+    ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
                 let timestamp = get_timestamp_from_key(key)?;
@@ -332,9 +332,13 @@ macro_rules! from_key_value {
                     agent_name: val.agent_name,
                     agent_id: val.agent_id,
                     process_guid: val.process_guid,
-                    process_id: val.process_id,
                     $(
-                        $fields: val.$fields,
+                        $plain_field: val.$plain_field,
+                    )*
+                     $(
+                        $str_num_field: {
+                            StringNumber(val.$str_num_field)
+                        },
                     )*
                 })
             }
@@ -355,15 +359,16 @@ from_key_value!(
     current_directory,
     user,
     logon_guid,
-    logon_id,
-    terminal_session_id,
     integrity_level,
     hashes,
     parent_process_guid,
-    parent_process_id,
     parent_image,
     parent_command_line,
-    parent_user
+    parent_user;
+    process_id,
+    logon_id,
+    terminal_session_id,
+    parent_process_id
 );
 
 from_key_value!(
@@ -371,12 +376,13 @@ from_key_value!(
     FileCreationTimeChanged,
     image,
     target_filename,
+    user;
+    process_id,
     creation_utc_time,
-    previous_creation_utc_time,
-    user
+    previous_creation_utc_time
 );
 
-from_key_value!(ProcessTerminatedEvent, ProcessTerminated, image, user);
+from_key_value!(ProcessTerminatedEvent, ProcessTerminated, image, user; process_id);
 
 from_key_value!(
     ImageLoadedEvent,
@@ -392,7 +398,8 @@ from_key_value!(
     signed,
     signature,
     signature_status,
-    user
+    user;
+    process_id
 );
 
 from_key_value!(
@@ -400,8 +407,9 @@ from_key_value!(
     FileCreate,
     image,
     target_filename,
-    creation_utc_time,
-    user
+    user;
+    process_id,
+    creation_utc_time
 );
 
 from_key_value!(
@@ -411,7 +419,8 @@ from_key_value!(
     image,
     target_object,
     details,
-    user
+    user;
+    process_id
 );
 
 from_key_value!(
@@ -421,7 +430,8 @@ from_key_value!(
     image,
     target_object,
     new_name,
-    user
+    user;
+    process_id
 );
 
 from_key_value!(
@@ -429,10 +439,11 @@ from_key_value!(
     FileCreateStreamHash,
     image,
     target_filename,
-    creation_utc_time,
     hash,
     contents,
-    user
+    user;
+    process_id,
+    creation_utc_time
 );
 
 from_key_value!(
@@ -441,17 +452,19 @@ from_key_value!(
     event_type,
     pipe_name,
     image,
-    user
+    user;
+    process_id
 );
 
 from_key_value!(
     DnsEventEvent,
     DnsEvent,
     query_name,
-    query_status,
     query_results,
     image,
-    user
+    user;
+    process_id,
+    query_status
 );
 
 from_key_value!(
@@ -462,7 +475,8 @@ from_key_value!(
     target_filename,
     hashes,
     is_executable,
-    archived
+    archived;
+    process_id
 );
 
 from_key_value!(
@@ -470,7 +484,8 @@ from_key_value!(
     ProcessTampering,
     image,
     tamper_type,
-    user
+    user;
+    process_id
 );
 
 from_key_value!(
@@ -480,7 +495,8 @@ from_key_value!(
     image,
     target_filename,
     hashes,
-    is_executable
+    is_executable;
+    process_id
 );
 
 impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
@@ -490,7 +506,7 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
             agent_name: value.agent_name,
             agent_id: value.agent_id,
             process_guid: value.process_guid,
-            process_id: value.process_id,
+            process_id: StringNumber(value.process_id),
             image: value.image,
             user: value.user,
             protocol: value.protocol,

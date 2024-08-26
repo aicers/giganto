@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
 use async_graphql::{
     connection::{query, Connection, Edge},
-    Context, Object, Result, SimpleObject, Union,
+    Context, Object, Result, SimpleObject, StringNumber, Union,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
@@ -135,14 +135,14 @@ struct ConnRawEvent {
     resp_port: u16,
     proto: u8,
     conn_state: String,
-    duration: i64,
+    duration: StringNumber<i64>,
     service: String,
-    orig_bytes: u64,
-    resp_bytes: u64,
-    orig_pkts: u64,
-    resp_pkts: u64,
-    orig_l2_bytes: u64,
-    resp_l2_bytes: u64,
+    orig_bytes: StringNumber<u64>,
+    resp_bytes: StringNumber<u64>,
+    orig_pkts: StringNumber<u64>,
+    resp_pkts: StringNumber<u64>,
+    orig_l2_bytes: StringNumber<u64>,
+    resp_l2_bytes: StringNumber<u64>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -155,11 +155,11 @@ struct DnsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
-    rtt: i64,
+    rtt: StringNumber<i64>,
     qclass: u16,
     qtype: u16,
     rcode: u16,
@@ -179,15 +179,15 @@ struct HttpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     method: String,
     host: String,
     uri: String,
     referrer: String,
     version: String,
     user_agent: String,
-    request_len: usize,
-    response_len: usize,
+    request_len: StringNumber<usize>,
+    response_len: StringNumber<usize>,
     status_code: u16,
     status_msg: String,
     username: String,
@@ -213,7 +213,7 @@ struct RdpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     cookie: String,
 }
 
@@ -226,7 +226,7 @@ struct SmtpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     mailfrom: String,
     date: String,
     from: String,
@@ -245,7 +245,7 @@ struct NtlmRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     username: String,
     hostname: String,
     domainname: String,
@@ -262,10 +262,10 @@ struct KerberosRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
-    client_time: i64,
-    server_time: i64,
-    error_code: u32,
+    last_time: StringNumber<i64>,
+    client_time: StringNumber<i64>,
+    server_time: StringNumber<i64>,
+    error_code: StringNumber<u32>,
     client_realm: String,
     cname_type: u8,
     client_name: Vec<String>,
@@ -283,7 +283,7 @@ struct SshRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     client: String,
     server: String,
     cipher_alg: String,
@@ -308,8 +308,8 @@ struct DceRpcRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
-    rtt: i64,
+    last_time: StringNumber<i64>,
+    rtt: StringNumber<i64>,
     named_pipe: String,
     endpoint: String,
     operation: String,
@@ -324,7 +324,7 @@ struct FtpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     user: String,
     password: String,
     command: String,
@@ -335,7 +335,7 @@ struct FtpRawEvent {
     data_resp_addr: String,
     data_resp_port: u16,
     file: String,
-    file_size: u64,
+    file_size: StringNumber<u64>,
     file_id: String,
 }
 
@@ -348,7 +348,7 @@ struct MqttRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     protocol: String,
     version: u8,
     client_id: String,
@@ -366,8 +366,8 @@ struct LdapRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
-    message_id: u32,
+    last_time: StringNumber<i64>,
+    message_id: StringNumber<u32>,
     version: u8,
     opcode: Vec<String>,
     result: Vec<String>,
@@ -385,7 +385,7 @@ struct TlsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     server_name: String,
     alpn_protocol: String,
     ja3: String,
@@ -400,8 +400,8 @@ struct TlsRawEvent {
     subject_country: String,
     subject_org_name: String,
     subject_common_name: String,
-    validity_not_before: i64,
-    validity_not_after: i64,
+    validity_not_before: StringNumber<i64>,
+    validity_not_after: StringNumber<i64>,
     subject_alt_name: String,
     issuer_country: String,
     issuer_org_name: String,
@@ -419,18 +419,18 @@ struct SmbRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     command: u8,
     path: String,
     service: String,
     file_name: String,
-    file_size: u64,
+    file_size: StringNumber<u64>,
     resource_type: u16,
     fid: u16,
-    create_time: i64,
-    access_time: i64,
-    write_time: i64,
-    change_time: i64,
+    create_time: StringNumber<i64>,
+    access_time: StringNumber<i64>,
+    write_time: StringNumber<i64>,
+    change_time: StringNumber<i64>,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -442,7 +442,7 @@ struct NfsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     read_files: Vec<String>,
     write_files: Vec<String>,
 }
@@ -456,11 +456,11 @@ struct BootpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     op: u8,
     htype: u8,
     hops: u8,
-    xid: u32,
+    xid: StringNumber<u32>,
     ciaddr: String,
     yiaddr: String,
     siaddr: String,
@@ -479,7 +479,7 @@ struct DhcpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: i64,
+    last_time: StringNumber<i64>,
     msg_type: u8,
     ciaddr: String,
     yiaddr: String,
@@ -489,12 +489,12 @@ struct DhcpRawEvent {
     router: Vec<String>,
     domain_name_server: Vec<String>,
     req_ip_addr: String,
-    lease_time: u32,
+    lease_time: StringNumber<u32>,
     server_id: String,
     param_req_list: Vec<u8>,
     message: String,
-    renewal_time: u32,
-    rebinding_time: u32,
+    renewal_time: StringNumber<u32>,
+    rebinding_time: StringNumber<u32>,
     class_id: Vec<u8>,
     client_id_type: u8,
     client_id: Vec<u8>,
@@ -581,7 +581,7 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
 }
 
 macro_rules! from_key_value {
-    ($to:ty, $from:ty, $($fields:ident),*) => {
+    ($to:ty, $from:ty,$( $plain_field:ident ),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
                 let timestamp = get_timestamp_from_key(key)?;
@@ -592,9 +592,13 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
-                    last_time: val.last_time,
                     $(
-                        $fields: val.$fields,
+                        $plain_field: val.$plain_field,
+                    )*
+                    $(
+                        $str_num_field: {
+                            StringNumber(val.$str_num_field)
+                        },
                     )*
                 })
             }
@@ -612,14 +616,14 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            duration: val.duration,
+            duration: StringNumber(val.duration),
             service: val.service,
-            orig_bytes: val.orig_bytes,
-            resp_bytes: val.resp_bytes,
-            orig_pkts: val.orig_pkts,
-            resp_pkts: val.resp_pkts,
-            orig_l2_bytes: val.orig_l2_bytes,
-            resp_l2_bytes: val.resp_l2_bytes,
+            orig_bytes: StringNumber(val.orig_bytes),
+            resp_bytes: StringNumber(val.resp_bytes),
+            orig_pkts: StringNumber(val.orig_pkts),
+            resp_pkts: StringNumber(val.resp_pkts),
+            orig_l2_bytes: StringNumber(val.orig_l2_bytes),
+            resp_l2_bytes: StringNumber(val.resp_l2_bytes),
         })
     }
 }
@@ -633,7 +637,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time,
+            last_time: StringNumber(val.last_time),
             user: val.user,
             password: val.password,
             command: val.command,
@@ -644,7 +648,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             data_resp_addr: val.data_resp_addr.to_string(),
             data_resp_port: val.data_resp_port,
             file: val.file,
-            file_size: val.file_size,
+            file_size: StringNumber(val.file_size),
             file_id: val.file_id,
         })
     }
@@ -659,11 +663,11 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time,
+            last_time: StringNumber(val.last_time),
             op: val.op,
             htype: val.htype,
             hops: val.hops,
-            xid: val.xid,
+            xid: StringNumber(val.xid),
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
             siaddr: val.siaddr.to_string(),
@@ -684,7 +688,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time,
+            last_time: StringNumber(val.last_time),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
@@ -698,12 +702,12 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
                 .map(ToString::to_string)
                 .collect(),
             req_ip_addr: val.req_ip_addr.to_string(),
-            lease_time: val.lease_time,
+            lease_time: StringNumber(val.lease_time),
             server_id: val.server_id.to_string(),
             param_req_list: val.param_req_list.clone(),
             message: val.message.clone(),
-            renewal_time: val.renewal_time,
-            rebinding_time: val.rebinding_time,
+            renewal_time: StringNumber(val.renewal_time),
+            rebinding_time: StringNumber(val.rebinding_time),
             class_id: val.class_id.clone(),
             client_id_type: val.client_id_type,
             client_id: val.client_id.clone(),
@@ -720,8 +724,6 @@ from_key_value!(
     referrer,
     version,
     user_agent,
-    request_len,
-    response_len,
     status_code,
     status_msg,
     username,
@@ -735,9 +737,12 @@ from_key_value!(
     resp_filenames,
     resp_mime_types,
     post_body,
-    state
+    state;
+    last_time,
+    request_len,
+    response_len
 );
-from_key_value!(RdpRawEvent, Rdp, cookie);
+from_key_value!(RdpRawEvent, Rdp, cookie; last_time);
 
 from_key_value!(
     DnsRawEvent,
@@ -745,7 +750,6 @@ from_key_value!(
     query,
     answer,
     trans_id,
-    rtt,
     qclass,
     qtype,
     rcode,
@@ -753,7 +757,9 @@ from_key_value!(
     tc_flag,
     rd_flag,
     ra_flag,
-    ttl
+    ttl;
+    last_time,
+    rtt
 );
 
 from_key_value!(
@@ -765,7 +771,8 @@ from_key_value!(
     to,
     subject,
     agent,
-    state
+    state;
+    last_time
 );
 
 from_key_value!(
@@ -775,21 +782,23 @@ from_key_value!(
     hostname,
     domainname,
     success,
-    protocol
+    protocol;
+    last_time
 );
 
 from_key_value!(
     KerberosRawEvent,
     Kerberos,
-    client_time,
-    server_time,
-    error_code,
     client_realm,
     cname_type,
     client_name,
     realm,
     sname_type,
-    service_name
+    service_name;
+    last_time,
+    client_time,
+    server_time,
+    error_code
 );
 
 from_key_value!(
@@ -807,10 +816,19 @@ from_key_value!(
     hassh_server_algorithms,
     hassh_server,
     client_shka,
-    server_shka
+    server_shka;
+    last_time
 );
 
-from_key_value!(DceRpcRawEvent, DceRpc, rtt, named_pipe, endpoint, operation);
+from_key_value!(
+    DceRpcRawEvent,
+    DceRpc,
+    named_pipe,
+    endpoint,
+    operation;
+    last_time,
+    rtt
+);
 
 from_key_value!(
     MqttRawEvent,
@@ -820,19 +838,21 @@ from_key_value!(
     client_id,
     connack_reason,
     subscribe,
-    suback_reason
+    suback_reason;
+    last_time
 );
 
 from_key_value!(
     LdapRawEvent,
     Ldap,
-    message_id,
     version,
     opcode,
     result,
     diagnostic_message,
     object,
-    argument
+    argument;
+    last_time,
+    message_id
 );
 
 from_key_value!(
@@ -851,14 +871,15 @@ from_key_value!(
     subject_country,
     subject_org_name,
     subject_common_name,
-    validity_not_before,
-    validity_not_after,
     subject_alt_name,
     issuer_country,
     issuer_org_name,
     issuer_org_unit_name,
     issuer_common_name,
-    last_alert
+    last_alert;
+    last_time,
+    validity_not_before,
+    validity_not_after
 );
 
 from_key_value!(
@@ -868,16 +889,17 @@ from_key_value!(
     path,
     service,
     file_name,
-    file_size,
     resource_type,
-    fid,
+    fid;
+    last_time,
+    file_size,
     create_time,
     access_time,
     write_time,
     change_time
 );
 
-from_key_value!(NfsRawEvent, Nfs, read_files, write_files);
+from_key_value!(NfsRawEvent, Nfs, read_files, write_files; last_time);
 
 async fn handle_paged_conn_raw_events<'ctx>(
     ctx: &Context<'ctx>,
