@@ -31,6 +31,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Modified `events_in_cluster` macro.
   - Added `filter_into` expression to also support `total_count` query.
   - Added macro pattern to return the sum of all source request results.
+- Changed `MAXIMUM_PAGE_SIZE` to 300. This change is for pagination of network
+  traffic events.
 
 ### Added
 

@@ -197,8 +197,8 @@ pub fn schema(
 }
 
 /// The default page size for connections when neither `first` nor `last` is
-/// provided. Maximum size: 100.
-const MAXIMUM_PAGE_SIZE: usize = 100;
+/// provided. Maximum size: 300.
+const MAXIMUM_PAGE_SIZE: usize = 300;
 const A_BILLION: i64 = 1_000_000_000;
 
 fn collect_exist_timestamp<T>(
