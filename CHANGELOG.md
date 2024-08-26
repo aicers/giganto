@@ -33,6 +33,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Added macro pattern to return the sum of all source request results.
 - Changed `MAXIMUM_PAGE_SIZE` to 300. This change is for pagination of network
   traffic events.
+- Supports exporting files for all sources of network protocol events.
+  - Changed `sourceId` in `ExportFilter` to `Option<String>`.
+  - Modified network protocol's RawEvent struct to extract json and csv format.
+    - Added `Serialize` and use the `#[serde(serialize_with)]` attribute.
+    - Implement `Display` trait.
+  - Added `process_export_for_all_source` to handle extraction for all sources.
 
 ### Added
 

@@ -34,6 +34,7 @@ use graphql_client::Response as GraphQlResponse;
 use libc::timeval;
 use num_traits::AsPrimitive;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
+use reqwest::Client;
 use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
 use tempfile::NamedTempFile;
@@ -734,7 +735,7 @@ where
     .await
 }
 
-async fn handle_paged_events_for_all_source<N, T>(
+pub async fn handle_paged_events_for_all_source<N, T>(
     store: RawEventStore<'_, T>,
     sources: &Arc<RwLock<HashSet<String>>>,
     filter: NetworkOptFilter,
@@ -1010,8 +1011,8 @@ macro_rules! events_in_cluster {
         if crate::graphql::is_current_giganto_in_charge($ctx, &$source).await {
             $handler($ctx, &$filter, $($($handler_arg),*)*)
         } else {
+            let client = $ctx.data::<reqwest::Client>()?;
             let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$source).await;
-
             match peer_addr {
                 Some(peer_addr) => {
                     #[allow(clippy::redundant_field_names)]
@@ -1025,7 +1026,7 @@ macro_rules! events_in_cluster {
                         })
                     };
                     crate::graphql::request_peer(
-                        $ctx,
+                        client,
                         peer_addr,
                         request_body,
                         response_to_result_converter,
@@ -1184,10 +1185,13 @@ macro_rules! events_in_cluster {
                 )
             }
             None => {
-                let current_giganto_result = $handler($ctx, &$filter, $($($handler_arg),*)*);
+                let peers = $ctx.data_opt::<crate::peer::Peers>();
+                let client = $ctx.data::<reqwest::Client>()?;
 
+                let current_giganto_result = $handler($ctx, &$filter, $($($handler_arg),*)*);
                 let peer_results= crate::graphql::request_all_peers_for_events_fut!(
-                    $ctx,
+                    peers,
+                    client,
                     $filter,
                     Some(true),
                     $graphql_query_type,
@@ -1296,6 +1300,7 @@ macro_rules! paged_events_in_cluster {
         if crate::graphql::is_current_giganto_in_charge($ctx, &$source).await {
             $handler($ctx, $filter, $after, $before, $first, $last).await
         } else {
+            let client = $ctx.data::<reqwest::Client>()?;
             let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$source).await;
 
             match peer_addr {
@@ -1335,7 +1340,7 @@ macro_rules! paged_events_in_cluster {
                     };
 
                     crate::graphql::request_peer(
-                        $ctx,
+                        client,
                         peer_addr,
                         request_body,
                         response_to_result_converter,
@@ -1398,6 +1403,9 @@ macro_rules! paged_events_in_cluster {
                 )
             }
             None => {
+                let peers = $ctx.data_opt::<crate::peer::Peers>();
+                let client = $ctx.data::<reqwest::Client>()?;
+
                 let current_giganto_result_fut = $handler(
                     $ctx,
                     $filter.clone(),
@@ -1408,7 +1416,8 @@ macro_rules! paged_events_in_cluster {
                 );
 
                 let peer_results_fut = crate::graphql::request_all_peers_for_paged_events_fut!(
-                    $ctx,
+                    peers,
+                    client,
                     $filter,
                     $after,
                     $before,
@@ -1626,8 +1635,8 @@ async fn find_who_are_in_charge(
     )
 }
 
-pub async fn request_peer<'ctx, QueryBodyType, ResponseDataType, ResultDataType, F>(
-    ctx: &Context<'ctx>,
+pub async fn request_peer<QueryBodyType, ResponseDataType, ResultDataType, F>(
+    client: &Client,
     peer_graphql_addr: SocketAddr,
     req_body: graphql_client::QueryBody<QueryBodyType>,
     response_to_result_converter: F,
@@ -1637,7 +1646,6 @@ where
     ResponseDataType: for<'a> Deserialize<'a>,
     F: 'static + FnOnce(Option<ResponseDataType>) -> ResultDataType,
 {
-    let client = ctx.data::<reqwest::Client>()?;
     let req = client
         .post(format!(
             "{}://{}/graphql",
@@ -1665,7 +1673,8 @@ where
 }
 
 macro_rules! request_all_peers_for_paged_events_fut {
-    ($ctx:expr,
+    ($peers:expr,
+     $client:expr,
      $filter:expr,
      $after:expr,
      $before:expr,
@@ -1676,7 +1685,7 @@ macro_rules! request_all_peers_for_paged_events_fut {
      $variables_type:ty,
      $response_data_type:path,
      $field_name:ident) => {{
-        let peer_graphql_endpoints = match $ctx.data_opt::<crate::peer::Peers>() {
+        let peer_graphql_endpoints = match $peers {
             Some(peers) => {
                 peers
                     .read()
@@ -1710,7 +1719,7 @@ macro_rules! request_all_peers_for_paged_events_fut {
 
                 connection
             } else {
-                Connection::new(false, false)
+                async_graphql::connection::Connection::new(false, false)
             }
         };
 
@@ -1727,7 +1736,7 @@ macro_rules! request_all_peers_for_paged_events_fut {
                     request_from_peer: $request_from_peer.into(),
                 });
                 crate::graphql::request_peer(
-                    $ctx,
+                    $client,
                     peer_endpoint,
                     request_body,
                     response_to_result_converter,
@@ -1740,7 +1749,8 @@ macro_rules! request_all_peers_for_paged_events_fut {
 pub(crate) use request_all_peers_for_paged_events_fut;
 
 macro_rules! request_all_peers_for_events_fut {
-    ($ctx:expr,
+    ($peers:expr,
+     $client:expr,
      $filter:expr,
      $request_from_peer:expr,
      $graphql_query_type:ident,
@@ -1749,7 +1759,7 @@ macro_rules! request_all_peers_for_events_fut {
      $field_name:ident,
      $result_type:tt
      $(, $query_arg:tt := $query_arg_from:expr)* ) => {{
-        let peer_graphql_endpoints = match $ctx.data_opt::<crate::peer::Peers>() {
+        let peer_graphql_endpoints = match $peers {
             Some(peers) => {
                 peers
                     .read()
@@ -1783,7 +1793,7 @@ macro_rules! request_all_peers_for_events_fut {
                     )*
                 });
                 crate::graphql::request_peer(
-                    $ctx,
+                    $client,
                     peer_endpoint,
                     request_body,
                     response_to_result_converter,
@@ -1804,12 +1814,12 @@ macro_rules! request_selected_peers_for_events_fut {
      $variables_type:ty,
      $graphql_query_type:ident,
      $($query_arg:tt := $query_arg_from:expr),*) => {{
+        let client = $ctx.data::<reqwest::Client>()?;
         let response_to_result_converter = |resp_data: Option<$response_data_type>| {
             resp_data.map_or_else(Vec::new, |resp_data| {
                 resp_data.$field_name.into_iter().map(Into::into).collect()
             })
         };
-
         let peer_requests = $peers_in_charge_graphql_addrs
             .into_iter()
             .map(|peer_endpoint| {
@@ -1820,7 +1830,7 @@ macro_rules! request_selected_peers_for_events_fut {
                     $($query_arg: $query_arg_from),*
                 });
                 crate::graphql::request_peer(
-                    $ctx,
+                    client,
                     peer_endpoint,
                     request_body,
                     response_to_result_converter,

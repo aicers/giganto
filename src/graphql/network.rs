@@ -2,7 +2,13 @@
 #[cfg(test)]
 mod tests;
 
-use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr, ops::Add};
+use std::{
+    collections::BTreeSet,
+    fmt::{Debug, Display, Formatter},
+    iter::Peekable,
+    net::IpAddr,
+    ops::Add,
+};
 
 use anyhow::anyhow;
 use async_graphql::{
@@ -11,12 +17,13 @@ use async_graphql::{
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass, Qtype, Rdp, Smb, Smtp,
+    Ssh, Tls,
 };
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 use rocksdb::Direction;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize, Serializer};
 
 use super::{
     base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
@@ -185,9 +192,10 @@ impl RawEventFilter for SearchFilter {
     }
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
-struct ConnRawEvent {
+pub struct ConnRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -203,9 +211,10 @@ struct ConnRawEvent {
     resp_pkts: u64,
 }
 #[allow(clippy::struct_excessive_bools)]
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
-struct DnsRawEvent {
+pub struct DnsRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -225,12 +234,14 @@ struct DnsRawEvent {
     tc_flag: bool,
     rd_flag: bool,
     ra_flag: bool,
+    #[serde(serialize_with = "serialize_int_to_string")]
     ttl: Vec<i32>,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
-struct HttpRawEvent {
+pub struct HttpRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -261,9 +272,10 @@ struct HttpRawEvent {
     resp_mime_types: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
-struct RdpRawEvent {
+pub struct RdpRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -275,9 +287,10 @@ struct RdpRawEvent {
     cookie: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
-struct SmtpRawEvent {
+pub struct SmtpRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -294,9 +307,10 @@ struct SmtpRawEvent {
     agent: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
-struct NtlmRawEvent {
+pub struct NtlmRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -314,9 +328,10 @@ struct NtlmRawEvent {
     success: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
-struct KerberosRawEvent {
+pub struct KerberosRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -336,9 +351,10 @@ struct KerberosRawEvent {
     service_name: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
-struct SshRawEvent {
+pub struct SshRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -361,9 +377,10 @@ struct SshRawEvent {
     host_key: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
-struct DceRpcRawEvent {
+pub struct DceRpcRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -378,9 +395,10 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
-struct FtpRawEvent {
+pub struct FtpRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -403,9 +421,10 @@ struct FtpRawEvent {
     file_id: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
-struct MqttRawEvent {
+pub struct MqttRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -419,12 +438,14 @@ struct MqttRawEvent {
     client_id: String,
     connack_reason: u8,
     subscribe: Vec<String>,
+    #[serde(serialize_with = "serialize_int_to_string")]
     suback_reason: Vec<u8>,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
-struct LdapRawEvent {
+pub struct LdapRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -442,9 +463,10 @@ struct LdapRawEvent {
     argument: Vec<String>,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
-struct TlsRawEvent {
+pub struct TlsRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -474,9 +496,10 @@ struct TlsRawEvent {
     last_alert: u8,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
-struct SmbRawEvent {
+pub struct SmbRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -498,9 +521,10 @@ struct SmbRawEvent {
     change_time: i64,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
+#[derive(SimpleObject, Serialize, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
-struct NfsRawEvent {
+pub struct NfsRawEvent {
+    #[serde(serialize_with = "serialize_timestamp")]
     timestamp: DateTime<Utc>,
     source: String,
     orig_addr: String,
@@ -534,6 +558,442 @@ impl Add for TotalCount {
         Self {
             total_count: self.total_count + other.total_count,
         }
+    }
+}
+
+fn serialize_timestamp<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let formatted_date = date.format("%s%.9f").to_string();
+    serializer.serialize_str(&formatted_date)
+}
+
+fn serialize_int_to_string<S, T>(vec: &[T], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    T: ToString,
+{
+    let string_vec: Vec<String> = vec.iter().map(std::string::ToString::to_string).collect();
+    serializer.serialize_some(&string_vec)
+}
+
+fn convert_time_format(timestamp: i64) -> String {
+    const A_BILLION: i64 = 1_000_000_000;
+
+    if timestamp > 0 {
+        format!("{}.{:09}", timestamp / A_BILLION, timestamp % A_BILLION)
+    } else {
+        format!("{}.{:09}", timestamp / A_BILLION, -timestamp % A_BILLION)
+    }
+}
+
+fn as_str_or_default(s: &str) -> &str {
+    if s.is_empty() {
+        "-"
+    } else {
+        s
+    }
+}
+
+fn vec_to_string_or_default<T>(vec: &[T]) -> String
+where
+    T: Display,
+{
+    if vec.is_empty() {
+        "-".to_string()
+    } else {
+        vec.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+impl Display for ConnRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.duration),
+            self.service,
+            self.orig_bytes,
+            self.resp_bytes,
+            self.orig_pkts,
+            self.resp_pkts
+        )
+    }
+}
+
+impl Display for DnsRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.query,
+            vec_to_string_or_default(&self.answer),
+            self.trans_id,
+            self.rtt,
+            Qclass::from(self.qclass),
+            Qtype::from(self.qtype),
+            self.rcode,
+            self.aa_flag,
+            self.tc_flag,
+            self.rd_flag,
+            self.ra_flag,
+            vec_to_string_or_default(&self.ttl),
+        )
+    }
+}
+
+impl Display for HttpRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.method),
+            as_str_or_default(&self.host),
+            as_str_or_default(&self.uri),
+            as_str_or_default(&self.referrer),
+            as_str_or_default(&self.version),
+            as_str_or_default(&self.user_agent),
+            self.request_len,
+            self.response_len,
+            self.status_code,
+            as_str_or_default(&self.status_msg),
+            as_str_or_default(&self.username),
+            as_str_or_default(&self.password),
+            as_str_or_default(&self.cookie),
+            as_str_or_default(&self.content_encoding),
+            as_str_or_default(&self.content_type),
+            as_str_or_default(&self.cache_control),
+            vec_to_string_or_default(&self.orig_filenames),
+            vec_to_string_or_default(&self.orig_mime_types),
+            vec_to_string_or_default(&self.resp_filenames),
+            vec_to_string_or_default(&self.resp_mime_types),
+        )
+    }
+}
+
+impl Display for RdpRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.cookie
+        )
+    }
+}
+
+impl Display for SmtpRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.mailfrom),
+            as_str_or_default(&self.date),
+            as_str_or_default(&self.from),
+            as_str_or_default(&self.to),
+            as_str_or_default(&self.subject),
+            as_str_or_default(&self.agent),
+        )
+    }
+}
+
+impl Display for NtlmRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.username),
+            as_str_or_default(&self.hostname),
+            as_str_or_default(&self.domainname),
+            as_str_or_default(&self.server_nb_computer_name),
+            as_str_or_default(&self.server_dns_computer_name),
+            as_str_or_default(&self.server_tree_name),
+            as_str_or_default(&self.success),
+        )
+    }
+}
+
+impl Display for KerberosRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            convert_time_format(self.client_time),
+            convert_time_format(self.server_time),
+            self.error_code,
+            as_str_or_default(&self.client_realm),
+            self.cname_type,
+            vec_to_string_or_default(&self.client_name),
+            as_str_or_default(&self.realm),
+            self.sname_type,
+            vec_to_string_or_default(&self.service_name),
+        )
+    }
+}
+
+impl Display for SshRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.version,
+            as_str_or_default(&self.auth_success),
+            self.auth_attempts,
+            as_str_or_default(&self.direction),
+            as_str_or_default(&self.client),
+            as_str_or_default(&self.server),
+            as_str_or_default(&self.cipher_alg),
+            as_str_or_default(&self.mac_alg),
+            as_str_or_default(&self.compression_alg),
+            as_str_or_default(&self.kex_alg),
+            as_str_or_default(&self.host_key_alg),
+            as_str_or_default(&self.host_key),
+        )
+    }
+}
+
+impl Display for DceRpcRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.rtt,
+            as_str_or_default(&self.named_pipe),
+            as_str_or_default(&self.endpoint),
+            as_str_or_default(&self.operation),
+        )
+    }
+}
+
+impl Display for FtpRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.user),
+            as_str_or_default(&self.password),
+            as_str_or_default(&self.command),
+            as_str_or_default(&self.reply_code),
+            as_str_or_default(&self.reply_msg),
+            self.data_passive,
+            self.data_orig_addr,
+            self.data_resp_addr,
+            self.data_resp_port,
+            as_str_or_default(&self.file),
+            self.file_size,
+            as_str_or_default(&self.file_id),
+        )
+    }
+}
+
+impl Display for MqttRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.protocol),
+            self.version,
+            as_str_or_default(&self.client_id),
+            self.connack_reason,
+            vec_to_string_or_default(&self.subscribe),
+            vec_to_string_or_default(&self.suback_reason),
+        )
+    }
+}
+
+impl Display for LdapRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.message_id,
+            self.version,
+            vec_to_string_or_default(&self.opcode),
+            vec_to_string_or_default(&self.result),
+            vec_to_string_or_default(&self.diagnostic_message),
+            vec_to_string_or_default(&self.object),
+            vec_to_string_or_default(&self.argument),
+        )
+    }
+}
+
+impl Display for TlsRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            as_str_or_default(&self.server_name),
+            as_str_or_default(&self.alpn_protocol),
+            as_str_or_default(&self.ja3),
+            as_str_or_default(&self.version),
+            self.cipher,
+            as_str_or_default(&self.ja3s),
+            as_str_or_default(&self.serial),
+            as_str_or_default(&self.subject_country),
+            as_str_or_default(&self.subject_org_name),
+            as_str_or_default(&self.subject_common_name),
+            convert_time_format(self.validity_not_before),
+            convert_time_format(self.validity_not_after),
+            as_str_or_default(&self.subject_alt_name),
+            as_str_or_default(&self.issuer_country),
+            as_str_or_default(&self.issuer_org_name),
+            as_str_or_default(&self.issuer_org_unit_name),
+            as_str_or_default(&self.issuer_common_name),
+            self.last_alert,
+        )
+    }
+}
+
+impl Display for SmbRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            self.command,
+            as_str_or_default(&self.path),
+            as_str_or_default(&self.service),
+            as_str_or_default(&self.file_name),
+            self.file_size,
+            self.resource_type,
+            self.fid,
+            self.create_time,
+            self.access_time,
+            self.write_time,
+            self.change_time,
+        )
+    }
+}
+
+impl Display for NfsRawEvent {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.timestamp.format("%s%.9f"),
+            self.source,
+            self.orig_addr,
+            self.orig_port,
+            self.resp_addr,
+            self.resp_port,
+            self.proto,
+            convert_time_format(self.last_time),
+            vec_to_string_or_default(&self.read_files),
+            vec_to_string_or_default(&self.write_files),
+        )
     }
 }
 

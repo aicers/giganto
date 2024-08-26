@@ -33,22 +33,39 @@ use giganto_client::{
     RawEventKind,
 };
 use graphql_client::GraphQLQuery;
+use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 
 use super::{
-    check_address, check_agent_id, check_port,
+    check_address, check_agent_id, check_port, handle_paged_events_for_all_source,
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
-    IpRange, NodeName, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    IpRange, NetworkOptFilter, NodeName, PortRange, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::{
     graphql::{
-        client::derives::{export as exports, Export as Exports},
+        client::derives::{
+            conn_raw_events, dce_rpc_raw_events, dns_raw_events, export as exports, ftp_raw_events,
+            http_raw_events, kerberos_raw_events, ldap_raw_events, mqtt_raw_events, nfs_raw_events,
+            ntlm_raw_events, rdp_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events,
+            tls_raw_events, ConnRawEvents, DceRpcRawEvents, DnsRawEvents, Export as Exports,
+            FtpRawEvents, HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+            NfsRawEvents, NtlmRawEvents, RdpRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents,
+            TlsRawEvents,
+        },
         events_in_cluster, impl_from_giganto_range_structs_for_graphql_client,
+        network::{
+            ConnRawEvent, DceRpcRawEvent, DnsRawEvent, FtpRawEvent, HttpRawEvent, KerberosRawEvent,
+            LdapRawEvent, MqttRawEvent, NfsRawEvent, NtlmRawEvent, RdpRawEvent, SmbRawEvent,
+            SmtpRawEvent, SshRawEvent, TlsRawEvent,
+        },
+        MAXIMUM_PAGE_SIZE,
     },
     ingest::implement::EventFilter,
+    peer::Peers,
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
+    IngestSources,
 };
 
 const ADDRESS_PROTOCOL: [&str; 16] = [
@@ -86,6 +103,8 @@ const AGENT_PROTOCOL: [&str; 14] = [
     "file delete detected",
 ];
 const KIND_PROTOCOL: [&str; 2] = ["log", "secu log"];
+
+const MAX_RETRY_CNT: u32 = 5;
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -751,6 +770,144 @@ macro_rules! convert_json_output {
             }
         }
     };
+}
+
+macro_rules! process_export_for_all_source {
+    ($store:expr,
+     $sources:expr,
+     $peers:expr,
+     $client:expr,
+     $filter:expr,
+     $export_type:ident,
+     $export_done_path:ident,
+     $export_progress_path:ident,
+     $from:ident,
+     $to:ident,
+     $graphql_query_type:ident,
+     $variables_type:ty,
+     $response_data_type:path,
+     $field_name:ident) => {{
+        let mut err_msg: Option<String> = None;
+        match File::create(&$export_progress_path) {
+            Ok(mut writer) =>{
+                let mut retry_count: u32 = 0;
+                let first = Some(i32::try_from(MAXIMUM_PAGE_SIZE).unwrap_or(100));
+                let mut after: Option<String> = None;
+                let last: Option<i32> = None;
+                let before: Option<String> = None;
+
+                loop {
+                    let current_giganto_result_fut = handle_paged_events_for_all_source::<$to, $from>(
+                        $store.clone(),
+                        $sources,
+                        $filter.clone(),
+                        after.clone(),
+                        before.clone(),
+                        first,
+                        last,
+                    );
+
+                    let peer_results_fut = crate::graphql::request_all_peers_for_paged_events_fut!(
+                        Some($peers.clone()),
+                        $client,
+                        Some($filter.clone()),
+                        after,
+                        before,
+                        first,
+                        last,
+                        Some(true),
+                        $graphql_query_type,
+                        $variables_type,
+                        $response_data_type,
+                        $field_name
+                    );
+
+                    let (current_giganto_result, peer_results) =
+                        tokio::join!(current_giganto_result_fut, peer_results_fut);
+
+                    let peer_results = peer_results.into_iter().collect::<Result<Vec<_>, _>>();
+
+                    if let (Ok(current_giganto_result), Ok(peer_results)) =
+                        (current_giganto_result, peer_results)
+                    {
+                        let result = crate::graphql::combine_results(
+                            current_giganto_result,
+                            peer_results,
+                            &before,
+                            first,
+                            last,
+                        );
+
+                        if result.edges.is_empty() {
+                            break;
+                        }
+
+                        // cursor is always exist
+                        after = Some(result.edges.last().unwrap().cursor.clone());
+
+                        for value in result.edges {
+                            let event = value.node;
+                            match $export_type.as_str() {
+                                "csv" => {
+                                    if let Err(e) = writeln!(writer, "{event}"){
+                                        err_msg = Some(format!("Failed to write event: {e:?}"));
+                                        break;
+                                    }
+                                }
+                                "json" => {
+                                    match serde_json::to_string(&event) {
+                                        Ok(json_data) =>{
+                                            if let Err(e) = writeln!(writer, "{json_data}") {
+                                                err_msg = Some(format!("Failed to write event: {e:?}"));
+                                                break;
+                                            }
+                                        }
+                                        Err(e) =>{
+                                            err_msg = Some(format!("Failed to create json string: {e:?}"));
+                                            break;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if !result.has_next_page {
+                            break;
+                        }
+
+                        //reset retry count
+                        retry_count = 0;
+
+                    } else {
+                        retry_count += 1;
+                        if retry_count == MAX_RETRY_CNT {
+                            err_msg = Some(format!("Failed to get current giganto/peer giganto result"));
+                            break;
+                        }
+                    }
+                }
+
+                if err_msg.is_none(){
+                    if let Err(e) = fs::rename(&$export_progress_path, &$export_done_path) {
+                        err_msg = Some(format!(
+                            "Failed to rename to {:?}: {e:?}",
+                            $export_done_path
+                        ));
+                    }
+                }
+            }
+            Err(e) =>{
+                err_msg = Some(format!("Failed to create file: {e:?}"));
+            }
+        }
+
+        if let Some(msg) = err_msg {
+            error!("Failed to export file: {msg}");
+        }else{
+            info!("export file success: {:?}", $export_done_path);
+        }
+    }};
 }
 
 convert_json_output!(
@@ -1438,6 +1595,19 @@ impl JsonOutput<Netflow9JsonOutput> for Netflow9 {
     }
 }
 
+impl From<ExportFilter> for NetworkOptFilter {
+    fn from(filter: ExportFilter) -> Self {
+        Self {
+            time: filter.time,
+            source: filter.source_id,
+            orig_addr: filter.orig_addr,
+            resp_addr: filter.resp_addr,
+            orig_port: filter.orig_port,
+            resp_port: filter.resp_port,
+        }
+    }
+}
+
 fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
     match option {
         Some(val) => val.to_string(),
@@ -1449,7 +1619,7 @@ fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
 #[derive(InputObject, Serialize, Clone)]
 pub struct ExportFilter {
     protocol: String,
-    source_id: String,
+    source_id: Option<String>,
     agent_name: Option<String>,
     agent_id: Option<String>,
     kind: Option<String>,
@@ -1461,8 +1631,9 @@ pub struct ExportFilter {
 }
 
 impl KeyExtractor for ExportFilter {
+    // source always exists in the condition that calls `get_start_key`.
     fn get_start_key(&self) -> &str {
-        &self.source_id
+        self.source_id.as_ref().unwrap()
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -1516,8 +1687,11 @@ impl RawEventFilter for ExportFilter {
     }
 }
 
-fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
-    let db = ctx.data::<Database>()?;
+fn gen_export_file_path(
+    ctx: &Context<'_>,
+    filter: &ExportFilter,
+    export_type: &str,
+) -> Result<(PathBuf, PathBuf, String)> {
     let path = ctx.data::<PathBuf>()?;
     let node_name = ctx.data::<NodeName>()?;
 
@@ -1538,9 +1712,35 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));
     let download_path = format!("{}@{}", export_done_path.display(), node_name.0);
+    Ok((export_progress_path, export_done_path, download_path))
+}
+
+fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
+    let db = ctx.data::<Database>()?;
+    let (export_progress_path, export_done_path, download_path) =
+        gen_export_file_path(ctx, filter, &export_type)?;
 
     export_by_protocol(
         db.clone(),
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    )?;
+
+    Ok(download_path)
+}
+
+fn handle_all_source_export(
+    ctx: &Context<'_>,
+    filter: ExportFilter,
+    export_type: String,
+) -> Result<String> {
+    let (export_progress_path, export_done_path, download_path) =
+        gen_export_file_path(ctx, &filter, &export_type)?;
+
+    export_by_protocol_for_all_source(
+        ctx,
         filter,
         export_type,
         export_done_path,
@@ -1586,13 +1786,18 @@ impl ExportQuery {
             return Err(anyhow!("Invalid export file format").into());
         }
 
-        let handler = handle_export;
+        // Process a request for all source
+        let Some(ref source_id) = filter.source_id else {
+            return handle_all_source_export(ctx, filter, export_type);
+        };
 
+        // Process a request for target source
+        let handler = handle_export;
         events_in_cluster!(
             ctx,
             filter,
             filter.into(),
-            filter.source_id,
+            source_id,
             handler,
             Exports,
             exports::Variables,
@@ -1603,6 +1808,359 @@ impl ExportQuery {
             with_extra_query_args (export_type := export_type)
         )
     }
+}
+
+#[allow(clippy::too_many_lines)]
+fn export_by_protocol_for_all_source(
+    ctx: &Context<'_>,
+    filter: ExportFilter,
+    export_type: String,
+    export_done_path: PathBuf,
+    export_progress_path: PathBuf,
+) -> Result<()> {
+    let db = ctx.data::<Database>()?.clone();
+    let peers = ctx.data::<Peers>()?.clone();
+    let client = ctx.data::<Client>()?.clone();
+    let sources = ctx.data::<IngestSources>()?.clone();
+    let protocol = filter.protocol.clone();
+    let filter = NetworkOptFilter::from(filter);
+
+    match protocol.as_str() {
+        "conn" => tokio::spawn(async move {
+            if let Ok(store) = db.conn_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Conn,
+                    ConnRawEvent,
+                    ConnRawEvents,
+                    conn_raw_events::Variables,
+                    conn_raw_events::ResponseData,
+                    conn_raw_events
+                );
+            } else {
+                error!("Failed to open conn store");
+            }
+        }),
+        "dns" => tokio::spawn(async move {
+            if let Ok(store) = db.dns_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Dns,
+                    DnsRawEvent,
+                    DnsRawEvents,
+                    dns_raw_events::Variables,
+                    dns_raw_events::ResponseData,
+                    dns_raw_events
+                );
+            } else {
+                error!("Failed to open dns store");
+            }
+        }),
+        "http" => tokio::spawn(async move {
+            if let Ok(store) = db.http_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Http,
+                    HttpRawEvent,
+                    HttpRawEvents,
+                    http_raw_events::Variables,
+                    http_raw_events::ResponseData,
+                    http_raw_events
+                );
+            } else {
+                error!("Failed to open http store");
+            }
+        }),
+        "rdp" => tokio::spawn(async move {
+            if let Ok(store) = db.rdp_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Rdp,
+                    RdpRawEvent,
+                    RdpRawEvents,
+                    rdp_raw_events::Variables,
+                    rdp_raw_events::ResponseData,
+                    rdp_raw_events
+                );
+            } else {
+                error!("Failed to open rdp store");
+            }
+        }),
+        "smtp" => tokio::spawn(async move {
+            if let Ok(store) = db.smtp_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Smtp,
+                    SmtpRawEvent,
+                    SmtpRawEvents,
+                    smtp_raw_events::Variables,
+                    smtp_raw_events::ResponseData,
+                    smtp_raw_events
+                );
+            } else {
+                error!("Failed to open smtp store");
+            }
+        }),
+        "ntlm" => tokio::spawn(async move {
+            if let Ok(store) = db.ntlm_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Ntlm,
+                    NtlmRawEvent,
+                    NtlmRawEvents,
+                    ntlm_raw_events::Variables,
+                    ntlm_raw_events::ResponseData,
+                    ntlm_raw_events
+                );
+            } else {
+                error!("Failed to open ntlm store");
+            }
+        }),
+        "kerberos" => tokio::spawn(async move {
+            if let Ok(store) = db.kerberos_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Kerberos,
+                    KerberosRawEvent,
+                    KerberosRawEvents,
+                    kerberos_raw_events::Variables,
+                    kerberos_raw_events::ResponseData,
+                    kerberos_raw_events
+                );
+            } else {
+                error!("Failed to open kerberos store");
+            }
+        }),
+        "ssh" => tokio::spawn(async move {
+            if let Ok(store) = db.ssh_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Ssh,
+                    SshRawEvent,
+                    SshRawEvents,
+                    ssh_raw_events::Variables,
+                    ssh_raw_events::ResponseData,
+                    ssh_raw_events
+                );
+            } else {
+                error!("Failed to open ssh store");
+            }
+        }),
+        "dce rpc" => tokio::spawn(async move {
+            if let Ok(store) = db.dce_rpc_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    DceRpc,
+                    DceRpcRawEvent,
+                    DceRpcRawEvents,
+                    dce_rpc_raw_events::Variables,
+                    dce_rpc_raw_events::ResponseData,
+                    dce_rpc_raw_events
+                );
+            } else {
+                error!("Failed to open dce rpc store");
+            }
+        }),
+        "ftp" => tokio::spawn(async move {
+            if let Ok(store) = db.ftp_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Ftp,
+                    FtpRawEvent,
+                    FtpRawEvents,
+                    ftp_raw_events::Variables,
+                    ftp_raw_events::ResponseData,
+                    ftp_raw_events
+                );
+            } else {
+                error!("Failed to open ftp store");
+            }
+        }),
+        "mqtt" => tokio::spawn(async move {
+            if let Ok(store) = db.mqtt_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Mqtt,
+                    MqttRawEvent,
+                    MqttRawEvents,
+                    mqtt_raw_events::Variables,
+                    mqtt_raw_events::ResponseData,
+                    mqtt_raw_events
+                );
+            } else {
+                error!("Failed to open mqtt store");
+            }
+        }),
+        "ldap" => tokio::spawn(async move {
+            if let Ok(store) = db.ldap_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Ldap,
+                    LdapRawEvent,
+                    LdapRawEvents,
+                    ldap_raw_events::Variables,
+                    ldap_raw_events::ResponseData,
+                    ldap_raw_events
+                );
+            } else {
+                error!("Failed to open ldap store");
+            }
+        }),
+        "tls" => tokio::spawn(async move {
+            if let Ok(store) = db.tls_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Tls,
+                    TlsRawEvent,
+                    TlsRawEvents,
+                    tls_raw_events::Variables,
+                    tls_raw_events::ResponseData,
+                    tls_raw_events
+                );
+            } else {
+                error!("Failed to open tls store");
+            }
+        }),
+        "smb" => tokio::spawn(async move {
+            if let Ok(store) = db.smb_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Smb,
+                    SmbRawEvent,
+                    SmbRawEvents,
+                    smb_raw_events::Variables,
+                    smb_raw_events::ResponseData,
+                    smb_raw_events
+                );
+            } else {
+                error!("Failed to open smb store");
+            }
+        }),
+        "nfs" => tokio::spawn(async move {
+            if let Ok(store) = db.nfs_store() {
+                process_export_for_all_source!(
+                    store,
+                    &sources,
+                    peers,
+                    &client,
+                    filter,
+                    export_type,
+                    export_done_path,
+                    export_progress_path,
+                    Nfs,
+                    NfsRawEvent,
+                    NfsRawEvents,
+                    nfs_raw_events::Variables,
+                    nfs_raw_events::ResponseData,
+                    nfs_raw_events
+                );
+            } else {
+                error!("Failed to open nfs store");
+            }
+        }),
+        none => {
+            return Err(anyhow!("{}: Unknown protocol", none).into());
+        }
+    };
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
