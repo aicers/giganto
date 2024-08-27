@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use async_graphql::{Context, Error, Object, Result, SimpleObject};
+use async_graphql::{Context, Error, Object, Result, SimpleObject, StringNumber};
 use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
@@ -59,7 +59,7 @@ pub struct StatisticsRawEvent {
 #[derive(SimpleObject, Debug, Clone, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [stats::StatisticsStatisticsStats, ])]
 pub struct StatisticsInfo {
-    pub timestamp: i64,
+    pub timestamp: StringNumber<i64>,
     #[graphql_client_type(recursive_into = true)]
     pub detail: Vec<StatisticsDetail>,
 }
@@ -250,7 +250,7 @@ fn gen_statistics(
         }
 
         stats_info_vec.push(StatisticsInfo {
-            timestamp: latest_key_timestamp,
+            timestamp: StringNumber(latest_key_timestamp),
             detail: stats_detail_vec.clone(),
         });
         stats_detail_vec.clear();
@@ -434,6 +434,7 @@ mod tests {
             ) {
                 source,
                 stats {
+                    timestamp
                     detail {
                         protocol,
                         bps,
@@ -515,10 +516,11 @@ mod tests {
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1000000, 300000000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2000000, 600000000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3000000, 900000000);
+        let timestamp: i64 = 1702272560;
+
+        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1000000, 300000000);
+        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2000000, 600000000);
+        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3000000, 900000000);
 
         // when
         let res = schema.execute(query).await;
@@ -526,7 +528,13 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"ingest src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{source: \"src2\", stats: [{timestamp: \"1702272560\", detail: \
+            [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"ingest src \
+             2\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \"Statistics\", \
+             bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 2\", stats: [{timestamp: \
+             \"1702272560\", detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}\
+             , {source: \"src 1\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \
+             \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 
         mock.assert_async().await;

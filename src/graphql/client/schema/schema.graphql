@@ -1,3 +1,8 @@
+scalar StringNumberU32
+scalar StringNumberU64
+scalar StringNumberI64
+scalar StringNumberUSize
+
 type BootpRawEvent {
   timestamp: DateTime!
   origAddr: String!
@@ -5,11 +10,11 @@ type BootpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   op: Int!
   htype: Int!
   hops: Int!
-  xid: Int!
+  xid: StringNumberU32!
   ciaddr: String!
   yiaddr: String!
   siaddr: String!
@@ -47,14 +52,14 @@ type ConnRawEvent {
   respPort: Int!
   proto: Int!
   connState: String!
-  duration: Int!
+  duration: StringNumberI64!
   service: String!
-  origBytes: Int!
-  respBytes: Int!
-  origPkts: Int!
-  respPkts: Int!
-  origL2Bytes: Int!
-  respL2Bytes: Int!
+  origBytes: StringNumberU64!
+  respBytes: StringNumberU64!
+  origPkts: StringNumberU64!
+  respPkts: StringNumberU64!
+  origL2Bytes: StringNumberU64!
+  respL2Bytes: StringNumberU64!
 }
 
 type ConnRawEventConnection {
@@ -89,8 +94,8 @@ type DceRpcRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
-  rtt: Int!
+  lastTime: StringNumberI64!
+  rtt: StringNumberI64!
   namedPipe: String!
   endpoint: String!
   operation: String!
@@ -123,7 +128,7 @@ type DhcpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   msgType: Int!
   ciaddr: String!
   yiaddr: String!
@@ -133,12 +138,12 @@ type DhcpRawEvent {
   router: [String!]!
   domainNameServer: [String!]!
   reqIpAddr: String!
-  leaseTime: Int!
+  leaseTime: StringNumberU32!
   serverId: String!
   paramReqList: [Int!]!
   message: String!
-  renewalTime: Int!
-  rebindingTime: Int!
+  renewalTime: StringNumberU32!
+  rebindingTime: StringNumberU32!
   classId: [Int!]!
   clientIdType: Int!
   clientId: [Int!]!
@@ -169,9 +174,9 @@ type DnsEventEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   queryName: String!
-  queryStatus: Int!
+  queryStatus: StringNumberU32!
   queryResults: [String!]!
   image: String!
   user: String!
@@ -204,11 +209,11 @@ type DnsRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   query: String!
   answer: [String!]!
   transId: Int!
-  rtt: Int!
+  rtt: StringNumberI64!
   qclass: Int!
   qtype: Int!
   rcode: Int!
@@ -257,10 +262,10 @@ type FileCreateEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   targetFilename: String!
-  creationUtcTime: Int!
+  creationUtcTime: StringNumberI64!
   user: String!
 }
 
@@ -289,10 +294,10 @@ type FileCreateStreamHashEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   targetFilename: String!
-  creationUtcTime: Int!
+  creationUtcTime: StringNumberI64!
   hash: [String!]!
   contents: String!
   user: String!
@@ -323,11 +328,11 @@ type FileCreationTimeChangedEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   targetFilename: String!
-  creationUtcTime: Int!
-  previousCreationUtcTime: Int!
+  creationUtcTime: StringNumberI64!
+  previousCreationUtcTime: StringNumberI64!
   user: String!
 }
 
@@ -356,7 +361,7 @@ type FileDeleteDetectedEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   user: String!
   image: String!
   targetFilename: String!
@@ -389,7 +394,7 @@ type FileDeleteEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   user: String!
   image: String!
   targetFilename: String!
@@ -425,7 +430,7 @@ type FtpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   user: String!
   password: String!
   command: String!
@@ -436,7 +441,7 @@ type FtpRawEvent {
   dataRespAddr: String!
   dataRespPort: Int!
   file: String!
-  fileSize: Int!
+  fileSize: StringNumberU64!
   fileId: String!
 }
 
@@ -488,15 +493,15 @@ type HttpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   method: String!
   host: String!
   uri: String!
   referrer: String!
   version: String!
   userAgent: String!
-  requestLen: Int!
-  responseLen: Int!
+  requestLen: StringNumberUSize!
+  responseLen: StringNumberUSize!
   statusCode: Int!
   statusMsg: String!
   username: String!
@@ -538,7 +543,7 @@ type ImageLoadedEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   imageLoaded: String!
   fileVersion: String!
@@ -590,10 +595,10 @@ type KerberosRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
-  clientTime: Int!
-  serverTime: Int!
-  errorCode: Int!
+  lastTime: StringNumberI64!
+  clientTime: StringNumberI64!
+  serverTime: StringNumberI64!
+  errorCode: StringNumberU32!
   clientRealm: String!
   cnameType: Int!
   clientName: [String!]!
@@ -629,8 +634,8 @@ type LdapRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
-  messageId: Int!
+  lastTime: StringNumberI64!
+  messageId: StringNumberU32!
   version: Int!
   opcode: [String!]!
   result: [String!]!
@@ -697,7 +702,7 @@ type MqttRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   protocol: String!
   version: Int!
   clientId: String!
@@ -741,8 +746,8 @@ type Netflow5RawEvent {
   nextHop: String!
   input: Int!
   output: Int!
-  dPkts: Int!
-  dOctets: Int!
+  dPkts: StringNumberU32!
+  dOctets: StringNumberU32!
   first: String!
   last: String!
   srcPort: Int!
@@ -754,7 +759,7 @@ type Netflow5RawEvent {
   dstAs: Int!
   srcMask: Int!
   dstMask: Int!
-  sequence: Int!
+  sequence: StringNumberU32!
   engineType: Int!
   engineId: Int!
   samplingMode: String!
@@ -783,8 +788,8 @@ type Netflow5RawEventEdge {
 
 type Netflow9RawEvent {
   timestamp: DateTime!
-  sequence: Int!
-  sourceId: Int!
+  sequence: StringNumberU32!
+  sourceId: StringNumberU32!
   templateId: Int!
   origAddr: String!
   origPort: Int!
@@ -829,7 +834,7 @@ type NetworkConnectionEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   user: String!
   protocol: String!
@@ -924,7 +929,7 @@ type NfsRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   readFiles: [String!]!
   writeFiles: [String!]!
 }
@@ -956,7 +961,7 @@ type NtlmRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   username: String!
   hostname: String!
   domainname: String!
@@ -1080,7 +1085,7 @@ type PipeEventEvent {
   agentId: String!
   eventType: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   pipeName: String!
   image: String!
   user: String!
@@ -1116,7 +1121,7 @@ type ProcessCreateEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   fileVersion: String!
   description: String!
@@ -1127,12 +1132,12 @@ type ProcessCreateEvent {
   currentDirectory: String!
   user: String!
   logonGuid: String!
-  logonId: Int!
-  terminalSessionId: Int!
+  logonId: StringNumberU32!
+  terminalSessionId: StringNumberU32!
   integrityLevel: String!
   hashes: [String!]!
   parentProcessGuid: String!
-  parentProcessId: Int!
+  parentProcessId: StringNumberU32!
   parentImage: String!
   parentCommandLine: String!
   parentUser: String!
@@ -1163,7 +1168,7 @@ type ProcessTamperingEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   tamperType: String!
   user: String!
@@ -1194,7 +1199,7 @@ type ProcessTerminatedEvent {
   agentName: String!
   agentId: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   user: String!
 }
@@ -1563,7 +1568,7 @@ type RdpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   cookie: String!
 }
 
@@ -1593,7 +1598,7 @@ type RegistryKeyValueRenameEvent {
   agentId: String!
   eventType: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   targetObject: String!
   newName: String!
@@ -1626,7 +1631,7 @@ type RegistryValueSetEvent {
   agentId: String!
   eventType: String!
   processGuid: String!
-  processId: Int!
+  processId: StringNumberU32!
   image: String!
   targetObject: String!
   details: String!
@@ -1717,18 +1722,18 @@ type SmbRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   command: Int!
   path: String!
   service: String!
   fileName: String!
-  fileSize: Int!
+  fileSize: StringNumberU64!
   resourceType: Int!
   fid: Int!
-  createTime: Int!
-  accessTime: Int!
-  writeTime: Int!
-  changeTime: Int!
+  createTime: StringNumberI64!
+  accessTime: StringNumberI64!
+  writeTime: StringNumberI64!
+  changeTime: StringNumberI64!
 }
 
 type SmbRawEventConnection {
@@ -1758,7 +1763,7 @@ type SmtpRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   mailfrom: String!
   date: String!
   from: String!
@@ -1795,7 +1800,7 @@ type SshRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   client: String!
   server: String!
   cipherAlg: String!
@@ -1839,7 +1844,7 @@ type StatisticsDetail {
 }
 
 type StatisticsInfo {
-  timestamp: Int!
+  timestamp: StringNumberI64!
   detail: [StatisticsDetail!]!
 }
 
@@ -1927,7 +1932,7 @@ type TlsRawEvent {
   respAddr: String!
   respPort: Int!
   proto: Int!
-  lastTime: Int!
+  lastTime: StringNumberI64!
   serverName: String!
   alpnProtocol: String!
   ja3: String!
@@ -1941,8 +1946,8 @@ type TlsRawEvent {
   subjectCountry: String!
   subjectOrgName: String!
   subjectCommonName: String!
-  validityNotBefore: Int!
-  validityNotAfter: Int!
+  validityNotBefore: StringNumberI64!
+  validityNotAfter: StringNumberI64!
   subjectAltName: String!
   issuerCountry: String!
   issuerOrgName: String!

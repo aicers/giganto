@@ -129,6 +129,13 @@ async fn conn_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    duration,
+                    origBytes,
+                    respBytes,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -136,7 +143,9 @@ async fn conn_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+         origPort: 46378, duration: \"12345\", origBytes: \"77\", respBytes: \"295\", origPkts: \
+         \"397\", respPkts: \"511\", origL2Bytes: \"21515\", respL2Bytes: \"27889\"}}]}}"
     );
 }
 
@@ -189,6 +198,13 @@ async fn conn_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    duration,
+                    origBytes,
+                    respBytes,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -248,7 +264,9 @@ async fn conn_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+         origPort: 46378, duration: \"324234\", origBytes: \"0\", respBytes: \"0\", origPkts: \
+         \"6\", respPkts: \"0\", origL2Bytes: \"0\", respL2Bytes: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -382,6 +400,7 @@ async fn dns_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    rtt,
                 }
             }
         }
@@ -389,7 +408,8 @@ async fn dns_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", origPort: 46378}}]}}"
+        "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
+        origPort: 46378, rtt: \"1\"}}]}}"
     );
 }
 
@@ -444,6 +464,7 @@ async fn dns_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    rtt,
                 }
             }
         }
@@ -513,7 +534,8 @@ async fn dns_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", origPort: 46378}}]}}"
+        "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
+        origPort: 46378, rtt: \"567\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -634,6 +656,8 @@ async fn http_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    requestLen,
+                    responseLen,
                 }
             }
         }
@@ -641,7 +665,8 @@ async fn http_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+         origPort: 46378, requestLen: \"0\", responseLen: \"0\"}}]}}"
     );
 }
 
@@ -706,6 +731,8 @@ async fn http_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    requestLen,
+                    responseLen,
                 }
             }
         }
@@ -796,7 +823,8 @@ async fn http_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+         origPort: 46378, requestLen: \"1024\", responseLen: \"2048\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1365,6 +1393,9 @@ async fn kerberos_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    clientTime,
+                    serverTime,
+                    errorCode,
                 }
             }
         }
@@ -1431,7 +1462,8 @@ async fn kerberos_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", clientTime: \
+        \"123456789\", serverTime: \"987654321\", errorCode: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1651,6 +1683,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    rtt,
                 }
             }
         }
@@ -1707,7 +1740,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", rtt: \"123456\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -1787,6 +1820,7 @@ async fn ftp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    fileSize,
                 }
             }
         }
@@ -1851,7 +1885,7 @@ async fn ftp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"1024\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2065,6 +2099,7 @@ async fn ldap_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    messageId,
                 }
             }
         }
@@ -2139,7 +2174,7 @@ async fn ldap_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", messageId: \"123\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2229,6 +2264,8 @@ async fn tls_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    validityNotBefore,
+                    validityNotAfter,
                 }
             }
         }
@@ -2313,7 +2350,8 @@ async fn tls_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", validityNotBefore: \
+        \"1637076000\", validityNotAfter: \"1668612000\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2338,6 +2376,11 @@ async fn smb_with_data() {
             edges {
                 node {
                     origAddr,
+                    fileSize,
+                    createTime,
+                    accessTime,
+                    writeTime,
+                    changeTime,
                 }
             }
         }
@@ -2345,7 +2388,9 @@ async fn smb_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"10\", \
+        createTime: \"10000000\", accessTime: \"20000000\", writeTime: \"10000000\", \
+        changeTime: \"20000000\"}}]}}"
     );
 }
 
@@ -2393,6 +2438,11 @@ async fn smb_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    fileSize,
+                    createTime,
+                    accessTime,
+                    writeTime,
+                    changeTime,
                 }
             }
         }
@@ -2455,7 +2505,9 @@ async fn smb_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"1024\", \
+        createTime: \"1609459200\", accessTime: \"1637076000\", writeTime: \"1668612000\", \
+        changeTime: \"1700148000\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2609,6 +2661,7 @@ async fn bootp_with_data() {
             edges {
                 node {
                     origAddr,
+                    xid,
                 }
             }
         }
@@ -2616,7 +2669,7 @@ async fn bootp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", xid: \"0\"}}]}}"
     );
 }
 
@@ -2664,6 +2717,7 @@ async fn bootp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    xid
                 }
             }
         }
@@ -2726,7 +2780,7 @@ async fn bootp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", xid: \"0\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -2750,6 +2804,9 @@ async fn dhcp_with_data() {
             edges {
                 node {
                     origAddr,
+                    leaseTime,
+                    renewalTime,
+                    rebindingTime,
                 }
             }
         }
@@ -2757,7 +2814,8 @@ async fn dhcp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", \
+        renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
     );
 }
 
@@ -2818,6 +2876,9 @@ async fn dhcp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    leaseTime,
+                    renewalTime,
+                    rebindingTime,
                 }
             }
         }
@@ -2887,7 +2948,8 @@ async fn dhcp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", \
+        renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
     );
     mock.assert_async().await;
 }

@@ -96,17 +96,11 @@ extern crate proc_macro;
 ///     fn from(node: conn_raw_events::ConnRawEventsConnRawEventsEdgesNode) -> Self {
 ///         Self {
 ///             timestamp: node.timestamp,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             orig_port: node.orig_port.map(|x| x as _),
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             proto: node.proto as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             duration: node.duration as __,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             service: node.service as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             resp_pkts: node.resp_pkts as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
 ///             orig_filenames: node.orig_filenames,
 ///             ja3s: node.ja3_s,
@@ -119,17 +113,11 @@ extern crate proc_macro;
 ///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent) -> Self {
 ///         Self {
 ///             timestamp: node.timestamp,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             orig_port: node.orig_port.map(|x| x as _),
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             proto: node.proto as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             duration: node.duration as __,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             service: node.service as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             resp_pkts: node.resp_pkts as _,
-///             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
 ///             orig_filenames: node.orig_filenames,
 ///             ja3s: node.ja3_s,
@@ -230,19 +218,16 @@ fn derive_from_graphql_client_autogen_2(
                         },
                         (SegmentType::Vec, CastStyle::As) => {
                             quote! {
-                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                                 #to_field_name: node.#from_field_name.into_iter().map(|x| x as _).collect(),
                             }
                         },
                         (SegmentType::Option, CastStyle::As) => {
                             quote! {
-                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                                 #to_field_name: node.#from_field_name.map(|x| x as _),
                             }
                         },
                         (SegmentType::Other, CastStyle::As) => {
                             quote! {
-                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                                 #to_field_name: node.#from_field_name as _,
                             }
                         },
@@ -360,7 +345,7 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
 }
 
 fn cast_style(field_type: &Type, recursive_into: bool) -> CastStyle {
-    if is_target_of_force_cast(field_type) {
+    if is_target_of_safe_to_i64_cast(field_type) {
         assert!(!recursive_into, "inappropriate use of `recursive_into`. Please remove `recursive_into` attribute on a field with `{}`", field_type.to_token_stream());
         CastStyle::As
     } else if recursive_into {
@@ -370,9 +355,9 @@ fn cast_style(field_type: &Type, recursive_into: bool) -> CastStyle {
     }
 }
 
-static TARGET_OF_FORCE_CAST: [&str; 8] = ["u8", "u16", "i8", "i16", "i32", "u32", "u64", "usize"];
+static SAFE_TO_I64_TYPES: [&str; 5] = ["u8", "u16", "i8", "i16", "i32"];
 
-fn is_target_of_force_cast(ty: &Type) -> bool {
+fn is_target_of_safe_to_i64_cast(ty: &Type) -> bool {
     let type_token = ty.to_token_stream().to_string();
-    TARGET_OF_FORCE_CAST.contains(&type_token.as_str())
+    SAFE_TO_I64_TYPES.contains(&type_token.as_str())
 }

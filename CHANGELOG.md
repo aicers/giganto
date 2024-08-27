@@ -55,6 +55,20 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
 - Removed `unsafe` block in `write_run_tcpdump` while creating a temorary file.
 - Remove migration code less than `0.15.3`
+- In `BootpRawEvent`, `ConnRawEvent`, `DceRpcRawEvent`, `DhcpRawEvent`,
+  `DnsEventEvent`, `DnsRawEvent`, `FileCreateEvent`,
+  `FileCreateStreamHashEvent`, `FileCreationTimeChangedEvent`,
+  `FileDeleteDetectedEvent`, `FileDeleteEvent`, `FtpRawEvent`,
+  `HttpRawEvent`, `ImageLoadedEvent`, `KerberosRawEvent`, `LdapRawEvent`,
+  `MqttRawEvent`, `Netflow5RawEvent`, `Netflow9RawEvent`,
+  `NetworkConnectionEvent`, `NfsRawEvent`, `NtlmRawEvent`, `PipeEventEvent`,
+  `ProcessCreateEvent`, `ProcessTamperingEvent`, `ProcessTerminatedEvent`,
+  `RdpRawEvent`, `RegistryKeyValueRenameEvent`, `RegistryValueSetEvent`,
+  `SmbRawEvent`, `SmtpRawEvent`, `SshRawEvent`, `StatisticsInfo`, and
+  `TlsRawEvent` changed GraphQL APIs to return `StringNumber` instead of
+  integers beyond `i32`.
+- Changed the `from_key_value` macro to additionally receive `str_num_field`
+  for `StringNumber` conversion.
 
 ## [0.20.0] - 2024-05-17
 
