@@ -36,15 +36,10 @@ impl Clone for Certs {
 
 #[allow(clippy::module_name_repetitions)]
 pub fn config_server(certs: &Arc<Certs>) -> Result<ServerConfig> {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let client_auth = rustls::server::WebPkiClientVerifier::builder_with_provider(
-        Arc::new(certs.root.clone()),
-        provider.clone(),
-    )
-    .build()?;
+    let client_auth =
+        rustls::server::WebPkiClientVerifier::builder(Arc::new(certs.root.clone())).build()?;
 
-    let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
+    let server_crypto = rustls::ServerConfig::builder()
         .with_client_cert_verifier(client_auth)
         .with_single_cert(certs.certs.clone(), certs.key.clone_key())
         .context("server config error")?;
@@ -108,12 +103,9 @@ pub fn subject_from_cert_opt(
 }
 
 pub fn config_client(certs: &Arc<Certs>) -> Result<ClientConfig> {
-    let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_root_certificates(certs.root.clone())
-    .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())?;
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(certs.root.clone())
+        .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())?;
 
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));

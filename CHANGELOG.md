@@ -26,7 +26,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
       change values for conn, http, smtp, ntlm, ssh, tls protocol's fields in
       versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
 - Change to receive events in a unit of 100.
-- Change the rustls crypto library setting to `aws-lc-rs`.
 - Fixed to append the kind value to the filename when extracting a file for a
   protocol for which a kind value exists.
 - Apply rustfmt's option `group_imports=StdExternalCrate`.

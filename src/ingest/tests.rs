@@ -133,14 +133,10 @@ fn init_client() -> Endpoint {
     let root = fs::read(ROOT_PATH).expect("Failed to read file");
     let server_root = to_root_cert(&root).unwrap();
 
-    let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("Failed to set default tls protocol version")
-    .with_root_certificates(server_root)
-    .with_client_auth_cert(cert_chain, pv_key)
-    .expect("the server root, cert chain or private key are not valid");
+    let client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(server_root)
+        .with_client_auth_cert(cert_chain, pv_key)
+        .expect("the server root, cert chain or private key are not valid");
 
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
