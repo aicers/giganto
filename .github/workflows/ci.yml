@@ -55,17 +55,22 @@ jobs:
     - name: Increase ulimit size
       run: ulimit -n 8096
     - name: Install Rust
-      uses: hecrj/setup-rust-action@v1
-      with:
-        rust-version: stable
-    - uses: actions/checkout@v2
+      uses: dtolnay/rust-toolchain@stable
+    - uses: actions/checkout@v4
     - uses: ./.github/cache-cargo
     - name: Install libcap on Ubuntu
       run: |
-            sudo apt-get install libpcap-dev libpcap0.8
-    - name: Install Tarpaulin
-      run: cargo install cargo-tarpaulin
-    - name: Generate coverage report
-      run: cargo tarpaulin --out xml
+          sudo apt-get install libpcap-dev libpcap0.8
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
+    - name: Generate code coverage
+      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      with:
+        files: lcov.info
+        fail_ci_if_error: true
