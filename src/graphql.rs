@@ -57,7 +57,7 @@ pub struct Query(
     export::ExportQuery,
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
-    status::GigantoStatusQuery,
+    status::StatusQuery,
     source::SourceQuery,
     statistics::StatisticsQuery,
     sysmon::SysmonQuery,
@@ -66,7 +66,7 @@ pub struct Query(
 );
 
 #[derive(Default, MergedObject)]
-pub struct Mutation(status::GigantoConfigMutation);
+pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone)]
 pub struct TimeRange {
