@@ -11,7 +11,7 @@ use tracing::info;
 
 use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
 use crate::peer::PeerIdentity;
-use crate::settings::GigantoConfig;
+use crate::settings::Config;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
 use crate::AckTransmissionCount;
@@ -28,7 +28,7 @@ pub trait TomlPeers {
 }
 
 #[derive(SimpleObject, Debug)]
-struct GigantoStatus {
+struct Status {
     name: String,
     cpu_usage: f32,
     total_memory: u64,
@@ -50,7 +50,7 @@ struct Properties {
 }
 
 #[Object]
-impl GigantoConfig {
+impl Config {
     async fn ingest_srv_addr(&self) -> String {
         self.ingest_srv_addr.to_string()
     }
@@ -120,17 +120,17 @@ impl PeerIdentity {
 }
 
 #[derive(Default)]
-pub(super) struct GigantoStatusQuery;
+pub(super) struct StatusQuery;
 
 #[derive(Default)]
-pub(super) struct GigantoConfigMutation;
+pub(super) struct ConfigMutation;
 
 #[Object]
-impl GigantoStatusQuery {
-    async fn giganto_status(&self) -> Result<GigantoStatus> {
+impl StatusQuery {
+    async fn status(&self) -> Result<Status> {
         let usg = roxy::resource_usage().await;
         let hostname = roxy::hostname();
-        let usg = GigantoStatus {
+        let usg = Status {
             name: hostname,
             cpu_usage: usg.cpu_usage,
             total_memory: usg.total_memory,
@@ -161,11 +161,11 @@ impl GigantoStatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
+    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Config> {
         let cfg_path = ctx.data::<String>()?;
         let toml = fs::read_to_string(cfg_path).context("toml not found")?;
 
-        let config: GigantoConfig = toml::from_str(&toml)?;
+        let config: Config = toml::from_str(&toml)?;
 
         Ok(config)
     }
@@ -177,15 +177,15 @@ impl GigantoStatusQuery {
 }
 
 #[Object]
-impl GigantoConfigMutation {
+impl ConfigMutation {
     #[allow(clippy::unused_async)]
-    async fn set_giganto_config<'ctx>(&self, ctx: &Context<'ctx>, draft: String) -> Result<String> {
-        let config_draft: GigantoConfig = toml::from_str(&draft)?;
+    async fn set_config<'ctx>(&self, ctx: &Context<'ctx>, draft: String) -> Result<bool> {
+        let config_draft: Config = toml::from_str(&draft)?;
 
         let cfg_path = ctx.data::<String>()?;
 
         let config_toml = fs::read_to_string(cfg_path).context("toml not found")?;
-        let config: GigantoConfig = toml::from_str(&config_toml)?;
+        let config: Config = toml::from_str(&config_toml)?;
 
         if config == config_draft {
             info!("No changes. config: {config:?}, draft: {config_draft:?}");
@@ -206,7 +206,7 @@ impl GigantoConfigMutation {
         });
         info!("Draft applied. config: {config:?}, draft: {config_draft:?}");
 
-        Ok("Done".to_string())
+        Ok(true)
     }
 
     async fn set_ack_transmission_count<'ctx>(
@@ -341,7 +341,7 @@ mod tests {
 
         let query = r#"
         {
-            gigantoStatus {
+            status {
                 name
                 cpuUsage
                 totalMemory
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_giganto_config() {
+    async fn test_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
@@ -370,7 +370,7 @@ mod tests {
 
         let query = r#"
             {
-                gigantoConfig {
+                config {
                     ingestSrvAddr
                     publishSrvAddr
                     graphqlSrvAddr
@@ -397,12 +397,13 @@ mod tests {
         let data = res.data.to_string();
         assert_eq!(
             data,
-            "{gigantoConfig: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}}".to_string()
+            "{config: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", \
+            graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}}".to_string()
         );
     }
 
     #[tokio::test]
-    async fn test_set_giganto_config() {
+    async fn test_set_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
@@ -417,7 +418,7 @@ mod tests {
         let query = format!(
             r#"
                 mutation {{
-                    setGigantoConfig(draft: {toml_content:?})
+                    setConfig(draft: {toml_content:?})
                 }}
                 "#
         );
@@ -450,14 +451,14 @@ mod tests {
         let query = format!(
             r#"
             mutation {{
-                setGigantoConfig(draft: {new_draft:?})
+                setConfig(draft: {new_draft:?})
             }}
             "#
         );
 
         let res = schema.execute(&query).await;
 
-        assert_eq!(res.data.to_string(), "{setGigantoConfig: \"Done\"}");
+        assert_eq!(res.data.to_string(), "{setConfig: true}");
 
         // check config temp file changes
         let config_temp_file =

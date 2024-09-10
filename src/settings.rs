@@ -2,7 +2,7 @@
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
 use clap::{ArgAction, Parser};
-use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
+use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 
 use crate::peer::PeerIdentity;
@@ -44,7 +44,7 @@ pub struct Args {
 
 /// The application settings.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct GigantoConfig {
+pub struct Config {
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
@@ -74,7 +74,7 @@ pub struct GigantoConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub config: GigantoConfig,
+    pub config: Config,
 
     // config file path
     pub cfg_path: String,
@@ -96,7 +96,7 @@ impl Settings {
                 ))
             }
         } else {
-            let config: GigantoConfig = default_config_builder().build()?.try_deserialize()?;
+            let config: Config = default_config_builder().build()?.try_deserialize()?;
             let cfg_path = config_path.to_str().expect("path to string").to_string();
 
             Ok(Self { config, cfg_path })
@@ -109,7 +109,7 @@ impl Settings {
         let s = default_config_builder()
             .add_source(File::with_name(cfg_path))
             .build()?;
-        let config: GigantoConfig = s.try_deserialize()?;
+        let config: Config = s.try_deserialize()?;
 
         Ok(Self {
             config,
@@ -133,7 +133,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .to_str()
         .expect("unreachable export path");
 
-    Config::builder()
+    ConfConfig::builder()
         .set_default("ingest_srv_addr", DEFAULT_INGEST_SRV_ADDR)
         .expect("valid address")
         .set_default("publish_srv_addr", DEFAULT_PUBLISH_SRV_ADDR)

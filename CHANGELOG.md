@@ -69,8 +69,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed command line interface.
   - Removed `cert`, `key`, `root` fields from config file.
   - Added cli options `-c`, `--cert`, `--key` and `--ca-certs`.
-- Changed `setGigantoConfig` to receive toml-string with full configuration.
-- Updated `gigantoConfig` to respond full configuration.
+- Renamed GraphQL API `gigantoConfig` to `config` and updated it to respond
+  the full configuration.
+- Renamed GraphQL API `setGigantoConfig` to `setConfig`. The endpoint now
+  accepts a full configuration as a TOML string and returns `Result<bool>`,
+  instead of `Result<String>`.
 
 ### Removed
 
