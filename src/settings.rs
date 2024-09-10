@@ -1,6 +1,7 @@
 //! Configurations for the application.
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
+use clap::{ArgAction, Parser};
 use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer};
 
@@ -15,14 +16,35 @@ const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
-const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
+const DEFAULT_MAX_SUB_COMPACTIONS: u32 = 2;
+
+#[derive(Parser, Debug)]
+#[command(version)]
+pub struct Args {
+    /// Path to the local configuration TOML file.
+    #[arg(short, value_name = "CONFIG_PATH")]
+    pub config: Option<String>,
+
+    /// Path to the certificate file.
+    #[arg(long, value_name = "CERT_PATH")]
+    pub cert: String,
+
+    /// Path to the key file.
+    #[arg(long, value_name = "KEY_PATH")]
+    pub key: String,
+
+    /// Paths to the CA certificate files.
+    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append)]
+    pub ca_certs: Vec<String>,
+
+    /// Enable the repair mode.
+    #[arg(long)]
+    pub repair: bool,
+}
 
 /// The application settings.
-#[derive(Clone, Debug, Deserialize)]
-pub struct Settings {
-    pub cert: PathBuf, // Path to the certificate file
-    pub key: PathBuf,  // Path to the private key file
-    pub root: PathBuf, // Path to the rootCA file
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct GigantoConfig {
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
@@ -32,8 +54,8 @@ pub struct Settings {
     pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
-    pub log_dir: PathBuf, //giganto's syslog path
-    pub export_dir: PathBuf, //giganto's export file path
+    pub log_dir: PathBuf,  // giganto's syslog path
+    pub export_dir: PathBuf, // giganto's export file path
 
     // db options
     pub max_open_files: i32,
@@ -41,16 +63,21 @@ pub struct Settings {
     pub num_of_thread: i32,
     pub max_sub_compactions: u32,
 
-    // config file path
-    pub cfg_path: String,
-
     // peers
-    #[serde(deserialize_with = "deserialize_peer_addr")]
+    #[serde(default, deserialize_with = "deserialize_peer_addr")]
     pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
     // ack transmission interval
     pub ack_transmission: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Settings {
+    pub config: GigantoConfig,
+
+    // config file path
+    pub cfg_path: String,
 }
 
 impl Settings {
@@ -69,7 +96,10 @@ impl Settings {
                 ))
             }
         } else {
-            default_config_builder().build()?.try_deserialize()
+            let config: GigantoConfig = default_config_builder().build()?.try_deserialize()?;
+            let cfg_path = config_path.to_str().expect("path to string").to_string();
+
+            Ok(Self { config, cfg_path })
         }
     }
 
@@ -79,15 +109,17 @@ impl Settings {
         let s = default_config_builder()
             .add_source(File::with_name(cfg_path))
             .build()?;
-        let mut setting: Settings = s.try_deserialize()?;
-        setting.cfg_path = cfg_path.to_string();
-        Ok(setting)
+        let config: GigantoConfig = s.try_deserialize()?;
+
+        Ok(Self {
+            config,
+            cfg_path: cfg_path.to_string(),
+        })
     }
 }
 
 /// Creates a new `ConfigBuilder` instance with the default configuration.
 fn default_config_builder() -> ConfigBuilder<DefaultState> {
-    let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
     let db_dir =
         directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
     let log_dir = directories::ProjectDirs::from_path(PathBuf::from("logs/apps"))
@@ -100,16 +132,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .data_dir()
         .to_str()
         .expect("unreachable export path");
-    let config_dir = dirs.config_dir();
-    let cert_path = config_dir.join("cert.pem");
-    let key_path = config_dir.join("key.pem");
-    let config_path = config_dir.join("config.toml");
 
     Config::builder()
-        .set_default("cert", cert_path.to_str().expect("path to string"))
-        .expect("default cert dir")
-        .set_default("key", key_path.to_str().expect("path to string"))
-        .expect("default key dir")
         .set_default("ingest_srv_addr", DEFAULT_INGEST_SRV_ADDR)
         .expect("valid address")
         .set_default("publish_srv_addr", DEFAULT_PUBLISH_SRV_ADDR)
@@ -130,10 +154,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max mb of level base")
         .set_default("num_of_thread", DEFAULT_NUM_OF_THREAD)
         .expect("default number of thread")
-        .set_default("max_sub_compactions", DEFAULT_MAX_SUBCOMPACTIONS)
+        .set_default("max_sub_compactions", DEFAULT_MAX_SUB_COMPACTIONS)
         .expect("default max subcompactions")
-        .set_default("cfg_path", config_path.to_str().expect("path to string"))
-        .expect("default config dir")
         .set_default("addr_to_peers", DEFAULT_INVALID_ADDR_TO_PEERS)
         .expect("default ack transmission")
         .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)

@@ -47,7 +47,7 @@ fn get_token() -> &'static Mutex<u32> {
     TOKEN.get_or_init(|| Mutex::new(0))
 }
 
-const ROOT_PATH: &str = "tests/certs/root.pem";
+const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const PROTOCOL_VERSION: &str = "0.21.0-alpha.2";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
@@ -96,8 +96,8 @@ fn server() -> Server {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -149,8 +149,8 @@ fn init_client() -> Endpoint {
             .collect::<Result<_, _>>()
             .expect("invalid PEM-encoded certificate")
     };
-    let root = fs::read(ROOT_PATH).expect("Failed to read file");
-    let server_root = to_root_cert(&root).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let server_root = to_root_cert(&ca_cert_path).unwrap();
 
     let client_crypto = rustls::ClientConfig::builder()
         .with_root_certificates(server_root)
@@ -783,8 +783,8 @@ async fn request_range_data_with_protocol() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -1901,8 +1901,8 @@ async fn request_range_data_with_log() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -2008,8 +2008,8 @@ async fn request_range_data_with_period_time_series() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -2156,8 +2156,8 @@ async fn request_network_event_stream() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -4046,8 +4046,8 @@ async fn request_raw_events() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -4132,8 +4132,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let root_pem = fs::read(ROOT_PATH).unwrap();
-        let root = to_root_cert(&root_pem).unwrap();
+        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+        let root = to_root_cert(&ca_cert_path).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
@@ -4229,8 +4229,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -4339,8 +4339,8 @@ async fn request_range_data_with_log_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let root_pem = fs::read(ROOT_PATH).unwrap();
-        let root = to_root_cert(&root_pem).unwrap();
+        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+        let root = to_root_cert(&ca_cert_path).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
@@ -4436,8 +4436,8 @@ async fn request_range_data_with_log_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -4544,8 +4544,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let root_pem = fs::read(ROOT_PATH).unwrap();
-        let root = to_root_cert(&root_pem).unwrap();
+        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+        let root = to_root_cert(&ca_cert_path).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
@@ -4646,8 +4646,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,
@@ -4754,8 +4754,8 @@ async fn request_raw_events_giganto_cluster() {
         let cert = to_cert_chain(&cert_pem).unwrap();
         let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
         let key = to_private_key(&key_pem).unwrap();
-        let root_pem = fs::read(ROOT_PATH).unwrap();
-        let root = to_root_cert(&root_pem).unwrap();
+        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+        let root = to_root_cert(&ca_cert_path).unwrap();
         let certs = Arc::new(Certs {
             certs: cert,
             key,
@@ -4848,8 +4848,8 @@ async fn request_raw_events_giganto_cluster() {
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
     let key = to_private_key(&key_pem).unwrap();
-    let root_pem = fs::read(ROOT_PATH).unwrap();
-    let root = to_root_cert(&root_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
 
     let certs = Arc::new(Certs {
         certs: cert,

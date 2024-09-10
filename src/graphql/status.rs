@@ -5,23 +5,20 @@ use std::{
 };
 
 use anyhow::{anyhow, Context as ct};
-use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject, StringNumber};
 use toml_edit::{value, DocumentMut, InlineTable};
+use tracing::info;
 
 use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
+use crate::peer::PeerIdentity;
+use crate::settings::GigantoConfig;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
 use crate::AckTransmissionCount;
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
-const CONFIG_INGEST_SRV_ADDR: &str = "ingest_srv_addr";
 pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
 pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
-const CONFIG_RETENTION: &str = "retention";
-const CONFIG_MAX_OPEN_FILES: &str = "max_open_files";
-const CONFIG_MAX_MB_OF_LEVEL_BASE: &str = "max_mb_of_level_base";
-const CONFIG_ADDR_TO_PEERS: &str = "addr_to_peers";
-const CONFIG_PEER_LIST: &str = "peers";
 const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
 pub const TEMP_TOML_POST_FIX: &str = ".temp.toml";
 
@@ -52,46 +49,74 @@ struct Properties {
     stats: String,
 }
 
-#[derive(InputObject, SimpleObject, Debug)]
-#[graphql(input_name = "InputPeerList")]
-pub struct PeerList {
-    pub addr: String,
-    pub hostname: String,
+#[Object]
+impl GigantoConfig {
+    async fn ingest_srv_addr(&self) -> String {
+        self.ingest_srv_addr.to_string()
+    }
+
+    async fn publish_srv_addr(&self) -> String {
+        self.publish_srv_addr.to_string()
+    }
+
+    async fn graphql_srv_addr(&self) -> String {
+        self.graphql_srv_addr.to_string()
+    }
+
+    async fn retention(&self) -> String {
+        humantime::format_duration(self.retention).to_string()
+    }
+
+    async fn data_dir(&self) -> String {
+        self.data_dir.to_string_lossy().to_string()
+    }
+
+    async fn log_dir(&self) -> String {
+        self.log_dir.to_string_lossy().to_string()
+    }
+
+    async fn export_dir(&self) -> String {
+        self.export_dir.to_string_lossy().to_string()
+    }
+
+    async fn max_open_files(&self) -> i32 {
+        self.max_open_files
+    }
+
+    async fn max_mb_of_level_base(&self) -> StringNumber<u64> {
+        StringNumber(self.max_mb_of_level_base)
+    }
+
+    async fn num_of_thread(&self) -> i32 {
+        self.num_of_thread
+    }
+
+    async fn max_sub_compactions(&self) -> StringNumber<u32> {
+        StringNumber(self.max_sub_compactions)
+    }
+
+    async fn addr_to_peers(&self) -> Option<String> {
+        self.addr_to_peers.map(|addr| addr.to_string())
+    }
+
+    async fn peers(&self) -> Option<Vec<PeerIdentity>> {
+        self.peers.clone().map(|peers| peers.into_iter().collect())
+    }
+
+    async fn ack_transmission(&self) -> u16 {
+        self.ack_transmission
+    }
 }
 
-impl TomlPeers for PeerList {
-    fn get_hostname(&self) -> String {
+#[Object]
+impl PeerIdentity {
+    async fn addr(&self) -> String {
+        self.addr.to_string()
+    }
+
+    async fn hostname(&self) -> String {
         self.hostname.clone()
     }
-    fn get_addr(&self) -> String {
-        self.addr.clone()
-    }
-}
-
-#[derive(SimpleObject, Debug)]
-struct GigantoConfig {
-    ingest_srv_addr: String,
-    publish_srv_addr: String,
-    graphql_srv_addr: String,
-    retention: String,
-    max_open_files: i32,
-    max_mb_of_level_base: u64,
-    addr_to_peers: String,
-    peer_list: Vec<PeerList>,
-    ack_transmission_cnt: u16,
-}
-
-#[derive(InputObject)]
-struct UserConfig {
-    ingest_srv_addr: Option<String>,
-    publish_srv_addr: Option<String>,
-    graphql_srv_addr: Option<String>,
-    retention: Option<String>,
-    max_open_files: Option<i32>,
-    max_mb_of_level_base: Option<u64>,
-    addr_to_peers: Option<String>,
-    peer_list: Option<Vec<PeerList>>,
-    ack_transmission_cnt: Option<u16>,
 }
 
 #[derive(Default)]
@@ -138,55 +163,11 @@ impl GigantoStatusQuery {
     #[allow(clippy::unused_async)]
     async fn giganto_config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<GigantoConfig> {
         let cfg_path = ctx.data::<String>()?;
-        let doc = read_toml_file(cfg_path)?;
-        let ingest_srv_addr = parse_toml_element_to_string(CONFIG_INGEST_SRV_ADDR, &doc)?;
-        let publish_srv_addr = parse_toml_element_to_string(CONFIG_PUBLISH_SRV_ADDR, &doc)?;
-        let graphql_srv_addr = parse_toml_element_to_string(CONFIG_GRAPHQL_SRV_ADDR, &doc)?;
-        let retention = parse_toml_element_to_string(CONFIG_RETENTION, &doc)?;
-        let max_open_files = parse_toml_element_to_integer(CONFIG_MAX_OPEN_FILES, &doc)?;
-        let max_mb_of_level_base =
-            parse_toml_element_to_integer(CONFIG_MAX_MB_OF_LEVEL_BASE, &doc)?;
-        let ack_transmission_cnt = parse_toml_element_to_integer(CONFIG_ACK_TRANSMISSION, &doc)?;
-        let mut peer_list = Vec::new();
-        let addr_to_peers = if doc.get(CONFIG_ADDR_TO_PEERS).is_some() {
-            let peers_value = doc
-                .get(CONFIG_PEER_LIST)
-                .context("peers not found")?
-                .as_array()
-                .context("invalid peers format")?;
-            for peer in peers_value {
-                if let Some(peer_data) = peer.as_inline_table() {
-                    let (Some(addr_val), Some(hostname_val)) =
-                        (peer_data.get("addr"), peer_data.get("hostname"))
-                    else {
-                        return Err(anyhow!("Invalid `addr`, `hostname` Value format").into());
-                    };
-                    let (Some(addr), Some(hostname)) = (addr_val.as_str(), hostname_val.as_str())
-                    else {
-                        return Err(anyhow!("Invalid `addr`, `hostname` String format").into());
-                    };
-                    peer_list.push(PeerList {
-                        addr: addr.to_string(),
-                        hostname: hostname.to_string(),
-                    });
-                }
-            }
-            parse_toml_element_to_string(CONFIG_ADDR_TO_PEERS, &doc)?
-        } else {
-            String::new()
-        };
+        let toml = fs::read_to_string(cfg_path).context("toml not found")?;
 
-        Ok(GigantoConfig {
-            ingest_srv_addr,
-            publish_srv_addr,
-            graphql_srv_addr,
-            retention,
-            max_open_files,
-            max_mb_of_level_base,
-            addr_to_peers,
-            peer_list,
-            ack_transmission_cnt,
-        })
+        let config: GigantoConfig = toml::from_str(&toml)?;
+
+        Ok(config)
     }
 
     #[allow(clippy::unused_async)]
@@ -198,29 +179,22 @@ impl GigantoStatusQuery {
 #[Object]
 impl GigantoConfigMutation {
     #[allow(clippy::unused_async)]
-    async fn set_giganto_config<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        field: UserConfig,
-    ) -> Result<String> {
+    async fn set_giganto_config<'ctx>(&self, ctx: &Context<'ctx>, draft: String) -> Result<String> {
+        let config_draft: GigantoConfig = toml::from_str(&draft)?;
+
         let cfg_path = ctx.data::<String>()?;
+
+        let config_toml = fs::read_to_string(cfg_path).context("toml not found")?;
+        let config: GigantoConfig = toml::from_str(&config_toml)?;
+
+        if config == config_draft {
+            info!("No changes. config: {config:?}, draft: {config_draft:?}");
+            return Err("No changes".to_string().into());
+        }
+
         let new_path = copy_toml_file(cfg_path)?;
-        let mut doc = read_toml_file(&new_path)?;
-        insert_toml_element(CONFIG_INGEST_SRV_ADDR, &mut doc, field.ingest_srv_addr);
-        insert_toml_element(CONFIG_PUBLISH_SRV_ADDR, &mut doc, field.publish_srv_addr);
-        insert_toml_element(CONFIG_GRAPHQL_SRV_ADDR, &mut doc, field.graphql_srv_addr);
-        insert_toml_element(CONFIG_RETENTION, &mut doc, field.retention);
-        let convert_open_file = field.max_open_files.map(i64::from);
-        insert_toml_element(CONFIG_MAX_OPEN_FILES, &mut doc, convert_open_file);
-        let convert_level_base = field
-            .max_mb_of_level_base
-            .and_then(|x| i64::try_from(x).ok());
-        insert_toml_element(CONFIG_MAX_MB_OF_LEVEL_BASE, &mut doc, convert_level_base);
-        let convert_ack_trans_cnt = field.ack_transmission_cnt.map(i64::from);
-        insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
-        insert_toml_element(CONFIG_ADDR_TO_PEERS, &mut doc, field.addr_to_peers);
-        insert_toml_peers(&mut doc, field.peer_list)?;
-        write_toml_file(&doc, &new_path)?;
+
+        fs::write(new_path, draft)?;
 
         let reload_notify = ctx.data::<ReloadNotify>()?;
         let config_reload = reload_notify.0.clone();
@@ -230,6 +204,7 @@ impl GigantoConfigMutation {
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
             config_reload.notify_one();
         });
+        info!("Draft applied. config: {config:?}, draft: {config_draft:?}");
 
         Ok("Done".to_string())
     }
@@ -308,22 +283,6 @@ pub fn parse_toml_element_to_string(key: &str, doc: &DocumentMut) -> Result<Stri
     Ok(value.to_string())
 }
 
-fn parse_toml_element_to_integer<T>(key: &str, doc: &DocumentMut) -> Result<T>
-where
-    T: std::convert::TryFrom<i64>,
-{
-    let Some(item) = doc.get(key) else {
-        return Err(anyhow!("{} not found.", key).into());
-    };
-    let Some(value) = item.as_integer() else {
-        return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
-    };
-    let Ok(value) = T::try_from(value) else {
-        return Err(anyhow!("parse failed: {}'s value format is not available.", key).into());
-    };
-    Ok(value)
-}
-
 fn insert_toml_element<T>(key: &str, doc: &mut DocumentMut, input: Option<T>)
 where
     T: std::convert::Into<toml_edit::Value>,
@@ -374,5 +333,160 @@ mod tests {
         let res = schema.execute(query).await;
 
         assert_eq!(res.data.to_string(), "{ping: true}");
+    }
+
+    #[tokio::test]
+    async fn test_status() {
+        let schema = TestSchema::new();
+
+        let query = r#"
+        {
+            gigantoStatus {
+                name
+                cpuUsage
+                totalMemory
+                usedMemory
+                totalDiskSpace
+                usedDiskSpace
+            }
+        }
+        "#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_giganto_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let toml_content = test_toml_content();
+
+        std::fs::write(&config_path, toml_content).unwrap();
+
+        let schema =
+            TestSchema::new_with_config_file_path(config_path.to_string_lossy().to_string());
+
+        let query = r#"
+            {
+                gigantoConfig {
+                    ingestSrvAddr
+                    publishSrvAddr
+                    graphqlSrvAddr
+                    dataDir
+                    retention
+                    logDir
+                    exportDir
+                    ackTransmission
+                    maxOpenFiles
+                    maxMbOfLevelBase
+                    numOfThread
+                    maxSubCompactions
+                    addrToPeers
+                    peers {
+                        addr
+                        hostname
+                    }
+                }
+            }
+        "#;
+
+        let res = schema.execute(query).await;
+
+        let data = res.data.to_string();
+        assert_eq!(
+            data,
+            "{gigantoConfig: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}}".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_giganto_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let toml_content = test_toml_content();
+
+        std::fs::write(&config_path, &toml_content).unwrap();
+
+        let schema =
+            TestSchema::new_with_config_file_path(config_path.to_string_lossy().to_string());
+
+        // No changes
+        let query = format!(
+            r#"
+                mutation {{
+                    setGigantoConfig(draft: {toml_content:?})
+                }}
+                "#
+        );
+
+        let res = schema.execute(&query).await;
+
+        assert_eq!(
+            res.errors.first().unwrap().message,
+            "No changes".to_string()
+        );
+
+        // Change publish port
+        let new_draft = r#"
+            ingest_srv_addr = "0.0.0.0:38370"
+            publish_srv_addr = "0.0.0.0:38372"
+            graphql_srv_addr = "127.0.0.1:8442"
+            data_dir = "tests/data"
+            retention = "100d"
+            log_dir = "/data/logs/apps"
+            export_dir = "tests/export"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 8
+            max_sub_compactions = 2
+            addr_to_peers = "127.0.0.1:48383"
+            peers = [{ addr = "127.0.0.1:60192", hostname = "node2" }]
+            "#;
+
+        let query = format!(
+            r#"
+            mutation {{
+                setGigantoConfig(draft: {new_draft:?})
+            }}
+            "#
+        );
+
+        let res = schema.execute(&query).await;
+
+        assert_eq!(res.data.to_string(), "{setGigantoConfig: \"Done\"}");
+
+        // check config temp file changes
+        let config_temp_file =
+            std::fs::read_to_string(&config_path.with_extension("toml.temp.toml")).unwrap();
+
+        assert!(
+            config_temp_file.contains(r#"publish_srv_addr = "0.0.0.0:38372""#),
+            "Config update was not applied correctly: {}",
+            config_temp_file
+        );
+    }
+
+    fn test_toml_content() -> String {
+        r#"
+            ingest_srv_addr = "0.0.0.0:38370"
+            publish_srv_addr = "0.0.0.0:38371"
+            graphql_srv_addr = "127.0.0.1:8442"
+            data_dir = "tests/data"
+            retention = "100d"
+            log_dir = "/data/logs/apps"
+            export_dir = "tests/export"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 8
+            max_sub_compactions = 2
+            addr_to_peers = "127.0.0.1:48383"
+            peers = [{ addr = "127.0.0.1:60192", hostname = "node2" }]
+            "#
+        .to_string()
     }
 }

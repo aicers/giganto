@@ -18,6 +18,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
+use clap::Parser;
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rocksdb::DB;
@@ -39,22 +40,12 @@ use tracing_subscriber::{
 use crate::{
     graphql::{status::TEMP_TOML_POST_FIX, NodeName},
     server::{subject_from_cert, Certs, SERVER_REBOOT_DELAY},
+    settings::Args,
     storage::migrate_data_dir,
 };
 
 const ONE_DAY: u64 = 60 * 60 * 24;
 const WAIT_SHUTDOWN: u64 = 15;
-const USAGE: &str = "\
-USAGE:
-    giganto [CONFIG]
-
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-
-ARG:
-    <CONFIG>    A TOML config file
-";
 
 pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
 pub type IngestSources = Arc<RwLock<HashSet<String>>>;
@@ -65,53 +56,40 @@ pub type AckTransmissionCount = Arc<RwLock<u16>>;
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (mut settings, repair) = if let Some((config_filename, repair)) = parse() {
-        (Settings::from_file(&config_filename)?, repair)
+    let args = Args::parse();
+    let mut settings = if let Some(config_filename) = args.config {
+        Settings::from_file(&config_filename)?
     } else {
-        (Settings::new()?, false)
+        Settings::new()?
     };
 
     let cfg_path = settings.cfg_path.clone();
     let temp_path = format!("{cfg_path}{TEMP_TOML_POST_FIX}");
 
-    let cert_pem = fs::read(&settings.cert).with_context(|| {
-        format!(
-            "failed to read certificate file: {}",
-            settings.cert.display()
-        )
-    })?;
+    let cert_pem = fs::read(&args.cert)
+        .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
     let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
     assert!(!cert.is_empty());
-    let key_pem = fs::read(&settings.key).with_context(|| {
-        format!(
-            "failed to read private key file: {}",
-            settings.key.display()
-        )
-    })?;
+    let key_pem = fs::read(&args.key)
+        .with_context(|| format!("failed to read private key file: {}", args.key))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root_pem = fs::read(&settings.root).with_context(|| {
-        format!(
-            "failed to read root certificate file: {}",
-            settings.root.display()
-        )
-    })?;
-    let root_cert = to_root_cert(&root_pem)?;
+    let root_cert = to_root_cert(&args.ca_certs)?;
     let certs = Arc::new(Certs {
         certs: cert.clone(),
         key: key.clone_key(),
         root: root_cert.clone(),
     });
 
-    let _guard = init_tracing(&settings.log_dir)?;
+    let _guard = init_tracing(&settings.config.log_dir)?;
 
-    let db_path = settings.data_dir.join("db");
+    let db_path = settings.config.data_dir.join("db");
     let db_options = crate::storage::DbOptions::new(
-        settings.max_open_files,
-        settings.max_mb_of_level_base,
-        settings.num_of_thread,
-        settings.max_sub_compactions,
+        settings.config.max_open_files,
+        settings.config.max_mb_of_level_base,
+        settings.config.num_of_thread,
+        settings.config.max_sub_compactions,
     );
-    if repair {
+    if args.repair {
         let start = Instant::now();
         let (db_opts, _) = storage::rocksdb_options(&db_options);
         info!("repair db start.");
@@ -129,7 +107,7 @@ async fn main() -> Result<()> {
 
     let database = storage::Database::open(&db_path, &db_options)?;
 
-    if let Err(e) = migrate_data_dir(&settings.data_dir, &database) {
+    if let Err(e) = migrate_data_dir(&settings.config.data_dir, &database) {
         error!("migration failed: {e}");
         return Ok(());
     }
@@ -151,13 +129,13 @@ async fn main() -> Result<()> {
         let ingest_sources = new_ingest_sources(&database);
         let runtime_ingest_sources = new_runtime_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
-        let (peers, peer_idents) = new_peers_data(settings.peers.clone());
+        let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
         let notify_config_reload = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
         let notify_power_off = Arc::new(Notify::new());
         let mut notify_source_change = None;
-        let ack_transmission_cnt = new_ack_transmission_count(settings.ack_transmission);
+        let ack_transmission_cnt = new_ack_transmission_count(settings.config.ack_transmission);
 
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
@@ -166,7 +144,7 @@ async fn main() -> Result<()> {
             ingest_sources.clone(),
             peers.clone(),
             request_client_pool.clone(),
-            settings.export_dir.clone(),
+            settings.config.export_dir.clone(),
             notify_config_reload.clone(),
             notify_reboot.clone(),
             notify_power_off.clone(),
@@ -177,7 +155,7 @@ async fn main() -> Result<()> {
 
         task::spawn(web::serve(
             schema,
-            settings.graphql_srv_addr,
+            settings.config.graphql_srv_addr,
             cert_pem.clone(),
             key_pem.clone(),
             notify_shutdown.clone(),
@@ -195,7 +173,7 @@ async fn main() -> Result<()> {
                 .expect("Cannot create runtime for retain_periodically.")
                 .block_on(storage::retain_periodically(
                     time::Duration::from_secs(ONE_DAY),
-                    settings.retention,
+                    settings.config.retention,
                     db,
                     notify_shutdown_copy,
                     running_flag,
@@ -205,7 +183,7 @@ async fn main() -> Result<()> {
                 });
         });
 
-        if let Some(addr_to_peers) = settings.addr_to_peers {
+        if let Some(addr_to_peers) = settings.config.addr_to_peers {
             let peer_server = peer::Peer::new(addr_to_peers, &certs.clone())?;
             let notify_source = Arc::new(Notify::new());
             task::spawn(peer_server.run(
@@ -219,7 +197,7 @@ async fn main() -> Result<()> {
             notify_source_change = Some(notify_source);
         }
 
-        let publish_server = publish::Server::new(settings.publish_srv_addr, &certs.clone());
+        let publish_server = publish::Server::new(settings.config.publish_srv_addr, &certs.clone());
         task::spawn(publish_server.run(
             database.clone(),
             pcap_sources.clone(),
@@ -231,7 +209,7 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
         ));
 
-        let ingest_server = ingest::Server::new(settings.ingest_srv_addr, &certs.clone());
+        let ingest_server = ingest::Server::new(settings.config.ingest_srv_addr, &certs.clone());
         task::spawn(ingest_server.run(
             database.clone(),
             pcap_sources,
@@ -316,44 +294,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parses the command line arguments and returns the first argument.
-#[allow(unused_assignments)]
-fn parse() -> Option<(String, bool)> {
-    let mut args = env::args();
-    let mut repair = false;
-    args.next()?;
-    let arg = args.next()?;
-    let repair_opt = args.next();
-    if let Some(str) = repair_opt {
-        match str.as_str() {
-            "--repair" => repair = true,
-            _ => eprintln!("Error: too many arguments"),
-        }
-    }
-
-    if arg == "--help" || arg == "-h" {
-        println!("{}", version());
-        println!();
-        print!("{USAGE}");
-        exit(0);
-    }
-    if arg == "--version" || arg == "-V" {
-        println!("{}", version());
-        exit(0);
-    }
-    if arg.starts_with('-') {
-        eprintln!("Error: unknown option: {arg}");
-        eprintln!("\n{USAGE}");
-        exit(1);
-    }
-
-    Some((arg, repair))
-}
-
-fn version() -> String {
-    format!("giganto {}", env!("CARGO_PKG_VERSION"))
-}
-
 fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
     let certs = rustls_pemfile::certs(&mut &*pem)
         .collect::<Result<_, _>>()
@@ -372,16 +312,27 @@ fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
     }
 }
 
-fn to_root_cert(pem: &[u8]) -> Result<rustls::RootCertStore> {
-    let mut root_cert = rustls::RootCertStore::empty();
-    let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
-        .collect::<Result<_, _>>()
-        .context("invalid PEM-encoded certificate")?;
-    if let Some(cert) = root_certs.first() {
-        root_cert
-            .add(cert.to_owned())
-            .context("failed to add root cert")?;
+fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
+    let mut ca_certs_files = Vec::new();
+
+    for ca_cert in ca_certs_paths {
+        let file = fs::read(ca_cert)
+            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
+
+        ca_certs_files.push(file);
     }
+    let mut root_cert = rustls::RootCertStore::empty();
+    for file in ca_certs_files {
+        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+            .collect::<Result<_, _>>()
+            .context("invalid PEM-encoded certificate")?;
+        if let Some(cert) = root_certs.first() {
+            root_cert
+                .add(cert.to_owned())
+                .context("failed to add root cert")?;
+        }
+    }
+
     Ok(root_cert)
 }
 
