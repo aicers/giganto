@@ -360,6 +360,161 @@ where
     Ok((records, has_previous, has_next))
 }
 
+#[allow(clippy::too_many_lines)]
+fn get_connection_by_prefix_timestamp_key<T>(
+    store: &RawEventStore<'_, T>,
+    filter: &(impl RawEventFilter + KeyExtractorByEndKey),
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<ConnArgs<T>>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    let (records, has_previous, has_next) = if let Some(before) = before {
+        if after.is_some() {
+            return Err("cannot use both `after` and `before`".into());
+        }
+        if first.is_some() {
+            return Err("'before' and 'first' cannot be specified simultaneously".into());
+        }
+
+        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        let cursor = base64_engine.decode(before)?;
+
+        // generate storage search key
+        let key_builder = StorageKey::builder2();
+        let from_key = key_builder
+            .clone()
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
+            return Err("invalid cursor".into());
+        }
+        let mut iter = store
+            .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
+            .peekable();
+        if let Some(Ok((key, _))) = iter.peek() {
+            if key.as_ref() == cursor {
+                iter.next();
+            }
+        }
+        let (mut records, has_previous) = collect_records_with_timestamp_fn(
+            iter,
+            last,
+            filter,
+            Some(&get_timestamp_from_key_prefix),
+        );
+        records.reverse();
+        (records, has_previous, false)
+    } else if let Some(after) = after {
+        if before.is_some() {
+            return Err("cannot use both `after` and `before`".into());
+        }
+        if last.is_some() {
+            return Err("'after' and 'last' cannot be specified simultaneously".into());
+        }
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        let cursor = base64_engine.decode(after)?;
+
+        // generate storage search key
+        let key_builder = StorageKey::builder2();
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+
+        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
+            return Err("invalid cursor".into());
+        }
+        let mut iter = store
+            .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
+            .peekable();
+        if let Some(Ok((key, _))) = iter.peek() {
+            if key.as_ref() == cursor {
+                iter.next();
+            }
+        }
+        let (records, has_next) = collect_records_with_timestamp_fn(
+            iter,
+            first,
+            filter,
+            Some(&get_timestamp_from_key_prefix),
+        );
+        (records, false, has_next)
+    } else if let Some(last) = last {
+        if first.is_some() {
+            return Err("first and last cannot be used together".into());
+        }
+        let last = last.min(MAXIMUM_PAGE_SIZE);
+
+        // generate storage search key
+        let key_builder = StorageKey::builder2();
+        let from_key = key_builder
+            .clone()
+            .upper_closed_bound_end_key(filter.get_range_end_key().1)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+        let to_key = key_builder
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
+        let (mut records, has_previous) = collect_records_with_timestamp_fn(
+            iter,
+            last,
+            filter,
+            Some(&get_timestamp_from_key_prefix),
+        );
+        records.reverse();
+        (records, has_previous, false)
+    } else {
+        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
+        // generate storage search key
+        let key_builder = StorageKey::builder2();
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(filter.get_range_end_key().0)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(filter.get_range_end_key().1)
+            .mid_key(filter.get_mid_key())
+            .end_key(filter.get_end_key())
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        let (records, has_next) = collect_records_with_timestamp_fn(
+            iter,
+            first,
+            filter,
+            Some(&get_timestamp_from_key_prefix),
+        );
+        (records, false, has_next)
+    };
+    Ok((records, has_previous, has_next))
+}
+
 fn load_connection<N, T>(
     store: &RawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
@@ -375,6 +530,37 @@ where
     let (records, has_previous, has_next) =
         get_connection(store, filter, after, before, first, last)?;
 
+    create_connection(records, has_previous, has_next)
+}
+
+fn load_connection_by_prefix_timestamp_key<N, T>(
+    store: &RawEventStore<'_, T>,
+    filter: &(impl RawEventFilter + KeyExtractorByEndKey),
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned + EventFilter,
+{
+    let (records, has_previous, has_next) =
+        get_connection_by_prefix_timestamp_key(store, filter, after, before, first, last)?;
+
+    create_connection(records, has_previous, has_next)
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn create_connection<N, T>(
+    records: Vec<(Box<[u8]>, T)>,
+    has_previous: bool,
+    has_next: bool,
+) -> Result<Connection<String, N>>
+where
+    N: FromKeyValue<T> + OutputType,
+    T: DeserializeOwned,
+{
     let mut connection: Connection<String, N> = Connection::new(has_previous, has_next);
     connection.edges = records
         .into_iter()
@@ -388,10 +574,12 @@ where
     Ok(connection)
 }
 
-fn collect_records<I, T>(
+#[allow(clippy::type_complexity)]
+fn collect_records_internal<I, T>(
     mut iter: I,
     size: usize,
     filter: &impl RawEventFilter,
+    get_timestamp: Option<&dyn Fn(&[u8]) -> Result<DateTime<Utc>, anyhow::Error>>,
 ) -> (Vec<KeyValue<T>>, bool)
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>>,
@@ -407,6 +595,12 @@ where
         }
         let item = item.expect("not error value");
         let data_type = item.1.data_type();
+
+        if let Some(get_timestamp_fn) = get_timestamp {
+            if let Ok(datetime) = get_timestamp_fn(&item.0) {
+                println!("datetime : {}, item : {:?}", datetime, item.1.agent_id());
+            }
+        }
 
         match filter.check(
             item.1.orig_addr(),
@@ -435,10 +629,44 @@ where
     (records, has_more)
 }
 
+fn collect_records<I, T>(
+    iter: I,
+    size: usize,
+    filter: &impl RawEventFilter,
+) -> (Vec<KeyValue<T>>, bool)
+where
+    I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>>,
+    T: EventFilter,
+{
+    collect_records_internal(iter, size, filter, None)
+}
+
+#[allow(clippy::type_complexity)]
+fn collect_records_with_timestamp_fn<I, T>(
+    iter: I,
+    size: usize,
+    filter: &impl RawEventFilter,
+    timestamp_fn: Option<&dyn Fn(&[u8]) -> Result<DateTime<Utc>, anyhow::Error>>,
+) -> (Vec<KeyValue<T>>, bool)
+where
+    I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>>,
+    T: EventFilter,
+{
+    collect_records_internal(iter, size, filter, timestamp_fn)
+}
+
+pub fn get_timestamp_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+    if key.len() > TIMESTAMP_SIZE {
+        let timestamp = i64::from_be_bytes(key[0..8].try_into()?);
+        return Ok(Utc.timestamp_nanos(timestamp));
+    }
+    Err(anyhow!("invalid database key length"))
+}
+
 pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
-        let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        return Ok(Utc.timestamp_nanos(nanos));
+        let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        return Ok(Utc.timestamp_nanos(timestamp));
     }
     Err(anyhow!("invalid database key length"))
 }
@@ -1512,6 +1740,8 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
     };
 }
 pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
+
+use crate::storage::KeyExtractorByEndKey;
 
 #[cfg(test)]
 mod tests {
