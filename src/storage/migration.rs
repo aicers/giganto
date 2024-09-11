@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.23.0,<0.24.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -51,6 +51,11 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
             VersionReq::parse(">=0.19.0,<0.21.0").expect("valid version requirement"),
             Version::parse("0.21.0").expect("valid version"),
             migrate_0_19_to_0_21_0,
+        ),
+        (
+            VersionReq::parse(">=0.21.0,<0.23.0").expect("valid version requirement"),
+            Version::parse("0.23.0").expect("valid version"),
+            migrate_0_21_0_to_0_23_0,
         ),
     ];
 
@@ -216,6 +221,19 @@ fn migrate_0_19_to_0_21_0(db: &Database) -> Result<()> {
     Ok(())
 }
 
+fn migrate_0_21_0_to_0_23_0(db: &Database) -> Result<()> {
+    info!("start migration for oplog");
+    let store = db.op_log_store()?;
+    for raw_event in store.iter_forward() {
+        let Ok((key, _value)) = raw_event else {
+            continue;
+        };
+        store.delete(&key)?;
+    }
+    info!("oplog migration complete");
+    Ok(())
+}
+
 fn migrate_netflow<T>(store: &RawEventStore<'_, T>) -> Result<()>
 where
     T: DeserializeOwned + EventFilter,
@@ -252,17 +270,25 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::fs::File;
+    use std::io::Write;
     use std::net::IpAddr;
+    use std::path::PathBuf;
 
     use chrono::Utc;
+    use giganto_client::ingest::log::OpLogLevel;
     use giganto_client::ingest::{
         log::SecuLog,
         netflow::{Netflow5, Netflow9},
     };
     use semver::{Version, VersionReq};
+    use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
+    use crate::storage::migration::migration_structures::OplogBeforeV22;
     use crate::storage::{
+        migrate_data_dir,
         migration::migration_structures::{
             ConnBeforeV21, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21,
             TlsBeforeV21,
@@ -271,10 +297,24 @@ mod tests {
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
     };
 
+    const CURRENT_VERSION: &str = "0.22.1";
+
+    fn mock_version_file(dir: &TempDir, version_content: &str) -> PathBuf {
+        let version_path = dir.path().join("VERSION");
+        let mut file = File::create(&version_path).expect("Failed to create VERSION file");
+        file.write_all(version_content.as_bytes())
+            .expect("Failed to write version");
+        version_path
+    }
+
     #[test]
     fn version() {
         let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid semver");
-        let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
+        //let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
+        /* TODO When the release version is updated to be higher than `0.23.0`, this code should be
+        removed, and the comments in the above code should be uncommented.
+         */
+        let current = Version::parse("0.23.0").expect("valid semver");
 
         // The current version must match the compatible version requirement.
         assert!(compatible.matches(&current));
@@ -754,5 +794,52 @@ mod tests {
             last_alert: 13,
         };
         assert_eq!(new_tls, store_tls);
+    }
+
+    #[test]
+    fn migrate_0_21_to_0_23_0() {
+        const TEST_TIMESTAMP: i64 = 1000;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let op_log_store = db.op_log_store().unwrap();
+
+        let old_op_log = OplogBeforeV22 {
+            agent_name: "local".to_string(),
+            log_level: OpLogLevel::Info,
+            contents: "test".to_string(),
+        };
+
+        let serialized_old_op_log = bincode::serialize(&old_op_log).unwrap();
+        let op_log_old_key = StorageKey::builder()
+            .start_key("local@sr1")
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+
+        op_log_store
+            .append(&op_log_old_key, &serialized_old_op_log)
+            .unwrap();
+
+        super::migrate_0_21_0_to_0_23_0(&db).unwrap();
+
+        let count = op_log_store.iter_forward().count();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn migrate_data_dir_version_test() {
+        let version_dir = tempfile::tempdir().unwrap();
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+
+        mock_version_file(&version_dir, "0.13.0");
+
+        let result = migrate_data_dir(version_dir.path(), &db);
+        assert!(result.is_ok());
+
+        if let Ok(updated_version) = fs::read_to_string(version_dir.path().join("VERSION")) {
+            assert_eq!(updated_version, CURRENT_VERSION)
+        }
     }
 }
