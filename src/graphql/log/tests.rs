@@ -1,3 +1,4 @@
+use std::sync::{Arc, OnceLock};
 use std::{mem, net::IpAddr};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -7,6 +8,8 @@ use giganto_client::ingest::{
 };
 
 use super::{base64_engine, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
+use crate::graphql::load_connection;
+use crate::ingest::generation::SequenceGenerator;
 use crate::{
     graphql::{tests::TestSchema, TimeRange},
     storage::RawEventStore,
@@ -24,7 +27,7 @@ async fn load_time_range() {
     insert_log_raw_event(&store, "src1", 5, "kind1", b"log5");
 
     // backward traversal in `start..end`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -51,7 +54,7 @@ async fn load_time_range() {
     );
 
     // backward traversal in `start..`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -82,7 +85,7 @@ async fn load_time_range() {
     );
 
     // backward traversal in `..end`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -113,7 +116,7 @@ async fn load_time_range() {
     );
 
     // forward traversal in `start..end`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -140,7 +143,7 @@ async fn load_time_range() {
     );
 
     // forward traversal `start..`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -171,7 +174,7 @@ async fn load_time_range() {
     );
 
     // forward traversal `..end`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -198,7 +201,7 @@ async fn load_time_range() {
     );
 
     // backward traversal in `start..end` and `before cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -225,7 +228,7 @@ async fn load_time_range() {
     );
 
     // backward traversal in `start..` and `before cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -252,7 +255,7 @@ async fn load_time_range() {
     );
 
     // backward traversal in `..end` and `before cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -283,7 +286,7 @@ async fn load_time_range() {
     );
 
     // forward traversal in `start..end` and `after cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -310,7 +313,7 @@ async fn load_time_range() {
     );
 
     // forward traversal `start..` and `after cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -337,7 +340,7 @@ async fn load_time_range() {
     );
 
     // forward traversal `..end` and `after cursor`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -364,7 +367,7 @@ async fn load_time_range() {
     );
 
     // forward traversal `..`
-    let connection = super::load_connection::<LogRawEvent, _>(
+    let connection = load_connection::<LogRawEvent, _>(
         &store,
         &LogFilter {
             time: Some(TimeRange {
@@ -458,8 +461,8 @@ async fn oplog_empty() {
 async fn oplog_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.op_log_store().unwrap();
-
-    insert_oplog_raw_event(&store, "giganto", 1);
+    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
+    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator).await;
 
     let query = r#"
         {
@@ -483,33 +486,150 @@ async fn oplog_with_data() {
 async fn load_oplog() {
     let schema = TestSchema::new();
     let store = schema.db.op_log_store().unwrap();
+    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_oplog_raw_event(&store, "giganto", 1);
-    insert_oplog_raw_event(&store, "giganto", 2);
-    insert_oplog_raw_event(&store, "giganto", 3);
-    insert_oplog_raw_event(&store, "giganto", 4);
-    insert_oplog_raw_event(&store, "giganto", 5);
+    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 2, &generator).await;
+    insert_oplog_raw_event(&store, "review", "src1", 2, &generator).await;
+    insert_oplog_raw_event(&store, "review", "src1", 3, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 3, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 4, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 5, &generator).await;
+    insert_oplog_raw_event(&store, "review", "src1", 5, &generator).await;
+    insert_oplog_raw_event(&store, "aice", "src1", 5, &generator).await;
 
-    let connection = super::load_connection::<OpLogRawEvent, _>(
+    let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
+        &store,
+        &OpLogFilter {
+            time: Some(TimeRange {
+                start: Some(DateTime::from_timestamp_nanos(5)),
+                end: Some(DateTime::from_timestamp_nanos(7)),
+            }),
+            agent_id: None,
+            log_level: Some("Info".to_string()),
+            contents: Some("oplog".to_string()),
+            sensor: None,
+        },
+        None,
+        None,
+        Some(5),
+        None,
+    )
+    .unwrap();
+    assert_eq!(connection.edges.len(), 3);
+    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
+    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+}
+
+#[tokio::test]
+async fn load_connection_by_prefix_timestamp_key() {
+    let schema = TestSchema::new();
+    let store = schema.db.op_log_store().unwrap();
+    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
+    let mut key_list: Vec<Vec<u8>> = Vec::new();
+
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 1, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 2, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 2, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 3, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 3, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 4, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src2", 5, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "piglet", "src2", 6, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 4, &generator).await);
+    key_list.push(insert_oplog_raw_event(&store, "review", "src2", 5, &generator).await);
+
+    let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
+                end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: "giganto@src 1".to_string(),
+            agent_id: Some("review".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
+            sensor: Some("src1".to_string()),
         },
         None,
         None,
-        Some(3),
+        Some(10),
         None,
+    )
+    .unwrap();
+    assert_eq!(connection.edges.len(), 3);
+    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
+    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+
+    let after = key_list.get(3).unwrap();
+    let after = base64_engine.encode(after);
+    let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
+        &store,
+        &OpLogFilter {
+            time: Some(TimeRange {
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(10)),
+            }),
+            agent_id: Some("review".to_string()),
+            log_level: Some("Info".to_string()),
+            contents: Some("oplog".to_string()),
+            sensor: Some("src1".to_string()),
+        },
+        Some(after),
+        None,
+        Some(10),
+        None,
+    )
+    .unwrap();
+    assert_eq!(connection.edges.len(), 1);
+    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
+    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+
+    let before = key_list.get(8).unwrap();
+    let before = base64_engine.encode(before);
+    let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
+        &store,
+        &OpLogFilter {
+            time: Some(TimeRange {
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(10)),
+            }),
+            agent_id: Some("review".to_string()),
+            log_level: Some("Info".to_string()),
+            contents: Some("oplog".to_string()),
+            sensor: Some("src1".to_string()),
+        },
+        None,
+        Some(before),
+        None,
+        Some(10),
     )
     .unwrap();
     assert_eq!(connection.edges.len(), 2);
     assert_eq!(connection.edges[0].node.level.as_str(), "Info");
     assert_eq!(connection.edges[1].node.contents.as_str(), "oplog");
+
+    let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
+        &store,
+        &OpLogFilter {
+            time: Some(TimeRange {
+                start: Some(DateTime::from_timestamp_nanos(1)),
+                end: Some(DateTime::from_timestamp_nanos(10)),
+            }),
+            agent_id: Some("piglet".to_string()),
+            log_level: Some("Info".to_string()),
+            contents: Some("oplog".to_string()),
+            sensor: Some("src2".to_string()),
+        },
+        None,
+        None,
+        None,
+        Some(10),
+    )
+    .unwrap();
+    assert_eq!(connection.edges.len(), 2);
+    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
+    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
 }
 
 fn insert_log_raw_event(
@@ -533,23 +653,31 @@ fn insert_log_raw_event(
     store.append(&key, &value).unwrap();
 }
 
-fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
+async fn insert_oplog_raw_event(
+    store: &RawEventStore<'_, OpLog>,
+    agent_name: &str,
+    sensor: &str,
+    timestamp: i64,
+    generator: &OnceLock<Arc<SequenceGenerator>>,
+) -> Vec<u8> {
+    let generator = generator.get_or_init(SequenceGenerator::init_generator);
+    let sequence_number = generator.generate_sequence_number();
+
     let mut key: Vec<u8> = Vec::new();
     let agent_id = format!("{agent_name}@src 1");
-    key.extend_from_slice(agent_id.as_bytes());
-    key.push(0);
     key.extend_from_slice(&timestamp.to_be_bytes());
+    key.extend_from_slice(&sequence_number.to_be_bytes());
 
     let oplog_body = OpLog {
-        sensor: "sensor".to_string(),
+        sensor: sensor.to_string(),
         agent_name: agent_id.to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };
 
     let value = bincode::serialize(&oplog_body).unwrap();
-
     store.append(&key, &value).unwrap();
+    key
 }
 
 #[tokio::test]

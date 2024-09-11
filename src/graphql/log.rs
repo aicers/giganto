@@ -33,13 +33,13 @@ use super::{
     client::derives::{
         log_raw_events, tsv_formatted_raw_events, LogRawEvents, TsvFormattedRawEvents,
     },
-    events_vec_in_cluster, get_timestamp_from_key, handle_paged_events,
-    impl_from_giganto_time_range_struct_for_graphql_client, load_connection,
-    paged_events_in_cluster, Engine, FromKeyValue,
+    events_vec_in_cluster, get_timestamp_from_key, get_timestamp_from_key_prefix,
+    handle_paged_events, impl_from_giganto_time_range_struct_for_graphql_client,
+    load_connection_by_prefix_timestamp_key, paged_events_in_cluster, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::{Database, KeyExtractor, RawEventStore},
+    storage::{Database, KeyExtractor, RawEventStore, TimestampKeyExtractor},
 };
 
 #[derive(Default)]
@@ -99,22 +99,14 @@ impl RawEventFilter for LogFilter {
 #[derive(InputObject)]
 pub struct OpLogFilter {
     time: Option<TimeRange>,
-    agent_id: String,
+    sensor: Option<String>,
+    agent_id: Option<String>,
     log_level: Option<String>,
     contents: Option<String>,
 }
 
-impl KeyExtractor for OpLogFilter {
-    fn get_start_key(&self) -> &str {
-        &self.agent_id
-    }
-
-    // oplog event don't use mid key
-    fn get_mid_key(&self) -> Option<Vec<u8>> {
-        None
-    }
-
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+impl TimestampKeyExtractor for OpLogFilter {
+    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -133,8 +125,8 @@ impl RawEventFilter for OpLogFilter {
         log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
-        _sensor: Option<String>,
-        _agent_id: Option<String>,
+        sensor: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<bool> {
         if let Some(filter_level) = &self.log_level {
             let log_level = if let Some(log_level) = log_level {
@@ -153,6 +145,26 @@ impl RawEventFilter for OpLogFilter {
                 false
             };
             if contents {
+                return Ok(false);
+            }
+        }
+        if let Some(filter_agent_id) = &self.agent_id {
+            let is_agent_id_mismatch = if let Some(agent_id) = agent_id {
+                !agent_id.contains(filter_agent_id)
+            } else {
+                false
+            };
+            if is_agent_id_mismatch {
+                return Ok(false);
+            }
+        }
+        if let Some(filter_sensor) = &self.sensor {
+            let is_sensor_mismatch = if let Some(sensor) = sensor {
+                !sensor.contains(filter_sensor)
+            } else {
+                false
+            };
+            if is_sensor_mismatch {
                 return Ok(false);
             }
         }
@@ -181,14 +193,18 @@ struct OpLogRawEvent {
     timestamp: DateTime<Utc>,
     level: String,
     contents: String,
+    agent_name: String,
+    sensor: String,
 }
 
 impl FromKeyValue<OpLog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            timestamp: get_timestamp_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
+            agent_name: l.agent_name,
+            sensor: l.sensor,
         })
     }
 }
@@ -251,14 +267,13 @@ impl LogQuery {
     ) -> Result<Connection<String, OpLogRawEvent>> {
         let db = ctx.data::<Database>()?;
         let store = db.op_log_store()?;
-
         query(
             after,
             before,
             first,
             last,
             |after, before, first, last| async move {
-                load_connection(&store, &filter, after, before, first, last)
+                load_connection_by_prefix_timestamp_key(&store, &filter, after, before, first, last)
             },
         )
         .await

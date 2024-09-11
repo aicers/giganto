@@ -1,13 +1,14 @@
 use std::net::IpAddr;
 
+use giganto_client::ingest::log::OpLogLevel;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     ingest::implement::EventFilter,
     storage::{
         Conn as ConnFromV21, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, SecuLog as SecuLogFromV23,
-        Smtp as SmtpFromV21, Ssh as SshFromV21, Tls as TlsFromV21,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
+        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, Tls as TlsFromV21,
     },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -483,6 +484,24 @@ impl From<SecuLogBeforeV23> for SecuLogFromV23 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
+            contents: input.contents,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct OpLogBeforeV24 {
+    pub agent_name: String,
+    pub log_level: OpLogLevel,
+    pub contents: String,
+}
+
+impl From<OpLogBeforeV24> for OpLogFromV24 {
+    fn from(input: OpLogBeforeV24) -> Self {
+        Self {
+            sensor: String::new(),
+            agent_name: input.agent_name,
+            log_level: input.log_level,
             contents: input.contents,
         }
     }

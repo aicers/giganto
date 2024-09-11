@@ -12,6 +12,8 @@ query OpLogRawEvents($filter: OpLogFilter!, $after: String, $before: String, $fi
                 timestamp
                 level
                 contents
+                agentName
+                sensor
             }
         }
     }
