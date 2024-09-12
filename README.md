@@ -6,7 +6,7 @@ and provides a flexible GraphQL API for querying the stored events. Giganto
 empowers AICE with the ability to efficiently handle large-scale data
 processing and real-time analytics.
 
-[![Coverage Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg?token=AUUUIKX8O1)](https://codecov.io/gh/aicers/giganto)
+[![Coverage Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/giganto)
 
 ## Features
 
