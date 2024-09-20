@@ -9,63 +9,24 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Update giganto-client to version `0.17.0`. Updating to this version results
-  in the following changes.
-  - Bump dependencies.
-    - Update quinn to version `0.11`.
-    - Update rustls to version `0.23`.
-  - Fixed code and structures based on changes to the conn, http, smtp, ntlm,
+- Updated the version of giganto-client from 0.15.2 to version 0.19.0.
+  Updating to this version results in the following changes.
+  - Updated the version of quinn, rustls from 0.10, 0.21 to 0.11, 0.23. With the
+    update to this version, the usage of the quinn and rustls crates has
+    changed, so code affected by the update has also been modified.
+  - Modified code and structures based on changes to the conn, http, smtp, ntlm,
     ssh, tls protocols field.
-  - Update the compatibility version of the quic communication modules.
-    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
-    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
-    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
-  - Fixed code related to migration.
-    - Changed `COMPATIBLE_VERSION_REQ` to ">=0.21.0-alpha.1,<0.22.0".
-    - Added migration function in `migrate_0_19_to_0_21_0_alpha_1`. This feature
-      change values for conn, http, smtp, ntlm, ssh, tls protocol's fields in
-      versions `0.19.0` and later, and in versions prior to `0.21.0-alpha.1`.
-- Change to receive events in a unit of 100.
-- Fixed to append the kind value to the filename when extracting a file for a
+  - Support bootp, dhcp protocol events.
+- Changed to receive events in a unit of 100.
+- Modified to append the kind value to the filename when extracting a file for a
   protocol for which a kind value exists.
-- Apply rustfmt's option `group_imports=StdExternalCrate`.
-  - Modify the code with the command `cargo fmt -- --config group_imports=StdExternalCrate`.
-    This command must be applied automatically or manually before all future pull
-    requests are submitted.
-  - Add `--config group_imports=StdExternalCrate` to the CI process like:
-    - `cargo fmt -- --check --config group_imports=StdExternalCrate`.
-- Update giganto-client to version `0.19.0`. Updating to this version results
-  in the following changes.
-  - Support bootp and dhcp events.
-  - Fixed code and structures based on changes to the conn protocols field.
-  - Update the compatibility version of the quic communication modules.
-    - Changed `PEER_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
-    - Changed `INGEST_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
-    - Changed `PUBLISH_VERSION_REQ` to ">=0.21.0-alpha.2,<0.22.0".
-  - Fixed code related to migration.
-    - Changed `COMPATIBLE_VERSION_REQ` to “>=0.21.0-alpha.2,<0.22.0”
-    - Added migration function in `migrate_0_21_0_alpha_1_to_0_21_0_alpha_2`.
-      This feature performs migration for changes to the conn protocol field
-      in version `0.21.0-alpha.2`.
-- Rename `chwaddr` to `chaddr` because the field names within the `Bootp` structure
-  of the giganto-client have changed.
+- Applied code import ordering by `StdExternalCrate`. From now on, all code is
+  expected to be formatted using `cargo fmt -- --config group_imports=StdExternalCrate`.
 - Changed cluster related configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
-- In `BootpRawEvent`, `ConnRawEvent`, `DceRpcRawEvent`, `DhcpRawEvent`,
-  `DnsEventEvent`, `DnsRawEvent`, `FileCreateEvent`,
-  `FileCreateStreamHashEvent`, `FileCreationTimeChangedEvent`,
-  `FileDeleteDetectedEvent`, `FileDeleteEvent`, `FtpRawEvent`,
-  `HttpRawEvent`, `ImageLoadedEvent`, `KerberosRawEvent`, `LdapRawEvent`,
-  `MqttRawEvent`, `Netflow5RawEvent`, `Netflow9RawEvent`,
-  `NetworkConnectionEvent`, `NfsRawEvent`, `NtlmRawEvent`, `PipeEventEvent`,
-  `ProcessCreateEvent`, `ProcessTamperingEvent`, `ProcessTerminatedEvent`,
-  `RdpRawEvent`, `RegistryKeyValueRenameEvent`, `RegistryValueSetEvent`,
-  `SmbRawEvent`, `SmtpRawEvent`, `SshRawEvent`, `StatisticsInfo`, and
-  `TlsRawEvent` changed GraphQL APIs to return `StringNumber` instead of
-  integers beyond `i32`.
-- Changed the `from_key_value` macro to additionally receive `str_num_field`
-  for `StringNumber` conversion.
+- Changed GraphQL APIs to return `StringNumber` instead of integers
+  beyond `i32` in all applicable APIs.
 - Changed command line interface.
   - Removed `cert`, `key`, `root` fields from config file.
   - Added cli options `-c`, `--cert`, `--key` and `--ca-certs`.
@@ -78,7 +39,13 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Removed
 
 - Removed `unsafe` block in `write_run_tcpdump` while creating a temporary file.
-- Remove migration code less than `0.15.3`
+- Removed migration code less than 0.15.3.
+
+### Security
+
+- Updated dependency for security vulnerabilities.
+  - Updated quinn-proto to version 0.11.8.
+  - Updated openssl to version 0.10.66.
 
 ## [0.20.0] - 2024-05-17
 
