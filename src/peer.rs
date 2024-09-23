@@ -39,7 +39,7 @@ use crate::{
     IngestSources,
 };
 
-const PEER_VERSION_REQ: &str = ">=0.21.0-alpha.2,<0.22.0";
+const PEER_VERSION_REQ: &str = ">=0.21.0,<0.22.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
@@ -759,7 +759,7 @@ pub mod tests {
     const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.21.0-alpha.2";
+    const PROTOCOL_VERSION: &str = "0.21.0";
 
     pub struct TestClient {
         send: SendStream,

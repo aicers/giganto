@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0] - 2024-09-23
 
 ### Changed
 
@@ -35,6 +35,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Renamed GraphQL API `setGigantoConfig` to `setConfig`. The endpoint now
   accepts a full configuration as a TOML string and returns `Result<bool>`,
   instead of `Result<String>`.
+- Update the compatibility version of the quic communication modules.
+  - `PEER_VERSION_REQ` to ">=0.21.0,<0.22.0".
+  - `INGEST_VERSION_REQ` to ">=0.21.0,<0.22.0".
+  - `PUBLISH_VERSION_REQ` to ">=0.21.0,<0.22.0".
 
 ### Removed
 
@@ -540,7 +544,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.20.0...main
+[0.21.0]: https://github.com/aicers/giganto/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/giganto/compare/0.17.0...0.18.0

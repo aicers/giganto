@@ -37,28 +37,12 @@ pub struct HttpFromV12BeforeV21 {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct ConnBeforeV21A1 {
+pub struct ConnBeforeV21 {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
     pub resp_addr: IpAddr,
     pub resp_port: u16,
     pub proto: u8,
-    pub duration: i64,
-    pub service: String,
-    pub orig_bytes: u64,
-    pub resp_bytes: u64,
-    pub orig_pkts: u64,
-    pub resp_pkts: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub struct ConnFromV21A1BeforeV21A2 {
-    pub orig_addr: IpAddr,
-    pub orig_port: u16,
-    pub resp_addr: IpAddr,
-    pub resp_port: u16,
-    pub proto: u8,
-    pub conn_state: String,
     pub duration: i64,
     pub service: String,
     pub orig_bytes: u64,
@@ -150,27 +134,8 @@ pub struct TlsBeforeV21 {
     pub last_alert: u8,
 }
 
-impl From<ConnBeforeV21A1> for ConnFromV21A1BeforeV21A2 {
-    fn from(input: ConnBeforeV21A1) -> Self {
-        Self {
-            orig_addr: input.orig_addr,
-            orig_port: input.orig_port,
-            resp_addr: input.resp_addr,
-            resp_port: input.resp_port,
-            proto: input.proto,
-            conn_state: String::new(),
-            duration: input.duration,
-            service: input.service,
-            orig_bytes: input.orig_bytes,
-            resp_bytes: input.resp_bytes,
-            orig_pkts: input.orig_pkts,
-            resp_pkts: input.resp_pkts,
-        }
-    }
-}
-
-impl From<ConnFromV21A1BeforeV21A2> for ConnFromV21 {
-    fn from(input: ConnFromV21A1BeforeV21A2) -> Self {
+impl From<ConnBeforeV21> for ConnFromV21 {
+    fn from(input: ConnBeforeV21) -> Self {
         Self {
             orig_addr: input.orig_addr,
             orig_port: input.orig_port,
