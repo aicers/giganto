@@ -34,7 +34,7 @@ pub struct Args {
     pub key: String,
 
     /// Paths to the CA certificate files.
-    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append)]
+    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append, required = true)]
     pub ca_certs: Vec<String>,
 
     /// Enable the repair mode.
@@ -144,9 +144,9 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("data dir")
         .set_default("retention", DEFAULT_RETENTION)
         .expect("retention")
-        .set_default("log_path", log_path)
+        .set_default("log_dir", log_path)
         .expect("log dir")
-        .set_default("export_path", export_path)
+        .set_default("export_dir", export_path)
         .expect("export_dir")
         .set_default("max_open_files", DEFAULT_MAX_OPEN_FILES)
         .expect("default max open files")
