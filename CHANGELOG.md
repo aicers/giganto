@@ -12,6 +12,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `required` option to `ca_certs` to provide an error message when there
   is no `--ca-certs` execution option.
 
+### Fixed
+
+- Fixed to create `Config` variable normally when running without config file.
+
 ## [0.21.0] - 2024-09-23
 
 ### Changed
