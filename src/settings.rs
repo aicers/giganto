@@ -34,7 +34,7 @@ pub struct Args {
     pub key: String,
 
     /// Paths to the CA certificate files.
-    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append)]
+    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append, required = true)]
     pub ca_certs: Vec<String>,
 
     /// Enable the repair mode.
