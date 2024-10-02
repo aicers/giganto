@@ -12,6 +12,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `required` option to `ca_certs` to provide an error message when there
   is no `--ca-certs` execution option.
 
+### Changed
+
+- Changed `config` GraphQL API to include a field indicating whether the configuration
+  is local or remote.
+
 ### Fixed
 
 - Fixed to create `Config` variable normally when running without config file.

@@ -42,6 +42,12 @@ pub struct Args {
     pub repair: bool,
 }
 
+impl Args {
+    pub fn is_local(&self) -> bool {
+        self.config.is_some()
+    }
+}
+
 /// The application settings.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Config {
