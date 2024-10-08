@@ -188,7 +188,7 @@ impl ConfigMutation {
         let config: Config = toml::from_str(&config_toml)?;
 
         if config == config_draft {
-            info!("No changes. config: {config:?}, draft: {config_draft:?}");
+            info!("No changes.");
             return Err("No changes".to_string().into());
         }
 
@@ -204,7 +204,7 @@ impl ConfigMutation {
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
             config_reload.notify_one();
         });
-        info!("Draft applied. config: {config:?}, draft: {config_draft:?}");
+        info!("Draft applied.");
 
         Ok(true)
     }
