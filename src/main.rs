@@ -57,6 +57,7 @@ pub type AckTransmissionCount = Arc<RwLock<u16>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let is_local_config = args.is_local();
     let mut settings = if let Some(config_filename) = args.config {
         Settings::from_file(&config_filename)?
     } else {
@@ -151,6 +152,7 @@ async fn main() -> Result<()> {
             notify_terminate.clone(),
             settings.cfg_path.clone(),
             ack_transmission_cnt.clone(),
+            is_local_config,
         );
 
         task::spawn(web::serve(

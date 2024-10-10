@@ -164,6 +164,7 @@ pub fn schema(
     notify_terminate: Arc<Notify>,
     config_file_path: String,
     ack_transmission_cnt: AckTransmissionCount,
+    is_local_config: bool,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -179,6 +180,7 @@ pub fn schema(
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
+        .data(is_local_config)
         .finish()
 }
 
@@ -1571,6 +1573,7 @@ mod tests {
                 notify_terminate,
                 config_file_path.unwrap_or("file_path".to_string()),
                 Arc::new(RwLock::new(1024)),
+                true,
             );
 
             Self {
