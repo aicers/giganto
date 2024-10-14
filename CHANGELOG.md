@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.22.0] - 2024-10-04
 
 ### Added
 
@@ -16,10 +16,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Changed `config` GraphQL API to include a field indicating whether the configuration
   is local or remote.
+- Update the compatibility version of the quic communication modules.
+  - `PEER_VERSION_REQ` to ">=0.21.0,<0.23.0".
+  - `INGEST_VERSION_REQ` to ">=0.21.0,<0.23.0".
+  - `PUBLISH_VERSION_REQ` to ">=0.21.0,<0.23.0".
 
 ### Fixed
 
 - Fixed to create `Config` variable normally when running without config file.
+
+### Security
+
+- Updated dependency for security vulnerabilities.
+  - Updated async-graphql to version 7.0.11.
 
 ## [0.21.0] - 2024-09-23
 
@@ -560,7 +569,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.21.0...main
+[0.22.0]: https://github.com/aicers/giganto/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/aicers/giganto/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/giganto/compare/0.18.0...0.19.0
