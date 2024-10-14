@@ -49,6 +49,12 @@ struct Properties {
     stats: String,
 }
 
+#[derive(SimpleObject, Debug)]
+struct ConfigInfo {
+    config: Config,
+    local: bool,
+}
+
 #[Object]
 impl Config {
     async fn ingest_srv_addr(&self) -> String {
@@ -161,13 +167,18 @@ impl StatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Config> {
+    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<ConfigInfo> {
         let cfg_path = ctx.data::<String>()?;
+        let is_local = ctx.data::<bool>()?;
         let toml = fs::read_to_string(cfg_path).context("toml not found")?;
 
         let config: Config = toml::from_str(&toml)?;
+        let config_info = ConfigInfo {
+            config,
+            local: *is_local,
+        };
 
-        Ok(config)
+        Ok(config_info)
     }
 
     #[allow(clippy::unused_async)]
@@ -371,23 +382,26 @@ mod tests {
         let query = r#"
             {
                 config {
-                    ingestSrvAddr
-                    publishSrvAddr
-                    graphqlSrvAddr
-                    dataDir
-                    retention
-                    logDir
-                    exportDir
-                    ackTransmission
-                    maxOpenFiles
-                    maxMbOfLevelBase
-                    numOfThread
-                    maxSubCompactions
-                    addrToPeers
-                    peers {
-                        addr
-                        hostname
+                    config {
+                        ingestSrvAddr
+                        publishSrvAddr
+                        graphqlSrvAddr
+                        dataDir
+                        retention
+                        logDir
+                        exportDir
+                        ackTransmission
+                        maxOpenFiles
+                        maxMbOfLevelBase
+                        numOfThread
+                        maxSubCompactions
+                        addrToPeers
+                        peers {
+                            addr
+                            hostname
+                        }
                     }
+                    local
                 }
             }
         "#;
@@ -397,8 +411,7 @@ mod tests {
         let data = res.data.to_string();
         assert_eq!(
             data,
-            "{config: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", \
-            graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}}".to_string()
+            "{config: {config: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}, local: true}}".to_string()
         );
     }
 
