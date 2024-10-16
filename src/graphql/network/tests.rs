@@ -280,7 +280,7 @@ async fn dns_empty() {
         dnsRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                source: "einsis"
+                source: "cluml"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
                 origPort: { start: 46377, end: 46380 }
@@ -549,7 +549,7 @@ async fn http_empty() {
         httpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2024-09-22T00:00:00Z" }
-                source: "einsis"
+                source: "cluml"
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
                 respPort: { start: 0, end: 200 }
@@ -684,9 +684,9 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i
         proto: 17,
         last_time: 1,
         method: "POST".to_string(),
-        host: "einsis".to_string(),
-        uri: "/einsis.gif".to_string(),
-        referrer: "einsis.com".to_string(),
+        host: "cluml".to_string(),
+        uri: "/cluml.gif".to_string(),
+        referrer: "cluml.com".to_string(),
         version: String::new(),
         user_agent: "giganto".to_string(),
         request_len: 0,
@@ -838,7 +838,7 @@ async fn rdp_empty() {
         rdpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "einsis"
+                source: "cluml"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respPort: { start: 0, end: 200 }
@@ -1788,7 +1788,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64
         resp_port: 80,
         proto: 17,
         last_time: 1,
-        user: "einsis".to_string(),
+        user: "cluml".to_string(),
         password: "aice".to_string(),
         command: "command".to_string(),
         reply_code: "500".to_string(),

@@ -864,7 +864,7 @@ pub mod tests {
 
         // peer server's peer list
         let peer_addr = SocketAddr::new("123.123.123.123".parse::<IpAddr>().unwrap(), TEST_PORT);
-        let peer_name = String::from("einsis_peer");
+        let peer_name = String::from("cluml_peer");
         let mut peer_identities = HashSet::new();
         peer_identities.insert(PeerIdentity {
             addr: peer_addr,
@@ -873,7 +873,7 @@ pub mod tests {
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         // peer server's source list
-        let source_name = String::from("einsis_source");
+        let source_name = String::from("cluml_source");
         let mut source_info = HashSet::new();
         source_info.insert(source_name.clone());
 
@@ -916,7 +916,7 @@ pub mod tests {
         assert!(recv_source_list.ingest_sources.contains(&source_name));
 
         // insert peer server's source value & notify to server
-        let source_name2 = String::from("einsis_source2");
+        let source_name2 = String::from("cluml_source2");
         ingest_sources.write().await.insert(source_name2.clone());
         notify_source.notify_one();
 

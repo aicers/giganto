@@ -57,7 +57,7 @@ peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]     # list of peer in
 By default, giganto reads the config file from the following directories:
 
 * Linux: `$HOME/.config/giganto/config.toml`
-* macOS: `$HOME/Library/Application Support/com.einsis.giganto/config.toml`
+* macOS: `$HOME/Library/Application Support/com.cluml.giganto/config.toml`
 
 For the `max_mb_of_level_base`, the last level has 100,000 times capacity,
 and it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
