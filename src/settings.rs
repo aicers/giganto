@@ -90,7 +90,7 @@ impl Settings {
     /// Creates a new `Settings` instance, populated from the default
     /// configuration file if it exists.
     pub fn new() -> Result<Self, ConfigError> {
-        let dirs = directories::ProjectDirs::from("com", "einsis", "giganto").expect("unreachable");
+        let dirs = directories::ProjectDirs::from("com", "cluml", "giganto").expect("unreachable");
         let config_path = dirs.config_dir().join("config.toml");
         if config_path.exists() {
             // `config::File` requires a `&str` path, so we can't use `config_path` directly.

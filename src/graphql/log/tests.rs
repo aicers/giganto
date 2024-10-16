@@ -391,7 +391,7 @@ async fn log_empty() {
     let schema = TestSchema::new();
     let query = r#"
         {
-            logRawEvents (filter: {source: "einsis", kind: "Hello"}, first: 1) {
+            logRawEvents (filter: {source: "cluml", kind: "Hello"}, first: 1) {
                 edges {
                     node {
                         log
