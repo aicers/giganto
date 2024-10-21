@@ -389,7 +389,11 @@ async fn get_pcap_conn_if_current_giganto_in_charge(
     pcap_sources: PcapSources,
     source: &String,
 ) -> Option<Connection> {
-    pcap_sources.read().await.get(source).cloned()
+    pcap_sources
+        .read()
+        .await
+        .get(source)
+        .and_then(|connections| connections.last().cloned())
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

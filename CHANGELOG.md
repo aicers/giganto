@@ -5,6 +5,14 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed `Connection` of type `PcapSources` to `Vec<Connection>`. This change
+  will allow giganto to find the latest `Connection` and extract pcap even if it
+  detects a late disconnect from ingest.
+
 ## [0.22.0] - 2024-10-04
 
 ### Added
@@ -569,6 +577,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.22.0...main
 [0.22.0]: https://github.com/aicers/giganto/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/aicers/giganto/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/aicers/giganto/compare/0.19.0...0.20.0
