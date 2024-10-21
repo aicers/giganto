@@ -3,7 +3,8 @@ use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
 
 use clap::{ArgAction, Parser};
 use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigError, File};
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{de::Error, Deserialize, Deserializer, Serialize};
+use toml::ser::Error as TomlError;
 
 use crate::peer::PeerIdentity;
 
@@ -49,7 +50,7 @@ impl Args {
 }
 
 /// The application settings.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
@@ -78,12 +79,12 @@ pub struct Config {
     pub ack_transmission: u16,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub config: Config,
 
     // config file path
-    pub cfg_path: String,
+    pub cfg_path: Option<String>,
 }
 
 impl Settings {
@@ -103,9 +104,11 @@ impl Settings {
             }
         } else {
             let config: Config = default_config_builder().build()?.try_deserialize()?;
-            let cfg_path = config_path.to_str().expect("path to string").to_string();
 
-            Ok(Self { config, cfg_path })
+            Ok(Self {
+                config,
+                cfg_path: None,
+            })
         }
     }
 
@@ -119,8 +122,25 @@ impl Settings {
 
         Ok(Self {
             config,
-            cfg_path: cfg_path.to_string(),
+            cfg_path: Some(cfg_path.to_string()),
         })
+    }
+
+    pub fn from_server(toml_str: &str) -> Result<Self, ConfigError> {
+        let s = default_config_builder()
+            .add_source(File::from_str(toml_str, config::FileFormat::Toml))
+            .build()?;
+
+        let config: Config = s.try_deserialize()?;
+
+        Ok(Self {
+            config,
+            cfg_path: None,
+        })
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, TomlError> {
+        toml::to_string(&self.config)
     }
 }
 
