@@ -47,7 +47,7 @@ use crate::{
 const ONE_DAY: u64 = 60 * 60 * 24;
 const WAIT_SHUTDOWN: u64 = 15;
 
-pub type PcapSources = Arc<RwLock<HashMap<String, Connection>>>;
+pub type PcapSources = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSources = Arc<RwLock<HashSet<String>>>;
 pub type RunTimeIngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
@@ -348,7 +348,7 @@ fn to_hms(dur: Duration) -> String {
 }
 
 fn new_pcap_sources() -> PcapSources {
-    Arc::new(RwLock::new(HashMap::<String, Connection>::new()))
+    Arc::new(RwLock::new(HashMap::<String, Vec<Connection>>::new()))
 }
 
 fn new_ingest_sources(db: &Database) -> IngestSources {
@@ -394,7 +394,11 @@ fn init_tracing(path: &Path) -> Result<WorkerGuard> {
         .with_ansi(false)
         .with_target(false)
         .with_writer(file_writer)
-        .with_filter(EnvFilter::from_default_env().add_directive(LevelFilter::INFO.into()));
+        .with_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        );
 
     let layered_subscriber = tracing_subscriber::registry().with(layer_file);
     #[cfg(debug_assertions)]

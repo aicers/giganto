@@ -2709,7 +2709,7 @@ where
     T: Display + EventFilter + JsonOutput<N> + Serialize,
     N: Serialize,
 {
-    match filter.check(
+    if let Ok(true) = filter.check(
         value.orig_addr(),
         value.resp_addr(),
         value.orig_port(),
@@ -2720,25 +2720,22 @@ where
         value.source(),
         value.agent_id(),
     ) {
-        Ok(true) => {
-            let (source, timestamp) = parse_key(key)?;
-            let timestamp = DateTime::from_timestamp_nanos(timestamp)
-                .format("%s%.9f")
-                .to_string();
+        let (source, timestamp) = parse_key(key)?;
+        let timestamp = DateTime::from_timestamp_nanos(timestamp)
+            .format("%s%.9f")
+            .to_string();
 
-            match export_type {
-                "csv" => {
-                    writeln!(writer, "{timestamp}\t{source}\t{value}")?;
-                }
-                "json" => {
-                    let json_data = value.convert_json_output(timestamp, source.to_string())?;
-                    let json_data = serde_json::to_string(&json_data)?;
-                    writeln!(writer, "{json_data}")?;
-                }
-                _ => {}
+        match export_type {
+            "csv" => {
+                writeln!(writer, "{timestamp}\t{source}\t{value}")?;
             }
+            "json" => {
+                let json_data = value.convert_json_output(timestamp, source.to_string())?;
+                let json_data = serde_json::to_string(&json_data)?;
+                writeln!(writer, "{json_data}")?;
+            }
+            _ => {}
         }
-        Ok(false) | Err(_) => {}
     }
     Ok(())
 }

@@ -172,7 +172,9 @@ async fn handle_connection(
         pcap_sources
             .write()
             .await
-            .insert(source.clone(), connection.clone());
+            .entry(source.clone())
+            .or_insert_with(Vec::new)
+            .push(connection.clone());
     }
 
     if let Err(error) = sender
@@ -1053,6 +1055,7 @@ async fn check_sources_conn(
     let source_store = source_db
         .sources_store()
         .expect("Failed to open source store");
+
     loop {
         select! {
             _ = itv.tick() => {
@@ -1086,7 +1089,9 @@ async fn check_sources_conn(
                         }
                         if !rep {
                             runtime_ingest_sources.write().await.remove(&source_key);
-                            pcap_sources.write().await.remove(&source_key);
+                            if let Some(connections) = pcap_sources.write().await.get_mut(&source_key).filter(|connection_vec| !connection_vec.is_empty()) {
+                                connections.remove(0);
+                            }
                         }
                     }
                 }

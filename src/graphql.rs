@@ -410,7 +410,7 @@ where
         let item = item.expect("not error value");
         let data_type = item.1.data_type();
 
-        match filter.check(
+        if let Ok(true) = filter.check(
             item.1.orig_addr(),
             item.1.resp_addr(),
             item.1.orig_port(),
@@ -421,8 +421,7 @@ where
             item.1.source(),
             item.1.agent_id(),
         ) {
-            Ok(true) => records.push(item),
-            Ok(false) | Err(_) => {}
+            records.push(item);
         }
         if records.len() == size {
             if invalid_data_cnt > 1 {
