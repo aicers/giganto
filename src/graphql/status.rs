@@ -1,26 +1,20 @@
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    time::Duration,
-};
+use std::{fs::OpenOptions, io::Write, time::Duration};
 
-use anyhow::{anyhow, Context as ct};
+use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, StringNumber};
+use tokio::sync::mpsc::Sender;
 use toml_edit::{value, DocumentMut, InlineTable};
-use tracing::info;
+use tracing::{error, info, warn};
 
-use super::{PowerOffNotify, RebootNotify, ReloadNotify, TerminateNotify};
-use crate::peer::PeerIdentity;
+use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::settings::Config;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
-use crate::AckTransmissionCount;
+use crate::{peer::PeerIdentity, settings::Settings};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
 pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
 pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
-const CONFIG_ACK_TRANSMISSION: &str = "ack_transmission";
-pub const TEMP_TOML_POST_FIX: &str = ".temp.toml";
 
 pub trait TomlPeers {
     fn get_hostname(&self) -> String;
@@ -47,12 +41,6 @@ struct Properties {
     estimate_live_data_size: u64,
     estimate_num_keys: u64,
     stats: String,
-}
-
-#[derive(SimpleObject, Debug)]
-struct ConfigInfo {
-    config: Config,
-    local: bool,
 }
 
 #[Object]
@@ -167,18 +155,16 @@ impl StatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<ConfigInfo> {
-        let cfg_path = ctx.data::<String>()?;
+    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Config> {
         let is_local = ctx.data::<bool>()?;
-        let toml = fs::read_to_string(cfg_path).context("toml not found")?;
 
-        let config: Config = toml::from_str(&toml)?;
-        let config_info = ConfigInfo {
-            config,
-            local: *is_local,
-        };
+        if *is_local {
+            Err(anyhow!("Config is local").into())
+        } else {
+            let s = ctx.data::<Settings>()?;
 
-        Ok(config_info)
+            Ok(s.config.clone())
+        }
     }
 
     #[allow(clippy::unused_async)]
@@ -191,50 +177,39 @@ impl StatusQuery {
 impl ConfigMutation {
     #[allow(clippy::unused_async)]
     async fn set_config<'ctx>(&self, ctx: &Context<'ctx>, draft: String) -> Result<bool> {
+        let is_local = ctx.data::<bool>()?;
+
+        if *is_local {
+            warn!("Config is local");
+            return Ok(false);
+        }
+
         let config_draft: Config = toml::from_str(&draft)?;
 
-        let cfg_path = ctx.data::<String>()?;
+        let s = ctx.data::<Settings>()?;
 
-        let config_toml = fs::read_to_string(cfg_path).context("toml not found")?;
-        let config: Config = toml::from_str(&config_toml)?;
+        let config = s.config.clone();
 
         if config == config_draft {
             info!("No changes.");
             return Err("No changes".to_string().into());
         }
 
-        let new_path = copy_toml_file(cfg_path)?;
-
-        fs::write(new_path, draft)?;
-
-        let reload_notify = ctx.data::<ReloadNotify>()?;
-        let config_reload = reload_notify.0.clone();
+        let reload_tx = ctx.data::<Sender<String>>()?;
+        let draft_clone = draft.clone();
+        let tx_clone = reload_tx.clone();
 
         tokio::spawn(async move {
             // Used to complete the response of a graphql Mutation.
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
-            config_reload.notify_one();
+            tx_clone.send(draft_clone).await.map_err(|e| {
+                error!("Failed to send config: {:?}", e);
+                "Failed to send config".to_string()
+            })
         });
         info!("Draft applied.");
 
         Ok(true)
-    }
-
-    async fn set_ack_transmission_count<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        count: u16,
-    ) -> Result<String> {
-        let cfg_path = ctx.data::<String>()?;
-        let mut doc = read_toml_file(cfg_path)?;
-        let convert_ack_trans_cnt = Some(i64::from(count));
-        insert_toml_element(CONFIG_ACK_TRANSMISSION, &mut doc, convert_ack_trans_cnt);
-        write_toml_file(&doc, cfg_path)?;
-
-        let ack_cnt = ctx.data::<AckTransmissionCount>()?;
-        *ack_cnt.write().await = count;
-
-        Ok("Done".to_string())
     }
 
     #[allow(clippy::unused_async)]
@@ -265,14 +240,8 @@ impl ConfigMutation {
     }
 }
 
-fn copy_toml_file(path: &str) -> Result<String> {
-    let new_path = format!("{path}{TEMP_TOML_POST_FIX}");
-    fs::copy(path, &new_path)?;
-    Ok(new_path)
-}
-
-pub fn read_toml_file(path: &str) -> Result<DocumentMut> {
-    let toml = fs::read_to_string(path).context("toml not found")?;
+pub fn settings_to_doc(settings: &Settings) -> Result<DocumentMut> {
+    let toml = settings.to_toml_string()?;
     let doc = toml.parse::<DocumentMut>()?;
     Ok(doc)
 }
@@ -292,15 +261,6 @@ pub fn parse_toml_element_to_string(key: &str, doc: &DocumentMut) -> Result<Stri
         return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
     };
     Ok(value.to_string())
-}
-
-fn insert_toml_element<T>(key: &str, doc: &mut DocumentMut, input: Option<T>)
-where
-    T: std::convert::Into<toml_edit::Value>,
-{
-    if let Some(element) = input {
-        doc[key] = value(element);
-    };
 }
 
 pub fn insert_toml_peers<T>(doc: &mut DocumentMut, input: Option<Vec<T>>) -> Result<()>
@@ -368,66 +328,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
+    async fn test_local_config() {
         let toml_content = test_toml_content();
 
-        std::fs::write(&config_path, toml_content).unwrap();
+        let schema = TestSchema::new();
 
-        let schema =
-            TestSchema::new_with_config_file_path(config_path.to_string_lossy().to_string());
-
+        // config
         let query = r#"
             {
                 config {
-                    config {
-                        ingestSrvAddr
-                        publishSrvAddr
-                        graphqlSrvAddr
-                        dataDir
-                        retention
-                        logDir
-                        exportDir
-                        ackTransmission
-                        maxOpenFiles
-                        maxMbOfLevelBase
-                        numOfThread
-                        maxSubCompactions
-                        addrToPeers
-                        peers {
-                            addr
-                            hostname
-                        }
+                    ingestSrvAddr
+                    publishSrvAddr
+                    graphqlSrvAddr
+                    dataDir
+                    retention
+                    logDir
+                    exportDir
+                    ackTransmission
+                    maxOpenFiles
+                    maxMbOfLevelBase
+                    numOfThread
+                    maxSubCompactions
+                    addrToPeers
+                    peers {
+                        addr
+                        hostname
                     }
-                    local
                 }
             }
         "#;
 
         let res = schema.execute(query).await;
 
-        let data = res.data.to_string();
         assert_eq!(
-            data,
-            "{config: {config: {ingestSrvAddr: \"0.0.0.0:38370\", publishSrvAddr: \"0.0.0.0:38371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests/data\", retention: \"3months 8days 16h 19m 12s\", logDir: \"/data/logs/apps\", exportDir: \"tests/export\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\", addrToPeers: \"127.0.0.1:48383\", peers: [{addr: \"127.0.0.1:60192\", hostname: \"node2\"}]}, local: true}}".to_string()
+            res.errors.first().unwrap().message,
+            "Config is local".to_string()
         );
-    }
 
-    #[tokio::test]
-    async fn test_set_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        let toml_content = test_toml_content();
-
-        std::fs::write(&config_path, &toml_content).unwrap();
-
-        let schema =
-            TestSchema::new_with_config_file_path(config_path.to_string_lossy().to_string());
-
-        // No changes
+        // set_config
         let query = format!(
             r#"
                 mutation {{
@@ -438,33 +376,52 @@ mod tests {
 
         let res = schema.execute(&query).await;
 
-        assert_eq!(
-            res.errors.first().unwrap().message,
-            "No changes".to_string()
+        assert_eq!(res.data.to_string(), "{setConfig: false}");
+    }
+
+    #[tokio::test]
+    async fn test_remote_config() {
+        let schema = TestSchema::new_with_remote_config();
+
+        // config
+        let query = r#"
+            {
+                config {
+                    ingestSrvAddr
+                    publishSrvAddr
+                    graphqlSrvAddr
+                    dataDir
+                    retention
+                    logDir
+                    exportDir
+                    ackTransmission
+                    maxOpenFiles
+                    maxMbOfLevelBase
+                    numOfThread
+                    maxSubCompactions
+                    addrToPeers
+                    peers {
+                        addr
+                        hostname
+                    }
+                }
+            }
+        "#;
+
+        let res = schema.execute(query).await;
+
+        let data = res.data.to_string();
+        assert!(
+            data.contains("ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\"")
         );
 
-        // Change publish port
-        let new_draft = r#"
-            ingest_srv_addr = "0.0.0.0:38370"
-            publish_srv_addr = "0.0.0.0:38372"
-            graphql_srv_addr = "127.0.0.1:8442"
-            data_dir = "tests/data"
-            retention = "100d"
-            log_dir = "/data/logs/apps"
-            export_dir = "tests/export"
-            ack_transmission = 1024
-            max_open_files = 8000
-            max_mb_of_level_base = 512
-            num_of_thread = 8
-            max_sub_compactions = 2
-            addr_to_peers = "127.0.0.1:48383"
-            peers = [{ addr = "127.0.0.1:60192", hostname = "node2" }]
-            "#;
+        let toml_content = test_toml_content();
 
+        // set_config
         let query = format!(
             r#"
             mutation {{
-                setConfig(draft: {new_draft:?})
+                setConfig(draft: {toml_content:?})
             }}
             "#
         );
@@ -472,16 +429,6 @@ mod tests {
         let res = schema.execute(&query).await;
 
         assert_eq!(res.data.to_string(), "{setConfig: true}");
-
-        // check config temp file changes
-        let config_temp_file =
-            std::fs::read_to_string(&config_path.with_extension("toml.temp.toml")).unwrap();
-
-        assert!(
-            config_temp_file.contains(r#"publish_srv_addr = "0.0.0.0:38372""#),
-            "Config update was not applied correctly: {}",
-            config_temp_file
-        );
     }
 
     fn test_toml_content() -> String {

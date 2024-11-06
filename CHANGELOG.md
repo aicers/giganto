@@ -5,6 +5,21 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Remote configuration is no longer stored in a temporary file, nor does it
+  overwrite the existing configuration file.
+- Changed GraphQL APIs `config` and `setConfig` when using local configuration.
+  - `config` return error when using local config.
+  - `setConfig` return `Ok(false)` when using local config.
+
+### Removed
+
+- Removed the GraphQL API `setAckTransmissionCount` as the entire configuration
+  is now sent at once when modified through the UI.
+
 ## [0.22.1] - 2024-10-22
 
 ### Fixed
@@ -577,6 +592,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.22.1...main
 [0.22.1]: https://github.com/aicers/giganto/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/giganto/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/aicers/giganto/compare/0.20.0...0.21.0

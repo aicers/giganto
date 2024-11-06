@@ -27,7 +27,10 @@ use settings::Settings;
 use storage::Database;
 use tokio::{
     runtime, select,
-    sync::{mpsc::UnboundedSender, Notify, RwLock},
+    sync::{
+        mpsc::{self, UnboundedSender},
+        Notify, RwLock,
+    },
     task,
     time::{self, sleep},
 };
@@ -38,7 +41,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    graphql::{status::TEMP_TOML_POST_FIX, NodeName},
+    graphql::NodeName,
     server::{subject_from_cert, Certs, SERVER_REBOOT_DELAY},
     settings::Args,
     storage::migrate_data_dir,
@@ -65,7 +68,6 @@ async fn main() -> Result<()> {
     };
 
     let cfg_path = settings.cfg_path.clone();
-    let temp_path = format!("{cfg_path}{TEMP_TOML_POST_FIX}");
 
     let cert_pem = fs::read(&args.cert)
         .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
@@ -131,7 +133,7 @@ async fn main() -> Result<()> {
         let runtime_ingest_sources = new_runtime_ingest_sources();
         let stream_direct_channels = new_stream_direct_channels();
         let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
-        let notify_config_reload = Arc::new(Notify::new());
+        let (reload_tx, mut reload_rx) = mpsc::channel::<String>(1);
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
         let notify_power_off = Arc::new(Notify::new());
@@ -146,13 +148,13 @@ async fn main() -> Result<()> {
             peers.clone(),
             request_client_pool.clone(),
             settings.config.export_dir.clone(),
-            notify_config_reload.clone(),
+            reload_tx,
             notify_reboot.clone(),
             notify_power_off.clone(),
             notify_terminate.clone(),
-            settings.cfg_path.clone(),
             ack_transmission_cnt.clone(),
             is_local_config,
+            settings.clone(),
         );
 
         task::spawn(web::serve(
@@ -194,7 +196,7 @@ async fn main() -> Result<()> {
                 peer_idents.clone(),
                 notify_source.clone(),
                 notify_shutdown.clone(),
-                settings.cfg_path.clone(),
+                settings.clone(),
             ));
             notify_source_change = Some(notify_source);
         }
@@ -225,23 +227,17 @@ async fn main() -> Result<()> {
 
         loop {
             select! {
-                () = notify_config_reload.notified() => {
-                    match Settings::from_file(&temp_path) {
+                Some(config_draft) = reload_rx.recv() => {
+                    match Settings::from_server(&config_draft) {
                         Ok(mut new_settings) => {
                             new_settings.cfg_path.clone_from(&cfg_path);
                             settings = new_settings;
                             notify_and_wait_shutdown(notify_shutdown.clone()).await; // Wait for the shutdown to complete
-                            fs::rename(&temp_path, &cfg_path).unwrap_or_else(|e| {
-                                error!("Failed to rename the new configuration file: {e}");
-                            });
                             break;
                         }
                         Err(e) => {
                             error!("Failed to load the new configuration: {e:#}");
                             warn!("Run giganto with the previous config");
-                            fs::remove_file(&temp_path).unwrap_or_else(|e| {
-                                error!("Failed to remove the temporary file: {e}");
-                            });
                             continue;
                         }
                     }

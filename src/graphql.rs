@@ -36,12 +36,13 @@ use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
 use tempfile::NamedTempFile;
-use tokio::sync::Notify;
+use tokio::sync::{mpsc::Sender, Notify};
 use tracing::error;
 
 use crate::{
     ingest::implement::EventFilter,
     peer::Peers,
+    settings::Settings,
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
@@ -144,7 +145,6 @@ pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub struct NodeName(pub String);
-pub struct ReloadNotify(Arc<Notify>); // reload config
 pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
@@ -158,13 +158,13 @@ pub fn schema(
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
-    config_reload: Arc<Notify>,
+    reload_tx: Sender<String>,
     notify_reboot: Arc<Notify>,
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
-    config_file_path: String,
     ack_transmission_cnt: AckTransmissionCount,
     is_local_config: bool,
+    settings: Settings,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -174,13 +174,13 @@ pub fn schema(
         .data(peers)
         .data(request_client_pool)
         .data(export_path)
-        .data(ReloadNotify(config_reload))
-        .data(config_file_path)
+        .data(reload_tx)
         .data(ack_transmission_cnt)
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
         .data(is_local_config)
+        .data(settings)
         .finish()
 }
 
@@ -423,6 +423,7 @@ where
         ) {
             records.push(item);
         }
+
         if records.len() == size {
             if invalid_data_cnt > 1 {
                 error!(
@@ -1529,6 +1530,7 @@ mod tests {
     use super::{schema, sort_and_trunk_edges, NodeName};
     use crate::graphql::{Mutation, NodeSource, Query};
     use crate::peer::{PeerInfo, Peers};
+    use crate::settings::Settings;
     use crate::storage::{Database, DbOptions};
     use crate::{new_pcap_sources, IngestSources};
 
@@ -1544,20 +1546,17 @@ mod tests {
     }
 
     impl TestSchema {
-        fn setup(
-            ingest_sources: IngestSources,
-            peers: Peers,
-            config_file_path: Option<String>,
-        ) -> Self {
+        fn setup(ingest_sources: IngestSources, peers: Peers, is_local_config: bool) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sources = new_pcap_sources();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
-            let config_reload = Arc::new(Notify::new());
+            let (reload_tx, _) = tokio::sync::mpsc::channel::<String>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
+            let settings = Settings::new().unwrap();
             let schema = schema(
                 NodeName("giganto1".to_string()),
                 db.clone(),
@@ -1566,13 +1565,13 @@ mod tests {
                 peers,
                 request_client_pool,
                 export_dir.path().to_path_buf(),
-                config_reload,
+                reload_tx,
                 notify_reboot,
                 notify_power_off,
                 notify_terminate,
-                config_file_path.unwrap_or("file_path".to_string()),
                 Arc::new(RwLock::new(1024)),
-                true,
+                is_local_config,
+                settings,
             );
 
             Self {
@@ -1591,7 +1590,7 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sources, peers, None)
+            Self::setup(ingest_sources, peers, true)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
@@ -1614,10 +1613,10 @@ mod tests {
                 },
             )])));
 
-            Self::setup(ingest_sources, peers, None)
+            Self::setup(ingest_sources, peers, true)
         }
 
-        pub fn new_with_config_file_path(path: String) -> Self {
+        pub fn new_with_remote_config() -> Self {
             let ingest_sources = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SOURCES
                     .into_iter()
@@ -1626,7 +1625,7 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sources, peers, Some(path))
+            Self::setup(ingest_sources, peers, false)
         }
 
         pub async fn execute(&self, query: &str) -> async_graphql::Response {
