@@ -92,7 +92,11 @@ async fn main() -> Result<()> {
         settings.config.num_of_thread,
         settings.config.max_sub_compactions,
     );
+
     if args.repair {
+        if !is_local_config {
+            bail!("repair is not allowed on remote config");
+        }
         let start = Instant::now();
         let (db_opts, _) = storage::rocksdb_options(&db_options);
         info!("repair db start.");
