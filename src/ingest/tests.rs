@@ -640,6 +640,7 @@ async fn op_log() {
     let (mut send_op_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let op_log_body = OpLog {
+        sensor: String::new(),
         agent_name: "giganto".to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),

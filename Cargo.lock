@@ -1076,7 +1076,7 @@ dependencies = [
 [[package]]
 name = "giganto-client"
 version = "0.20.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.20.0#d38bc68469ef1d64e4e5d49dd0b5ca20aec4d30b"
+source = "git+https://github.com/aicers/giganto-client.git?rev=5d6148#5d6148191164d71095a280d036714c64ea71e302"
 dependencies = [
  "anyhow",
  "bincode",

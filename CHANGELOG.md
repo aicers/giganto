@@ -7,6 +7,13 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `sensor` field to `OpLog`.
+- Added the `load_connection_by_prefix_timestamp_key` function and
+  `TimestampKeyExtractor` trait to enable querying of keys prefixed with
+  `timestamp`.
+
 ### Changed
 
 - Remote configuration is no longer stored in a temporary file, nor does it

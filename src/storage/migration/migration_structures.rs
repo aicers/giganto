@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use giganto_client::ingest::log::OpLogLevel;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{
@@ -283,4 +284,11 @@ impl From<TlsBeforeV21> for TlsFromV21 {
             last_alert: input.last_alert,
         }
     }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct OplogBeforeV22 {
+    pub agent_name: String,
+    pub log_level: OpLogLevel,
+    pub contents: String,
 }
