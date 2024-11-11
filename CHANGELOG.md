@@ -14,6 +14,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed GraphQL APIs `config` and `setConfig` when using local configuration.
   - `config` return error when using local config.
   - `setConfig` return `Ok(false)` when using local config.
+- Modified the repair mode to operate only with a local configuration. Giganto
+  now terminates if the repair option is specified without the `-c` flag.
 
 ### Removed
 
