@@ -629,8 +629,8 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
 fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
     if let Some(ip_range) = filter_addr {
         if let Some(addr) = target_addr {
-            if let Some(start) = ip_range.start.clone() {
-                if let Some(end) = ip_range.end.clone() {
+            if let Some(start) = ip_range.start.as_deref() {
+                if let Some(end) = ip_range.end.as_deref() {
                     if addr >= start.parse::<IpAddr>()? && addr < end.parse::<IpAddr>()? {
                         return Ok(true);
                     }
