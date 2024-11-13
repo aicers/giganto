@@ -3,7 +3,7 @@ use std::{fs::OpenOptions, io::Write, time::Duration};
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, StringNumber};
 use tokio::sync::mpsc::Sender;
-use toml_edit::{value, DocumentMut, InlineTable};
+use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info, warn};
 
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
@@ -274,17 +274,8 @@ where
         array.clear();
         for peer in peer_list {
             let mut table = InlineTable::new();
-            if let (Some(addr), Some(hostname)) = (
-                value(peer.get_addr()).as_value(),
-                value(peer.get_hostname()).as_value(),
-            ) {
-                table.insert("addr", addr.clone());
-                table.insert("hostname", hostname.clone());
-            } else {
-                return Err(
-                    anyhow!("insert failed: peer's `addr`, `hostname` option not found.").into(),
-                );
-            }
+            table.insert("addr", peer.get_addr().into());
+            table.insert("hostname", peer.get_hostname().into());
             array.push(table);
         }
     }
