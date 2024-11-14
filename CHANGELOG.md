@@ -7,6 +7,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added GraphQL API `csvFormattedRawEvents` that returns the values of raw
+  events of the request protocol in csv format String, delimited by tab.
+
 ### Changed
 
 - Remote configuration is no longer stored in a temporary file, nor does it
@@ -22,7 +27,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     family. Running this version of Giganto will migrate the existing data in
     `sources` column familiy to `sensors` column family.
   - The `sources` GraphQL API is renamed to `sensors`.
-  - The `sourceId` field in the `export` GraphQL API  is renamed to `sensorId`.
+  - The `sourceId` field in the `export` GraphQL API is renamed to `sensorId`.
   - The `source` field in the filter parameters of all GraphQL APIs is changed
     to `sensor`.
 

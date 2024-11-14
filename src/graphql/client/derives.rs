@@ -616,3 +616,11 @@ pub struct Export;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct Statistics;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/csv_formatted_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct CsvFormattedRawEvents;
