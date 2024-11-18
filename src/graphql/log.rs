@@ -32,13 +32,13 @@ pub(super) struct LogQuery;
 #[derive(InputObject)]
 pub struct LogFilter {
     time: Option<TimeRange>,
-    source: String,
+    sensor: String,
     kind: Option<String>,
 }
 
 impl KeyExtractor for LogFilter {
     fn get_start_key(&self) -> &str {
-        &self.source
+        &self.sensor
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -64,7 +64,7 @@ impl RawEventFilter for LogFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         _agent_id: Option<String>,
     ) -> Result<bool> {
         Ok(true)
@@ -108,7 +108,7 @@ impl RawEventFilter for OpLogFilter {
         log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         _agent_id: Option<String>,
     ) -> Result<bool> {
         if let Some(filter_level) = &self.log_level {
@@ -202,7 +202,7 @@ impl LogQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -247,7 +247,7 @@ macro_rules! impl_from_giganto_log_filter_for_graphql_client {
                 fn from(filter: LogFilter) -> Self {
                     Self {
                         time:   filter.time.map(Into::into),
-                        source: filter.source,
+                        sensor: filter.sensor,
                         kind:   filter.kind,
                     }
                 }

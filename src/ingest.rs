@@ -46,17 +46,17 @@ use crate::server::{
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 use crate::{
-    AckTransmissionCount, IngestSources, PcapSources, RunTimeIngestSources, StreamDirectChannels,
+    AckTransmissionCount, IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
 };
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
-const SOURCE_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
+const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
+const INGEST_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
 
-type SourceInfo = (String, DateTime<Utc>, ConnState, bool);
+type SensorInfo = (String, DateTime<Utc>, ConnState, bool);
 
 enum ConnState {
     Connected,
@@ -82,12 +82,12 @@ impl Server {
     pub async fn run(
         self,
         db: Database,
-        pcap_sources: PcapSources,
-        ingest_sources: IngestSources,
-        runtime_ingest_sources: RunTimeIngestSources,
+        pcap_sensors: PcapSensors,
+        ingest_sensors: IngestSensors,
+        runtime_ingest_sensors: RunTimeIngestSensors,
         stream_direct_channels: StreamDirectChannels,
         notify_shutdown: Arc<Notify>,
-        notify_source: Option<Arc<Notify>>,
+        notify_sensor: Option<Arc<Notify>>,
         ack_transmission_cnt: AckTransmissionCount,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
@@ -96,15 +96,15 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
-        let (tx, rx): (Sender<SourceInfo>, Receiver<SourceInfo>) = channel(100);
-        let source_db = db.clone();
-        task::spawn(check_sources_conn(
-            source_db,
-            pcap_sources.clone(),
-            ingest_sources,
-            runtime_ingest_sources,
+        let (tx, rx): (Sender<SensorInfo>, Receiver<SensorInfo>) = channel(100);
+        let sensor_db = db.clone();
+        task::spawn(check_sensors_conn(
+            sensor_db,
+            pcap_sensors.clone(),
+            ingest_sensors,
+            runtime_ingest_sensors,
             rx,
-            notify_source,
+            notify_sensor,
         ));
 
         let shutdown_signal = Arc::new(AtomicBool::new(false));
@@ -114,7 +114,7 @@ impl Server {
                 Some(conn) = endpoint.accept()  => {
                     let sender = tx.clone();
                     let db = db.clone();
-                    let pcap_sources = pcap_sources.clone();
+                    let pcap_sensors = pcap_sensors.clone();
                     let stream_direct_channels = stream_direct_channels.clone();
                     let notify_shutdown = notify_shutdown.clone();
                     let shutdown_sig = shutdown_signal.clone();
@@ -122,7 +122,7 @@ impl Server {
                     tokio::spawn(async move {
                         let remote = conn.remote_address();
                         if let Err(e) =
-                            handle_connection(conn, db, pcap_sources, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
+                            handle_connection(conn, db, pcap_sensors, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
                         {
                             error!("connection failed: {e}. {remote}");
                         }
@@ -145,8 +145,8 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Incoming,
     db: Database,
-    pcap_sources: PcapSources,
-    sender: Sender<SourceInfo>,
+    pcap_sensors: PcapSensors,
+    sender: Sender<SensorInfo>,
     stream_direct_channels: StreamDirectChannels,
     notify_shutdown: Arc<Notify>,
     shutdown_signal: Arc<AtomicBool>,
@@ -165,20 +165,20 @@ async fn handle_connection(
         }
     };
 
-    let (agent, source) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
     let rep = agent.contains("reproduce");
 
     if !rep {
-        pcap_sources
+        pcap_sensors
             .write()
             .await
-            .entry(source.clone())
+            .entry(sensor.clone())
             .or_insert_with(Vec::new)
             .push(connection.clone());
     }
 
     if let Err(error) = sender
-        .send((source.clone(), Utc::now(), ConnState::Connected, rep))
+        .send((sensor.clone(), Utc::now(), ConnState::Connected, rep))
         .await
     {
         error!("Failed to send channel data : {error}");
@@ -189,7 +189,7 @@ async fn handle_connection(
                 let stream = match stream {
                     Err(conn_err) => {
                         if let Err(error) = sender
-                            .send((source, Utc::now(), ConnState::Disconnected, rep))
+                            .send((sensor, Utc::now(), ConnState::Disconnected, rep))
                             .await
                         {
                             error!("Failed to send internal channel data : {error}");
@@ -204,13 +204,13 @@ async fn handle_connection(
                     }
                     Ok(s) => s,
                 };
-                let source = source.clone();
+                let sensor = sensor.clone();
                 let db = db.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
                 let shutdown_signal = shutdown_signal.clone();
                 let ack_trans_cnt = ack_trans_cnt.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(source, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
+                    if let Err(e) = handle_request(sensor, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
                         error!("failed: {e}");
                     }
                 });
@@ -227,7 +227,7 @@ async fn handle_connection(
 
 #[allow(clippy::too_many_lines)]
 async fn handle_request(
-    source: String,
+    sensor: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
     stream_direct_channels: StreamDirectChannels,
@@ -244,8 +244,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Conn,
-                Some(NetworkKey::new(&source, "conn")),
-                source,
+                Some(NetworkKey::new(&sensor, "conn")),
+                sensor,
                 db.conn_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -258,8 +258,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Dns,
-                Some(NetworkKey::new(&source, "dns")),
-                source,
+                Some(NetworkKey::new(&sensor, "dns")),
+                sensor,
                 db.dns_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -272,8 +272,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Log,
-                Some(NetworkKey::new(&source, "log")),
-                source,
+                Some(NetworkKey::new(&sensor, "log")),
+                sensor,
                 db.log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -286,8 +286,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Http,
-                Some(NetworkKey::new(&source, "http")),
-                source,
+                Some(NetworkKey::new(&sensor, "http")),
+                sensor,
                 db.http_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -300,8 +300,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Rdp,
-                Some(NetworkKey::new(&source, "rdp")),
-                source,
+                Some(NetworkKey::new(&sensor, "rdp")),
+                sensor,
                 db.rdp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -315,7 +315,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::PeriodicTimeSeries,
                 None,
-                source,
+                sensor,
                 db.periodic_time_series_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -328,8 +328,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Smtp,
-                Some(NetworkKey::new(&source, "smtp")),
-                source,
+                Some(NetworkKey::new(&sensor, "smtp")),
+                sensor,
                 db.smtp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -342,8 +342,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ntlm,
-                Some(NetworkKey::new(&source, "ntlm")),
-                source,
+                Some(NetworkKey::new(&sensor, "ntlm")),
+                sensor,
                 db.ntlm_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -356,8 +356,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Kerberos,
-                Some(NetworkKey::new(&source, "kerberos")),
-                source,
+                Some(NetworkKey::new(&sensor, "kerberos")),
+                sensor,
                 db.kerberos_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -370,8 +370,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ssh,
-                Some(NetworkKey::new(&source, "ssh")),
-                source,
+                Some(NetworkKey::new(&sensor, "ssh")),
+                sensor,
                 db.ssh_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -384,8 +384,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::DceRpc,
-                Some(NetworkKey::new(&source, "dce rpc")),
-                source,
+                Some(NetworkKey::new(&sensor, "dce rpc")),
+                sensor,
                 db.dce_rpc_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -399,7 +399,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::Statistics,
                 None,
-                source,
+                sensor,
                 db.statistics_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -413,7 +413,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::OpLog,
                 None,
-                source,
+                sensor,
                 db.op_log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -427,7 +427,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::Packet,
                 None,
-                source,
+                sensor,
                 db.packet_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -440,8 +440,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ftp,
-                Some(NetworkKey::new(&source, "ftp")),
-                source,
+                Some(NetworkKey::new(&sensor, "ftp")),
+                sensor,
                 db.ftp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -454,8 +454,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Mqtt,
-                Some(NetworkKey::new(&source, "mqtt")),
-                source,
+                Some(NetworkKey::new(&sensor, "mqtt")),
+                sensor,
                 db.mqtt_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -468,8 +468,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ldap,
-                Some(NetworkKey::new(&source, "ldap")),
-                source,
+                Some(NetworkKey::new(&sensor, "ldap")),
+                sensor,
                 db.ldap_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -482,8 +482,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Tls,
-                Some(NetworkKey::new(&source, "tls")),
-                source,
+                Some(NetworkKey::new(&sensor, "tls")),
+                sensor,
                 db.tls_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -496,8 +496,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Smb,
-                Some(NetworkKey::new(&source, "smb")),
-                source,
+                Some(NetworkKey::new(&sensor, "smb")),
+                sensor,
                 db.smb_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -510,8 +510,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Nfs,
-                Some(NetworkKey::new(&source, "nfs")),
-                source,
+                Some(NetworkKey::new(&sensor, "nfs")),
+                sensor,
                 db.nfs_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -524,8 +524,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Bootp,
-                Some(NetworkKey::new(&source, "bootp")),
-                source,
+                Some(NetworkKey::new(&sensor, "bootp")),
+                sensor,
                 db.bootp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -538,8 +538,8 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Dhcp,
-                Some(NetworkKey::new(&source, "dhcp")),
-                source,
+                Some(NetworkKey::new(&sensor, "dhcp")),
+                sensor,
                 db.dhcp_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -553,7 +553,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::ProcessCreate,
                 None,
-                source,
+                sensor,
                 db.process_create_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -567,7 +567,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::FileCreateTime,
                 None,
-                source,
+                sensor,
                 db.file_create_time_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -581,7 +581,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::NetworkConnect,
                 None,
-                source,
+                sensor,
                 db.network_connect_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -595,7 +595,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::ProcessTerminate,
                 None,
-                source,
+                sensor,
                 db.process_terminate_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -609,7 +609,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::ImageLoad,
                 None,
-                source,
+                sensor,
                 db.image_load_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -623,7 +623,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::FileCreate,
                 None,
-                source,
+                sensor,
                 db.file_create_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -637,7 +637,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::RegistryValueSet,
                 None,
-                source,
+                sensor,
                 db.registry_value_set_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -651,7 +651,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::RegistryKeyRename,
                 None,
-                source,
+                sensor,
                 db.registry_key_rename_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -665,7 +665,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::FileCreateStreamHash,
                 None,
-                source,
+                sensor,
                 db.file_create_stream_hash_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -679,7 +679,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::PipeEvent,
                 None,
-                source,
+                sensor,
                 db.pipe_event_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -693,7 +693,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::DnsQuery,
                 None,
-                source,
+                sensor,
                 db.dns_query_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -707,7 +707,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::FileDelete,
                 None,
-                source,
+                sensor,
                 db.file_delete_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -721,7 +721,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::ProcessTamper,
                 None,
-                source,
+                sensor,
                 db.process_tamper_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -735,7 +735,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::FileDeleteDetected,
                 None,
-                source,
+                sensor,
                 db.file_delete_detected_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -749,7 +749,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::Netflow5,
                 None,
-                source,
+                sensor,
                 db.netflow5_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -763,7 +763,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::Netflow9,
                 None,
-                source,
+                sensor,
                 db.netflow9_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -777,7 +777,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::SecuLog,
                 None,
-                source,
+                sensor,
                 db.secu_log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
@@ -798,7 +798,7 @@ async fn handle_data<T>(
     mut recv: RecvStream,
     raw_event_kind: RawEventKind,
     network_key: Option<NetworkKey>,
-    source: String,
+    sensor: String,
     store: RawEventStore<'_, T>,
     stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
@@ -879,7 +879,7 @@ async fn handle_data<T>(
                         }
                         continue;
                     }
-                    let key_builder = StorageKey::builder().start_key(&source);
+                    let key_builder = StorageKey::builder().start_key(&sensor);
                     let key_builder = match raw_event_kind {
                         RawEventKind::Log => {
                             let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
@@ -907,7 +907,7 @@ async fn handle_data<T>(
                                 err_msg = Some("Failed to deserialize OpLog".to_string());
                                 break;
                             };
-                            let agent_id = format!("{}@{source}", op_log.agent_name);
+                            let agent_id = format!("{}@{sensor}", op_log.agent_name);
                             StorageKey::builder()
                                 .start_key(&agent_id)
                                 .end_key(timestamp)
@@ -961,7 +961,7 @@ async fn handle_data<T>(
                             network_key,
                             &raw_event,
                             timestamp,
-                            &source,
+                            &sensor,
                             stream_direct_channels.clone(),
                         )
                         .await
@@ -997,7 +997,7 @@ async fn handle_data<T>(
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(
-                            "{source:?}, {stream_id:?}, {raw_event_kind:?}, count = {count}, size = {size}, duration = {}",
+                            "{sensor:?}, {stream_id:?}, {raw_event_kind:?}, count = {count}, size = {size}, duration = {}",
                             start.elapsed().as_secs()
                         );
                         count = 0;
@@ -1042,54 +1042,54 @@ async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result<(),
     Ok(())
 }
 
-async fn check_sources_conn(
-    source_db: Database,
-    pcap_sources: PcapSources,
-    ingest_sources: IngestSources,
-    runtime_ingest_sources: RunTimeIngestSources,
-    mut rx: Receiver<SourceInfo>,
-    notify_source: Option<Arc<Notify>>,
+async fn check_sensors_conn(
+    sensor_db: Database,
+    pcap_sensors: PcapSensors,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    mut rx: Receiver<SensorInfo>,
+    notify_sensor: Option<Arc<Notify>>,
 ) -> Result<()> {
-    let mut itv = time::interval(time::Duration::from_secs(SOURCE_INTERVAL));
+    let mut itv = time::interval(time::Duration::from_secs(SENSOR_INTERVAL));
     itv.reset();
-    let source_store = source_db
-        .sources_store()
-        .expect("Failed to open source store");
+    let sensor_store = sensor_db
+        .sensors_store()
+        .expect("Failed to open sensor store");
 
     loop {
         select! {
             _ = itv.tick() => {
-                let mut runtime_sources = runtime_ingest_sources.write().await;
-                let keys: Vec<String> = runtime_sources.keys().map(std::borrow::ToOwned::to_owned).collect();
+                let mut runtime_sensors = runtime_ingest_sensors.write().await;
+                let keys: Vec<String> = runtime_sensors.keys().map(std::borrow::ToOwned::to_owned).collect();
 
-                for source_key in keys {
+                for sensor_key in keys {
                     let timestamp = Utc::now();
-                    if source_store.insert(&source_key, timestamp).is_err(){
-                        error!("Failed to append source store");
+                    if sensor_store.insert(&sensor_key, timestamp).is_err(){
+                        error!("Failed to append sensor store");
                     }
-                    runtime_sources.insert(source_key, timestamp);
+                    runtime_sensors.insert(sensor_key, timestamp);
                 }
             }
 
-            Some((source_key, timestamp_val, conn_state, rep)) = rx.recv() => {
+            Some((sensor_key, timestamp_val, conn_state, rep)) = rx.recv() => {
                 match conn_state {
                     ConnState::Connected => {
-                        if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append source store");
+                        if sensor_store.insert(&sensor_key, timestamp_val).is_err() {
+                            error!("Failed to append sensor store");
                         }
-                        runtime_ingest_sources.write().await.insert(source_key.clone(), timestamp_val);
-                        ingest_sources.write().await.insert(source_key);
-                        if let Some(ref notify) = notify_source {
+                        runtime_ingest_sensors.write().await.insert(sensor_key.clone(), timestamp_val);
+                        ingest_sensors.write().await.insert(sensor_key);
+                        if let Some(ref notify) = notify_sensor {
                             notify.notify_one();
                         }
                     }
                     ConnState::Disconnected => {
-                        if source_store.insert(&source_key, timestamp_val).is_err() {
-                            error!("Failed to append source store");
+                        if sensor_store.insert(&sensor_key, timestamp_val).is_err() {
+                            error!("Failed to append sensor store");
                         }
                         if !rep {
-                            runtime_ingest_sources.write().await.remove(&source_key);
-                            if let Some(connections) = pcap_sources.write().await.get_mut(&source_key).filter(|connection_vec| !connection_vec.is_empty()) {
+                            runtime_ingest_sensors.write().await.remove(&sensor_key);
+                            if let Some(connections) = pcap_sensors.write().await.get_mut(&sensor_key).filter(|connection_vec| !connection_vec.is_empty()) {
                                 connections.remove(0);
                             }
                         }
@@ -1101,17 +1101,17 @@ async fn check_sources_conn(
 }
 
 pub struct NetworkKey {
-    pub(crate) source_key: String,
+    pub(crate) sensor_key: String,
     pub(crate) all_key: String,
 }
 
 impl NetworkKey {
-    pub fn new(source: &str, protocol: &str) -> Self {
-        let source_key = format!("{source}\0{protocol}");
+    pub fn new(sensor: &str, protocol: &str) -> Self {
+        let sensor_key = format!("{sensor}\0{protocol}");
         let all_key = format!("all\0{protocol}");
 
         Self {
-            source_key,
+            sensor_key,
             all_key,
         }
     }

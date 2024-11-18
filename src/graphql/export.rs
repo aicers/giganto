@@ -95,7 +95,7 @@ pub(super) struct ExportQuery;
 #[derive(Serialize, Debug)]
 struct ConnJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -116,7 +116,7 @@ struct ConnJsonOutput {
 #[derive(Serialize, Debug)]
 struct DnsJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -140,7 +140,7 @@ struct DnsJsonOutput {
 #[derive(Serialize, Debug)]
 struct HttpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -174,7 +174,7 @@ struct HttpJsonOutput {
 #[derive(Serialize, Debug)]
 struct RdpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -187,7 +187,7 @@ struct RdpJsonOutput {
 #[derive(Serialize, Debug)]
 struct SmtpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -206,7 +206,7 @@ struct SmtpJsonOutput {
 #[derive(Serialize, Debug)]
 struct NtlmJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -223,7 +223,7 @@ struct NtlmJsonOutput {
 #[derive(Serialize, Debug)]
 struct KerberosJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -244,7 +244,7 @@ struct KerberosJsonOutput {
 #[derive(Serialize, Debug)]
 struct SshJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -269,7 +269,7 @@ struct SshJsonOutput {
 #[derive(Serialize, Debug)]
 struct DceRpcJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -285,7 +285,7 @@ struct DceRpcJsonOutput {
 #[derive(Serialize, Debug)]
 struct FtpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -309,7 +309,7 @@ struct FtpJsonOutput {
 #[derive(Serialize, Debug)]
 struct MqttJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -327,7 +327,7 @@ struct MqttJsonOutput {
 #[derive(Serialize, Debug)]
 struct LdapJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -346,7 +346,7 @@ struct LdapJsonOutput {
 #[derive(Serialize, Debug)]
 struct TlsJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -379,7 +379,7 @@ struct TlsJsonOutput {
 #[derive(Serialize, Debug)]
 struct SmbJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -402,7 +402,7 @@ struct SmbJsonOutput {
 #[derive(Serialize, Debug)]
 struct NfsJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -416,7 +416,7 @@ struct NfsJsonOutput {
 #[derive(Serialize, Debug)]
 struct BootpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -439,7 +439,7 @@ struct BootpJsonOutput {
 #[derive(Serialize, Debug)]
 struct DhcpJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -469,7 +469,7 @@ struct DhcpJsonOutput {
 #[derive(Serialize, Debug)]
 struct LogJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     kind: String,
     log: String,
 }
@@ -492,7 +492,7 @@ struct OpLogJsonOutput {
 #[derive(Serialize, Debug)]
 struct SecuLogJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     kind: String,
     orig_addr: String,
     orig_port: String,
@@ -505,7 +505,7 @@ struct SecuLogJsonOutput {
 #[derive(Serialize, Debug)]
 struct StatisticsJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     core: u32,
     period: u16,
     stats: Vec<(RawEventKind, u64, u64)>,
@@ -514,7 +514,7 @@ struct StatisticsJsonOutput {
 #[derive(Serialize, Debug)]
 struct ProcessCreateJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -543,7 +543,7 @@ struct ProcessCreateJsonOutput {
 #[derive(Serialize, Debug)]
 struct FileCreateTimeJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -558,7 +558,7 @@ struct FileCreateTimeJsonOutput {
 #[derive(Serialize, Debug)]
 struct NetworkConnectJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -582,7 +582,7 @@ struct NetworkConnectJsonOutput {
 #[derive(Serialize, Debug)]
 struct ProcessTerminateJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -594,7 +594,7 @@ struct ProcessTerminateJsonOutput {
 #[derive(Serialize, Debug)]
 struct ImageLoadJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -616,7 +616,7 @@ struct ImageLoadJsonOutput {
 #[derive(Serialize, Debug)]
 struct FileCreateJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -630,7 +630,7 @@ struct FileCreateJsonOutput {
 #[derive(Serialize, Debug)]
 struct RegistryValueSetJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -645,7 +645,7 @@ struct RegistryValueSetJsonOutput {
 #[derive(Serialize, Debug)]
 struct RegistryKeyRenameJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -660,7 +660,7 @@ struct RegistryKeyRenameJsonOutput {
 #[derive(Serialize, Debug)]
 struct FileCreateStreamHashJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -676,7 +676,7 @@ struct FileCreateStreamHashJsonOutput {
 #[derive(Serialize, Debug)]
 struct PipeEventJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -690,7 +690,7 @@ struct PipeEventJsonOutput {
 #[derive(Serialize, Debug)]
 struct DnsQueryJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -705,7 +705,7 @@ struct DnsQueryJsonOutput {
 #[derive(Serialize, Debug)]
 struct FileDeleteJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -721,7 +721,7 @@ struct FileDeleteJsonOutput {
 #[derive(Serialize, Debug)]
 struct ProcessTamperJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -734,7 +734,7 @@ struct ProcessTamperJsonOutput {
 #[derive(Serialize, Debug)]
 struct FileDeleteDetectedJsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -749,7 +749,7 @@ struct FileDeleteDetectedJsonOutput {
 #[derive(Serialize, Debug)]
 pub struct Netflow5JsonOutput {
     timestamp: String,
-    source: String,
+    sensor: String,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -778,7 +778,6 @@ pub struct Netflow5JsonOutput {
 #[derive(Serialize, Debug)]
 pub struct Netflow9JsonOutput {
     timestamp: String,
-    source: String,
     sequence: u32,
     source_id: u32,
     template_id: u16,
@@ -791,16 +790,16 @@ pub struct Netflow9JsonOutput {
 }
 
 pub trait JsonOutput<T>: Sized {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<T>;
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<T>;
 }
 
 macro_rules! convert_json_output {
     ($to:ident, $from:ty, $($fields:ident),*) => {
         impl JsonOutput<$to> for $from {
-            fn convert_json_output(&self, timestamp:String, source:String) -> Result<$to> {
+            fn convert_json_output(&self, timestamp:String, sensor:String) -> Result<$to> {
                 Ok($to {
                     timestamp,
-                    source,
+                    sensor,
                     orig_addr: self.orig_addr.to_string(),
                     orig_port: self.orig_port,
                     resp_addr: self.resp_addr.to_string(),
@@ -965,10 +964,10 @@ convert_json_output!(
 convert_json_output!(NfsJsonOutput, Nfs, read_files, write_files);
 
 impl JsonOutput<ConnJsonOutput> for Conn {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<ConnJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<ConnJsonOutput> {
         Ok(ConnJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -988,10 +987,10 @@ impl JsonOutput<ConnJsonOutput> for Conn {
 }
 
 impl JsonOutput<DnsJsonOutput> for Dns {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<DnsJsonOutput> {
         Ok(DnsJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -1015,10 +1014,10 @@ impl JsonOutput<DnsJsonOutput> for Dns {
 }
 
 impl JsonOutput<LogJsonOutput> for Log {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<LogJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<LogJsonOutput> {
         Ok(LogJsonOutput {
             timestamp,
-            source,
+            sensor,
             kind: self.kind.clone(),
             log: String::from_utf8_lossy(&self.log).to_string(),
         })
@@ -1029,21 +1028,21 @@ impl JsonOutput<TimeSeriesJsonOutput> for PeriodicTimeSeries {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<TimeSeriesJsonOutput> {
         Ok(TimeSeriesJsonOutput {
             start: timestamp,
-            id: source,
+            id: sensor,
             data: self.data.clone(),
         })
     }
 }
 
 impl JsonOutput<OpLogJsonOutput> for OpLog {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<OpLogJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<OpLogJsonOutput> {
         Ok(OpLogJsonOutput {
             timestamp,
-            agent_id: source,
+            agent_id: sensor,
             level: self.log_level().unwrap_or_else(|| "-".to_string()),
             contents: self.contents.clone(),
         })
@@ -1051,10 +1050,10 @@ impl JsonOutput<OpLogJsonOutput> for OpLog {
 }
 
 impl JsonOutput<SecuLogJsonOutput> for SecuLog {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<SecuLogJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<SecuLogJsonOutput> {
         Ok(SecuLogJsonOutput {
             timestamp,
-            source,
+            sensor,
             kind: self.kind.clone(),
             orig_addr: to_string_or_empty(self.orig_addr),
             orig_port: to_string_or_empty(self.orig_port),
@@ -1067,10 +1066,10 @@ impl JsonOutput<SecuLogJsonOutput> for SecuLog {
 }
 
 impl JsonOutput<FtpJsonOutput> for Ftp {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<FtpJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<FtpJsonOutput> {
         Ok(FtpJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -1094,10 +1093,10 @@ impl JsonOutput<FtpJsonOutput> for Ftp {
 }
 
 impl JsonOutput<MqttJsonOutput> for Mqtt {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<MqttJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<MqttJsonOutput> {
         Ok(MqttJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -1115,10 +1114,10 @@ impl JsonOutput<MqttJsonOutput> for Mqtt {
 }
 
 impl JsonOutput<BootpJsonOutput> for Bootp {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<BootpJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<BootpJsonOutput> {
         Ok(BootpJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -1141,10 +1140,10 @@ impl JsonOutput<BootpJsonOutput> for Bootp {
 }
 
 impl JsonOutput<DhcpJsonOutput> for Dhcp {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DhcpJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<DhcpJsonOutput> {
         Ok(DhcpJsonOutput {
             timestamp,
-            source,
+            sensor,
             orig_addr: self.orig_addr.to_string(),
             orig_port: self.orig_port,
             resp_addr: self.resp_addr.to_string(),
@@ -1181,11 +1180,11 @@ impl JsonOutput<StatisticsJsonOutput> for Statistics {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<StatisticsJsonOutput> {
         Ok(StatisticsJsonOutput {
             timestamp,
-            source,
+            sensor,
             core: self.core,
             period: self.period,
             stats: self.stats.clone(),
@@ -1197,11 +1196,11 @@ impl JsonOutput<ProcessCreateJsonOutput> for ProcessCreate {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<ProcessCreateJsonOutput> {
         Ok(ProcessCreateJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1233,11 +1232,11 @@ impl JsonOutput<FileCreateTimeJsonOutput> for FileCreationTimeChanged {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<FileCreateTimeJsonOutput> {
         Ok(FileCreateTimeJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1255,11 +1254,11 @@ impl JsonOutput<NetworkConnectJsonOutput> for NetworkConnection {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<NetworkConnectJsonOutput> {
         Ok(NetworkConnectJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1286,11 +1285,11 @@ impl JsonOutput<ProcessTerminateJsonOutput> for ProcessTerminated {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<ProcessTerminateJsonOutput> {
         Ok(ProcessTerminateJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1305,11 +1304,11 @@ impl JsonOutput<ImageLoadJsonOutput> for ImageLoaded {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<ImageLoadJsonOutput> {
         Ok(ImageLoadJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1334,11 +1333,11 @@ impl JsonOutput<FileCreateJsonOutput> for FileCreate {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<FileCreateJsonOutput> {
         Ok(FileCreateJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1355,11 +1354,11 @@ impl JsonOutput<RegistryValueSetJsonOutput> for RegistryValueSet {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<RegistryValueSetJsonOutput> {
         Ok(RegistryValueSetJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             event_type: self.event_type.clone(),
@@ -1377,11 +1376,11 @@ impl JsonOutput<RegistryKeyRenameJsonOutput> for RegistryKeyValueRename {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<RegistryKeyRenameJsonOutput> {
         Ok(RegistryKeyRenameJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             event_type: self.event_type.clone(),
@@ -1399,11 +1398,11 @@ impl JsonOutput<FileCreateStreamHashJsonOutput> for FileCreateStreamHash {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<FileCreateStreamHashJsonOutput> {
         Ok(FileCreateStreamHashJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1422,11 +1421,11 @@ impl JsonOutput<PipeEventJsonOutput> for PipeEvent {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<PipeEventJsonOutput> {
         Ok(PipeEventJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             event_type: self.event_type.clone(),
@@ -1440,10 +1439,10 @@ impl JsonOutput<PipeEventJsonOutput> for PipeEvent {
 }
 
 impl JsonOutput<DnsQueryJsonOutput> for DnsEvent {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<DnsQueryJsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<DnsQueryJsonOutput> {
         Ok(DnsQueryJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1461,11 +1460,11 @@ impl JsonOutput<FileDeleteJsonOutput> for FileDelete {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<FileDeleteJsonOutput> {
         Ok(FileDeleteJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1484,11 +1483,11 @@ impl JsonOutput<ProcessTamperJsonOutput> for ProcessTampering {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<ProcessTamperJsonOutput> {
         Ok(ProcessTamperJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1504,11 +1503,11 @@ impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
     fn convert_json_output(
         &self,
         timestamp: String,
-        source: String,
+        sensor: String,
     ) -> Result<FileDeleteDetectedJsonOutput> {
         Ok(FileDeleteDetectedJsonOutput {
             timestamp,
-            source,
+            sensor,
             agent_name: self.agent_name.clone(),
             agent_id: self.agent_id.clone(),
             process_guid: self.process_guid.clone(),
@@ -1523,10 +1522,10 @@ impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
 }
 
 impl JsonOutput<Netflow5JsonOutput> for Netflow5 {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<Netflow5JsonOutput> {
+    fn convert_json_output(&self, timestamp: String, sensor: String) -> Result<Netflow5JsonOutput> {
         Ok(Netflow5JsonOutput {
             timestamp,
-            source,
+            sensor,
             src_addr: self.src_addr.to_string(),
             dst_addr: self.dst_addr.to_string(),
             next_hop: self.next_hop.to_string(),
@@ -1555,10 +1554,13 @@ impl JsonOutput<Netflow5JsonOutput> for Netflow5 {
 }
 
 impl JsonOutput<Netflow9JsonOutput> for Netflow9 {
-    fn convert_json_output(&self, timestamp: String, source: String) -> Result<Netflow9JsonOutput> {
+    fn convert_json_output(
+        &self,
+        timestamp: String,
+        _sensor: String,
+    ) -> Result<Netflow9JsonOutput> {
         Ok(Netflow9JsonOutput {
             timestamp,
-            source,
             sequence: self.sequence,
             source_id: self.source_id,
             template_id: self.template_id,
@@ -1583,7 +1585,7 @@ fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
 #[derive(InputObject, Serialize, Clone)]
 pub struct ExportFilter {
     protocol: String,
-    source_id: String,
+    sensor_id: String,
     agent_name: Option<String>,
     agent_id: Option<String>,
     kind: Option<String>,
@@ -1596,7 +1598,7 @@ pub struct ExportFilter {
 
 impl KeyExtractor for ExportFilter {
     fn get_start_key(&self) -> &str {
-        &self.source_id
+        &self.sensor_id
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -1635,7 +1637,7 @@ impl RawEventFilter for ExportFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
@@ -1725,7 +1727,7 @@ impl ExportQuery {
         events_in_cluster!(
             ctx,
             filter,
-            filter.source_id,
+            filter.sensor_id,
             handler,
             Exports,
             exports::Variables,
@@ -2717,20 +2719,20 @@ where
         value.log_level(),
         value.log_contents(),
         value.text(),
-        value.source(),
+        value.sensor(),
         value.agent_id(),
     ) {
-        let (source, timestamp) = parse_key(key)?;
+        let (sensor, timestamp) = parse_key(key)?;
         let timestamp = DateTime::from_timestamp_nanos(timestamp)
             .format("%s%.9f")
             .to_string();
 
         match export_type {
             "csv" => {
-                writeln!(writer, "{timestamp}\t{source}\t{value}")?;
+                writeln!(writer, "{timestamp}\t{sensor}\t{value}")?;
             }
             "json" => {
-                let json_data = value.convert_json_output(timestamp, source.to_string())?;
+                let json_data = value.convert_json_output(timestamp, sensor.to_string())?;
                 let json_data = serde_json::to_string(&json_data)?;
                 writeln!(writer, "{json_data}")?;
             }
@@ -2743,10 +2745,10 @@ where
 fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
     if let Some(pos) = key.iter().position(|x| *x == 0) {
         if let Some(s) = key.get(..pos) {
-            let source = String::from_utf8_lossy(s);
+            let sensor = String::from_utf8_lossy(s);
             if let Some(t) = key.get(key.len() - 8..) {
                 let timestamp = i64::from_be_bytes(t.try_into()?);
-                return Ok((source, timestamp));
+                return Ok((sensor, timestamp));
             };
         }
     }
@@ -2771,7 +2773,7 @@ macro_rules! impl_from_giganto_export_filter_for_graphql_client {
                 fn from(filter: ExportFilter) -> Self {
                     Self {
                         protocol: filter.protocol,
-                        source_id: filter.source_id,
+                        sensor_id: filter.sensor_id,
                         agent_name: filter.agent_name,
                         agent_id: filter.agent_id,
                         kind: filter.kind,

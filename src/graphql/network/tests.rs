@@ -19,7 +19,7 @@ async fn conn_empty() {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                source: "ingest_source_1"
+                sensor: "ingest_sensor_1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -48,7 +48,7 @@ async fn conn_empty_giganto_cluster() {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                source: "ingest src 2"
+                sensor: "ingest src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -116,7 +116,7 @@ async fn conn_with_data() {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46378, end: 46379 }
@@ -149,9 +149,9 @@ async fn conn_with_data() {
     );
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -185,7 +185,7 @@ async fn conn_with_data_giganto_cluster() {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
-                source: "ingest src 2"
+                sensor: "ingest src 2"
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46378, end: 46379 }
@@ -280,7 +280,7 @@ async fn dns_empty() {
         dnsRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                source: "cluml"
+                sensor: "cluml"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
                 origPort: { start: 46377, end: 46380 }
@@ -315,7 +315,7 @@ async fn dns_empty_giganto_cluster() {
         dnsRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
                 origPort: { start: 46377, end: 46380 }
@@ -387,7 +387,7 @@ async fn dns_with_data() {
     {
         dnsRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
                 origPort: { start: 46377, end: 46380 }
@@ -413,9 +413,9 @@ async fn dns_with_data() {
     );
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -451,7 +451,7 @@ async fn dns_with_data_giganto_cluster() {
     {
         dnsRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
                 origPort: { start: 46377, end: 46380 }
@@ -549,7 +549,7 @@ async fn http_empty() {
         httpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2024-09-22T00:00:00Z" }
-                source: "cluml"
+                sensor: "cluml"
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
                 respPort: { start: 0, end: 200 }
@@ -577,7 +577,7 @@ async fn http_empty_giganto_cluster() {
     httpRawEvents(
         filter: {
             time: { start: "1992-06-05T00:00:00Z", end: "2024-09-22T00:00:00Z" }
-            source: "src 2"
+            sensor: "src 2"
             respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
             origPort: { start: 46377, end: 46380 }
             respPort: { start: 0, end: 200 }
@@ -644,7 +644,7 @@ async fn http_with_data() {
         httpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -670,9 +670,9 @@ async fn http_with_data() {
     );
 }
 
-fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -719,7 +719,7 @@ async fn http_with_data_giganto_cluster() {
         httpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -838,7 +838,7 @@ async fn rdp_empty() {
         rdpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "cluml"
+                sensor: "cluml"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respPort: { start: 0, end: 200 }
@@ -866,7 +866,7 @@ async fn rdp_empty_giganto_cluster() {
         rdpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "ingest src 2"
+                sensor: "ingest src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respPort: { start: 0, end: 200 }
@@ -933,7 +933,7 @@ async fn rdp_with_data() {
         rdpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
                 respPort: { start: 0, end: 200 }
@@ -956,9 +956,9 @@ async fn rdp_with_data() {
     );
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -984,7 +984,7 @@ async fn rdp_with_data_giganto_cluster() {
         rdpRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
                 respPort: { start: 0, end: 200 }
@@ -1067,7 +1067,7 @@ async fn smtp_with_data() {
     {
         smtpRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1085,9 +1085,9 @@ async fn smtp_with_data() {
     );
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1118,7 +1118,7 @@ async fn smtp_with_data_giganto_cluster() {
     {
         smtpRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1202,7 +1202,7 @@ async fn ntlm_with_data() {
     {
         ntlmRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1220,9 +1220,9 @@ async fn ntlm_with_data() {
     );
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1251,7 +1251,7 @@ async fn ntlm_with_data_giganto_cluster() {
     {
         ntlmRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1333,7 +1333,7 @@ async fn kerberos_with_data() {
     {
         kerberosRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1351,9 +1351,9 @@ async fn kerberos_with_data() {
     );
 }
 
-fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1386,7 +1386,7 @@ async fn kerberos_with_data_giganto_cluster() {
     {
         kerberosRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1481,7 +1481,7 @@ async fn ssh_with_data() {
     {
         sshRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1499,9 +1499,9 @@ async fn ssh_with_data() {
     );
 }
 
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1538,7 +1538,7 @@ async fn ssh_with_data_giganto_cluster() {
     {
         sshRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1628,7 +1628,7 @@ async fn dce_rpc_with_data() {
     {
         dceRpcRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1646,9 +1646,9 @@ async fn dce_rpc_with_data() {
     );
 }
 
-fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1676,7 +1676,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
     {
         dceRpcRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1757,7 +1757,7 @@ async fn ftp_with_data() {
     {
         ftpRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1775,9 +1775,9 @@ async fn ftp_with_data() {
     );
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1813,7 +1813,7 @@ async fn ftp_with_data_giganto_cluster() {
     {
         ftpRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -1903,7 +1903,7 @@ async fn mqtt_with_data() {
     {
         mqttRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -1921,9 +1921,9 @@ async fn mqtt_with_data() {
     );
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1954,7 +1954,7 @@ async fn mqtt_with_data_giganto_cluster() {
     {
         mqttRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2041,7 +2041,7 @@ async fn ldap_with_data() {
     {
         ldapRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2059,9 +2059,9 @@ async fn ldap_with_data() {
     );
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2092,7 +2092,7 @@ async fn ldap_with_data_giganto_cluster() {
     {
         ldapRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2192,7 +2192,7 @@ async fn tls_with_data() {
     {
         tlsRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2210,9 +2210,9 @@ async fn tls_with_data() {
     );
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2257,7 +2257,7 @@ async fn tls_with_data_giganto_cluster() {
     {
         tlsRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2369,7 +2369,7 @@ async fn smb_with_data() {
     {
         smbRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2394,9 +2394,9 @@ async fn smb_with_data() {
     );
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2431,7 +2431,7 @@ async fn smb_with_data_giganto_cluster() {
     {
         smbRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2525,7 +2525,7 @@ async fn nfs_with_data() {
     {
         nfsRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2543,9 +2543,9 @@ async fn nfs_with_data() {
     );
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2571,7 +2571,7 @@ async fn nfs_with_data_giganto_cluster() {
     {
         nfsRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2654,7 +2654,7 @@ async fn bootp_with_data() {
     {
         bootpRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2673,9 +2673,9 @@ async fn bootp_with_data() {
     );
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2710,7 +2710,7 @@ async fn bootp_with_data_giganto_cluster() {
     {
         bootpRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2797,7 +2797,7 @@ async fn dhcp_with_data() {
     {
         dhcpRawEvents(
             filter: {
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 1
         ) {
@@ -2819,9 +2819,9 @@ async fn dhcp_with_data() {
     );
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -2869,7 +2869,7 @@ async fn dhcp_with_data_giganto_cluster() {
     {
         dhcpRawEvents(
             filter: {
-                source: "src 2"
+                sensor: "src 2"
             }
             first: 1
         ) {
@@ -2967,7 +2967,7 @@ async fn conn_with_start_or_end() {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.76" }
                 origPort: { end: 46380 }
             }
@@ -3154,7 +3154,7 @@ async fn union() {
         networkRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                source: "src 1"
+                sensor: "src 1"
             }
             first: 20
             ) {
@@ -3228,7 +3228,7 @@ async fn search_empty() {
         searchHttpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3261,7 +3261,7 @@ async fn search_http_with_data() {
         searchHttpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3297,7 +3297,7 @@ async fn search_conn_with_data() {
         searchConnRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3320,7 +3320,7 @@ async fn search_conn_with_data_giganto_cluster() {
         searchConnRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3383,7 +3383,7 @@ async fn search_dns_with_data() {
         searchDnsRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 70, end: 46380 }
@@ -3406,7 +3406,7 @@ async fn search_dns_with_data_giganto_cluster() {
         searchDnsRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 70, end: 46380 }
@@ -3469,7 +3469,7 @@ async fn search_rdp_with_data() {
         searchRdpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3492,7 +3492,7 @@ async fn search_rdp_with_data_giganto_cluster() {
         searchRdpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3555,7 +3555,7 @@ async fn search_smtp_with_data() {
         searchSmtpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3578,7 +3578,7 @@ async fn search_smtp_with_data_giganto_cluster() {
         searchSmtpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3641,7 +3641,7 @@ async fn search_ntlm_with_data() {
         searchNtlmRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3664,7 +3664,7 @@ async fn search_ntlm_with_data_giganto_cluster() {
         searchNtlmRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3727,7 +3727,7 @@ async fn search_kerberos_with_data() {
         searchKerberosRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3750,7 +3750,7 @@ async fn search_kerberos_with_data_giganto_cluster() {
         searchKerberosRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 2"
+                sensor: "src 2"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3812,7 +3812,7 @@ async fn search_ssh_with_data() {
         searchSshRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3848,7 +3848,7 @@ async fn search_dce_rpc_with_data() {
         searchDceRpcRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -3884,7 +3884,7 @@ async fn search_ftp_with_data() {
         searchFtpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -3920,7 +3920,7 @@ async fn search_mqtt_with_data() {
         searchMqttRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -3956,7 +3956,7 @@ async fn search_ldap_with_data() {
         searchLdapRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -3992,7 +3992,7 @@ async fn search_tls_with_data() {
         searchTlsRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -4028,7 +4028,7 @@ async fn search_smb_with_data() {
         searchSmbRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -4064,7 +4064,7 @@ async fn search_nfs_with_data() {
         searchNfsRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -4100,7 +4100,7 @@ async fn search_bootp_with_data() {
         searchBootpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }
@@ -4136,7 +4136,7 @@ async fn search_dhcp_with_data() {
         searchDhcpRawEvents(
             filter: {
                 time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
-                source: "src 1"
+                sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
                 origPort: { start: 46377, end: 46380 }

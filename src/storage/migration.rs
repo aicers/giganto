@@ -8,25 +8,28 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use giganto_client::ingest::log::SecuLog;
+use rocksdb::{ColumnFamilyDescriptor, WriteBatch, DB};
 use semver::{Version, VersionReq};
 use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+    ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21,
+    SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
-use super::Database;
+use super::{data_dir_to_db_path, Database, RAW_DATA_COLUMN_FAMILY_NAMES};
 use crate::{
     graphql::TIMESTAMP_SIZE,
     ingest::implement::EventFilter,
     storage::{
-        Conn as ConnFromV21, Http as HttpFromV21, Ntlm as NtlmFromV21, RawEventStore,
-        Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
+        rocksdb_options, Conn as ConnFromV21, DbOptions, Http as HttpFromV21,
+        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21,
+        RawEventStore, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21,
+        StorageKey, Tls as TlsFromV21,
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -34,14 +37,15 @@ const COMPATIBLE_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
 ///
 /// Returns an error if the data directory doesn't exist and cannot be created,
 /// or if the data directory exists but is in the format too old to be upgraded.
-pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
+pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
     let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid version requirement");
     let mut version: Version = retrieve_or_create_version(data_dir)?;
     if compatible.matches(&version) {
         return Ok(());
     }
 
-    let migration: Vec<(_, _, fn(_) -> Result<_, _>)> = vec![
+    let db_path = data_dir_to_db_path(data_dir);
+    let migration: Vec<(_, _, fn(_, _) -> Result<_, _>)> = vec![
         (
             VersionReq::parse(">=0.13.0,<0.19.0").expect("valid version requirement"),
             Version::parse("0.19.0").expect("valid version"),
@@ -52,6 +56,11 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
             Version::parse("0.21.0").expect("valid version"),
             migrate_0_19_to_0_21_0,
         ),
+        (
+            VersionReq::parse(">=0.21.0,<0.23.0").expect("valid version requirement"),
+            Version::parse("0.23.0-alpha.1").expect("valid version"),
+            migrate_0_21_to_0_23,
+        ),
     ];
 
     while let Some((_req, to, m)) = migration
@@ -59,7 +68,7 @@ pub fn migrate_data_dir(data_dir: &Path, db: &Database) -> Result<()> {
         .find(|(req, _to, _m)| req.matches(&version))
     {
         info!("Migrating database to {to}");
-        m(db)?;
+        m(&db_path, db_opts)?;
         version = to.clone();
         if compatible.matches(&version) {
             return create_version_file(&data_dir.join("VERSION"))
@@ -107,13 +116,36 @@ fn read_version_file(path: &Path) -> Result<Version> {
     Version::parse(&ver).context("cannot parse VERSION")
 }
 
+const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+impl Database {
+    fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Result<Self> {
+        let (db_opts, cf_opts) = rocksdb_options(db_opts);
+        let mut cfs_name: Vec<&str> = Vec::with_capacity(
+            RAW_DATA_COLUMN_FAMILY_NAMES.len() + OLD_META_DATA_COLUMN_FAMILY_NAMES.len(),
+        );
+        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(OLD_META_DATA_COLUMN_FAMILY_NAMES);
+
+        let cfs = cfs_name
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+
+        let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).context("cannot open database")?;
+        Ok(Database {
+            db: std::sync::Arc::new(db),
+        })
+    }
+}
+
 // Delete the netflow5/netflow5/secuLog data in the old key and insert it with the new key.
-fn migrate_0_13_to_0_19_0(db: &Database) -> Result<()> {
-    let netflow5_store = db.netflow5_store()?;
-    migrate_netflow(&netflow5_store)?;
+fn migrate_0_13_to_0_19_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open_with_old_cfs(db_path, db_opts)?;
+
+    let netflow5_store: RawEventStore<'_, Netflow5FromV23> = db.netflow5_store()?;
+    migrate_netflow_from_0_13_to_0_19_0::<Netflow5FromV23, Netflow5BeforeV23>(&netflow5_store)?;
 
     let netflow9_store = db.netflow9_store()?;
-    migrate_netflow(&netflow9_store)?;
+    migrate_netflow_from_0_13_to_0_19_0::<Netflow9FromV23, Netflow9BeforeV23>(&netflow9_store)?;
 
     let secu_log_store = db.secu_log_store()?;
     for raw_event in secu_log_store.iter_forward() {
@@ -124,7 +156,7 @@ fn migrate_0_13_to_0_19_0(db: &Database) -> Result<()> {
 
         let (Ok(timestamp), Ok(secu_log_raw_event)) = (
             get_timestamp_from_key(&key),
-            bincode::deserialize::<SecuLog>(&value),
+            bincode::deserialize::<SecuLogBeforeV23>(&value),
         ) else {
             continue;
         };
@@ -139,8 +171,36 @@ fn migrate_0_13_to_0_19_0(db: &Database) -> Result<()> {
     Ok(())
 }
 
+fn migrate_netflow_from_0_13_to_0_19_0<S, T>(store: &RawEventStore<'_, S>) -> Result<()>
+where
+    T: DeserializeOwned + EventFilter,
+    S: DeserializeOwned,
+{
+    for raw_event in store.iter_forward() {
+        let Ok((key, value)) = raw_event else {
+            continue;
+        };
+        store.delete(&key)?;
+
+        let (Ok(timestamp), Ok(netflow_raw_event)) = (
+            get_timestamp_from_key(&key),
+            bincode::deserialize::<T>(&value),
+        ) else {
+            continue;
+        };
+        let new_key = StorageKey::builder()
+            .start_key(&netflow_raw_event.sensor().unwrap())
+            .end_key(timestamp)
+            .build();
+        store.append(&new_key.key(), &value)?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
-fn migrate_0_19_to_0_21_0(db: &Database) -> Result<()> {
+fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open_with_old_cfs(db_path, db_opts)?;
+
     // migration ntlm raw event
     info!("start migration for ntlm");
     let store = db.ntlm_store()?;
@@ -216,28 +276,95 @@ fn migrate_0_19_to_0_21_0(db: &Database) -> Result<()> {
     Ok(())
 }
 
-fn migrate_netflow<T>(store: &RawEventStore<'_, T>) -> Result<()>
-where
-    T: DeserializeOwned + EventFilter,
-{
-    for raw_event in store.iter_forward() {
-        let Ok((key, value)) = raw_event else {
-            continue;
-        };
-        store.delete(&key)?;
+fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    rename_sources_to_sensors(db_path, db_opts)?;
 
-        let (Ok(timestamp), Ok(netflow_raw_event)) = (
-            get_timestamp_from_key(&key),
-            bincode::deserialize::<T>(&value),
-        ) else {
-            continue;
-        };
-        let new_key = StorageKey::builder()
-            .start_key(&netflow_raw_event.source().unwrap()) //source is always exist
-            .end_key(timestamp)
-            .build();
-        store.append(&new_key.key(), &value)?;
+    let db = Database::open(db_path, db_opts)?;
+    migrate_0_21_to_0_23_netflow5(&db)?;
+    migrate_0_21_to_0_23_netflow9(&db)?;
+    migrate_0_21_to_0_23_secu_log(&db)?;
+    Ok(())
+}
+
+fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
+    let store = db.netflow5_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<Netflow5BeforeV23>(&val)?;
+        let convert_new: Netflow5FromV23 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
     }
+    info!("netflow5 migration complete");
+    Ok(())
+}
+
+fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
+    let store = db.netflow9_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<Netflow9BeforeV23>(&val)?;
+        let convert_new: Netflow9FromV23 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+    info!("netflow9 migration complete");
+    Ok(())
+}
+
+fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
+    let store = db.secu_log_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<SecuLogBeforeV23>(&val)?;
+        let convert_new: SecuLogFromV23 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+    info!("secu log migration complete");
+    Ok(())
+}
+
+// Since rocksdb does not provide column familiy renaming interface, we need to copy the data from
+// the old column family to the new one, and then drop the old column family.
+fn rename_sources_to_sensors(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    const OLD_CF: &str = "sources";
+    const NEW_CF: &str = "sensors";
+
+    let (db_opts, _) = rocksdb_options(db_opts);
+
+    let mut cfs = DB::list_cf(&db_opts, db_path).unwrap_or_default();
+
+    if cfs.iter().all(|cf| cf.as_str() != OLD_CF) {
+        info!("Ignore column family renaming: column family {OLD_CF} does not exist.");
+        return Ok(());
+    }
+
+    info!("Renaming column family from {} to {}", OLD_CF, NEW_CF);
+    cfs.push(NEW_CF.to_string());
+
+    let mut db = DB::open_cf(&db_opts, db_path, cfs).context("cannot open database")?;
+
+    let mut batch = WriteBatch::default();
+    let old_cf = db
+        .cf_handle(OLD_CF)
+        .context(format!("{OLD_CF} column family does not exist"))?;
+    let new_cf = db
+        .cf_handle(NEW_CF)
+        .context(format!("{NEW_CF} column family does not exist"))?;
+
+    let iter = db.iterator_cf(old_cf, rocksdb::IteratorMode::Start);
+    for (key, value) in iter.flatten() {
+        batch.put_cf(&new_cf, key, value);
+    }
+
+    if db.write(batch).is_ok() {
+        db.drop_cf(OLD_CF)
+            .context("Failed to drop old column family")?;
+    }
+
+    info!("Column family renaming from {OLD_CF} to {NEW_CF} is complete",);
+
     Ok(())
 }
 
@@ -255,19 +382,18 @@ mod tests {
     use std::net::IpAddr;
 
     use chrono::Utc;
-    use giganto_client::ingest::{
-        log::SecuLog,
-        netflow::{Netflow5, Netflow9},
-    };
+    use rocksdb::{Options, WriteBatch, DB};
     use semver::{Version, VersionReq};
 
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::{
+        data_dir_to_db_path,
         migration::migration_structures::{
-            ConnBeforeV21, HttpFromV12BeforeV21, NtlmBeforeV21, SmtpBeforeV21, SshBeforeV21,
-            TlsBeforeV21,
+            ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23,
+            NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
         },
-        Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Ntlm as NtlmFromV21,
+        Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, SecuLog as SecuLogFromV23,
         Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
     };
 
@@ -297,18 +423,21 @@ mod tests {
     fn migrate_0_13_to_0_19() {
         const OLD_NETFLOW5_PREFIX_KEY: &str = "netflow5";
         const OLD_NETFLOW9_PREFIX_KEY: &str = "netflow9";
-        const TEST_SOURCE: &str = "src1";
+        const TEST_SENSOR: &str = "src1";
         const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
         const TEST_TIMESTAMP: i64 = 1000;
 
         // open temp db
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
 
-        // insert netflow5 data using the old key.
-        let netflow5_store = db.netflow5_store().unwrap();
-        let netflow5_body = Netflow5 {
-            source: TEST_SOURCE.to_string(),
+        let netflow5_old_key = StorageKey::builder()
+            .start_key(OLD_NETFLOW5_PREFIX_KEY)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        let netflow5_body = Netflow5BeforeV23 {
+            source: TEST_SENSOR.to_string(),
             src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             next_hop: "192.168.4.78".parse::<IpAddr>().unwrap(),
@@ -334,20 +463,14 @@ mod tests {
             sampling_rate: 0,
         };
         let serialized_netflow5 = bincode::serialize(&netflow5_body).unwrap();
-        let netflow5_old_key = StorageKey::builder()
-            .start_key(OLD_NETFLOW5_PREFIX_KEY)
+
+        let netflow9_old_key = StorageKey::builder()
+            .start_key(OLD_NETFLOW9_PREFIX_KEY)
             .end_key(TEST_TIMESTAMP)
             .build()
             .key();
-
-        netflow5_store
-            .append(&netflow5_old_key, &serialized_netflow5)
-            .unwrap();
-
-        // insert netflow9 data using the old key.
-        let netflow9_store = db.netflow9_store().unwrap();
-        let netflow9_body = Netflow9 {
-            source: TEST_SOURCE.to_string(),
+        let netflow9_body = Netflow9BeforeV23 {
+            source: TEST_SENSOR.to_string(),
             sequence: 3282250832,
             source_id: 17,
             template_id: 260,
@@ -359,19 +482,14 @@ mod tests {
             contents: format!("netflow5_contents {TEST_TIMESTAMP}").to_string(),
         };
         let serialized_netflow9 = bincode::serialize(&netflow9_body).unwrap();
-        let netflow9_old_key = StorageKey::builder()
-            .start_key(OLD_NETFLOW9_PREFIX_KEY)
+
+        let secu_log_old_key = StorageKey::builder()
+            .start_key(TEST_KIND)
             .end_key(TEST_TIMESTAMP)
             .build()
             .key();
-        netflow9_store
-            .append(&netflow9_old_key, &serialized_netflow9)
-            .unwrap();
-
-        // insert secuLog data using the old key.
-        let secu_log_store = db.secu_log_store().unwrap();
-        let secu_log_body = SecuLog {
-            source: TEST_SOURCE.to_string(),
+        let secu_log_body = SecuLogBeforeV23 {
+            source: TEST_SENSOR.to_string(),
             kind: TEST_KIND.to_string(),
             log_type: TEST_KIND.to_string(),
             version: "V3".to_string(),
@@ -383,31 +501,52 @@ mod tests {
             contents: format!("secu_log_contents {TEST_TIMESTAMP}").to_string(),
         };
         let serialized_secu_log = bincode::serialize(&secu_log_body).unwrap();
-        let secu_log_old_key = StorageKey::builder()
-            .start_key(TEST_KIND)
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-        secu_log_store
-            .append(&secu_log_old_key, &serialized_secu_log)
-            .unwrap();
 
-        //migration 0.13.0 to 0.19.0
-        super::migrate_0_13_to_0_19_0(&db).unwrap();
+        {
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
 
-        //check netflow5/9 migration
+            // insert netflow5 data using the old key.
+            let netflow5_store = db.netflow5_store().unwrap();
+            netflow5_store
+                .append(&netflow5_old_key, &serialized_netflow5)
+                .unwrap();
+
+            // insert netflow9 data using the old key.
+            let netflow9_store = db.netflow9_store().unwrap();
+            netflow9_store
+                .append(&netflow9_old_key, &serialized_netflow9)
+                .unwrap();
+
+            // insert secuLog data using the old key.
+            let secu_log_store = db.secu_log_store().unwrap();
+
+            secu_log_store
+                .append(&secu_log_old_key, &serialized_secu_log)
+                .unwrap();
+        }
+
+        // migration 0.13.0 to 0.19.0
+        super::migrate_0_13_to_0_19_0(&db_path, &DbOptions::default()).unwrap();
+
+        // check netflow5/9 migration
+
+        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+
         let netflow_new_key = StorageKey::builder()
-            .start_key(TEST_SOURCE)
+            .start_key(TEST_SENSOR)
             .end_key(TEST_TIMESTAMP)
             .build()
             .key();
 
+        let netflow5_store = db.netflow5_store().unwrap();
         let mut result_iter = netflow5_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
         assert_ne!(netflow5_old_key, result_key.to_vec());
         assert_eq!(netflow_new_key, result_key.to_vec());
         assert_eq!(serialized_netflow5, result_value.to_vec());
+
+        let netflow9_store = db.netflow9_store().unwrap();
 
         let mut result_iter = netflow9_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
@@ -418,11 +557,13 @@ mod tests {
 
         //check secuLog migration
         let secu_log_new_key = StorageKey::builder()
-            .start_key(TEST_SOURCE)
+            .start_key(TEST_SENSOR)
             .mid_key(Some(TEST_KIND.as_bytes().to_vec()))
             .end_key(TEST_TIMESTAMP)
             .build()
             .key();
+
+        let secu_log_store = db.secu_log_store().unwrap();
 
         let mut result_iter = secu_log_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
@@ -436,23 +577,17 @@ mod tests {
     fn migrate_0_19_to_0_21_0() {
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let conn_store = db.conn_store().unwrap();
-        let http_store = db.http_store().unwrap();
-        let smtp_store = db.smtp_store().unwrap();
-        let ntlm_store = db.ntlm_store().unwrap();
-        let ssh_store = db.ssh_store().unwrap();
-        let tls_store = db.tls_store().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
 
         // generate key
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let source = "src1";
-        let mut key = Vec::with_capacity(source.len() + 1 + std::mem::size_of::<i64>());
-        key.extend_from_slice(source.as_bytes());
+        let sensor = "src1";
+        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
+        key.extend_from_slice(sensor.as_bytes());
         key.push(0);
         key.extend(timestamp.to_be_bytes());
 
-        // insert old conn raw data
+        // prepare old conn raw data
         let old_conn = ConnBeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -467,9 +602,8 @@ mod tests {
             resp_pkts: 511,
         };
         let ser_old_conn = bincode::serialize(&old_conn).unwrap();
-        conn_store.append(&key, &ser_old_conn).unwrap();
 
-        // insert old http raw data
+        // prepare old http raw data
         let old_http = HttpFromV12BeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -499,9 +633,8 @@ mod tests {
             resp_mime_types: vec!["-".to_string()],
         };
         let ser_old_http = bincode::serialize(&old_http).unwrap();
-        http_store.append(&key, &ser_old_http).unwrap();
 
-        // insert old smtp raw data
+        // prepare old smtp raw data
         let old_smtp = SmtpBeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -517,9 +650,8 @@ mod tests {
             agent: "agent".to_string(),
         };
         let ser_old_smtp = bincode::serialize(&old_smtp).unwrap();
-        smtp_store.append(&key, &ser_old_smtp).unwrap();
 
-        // insert old ntlm raw data
+        // prepare old ntlm raw data
         let old_ntlm = NtlmBeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -536,9 +668,8 @@ mod tests {
             success: "tf".to_string(),
         };
         let ser_old_ntlm = bincode::serialize(&old_ntlm).unwrap();
-        ntlm_store.append(&key, &ser_old_ntlm).unwrap();
 
-        // insert old ssh raw data
+        // prepare old ssh raw data
         let old_ssh = SshBeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -560,9 +691,8 @@ mod tests {
             host_key: "host_key".to_string(),
         };
         let ser_old_ssh = bincode::serialize(&old_ssh).unwrap();
-        ssh_store.append(&key, &ser_old_ssh).unwrap();
 
-        // insert old tls raw data
+        // prepare old tls raw data
         let old_tls = TlsBeforeV21 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -590,12 +720,36 @@ mod tests {
             last_alert: 13,
         };
         let ser_old_tls = bincode::serialize(&old_tls).unwrap();
-        tls_store.append(&key, &ser_old_tls).unwrap();
 
-        //migration 0.19.0 to 0.21.0
-        super::migrate_0_19_to_0_21_0(&db).unwrap();
+        {
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
 
-        //check conn migration
+            let conn_store = db.conn_store().unwrap();
+            conn_store.append(&key, &ser_old_conn).unwrap();
+
+            let http_store = db.http_store().unwrap();
+            http_store.append(&key, &ser_old_http).unwrap();
+
+            let smtp_store = db.smtp_store().unwrap();
+            smtp_store.append(&key, &ser_old_smtp).unwrap();
+
+            let ntlm_store = db.ntlm_store().unwrap();
+            ntlm_store.append(&key, &ser_old_ntlm).unwrap();
+
+            let ssh_store = db.ssh_store().unwrap();
+            ssh_store.append(&key, &ser_old_ssh).unwrap();
+
+            let tls_store = db.tls_store().unwrap();
+            tls_store.append(&key, &ser_old_tls).unwrap();
+        }
+
+        // migration 0.19.0 to 0.21.0
+        super::migrate_0_19_to_0_21_0(&db_path, &DbOptions::default()).unwrap();
+
+        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+
+        // check conn migration
+        let conn_store = db.conn_store().unwrap();
         let raw_event = conn_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_conn = bincode::deserialize::<ConnFromV21>(&val).unwrap();
@@ -617,7 +771,8 @@ mod tests {
         };
         assert_eq!(new_conn, store_conn);
 
-        //check http migration
+        // check http migration
+        let http_store = db.http_store().unwrap();
         let raw_event = http_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_http = bincode::deserialize::<HttpFromV21>(&val).unwrap();
@@ -653,7 +808,8 @@ mod tests {
         };
         assert_eq!(new_http, store_http);
 
-        //check smtp migration
+        // check smtp migration
+        let smtp_store = db.smtp_store().unwrap();
         let raw_event = smtp_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_smtp = bincode::deserialize::<SmtpFromV21>(&val).unwrap();
@@ -674,7 +830,8 @@ mod tests {
         };
         assert_eq!(new_smtp, store_smtp);
 
-        //check ntlm migration
+        // check ntlm migration
+        let ntlm_store = db.ntlm_store().unwrap();
         let raw_event = ntlm_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_ntlm = bincode::deserialize::<NtlmFromV21>(&val).unwrap();
@@ -693,7 +850,8 @@ mod tests {
         };
         assert_eq!(new_ntlm, store_ntlm);
 
-        //check ssh migration
+        // check ssh migration
+        let ssh_store = db.ssh_store().unwrap();
         let raw_event = ssh_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_ssh = bincode::deserialize::<SshFromV21>(&val).unwrap();
@@ -720,7 +878,8 @@ mod tests {
         };
         assert_eq!(new_ssh, store_ssh);
 
-        //check tls migration
+        // check tls migration
+        let tls_store = db.tls_store().unwrap();
         let raw_event = tls_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
         let store_tls = bincode::deserialize::<TlsFromV21>(&val).unwrap();
@@ -754,5 +913,204 @@ mod tests {
             last_alert: 13,
         };
         assert_eq!(new_tls, store_tls);
+    }
+
+    #[test]
+    fn migrate_0_21_to_0_23() {
+        const TEST_SENSOR: &str = "src1";
+        const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
+        const TEST_TIMESTAMP: i64 = 1000;
+
+        // open temp db
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+
+        let netflow5_key = StorageKey::builder()
+            .start_key(TEST_SENSOR)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        let netflow5_old = Netflow5BeforeV23 {
+            source: "".to_string(),
+            src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            next_hop: "192.168.4.78".parse::<IpAddr>().unwrap(),
+            input: 65535,
+            output: 1,
+            d_pkts: 1,
+            d_octets: 464,
+            first: 3477280180,
+            last: 3477280180,
+            src_port: 9,
+            dst_port: 771,
+            tcp_flags: 0,
+            prot: 1,
+            tos: 192,
+            src_as: 0,
+            dst_as: 0,
+            src_mask: 0,
+            dst_mask: 0,
+            sequence: 64,
+            engine_type: 0,
+            engine_id: 0,
+            sampling_mode: 0,
+            sampling_rate: 0,
+        };
+        let serialized_netflow5_old = bincode::serialize(&netflow5_old).unwrap();
+
+        let netflow9_key = StorageKey::builder()
+            .start_key(TEST_SENSOR)
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        let netflow9_old = Netflow9BeforeV23 {
+            source: "".to_string(),
+            sequence: 3282250832,
+            source_id: 17,
+            template_id: 260,
+            orig_addr: "192.168.4.75".parse::<IpAddr>().unwrap(),
+            orig_port: 5000,
+            resp_addr: "192.168.4.80".parse::<IpAddr>().unwrap(),
+            resp_port: 6000,
+            proto: 6,
+            contents: format!("netflow5_contents {TEST_TIMESTAMP}").to_string(),
+        };
+        let serialized_netflow9_old = bincode::serialize(&netflow9_old).unwrap();
+
+        let secu_log_key = StorageKey::builder()
+            .start_key(TEST_SENSOR)
+            .mid_key(Some(TEST_KIND.as_bytes().to_vec()))
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+        let secu_log_old = SecuLogBeforeV23 {
+            source: "".to_string(),
+            kind: TEST_KIND.to_string(),
+            log_type: TEST_KIND.to_string(),
+            version: "V3".to_string(),
+            orig_addr: None,
+            orig_port: None,
+            resp_addr: None,
+            resp_port: None,
+            proto: None,
+            contents: format!("secu_log_contents {TEST_TIMESTAMP}").to_string(),
+        };
+
+        let serialized_secu_log_old = bincode::serialize(&secu_log_old).unwrap();
+
+        {
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+
+            // insert netflow5 data using the old key.
+            let netflow5_store = db.netflow5_store().unwrap();
+            netflow5_store
+                .append(&netflow5_key, &serialized_netflow5_old)
+                .unwrap();
+
+            // insert netflow9 data using the old key.
+            let netflow9_store = db.netflow9_store().unwrap();
+            netflow9_store
+                .append(&netflow9_key, &serialized_netflow9_old)
+                .unwrap();
+
+            // insert secuLog data using the old key.
+            let secu_log_store = db.secu_log_store().unwrap();
+            secu_log_store
+                .append(&secu_log_key, &serialized_secu_log_old)
+                .unwrap();
+        }
+
+        // run migration
+        super::migrate_0_21_to_0_23(&db_path, &DbOptions::default()).unwrap();
+
+        let db = Database::open(&db_path, &DbOptions::default()).unwrap();
+
+        // check netflow5
+        let netflow5_store = db.netflow5_store().unwrap();
+        let mut result_iter = netflow5_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_eq!(netflow5_key, result_key.to_vec());
+        let netflow5_new: Netflow5FromV23 = netflow5_old.into();
+        assert_eq!(
+            bincode::serialize(&netflow5_new).unwrap(),
+            result_value.to_vec()
+        );
+
+        // check netflow9
+        let netflow9_store = db.netflow9_store().unwrap();
+        let mut result_iter = netflow9_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_eq!(netflow9_key, result_key.to_vec());
+        let netflow9_new: Netflow9FromV23 = netflow9_old.into();
+        assert_eq!(
+            bincode::serialize(&netflow9_new).unwrap(),
+            result_value.to_vec()
+        );
+
+        // check secuLog
+        let secu_log_store = db.secu_log_store().unwrap();
+        let mut result_iter = secu_log_store.iter_forward();
+        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
+
+        assert_eq!(secu_log_key, result_key.to_vec());
+        let secu_log_new: SecuLogFromV23 = secu_log_old.into();
+        assert_eq!(
+            bincode::serialize(&secu_log_new).unwrap(),
+            result_value.to_vec()
+        );
+    }
+
+    #[test]
+    fn migrate_0_21_to_0_23_with_renaming_cf_sources_to_sensors() {
+        const OLD_CF: &str = "sources";
+        const NEW_CF: &str = "sensors";
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = &data_dir_to_db_path(db_dir.path());
+        let (db_opts, _cf_opts) = crate::storage::rocksdb_options(&DbOptions::default());
+
+        // create old cf and insert data
+        {
+            let db = DB::open_cf(&db_opts, db_path, &[OLD_CF]).unwrap();
+
+            let old_cf = db.cf_handle(OLD_CF).unwrap();
+            let mut batch = WriteBatch::default();
+            batch.put_cf(&old_cf, b"test_key_1", b"test_value_1");
+            batch.put_cf(&old_cf, b"test_key_2", b"test_value_2");
+            db.write(batch).unwrap();
+        }
+
+        let old_cfs: Vec<String> = DB::list_cf(&db_opts, db_path).unwrap_or_default();
+        assert!(old_cfs.iter().any(|cf| cf == OLD_CF));
+        assert!(!old_cfs.iter().any(|cf| cf == NEW_CF));
+
+        // run migration
+        super::migrate_0_21_to_0_23(&db_path, &DbOptions::default()).unwrap();
+
+        let new_cfs: Vec<String> = DB::list_cf(&db_opts, db_path).unwrap_or_default();
+        assert!(!new_cfs.iter().any(|cf| cf == OLD_CF));
+        assert!(new_cfs.iter().any(|cf| cf == NEW_CF));
+
+        let db_after_renaming =
+            DB::open_cf_for_read_only(&Options::default(), db_path, &[NEW_CF], false).unwrap();
+
+        assert!(db_after_renaming.cf_handle(NEW_CF).is_some());
+
+        let new_cf = db_after_renaming.cf_handle(NEW_CF).unwrap();
+
+        let result_value_1 = db_after_renaming
+            .get_cf(&new_cf, b"test_key_1")
+            .unwrap()
+            .unwrap();
+
+        let result_value_2 = db_after_renaming
+            .get_cf(&new_cf, b"test_key_2")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result_value_1, b"test_value_1");
+        assert_eq!(result_value_2, b"test_value_2");
     }
 }

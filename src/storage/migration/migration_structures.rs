@@ -2,9 +2,13 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::storage::{
-    Conn as ConnFromV21, Http as HttpFromV21, Ntlm as NtlmFromV21, Smtp as SmtpFromV21,
-    Ssh as SshFromV21, Tls as TlsFromV21,
+use crate::{
+    ingest::implement::EventFilter,
+    storage::{
+        Conn as ConnFromV21, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, SecuLog as SecuLogFromV23,
+        Smtp as SmtpFromV21, Ssh as SshFromV21, Tls as TlsFromV21,
+    },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct HttpFromV12BeforeV21 {
@@ -281,6 +285,205 @@ impl From<TlsBeforeV21> for TlsFromV21 {
             issuer_org_unit_name: input.issuer_org_unit_name,
             issuer_common_name: input.issuer_common_name,
             last_alert: input.last_alert,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Netflow5BeforeV23 {
+    pub source: String,
+    pub src_addr: IpAddr,
+    pub dst_addr: IpAddr,
+    pub next_hop: IpAddr,
+    pub input: u16,
+    pub output: u16,
+    pub d_pkts: u32,
+    pub d_octets: u32,
+    pub first: u32, // milliseconds
+    pub last: u32,  // milliseconds
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub tcp_flags: u8,
+    pub prot: u8,
+    pub tos: u8, // Hex
+    pub src_as: u16,
+    pub dst_as: u16,
+    pub src_mask: u8,
+    pub dst_mask: u8,
+    pub sequence: u32,
+    pub engine_type: u8,
+    pub engine_id: u8,
+    pub sampling_mode: u8,
+    pub sampling_rate: u16,
+}
+
+impl EventFilter for Netflow5BeforeV23 {
+    fn data_type(&self) -> String {
+        "netflow v5".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.src_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.dst_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.src_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.dst_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+    fn sensor(&self) -> Option<String> {
+        Some(self.source.clone())
+    }
+}
+
+impl From<Netflow5BeforeV23> for Netflow5FromV23 {
+    fn from(input: Netflow5BeforeV23) -> Self {
+        Self {
+            src_addr: input.src_addr,
+            dst_addr: input.dst_addr,
+            next_hop: input.next_hop,
+            input: input.input,
+            output: input.output,
+            d_pkts: input.d_pkts,
+            d_octets: input.d_octets,
+            first: input.first,
+            last: input.last,
+            src_port: input.src_port,
+            dst_port: input.dst_port,
+            tcp_flags: input.tcp_flags,
+            prot: input.prot,
+            tos: input.tos,
+            src_as: input.src_as,
+            dst_as: input.dst_as,
+            src_mask: input.src_mask,
+            dst_mask: input.dst_mask,
+            sequence: input.sequence,
+            engine_type: input.engine_type,
+            engine_id: input.engine_id,
+            sampling_mode: input.sampling_mode,
+            sampling_rate: input.sampling_rate,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Netflow9BeforeV23 {
+    pub source: String,
+    pub sequence: u32,
+    pub source_id: u32,
+    pub template_id: u16,
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub contents: String,
+}
+
+impl EventFilter for Netflow9BeforeV23 {
+    fn data_type(&self) -> String {
+        "netflow v9".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        Some(self.orig_port)
+    }
+    fn resp_port(&self) -> Option<u16> {
+        Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.contents.clone())
+    }
+    fn sensor(&self) -> Option<String> {
+        Some(self.source.clone())
+    }
+}
+
+impl From<Netflow9BeforeV23> for Netflow9FromV23 {
+    fn from(input: Netflow9BeforeV23) -> Self {
+        Self {
+            sequence: input.sequence,
+            source_id: input.source_id,
+            template_id: input.template_id,
+            orig_addr: input.orig_addr,
+            orig_port: input.orig_port,
+            resp_addr: input.resp_addr,
+            resp_port: input.resp_port,
+            proto: input.proto,
+            contents: input.contents,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SecuLogBeforeV23 {
+    pub source: String,
+    pub kind: String,
+    pub log_type: String,
+    pub version: String,
+    pub orig_addr: Option<IpAddr>,
+    pub orig_port: Option<u16>,
+    pub resp_addr: Option<IpAddr>,
+    pub resp_port: Option<u16>,
+    pub proto: Option<u8>,
+    pub contents: String,
+}
+
+impl EventFilter for SecuLogBeforeV23 {
+    fn data_type(&self) -> String {
+        "security log".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        self.orig_addr
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        self.resp_addr
+    }
+    fn orig_port(&self) -> Option<u16> {
+        self.orig_port
+    }
+    fn resp_port(&self) -> Option<u16> {
+        self.resp_port
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        Some(self.contents.clone())
+    }
+    fn sensor(&self) -> Option<String> {
+        Some(self.source.clone())
+    }
+}
+
+impl From<SecuLogBeforeV23> for SecuLogFromV23 {
+    fn from(input: SecuLogBeforeV23) -> Self {
+        Self {
+            kind: input.kind,
+            log_type: input.log_type,
+            version: input.version,
+            orig_addr: input.orig_addr,
+            orig_port: input.orig_port,
+            resp_addr: input.resp_addr,
+            resp_port: input.resp_port,
+            proto: input.proto,
+            contents: input.contents,
         }
     }
 }

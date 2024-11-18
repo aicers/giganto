@@ -1,7 +1,6 @@
-scalar StringNumberU32
-scalar StringNumberU64
-scalar StringNumberI64
-scalar StringNumberUSize
+# Indicates that an Input Object is a OneOf Input Object (and thus requires
+#                         exactly one of its field be provided)
+directive @oneOf on INPUT_OBJECT
 
 type BootpRawEvent {
   timestamp: DateTime!
@@ -42,6 +41,23 @@ type BootpRawEventEdge {
 
   # A cursor for use in pagination
   cursor: String!
+}
+
+type Config {
+  ingestSrvAddr: String!
+  publishSrvAddr: String!
+  graphqlSrvAddr: String!
+  retention: String!
+  dataDir: String!
+  logDir: String!
+  exportDir: String!
+  maxOpenFiles: Int!
+  maxMbOfLevelBase: StringNumberU64!
+  numOfThread: Int!
+  maxSubCompactions: StringNumberU32!
+  addrToPeers: String
+  peers: [PeerIdentity!]
+  ackTransmission: Int!
 }
 
 type ConnRawEvent {
@@ -246,7 +262,7 @@ type DnsRawEventEdge {
 
 input ExportFilter {
   protocol: String!
-  sourceId: String!
+  sensorId: String!
   agentName: String
   agentId: String
   kind: String
@@ -465,27 +481,6 @@ type FtpRawEventEdge {
   cursor: String!
 }
 
-type GigantoConfig {
-  ingestSrvAddr: String!
-  publishSrvAddr: String!
-  graphqlSrvAddr: String!
-  retention: String!
-  maxOpenFiles: Int!
-  maxMbOfLevelBase: Int!
-  peerAddress: String!
-  peerList: [PeerList!]!
-  ackTransmissionCnt: Int!
-}
-
-type GigantoStatus {
-  name: String!
-  cpuUsage: Float!
-  totalMemory: Int!
-  usedMemory: Int!
-  totalDiskSpace: Int!
-  usedDiskSpace: Int!
-}
-
 type HttpRawEvent {
   timestamp: DateTime!
   origAddr: String!
@@ -500,8 +495,8 @@ type HttpRawEvent {
   referrer: String!
   version: String!
   userAgent: String!
-  requestLen: StringNumberUSize!
-  responseLen: StringNumberUSize!
+  requestLen: StringNumberUsize!
+  responseLen: StringNumberUsize!
   statusCode: Int!
   statusMsg: String!
   username: String!
@@ -576,11 +571,6 @@ type ImageLoadedEventEdge {
 
   # A cursor for use in pagination
   cursor: String!
-}
-
-input InputPeerList {
-  addr: String!
-  hostname: String!
 }
 
 input IpRange {
@@ -666,7 +656,7 @@ type LdapRawEventEdge {
 
 input LogFilter {
   time: TimeRange
-  source: String!
+  sensor: String!
   kind: String
 }
 
@@ -732,8 +722,7 @@ type MqttRawEventEdge {
 }
 
 type Mutation {
-  setGigantoConfig(field: UserConfig!): String!
-  setAckTransmissionCount(count: Int!): String!
+  setConfig(draft: String!): Boolean!
   stop: Boolean!
   reboot: Boolean!
   shutdown: Boolean!
@@ -821,7 +810,7 @@ type Netflow9RawEventEdge {
 
 input NetflowFilter {
   time: TimeRange
-  source: String!
+  sensor: String!
   origAddr: IpRange
   respAddr: IpRange
   origPort: PortRange
@@ -873,7 +862,7 @@ type NetworkConnectionEventEdge {
 
 input NetworkFilter {
   time: TimeRange
-  source: String!
+  sensor: String!
   origAddr: IpRange
   respAddr: IpRange
   origPort: PortRange
@@ -1049,7 +1038,7 @@ type PacketEdge {
 }
 
 input PacketFilter {
-  source: String!
+  sensor: String!
   requestTime: DateTime!
   packetTime: TimeRange
 }
@@ -1074,7 +1063,7 @@ type Pcap {
   parsedPcap: String!
 }
 
-type PeerList {
+type PeerIdentity {
   addr: String!
   hostname: String!
 }
@@ -1408,13 +1397,13 @@ type Query {
     first: Int
     last: Int
   ): TimeSeriesConnection!
-  gigantoStatus: GigantoStatus!
+  status: Status!
   propertiesCf(filter: PropertyFilter!): Properties!
-  gigantoConfig: GigantoConfig!
+  config: Config!
   ping: Boolean!
-  sources: [String!]!
+  sensors: [String!]!
   statistics(
-    sources: [String!]!
+    sensors: [String!]!
     time: TimeRange
     protocols: [String!]
     requestFromPeer: Boolean
@@ -1660,7 +1649,7 @@ type RegistryValueSetEventEdge {
 
 input SearchFilter {
   time: TimeRange
-  source: String!
+  sensor: String!
   origAddr: IpRange
   respAddr: IpRange
   origPort: PortRange
@@ -1674,7 +1663,7 @@ input SearchFilter {
 
 input SecuLogFilter {
   time: TimeRange
-  source: String!
+  sensor: String!
   kind: String!
   origAddr: IpRange
   respAddr: IpRange
@@ -1849,9 +1838,26 @@ type StatisticsInfo {
 }
 
 type StatisticsRawEvent {
-  source: String!
+  sensor: String!
   stats: [StatisticsInfo!]!
 }
+
+type Status {
+  name: String!
+  cpuUsage: Float!
+  totalMemory: Int!
+  usedMemory: Int!
+  totalDiskSpace: Int!
+  usedDiskSpace: Int!
+}
+
+scalar StringNumberI64
+
+scalar StringNumberU32
+
+scalar StringNumberU64
+
+scalar StringNumberUsize
 
 union SysmonEvents =
     ProcessCreateEvent
@@ -1974,16 +1980,4 @@ type TlsRawEventEdge {
 
   # A cursor for use in pagination
   cursor: String!
-}
-
-input UserConfig {
-  ingestSrvAddr: String
-  publishSrvAddr: String
-  graphqlSrvAddr: String
-  retention: String
-  maxOpenFiles: Int
-  maxMbOfLevelBase: Int
-  peerAddress: String
-  peerList: [InputPeerList!]
-  ackTransmissionCnt: Int
 }

@@ -6,7 +6,6 @@
   - giganto 1번서버에는 ingest-src-[1|2|3] 의 데이터가 인입
   - giganto 2번서버에는 ingest-src-[4|5|6] 의 데이터가 인입
   - giganto 3번서버에는 ingest-src-[7|8|9] 의 데이터가 인입된다고 가정
-
 - 대표적으로 2가지의 시나리오가 존재합니다.
   - [1] 유저가 1번서버에게 ingest-src-1 데이터를 달라고 요청하는 경우
     - [1-1] 이 경우, 1번서버는 해당 데이터를 보유하고 있으므로, DB에서 찾아서
@@ -18,7 +17,6 @@
       GraphQL 라이브러리 사용)
     - [2-3] 1번서버는 3번서버로부터 응답을 받은 것을 파싱하여, 유저에게
       최종적으로 응답합니다.
-
 - 한편, 조금 더 복잡한 시나리오도 2가지 존재합니다.
   - [3] 유저가 1번서버에게 ingest-src-[1,4,5] 데이터를 달라고 요청하는 경우
     - 이 경우, 1번서버는 자신의 DB에서 데이터를 찾는 동시에, 2번서버에게 GraphQL
@@ -124,7 +122,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -199,7 +197,7 @@ naming 규칙에 의해 생성된 값입니다. 이 값이 무엇인지 확신�
 cargo expand graphql::client::derives` 명령어를 통해 생성된 코드를 바탕으로 확인
 부탁드립니다.
 
-### CHECKPOINT 5 test 작성 시 `TestSchema` 사용 상 참고사항
+### CHECKPOINT 5. test 작성 시 `TestSchema` 사용 상 참고사항
 
 - CHECKPOINT 5-1
 
@@ -207,16 +205,16 @@ cargo expand graphql::client::derives` 명령어를 통해 생성된 코드를 �
 TestSchema::new()
 ```
 
-로 생성하는 경우, `const CURRENT_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src1",
-"src 1", "ingest src 1"];` 인 것만 본인이 처리할 수 있는 source 로 인식됩니다.
+로 생성하는 경우, `const CURRENT_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src1",
+"src 1", "ingest src 1"];` 인 것만 본인이 처리할 수 있는 sensor 로 인식됩니다.
 
 ```rust
 TestSchema::new_with_graphql_peer(port)
 ```
 
-로 생성하는 경우, new()와 동일하게 본인은 `CURRENT_GIGANTO_INGEST_SOURCES` 에
-해당하는 것을 처리할 수 있고, peer giganto는 `const PEER_GIGANTO_INGEST_SOURCES:
-[&str; 3] = ["src2", "src 2", "ingest src 2"];` 에 대한 source를 처리할 수
+로 생성하는 경우, new()와 동일하게 본인은 `CURRENT_GIGANTO_INGEST_SENSORS` 에
+해당하는 것을 처리할 수 있고, peer giganto는 `const PEER_GIGANTO_INGEST_SENSORS:
+[&str; 3] = ["src2", "src 2", "ingest src 2"];` 에 대한 sensor를 처리할 수
 있도록 세팅됩니다.
 
 - CHECKPOINT 5-2
@@ -228,11 +226,10 @@ TestSchema::new_with_graphql_peer(port)
 ### CASE [3] 유저가 1번서버에게 ingest-src-[1,4,5] 데이터를 달라고 요청하는 경우
 
 - 특징
-  - GraphQL API 상 source에 대한 argument가 `sources: Vec<String>` 처럼 여러개의
-  source를 받을 수 있는 API입니다.
-
+  - GraphQL API 상 sensor에 대한 argument가 `sensors: Vec<String>` 처럼 여러개의
+    sensor를 받을 수 있는 API입니다.
 - Giganto Cluster 사용법
-  - 다음과 같이 `multiple_sources` 으로 시작하는 macro variant를 호출하면 됩니다.
+  - 다음과 같이 `multiple_sensors` 으로 시작하는 macro variant를 호출하면 됩니다.
 
 ```rust
 #[Object]
@@ -241,7 +238,7 @@ impl StatisticsQuery {
     async fn statistics<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        sources: Vec<String>,
+        sensors: Vec<String>,
         time: Option<TimeRange>,
         protocols: Option<Vec<String>>,
         request_from_peer: Option<bool>,
@@ -249,9 +246,9 @@ impl StatisticsQuery {
         let handler = handle_statistics;
 
         events_in_cluster!(
-            multiple_sources  // here!
+            multiple_sensors  // here!
             ctx,
-            sources,
+            sensors,
             request_from_peer,
             handler,
             Stats,
@@ -272,19 +269,21 @@ impl StatisticsQuery {
 ### CASE [4] 유저가 1번서버에게 모든 ingest-src-[1..=9] 데이터를 달라고 요청하는 경우
 
 - 특징
-  - GraphQL API 상 source에 대한 argument 혹은 nested argument로 존재하는
-    `source`가 `Option<String>` 이고 이 값이 `Option::None`인 경우, 이 API가
-    모든 `source`에 대한 데이터를 응답해주도록 약속한 API인 경우입니다.
-
+  - 애초에 GraphQL API의 파라미터로 sensor에 대한 정보가 주어지지 않는 경우일
+    수도 있고, GraphQL API argument 혹은 nested argument로 존재하는 `sensor`가
+    `Option<String>` 이고 이 값이 `Option::None`인 경우, 이 API가 모든
+    `sensor`에 대한 데이터를 응답해주도록 약속한 API인 경우일 수도 있습니다.
 - Giganto Cluster 사용법
-  - 다음과 같이 `request_all_peers_if_source_is_none` 으로 시작하는 macro
-    variant를 호출하면 됩니다.
+  - 다음과 같이 `request_all_peers` 또는 `request_all_peers_if_sensor_is_none`가
+    표기된 macro variant를 호출하면 됩니다. 이 때, 전자는 `sensor`가 `Some`인지
+    `None`인지를 막론하고 모든 peer giganto에게 질의를 던지는 것을 의미하고,
+    후자는 sensor가 `None`인 경우에만 모든 peer giganto에게 질의를 던지는 것을
+    의미합니다.
 
 ```rust
 pub struct NetflowFilter {
     time: Option<TimeRange>,
     source: Option<String>,  // check!
-    kind: Option<String>,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
@@ -297,18 +296,17 @@ impl NetflowQuery {
     async fn netflow5_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        mut filter: NetflowFilter,
+        filter: NetflowFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
         request_from_peer: Option<bool>,
     ) -> Result<Connection<String, Netflow5RawEvent>> {
-        filter.kind = Some("netflow5".to_string());
         let handler = handle_netflow5_raw_events;
 
         paged_events_in_cluster!(
-            request_all_peers_if_source_is_none  // here!
+            request_all_peers_if_sensor_is_none  // here!
             ctx,
             filter,
             after,

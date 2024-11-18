@@ -5,7 +5,7 @@ mod netflow;
 pub mod network;
 mod packet;
 mod security;
-mod source;
+mod sensor;
 pub mod statistics;
 pub mod status;
 mod sysmon;
@@ -46,7 +46,7 @@ use crate::{
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
-    AckTransmissionCount, IngestSources, PcapSources,
+    AckTransmissionCount, IngestSensors, PcapSensors,
 };
 
 pub const TIMESTAMP_SIZE: usize = 8;
@@ -59,7 +59,7 @@ pub struct Query(
     packet::PacketQuery,
     timeseries::TimeSeriesQuery,
     status::StatusQuery,
-    source::SourceQuery,
+    sensor::SensorQuery,
     statistics::StatisticsQuery,
     sysmon::SysmonQuery,
     security::SecurityLogQuery,
@@ -91,7 +91,7 @@ pub struct PortRange {
 pub struct NetworkFilter {
     pub time: Option<TimeRange>,
     #[serde(skip)]
-    pub source: String,
+    pub sensor: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
@@ -105,7 +105,7 @@ pub struct NetworkFilter {
 pub struct SearchFilter {
     pub time: Option<TimeRange>,
     #[serde(skip)]
-    pub source: String,
+    pub sensor: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
@@ -128,7 +128,7 @@ pub trait RawEventFilter {
         log_level: Option<String>,
         log_contents: Option<String>,
         text: Option<String>,
-        source: Option<String>,
+        sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool>;
 }
@@ -137,8 +137,8 @@ pub trait FromKeyValue<T>: Sized {
     fn from_key_value(key: &[u8], value: T) -> Result<Self>;
 }
 
-pub trait NodeSource {
-    fn source(&self) -> &str;
+pub trait ClusterSortKey {
+    fn secondary(&self) -> Option<&str>;
 }
 
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
@@ -153,8 +153,8 @@ pub struct TerminateNotify(Arc<Notify>); // stop
 pub fn schema(
     node_name: NodeName,
     database: Database,
-    pcap_sources: PcapSources,
-    ingest_sources: IngestSources,
+    pcap_sensors: PcapSensors,
+    ingest_sensors: IngestSensors,
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
@@ -169,8 +169,8 @@ pub fn schema(
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
         .data(database)
-        .data(pcap_sources)
-        .data(ingest_sources)
+        .data(pcap_sensors)
+        .data(ingest_sensors)
         .data(peers)
         .data(request_client_pool)
         .data(export_path)
@@ -211,7 +211,7 @@ where
                             raw_event.log_level(),
                             raw_event.log_contents(),
                             raw_event.text(),
-                            raw_event.source(),
+                            raw_event.sensor(),
                             raw_event.agent_id(),
                         )
                         .map_or(None, |c| c.then_some(*time))
@@ -418,7 +418,7 @@ where
             item.1.log_level(),
             item.1.log_contents(),
             item.1.text(),
-            item.1.source(),
+            item.1.sensor(),
             item.1.agent_id(),
         ) {
             records.push(item);
@@ -712,15 +712,15 @@ where
 
 // This macro helps to reduce boilerplate for handling
 // `search_[something]_events` APIs in giganto cluster. If the current giganto
-// is in charge of the given `filter.source`, it will execute the handler
+// is in charge of the given `filter.sensor`, it will execute the handler
 // locally. Otherwise, it will forward the request to a peer giganto in charge
-// of the given `filter.source`. Peer giganto's response will be converted to
+// of the given `filter.sensor`. Peer giganto's response will be converted to
 // the return type of the current giganto.
 //
 // Below is detailed explanation of arguments:
 // * `$ctx` - The context of the GraphQL query.
 // * `$filter` - The filter of the query.
-// * `$source` - The source of the query.
+// * `$sensor` - The sensor of the query.
 // * `$handler` - The handler to be carried out by the current giganto if it is
 //   in charge.
 // * `$graphql_query_type` - Name of the struct that derives `GraphQLQuery`.
@@ -745,7 +745,7 @@ where
 macro_rules! events_in_cluster {
     ($ctx:expr,
      $filter:expr,
-     $source:expr,
+     $sensor:expr,
      $handler:ident,
      $graphql_query_type:ident,
      $variables_type:ty,
@@ -755,10 +755,10 @@ macro_rules! events_in_cluster {
      $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
         type QueryVariables = $variables_type;
-        if crate::graphql::is_current_giganto_in_charge($ctx, &$source).await {
+        if crate::graphql::is_current_giganto_in_charge($ctx, &$sensor).await {
             $handler($ctx, &$filter, $($($handler_arg)*)*)
         } else {
-            let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$source).await;
+            let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$sensor).await;
 
             match peer_addr {
                 Some(peer_addr) => {
@@ -786,19 +786,19 @@ macro_rules! events_in_cluster {
     }};
 
     // This variant of the macro is for the case where API request comes with
-    // multiple sources. In this case, current giganto will figure out which
-    // gigantos are in charge of requested `sources`, including itself. If
-    // current giganto is in charge of any of the requested `sources`, it will
+    // multiple sensors. In this case, current giganto will figure out which
+    // gigantos are in charge of requested `sensors`, including itself. If
+    // current giganto is in charge of any of the requested `sensors`, it will
     // handle the request locally, and if peer gigantos are in charge of any of
-    // the requested `sources`, it will forward the request to them.
+    // the requested `sensors`, it will forward the request to them.
     //
     // This macro has the same arguments as the primary macro variant, except
     // these arguments:
-    // * `$sources` - The sources of the query. It should be iterable.
+    // * `$sensors` - The sensors of the query. It should be iterable.
     // * `$request_from_peer` - Whether the request comes from a peer giganto.
-    (multiple_sources
+    (multiple_sensors
      $ctx:expr,
-     $sources:expr,
+     $sensors:expr,
      $request_from_peer:expr,
      $handler:ident,
      $graphql_query_type:ident,
@@ -809,23 +809,23 @@ macro_rules! events_in_cluster {
      $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
         if $request_from_peer.unwrap_or_default() {
-            return $handler($ctx, &$sources, $($($handler_arg,)*)*).await;
+            return $handler($ctx, &$sensors, $($($handler_arg,)*)*).await;
         }
 
-        let sources_set: HashSet<_> = $sources.iter().map(|s| s.as_str()).collect();
-        let (sources_to_handle_by_current_giganto, peers_in_charge_graphql_addrs)
-            = crate::graphql::find_who_are_in_charge(&$ctx, &sources_set).await;
+        let sensors_set: HashSet<_> = $sensors.iter().map(|s| s.as_str()).collect();
+        let (sensors_to_handle_by_current_giganto, peers_in_charge_graphql_addrs)
+            = crate::graphql::find_who_are_in_charge(&$ctx, &sensors_set).await;
 
         match (
-            !sources_to_handle_by_current_giganto.is_empty(),
+            !sensors_to_handle_by_current_giganto.is_empty(),
             !peers_in_charge_graphql_addrs.is_empty(),
         ) {
             (true, true) => {
-                let current_giganto_result_fut = $handler($ctx, &sources_to_handle_by_current_giganto, $($($handler_arg,)*)*);
+                let current_giganto_result_fut = $handler($ctx, &sensors_to_handle_by_current_giganto, $($($handler_arg,)*)*);
 
                 let peer_results_fut = crate::graphql::request_selected_peers_for_events_fut!(
                     $ctx,
-                    $sources,
+                    $sensors,
                     peers_in_charge_graphql_addrs,
                     $response_data_type,
                     $field_name,
@@ -858,7 +858,7 @@ macro_rules! events_in_cluster {
             (false, true) => {
                 let peer_results = crate::graphql::request_selected_peers_for_events_fut!(
                     $ctx,
-                    $sources,
+                    $sensors,
                     peers_in_charge_graphql_addrs,
                     $response_data_type,
                     $field_name,
@@ -875,7 +875,7 @@ macro_rules! events_in_cluster {
                 Ok(peer_results.into_iter().flatten().collect())
             }
             (true, false) => {
-                $handler($ctx, &sources_to_handle_by_current_giganto, $($($handler_arg,)*)*).await
+                $handler($ctx, &sensors_to_handle_by_current_giganto, $($($handler_arg,)*)*).await
             }
             (false, false) => Ok(Vec::new()),
         }
@@ -889,7 +889,7 @@ pub(crate) use events_in_cluster;
 macro_rules! events_vec_in_cluster {
     ($ctx:expr,
      $filter:expr,
-     $source:expr,
+     $sensor:expr,
      $handler:ident,
      $graphql_query_type:ident,
      $variables_type:ty,
@@ -898,7 +898,7 @@ macro_rules! events_vec_in_cluster {
         crate::graphql::events_in_cluster!(
             $ctx,
             $filter,
-            $source,
+            $sensor,
             $handler,
             $graphql_query_type,
             $variables_type,
@@ -912,15 +912,15 @@ pub(crate) use events_vec_in_cluster;
 
 // This macro helps to reduce boilerplate for handling
 // `[something]_events_connection` APIs in giganto cluster. If the current
-// giganto is in charge of the given `filter.source`, it will execute the
+// giganto is in charge of the given `filter.sensor`, it will execute the
 // handler locally. Otherwise, it will forward the request to a peer giganto in
-// charge of the given `filter.source`. Peer giganto's response will be
+// charge of the given `filter.sensor`. Peer giganto's response will be
 // converted to the return type of the current giganto.
 //
 // Below is detailed explanation of arguments:
 // * `$ctx` - The context of the GraphQL query.
 // * `$filter` - The filter of the query.
-// * `$source` - The source of the query.
+// * `$sensor` - The sensor of the query.
 // * `$after` - The cursor of the last edge of the previous page.
 // * `$before` - The cursor of the first edge of the next page.
 // * `$first` - The number of edges to be returned from the first edge of the
@@ -945,7 +945,7 @@ pub(crate) use events_vec_in_cluster;
 macro_rules! paged_events_in_cluster {
     ($ctx:expr,
      $filter:expr,
-     $source:expr,
+     $sensor:expr,
      $after:expr,
      $before:expr,
      $first:expr,
@@ -956,10 +956,10 @@ macro_rules! paged_events_in_cluster {
      $response_data_type:path,
      $field_name:ident
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
-        if crate::graphql::is_current_giganto_in_charge($ctx, &$source).await {
+        if crate::graphql::is_current_giganto_in_charge($ctx, &$sensor).await {
             $handler($ctx, $filter, $after, $before, $first, $last).await
         } else {
-            let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$source).await;
+            let peer_addr = crate::graphql::peer_in_charge_graphql_addr($ctx, &$sensor).await;
 
             match peer_addr {
                 Some(peer_addr) => {
@@ -1010,14 +1010,14 @@ macro_rules! paged_events_in_cluster {
         }
     }};
 
-    // This macro variant is for the case where user does not specify `source`
+    // This macro variant is for the case where user does not specify `sensor`
     // in the filter. In this case, the current giganto will request all peers
     // for the result and combine them.
     //
     // This macro has the same arguments as the primary macro variant, except
     // these arguments:
     // * `$request_from_peer` - Whether the request comes from a peer giganto.
-    (request_all_peers_if_source_is_none
+    (request_all_peers_if_sensor_is_none
      $ctx:expr,
      $filter:expr,
      $after:expr,
@@ -1034,12 +1034,12 @@ macro_rules! paged_events_in_cluster {
             return $handler($ctx, $filter, $after, $before, $first, $last).await;
         }
 
-        match &$filter.source {
-            Some(source) => {
+        match &$filter.sensor {
+            Some(sensor) => {
                 paged_events_in_cluster!(
                     $ctx,
                     $filter,
-                    source,
+                    sensor,
                     $after,
                     $before,
                     $first,
@@ -1098,6 +1098,66 @@ macro_rules! paged_events_in_cluster {
             }
         }
     }};
+
+    (request_all_peers
+        $ctx:expr,
+        $filter:expr,
+        $after:expr,
+        $before:expr,
+        $first:expr,
+        $last:expr,
+        $request_from_peer:expr,
+        $handler:expr,
+        $graphql_query_type:ident,
+        $variables_type:ty,
+        $response_data_type:path,
+        $field_name:ident) => {{
+            if $request_from_peer.unwrap_or_default() {
+               return $handler($ctx, $filter, $after, $before, $first, $last).await;
+            }
+
+            let current_giganto_result_fut = $handler(
+                $ctx,
+                $filter.clone(),
+                $after.clone(),
+                $before.clone(),
+                $first,
+                $last,
+            );
+
+            let peer_results_fut = crate::graphql::request_all_peers_for_paged_events_fut!(
+                $ctx,
+                $filter,
+                $after,
+                $before,
+                $first,
+                $last,
+                $request_from_peer,
+                $graphql_query_type,
+                $variables_type,
+                $response_data_type,
+                $field_name
+            );
+
+            let (current_giganto_result, peer_results) =
+                tokio::join!(current_giganto_result_fut, peer_results_fut);
+
+            let current_giganto_result = current_giganto_result
+                .map_err(|_| async_graphql::Error::new("Current giganto failed to get result"))?;
+
+            let peer_results: Vec<_> = peer_results
+                .into_iter()
+                .map(|result| result.map_err(|e| async_graphql::Error::new(format!("Peer giganto failed to respond {e:?}"))))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(crate::graphql::combine_results(
+                current_giganto_result,
+                peer_results,
+                &$before,
+                $first,
+                $last,
+            ))
+       }};
 }
 pub(crate) use paged_events_in_cluster;
 
@@ -1110,7 +1170,7 @@ fn combine_results<N>(
     last: Option<i32>,
 ) -> Connection<String, N>
 where
-    N: OutputType + NodeSource,
+    N: OutputType + ClusterSortKey,
 {
     let (has_next_page_combined, has_prev_page_combined) = peer_results.iter().fold(
         (
@@ -1153,7 +1213,7 @@ fn sort_and_trunk_edges<N>(
     last: Option<i32>,
 ) -> Vec<Edge<String, N, EmptyFields>>
 where
-    N: OutputType + NodeSource,
+    N: OutputType + ClusterSortKey,
 {
     let (take_direction, get_len) = if before.is_some() || last.is_some() {
         (
@@ -1167,12 +1227,15 @@ where
         )
     };
 
-    // Sort by `cursor`, and then `source`. Since each node in giganto may have
+    // Sort by `cursor`, and then `sensor`. Since each node in giganto may have
     // conflicting `cursor` values, we need a secondary sort key.
     edges.sort_unstable_by(|a, b| {
-        a.cursor
-            .cmp(&b.cursor)
-            .then_with(|| a.node.source().cmp(b.node.source()))
+        a.cursor.cmp(&b.cursor).then_with(|| {
+            a.node
+                .secondary()
+                .unwrap_or_default()
+                .cmp(b.node.secondary().unwrap_or_default())
+        })
     });
 
     if take_direction == TakeDirection::First {
@@ -1185,17 +1248,17 @@ where
     edges
 }
 
-async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, source_filter: &str) -> bool {
-    let ingest_sources = ctx.data_opt::<IngestSources>();
-    match ingest_sources {
-        Some(ingest_sources) => ingest_sources.read().await.contains(source_filter),
+async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, sensor_filter: &str) -> bool {
+    let ingest_sensors = ctx.data_opt::<IngestSensors>();
+    match ingest_sensors {
+        Some(ingest_sensors) => ingest_sensors.read().await.contains(sensor_filter),
         None => false,
     }
 }
 
 async fn peer_in_charge_graphql_addr<'ctx>(
     ctx: &Context<'ctx>,
-    source_filter: &str,
+    sensor_filter: &str,
 ) -> Option<SocketAddr> {
     let peers = ctx.data_opt::<Peers>();
     match peers {
@@ -1206,8 +1269,8 @@ async fn peer_in_charge_graphql_addr<'ctx>(
                 .iter()
                 .find_map(|(addr_to_peers, peer_info)| {
                     peer_info
-                        .ingest_sources
-                        .contains(source_filter)
+                        .ingest_sensors
+                        .contains(sensor_filter)
                         .then(|| {
                             SocketAddr::new(
                                 addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
@@ -1222,20 +1285,20 @@ async fn peer_in_charge_graphql_addr<'ctx>(
 
 async fn find_who_are_in_charge(
     ctx: &Context<'_>,
-    sources: &HashSet<&str>,
+    sensors: &HashSet<&str>,
 ) -> (Vec<String>, Vec<SocketAddr>) {
-    let ingest_sources = ctx.data_opt::<IngestSources>();
+    let ingest_sensors = ctx.data_opt::<IngestSensors>();
 
-    let sources_to_handle_by_current_giganto: Vec<String> = match ingest_sources {
-        Some(ingest_sources) => {
-            let ingest_sources = ingest_sources.read().await;
-            let ingest_sources_set = ingest_sources
+    let sensors_to_handle_by_current_giganto: Vec<String> = match ingest_sensors {
+        Some(ingest_sensors) => {
+            let ingest_sensors = ingest_sensors.read().await;
+            let ingest_sensors_set = ingest_sensors
                 .iter()
                 .map(std::string::String::as_str)
                 .collect::<HashSet<_>>();
 
-            sources
-                .intersection(&ingest_sources_set)
+            sensors
+                .intersection(&ingest_sensors_set)
                 .map(ToString::to_string)
                 .collect()
         }
@@ -1250,9 +1313,9 @@ async fn find_who_are_in_charge(
             .iter()
             .filter(|&(_addr_to_peers, peer_info)| {
                 peer_info
-                    .ingest_sources
+                    .ingest_sensors
                     .iter()
-                    .any(|ingest_source| sources.contains(&ingest_source.as_str()))
+                    .any(|ingest_sensor| sensors.contains(&ingest_sensor.as_str()))
             })
             .map(|(addr_to_peers, peer_info)| {
                 SocketAddr::new(
@@ -1269,7 +1332,7 @@ async fn find_who_are_in_charge(
     };
 
     (
-        sources_to_handle_by_current_giganto,
+        sensors_to_handle_by_current_giganto,
         peers_in_charge_graphql_addrs,
     )
 }
@@ -1391,7 +1454,7 @@ pub(crate) use request_all_peers_for_paged_events_fut;
 
 macro_rules! request_selected_peers_for_events_fut {
     ($ctx:expr,
-     $sources:expr,
+     $sensors:expr,
      $peers_in_charge_graphql_addrs:expr,
      $response_data_type:path,
      $field_name:ident,
@@ -1409,7 +1472,7 @@ macro_rules! request_selected_peers_for_events_fut {
             .map(|peer_endpoint| {
                 type QueryVariables = $variables_type;
                 let request_body = $graphql_query_type::build_query(QueryVariables {
-                    sources: $sources.clone(),
+                    sensors: $sensors.clone(),
                     request_from_peer: Some(true),
                     $($query_arg: $query_arg_from),*
                 });
@@ -1474,7 +1537,7 @@ macro_rules! impl_from_giganto_network_filter_for_graphql_client {
                 fn from(filter: NetworkFilter) -> Self {
                     Self {
                         time: filter.time.map(Into::into),
-                        source: filter.source,
+                        sensor: filter.sensor,
                         orig_addr: filter.orig_addr.map(Into::into),
                         resp_addr: filter.resp_addr.map(Into::into),
                         orig_port: filter.orig_port.map(Into::into),
@@ -1497,7 +1560,7 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
                 fn from(filter: SearchFilter) -> Self {
                     Self {
                         time: filter.time.map(Into::into),
-                        source: filter.source,
+                        sensor: filter.sensor,
                         orig_addr: filter.orig_addr.map(Into::into),
                         resp_addr: filter.resp_addr.map(Into::into),
                         orig_port: filter.orig_port.map(Into::into),
@@ -1528,16 +1591,16 @@ mod tests {
     use tokio::sync::{Notify, RwLock};
 
     use super::{schema, sort_and_trunk_edges, NodeName};
-    use crate::graphql::{Mutation, NodeSource, Query};
+    use crate::graphql::{ClusterSortKey, Mutation, Query};
     use crate::peer::{PeerInfo, Peers};
     use crate::settings::Settings;
     use crate::storage::{Database, DbOptions};
-    use crate::{new_pcap_sources, IngestSources};
+    use crate::{new_pcap_sensors, IngestSensors};
 
     type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 
-    const CURRENT_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src1", "src 1", "ingest src 1"];
-    const PEER_GIGANTO_2_INGEST_SOURCES: [&str; 3] = ["src2", "src 2", "ingest src 2"];
+    const CURRENT_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src1", "src 1", "ingest src 1"];
+    const PEER_GIGANTO_2_INGEST_SENSORS: [&str; 3] = ["src2", "src 2", "ingest src 2"];
 
     pub struct TestSchema {
         pub _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
@@ -1546,10 +1609,10 @@ mod tests {
     }
 
     impl TestSchema {
-        fn setup(ingest_sources: IngestSources, peers: Peers, is_local_config: bool) -> Self {
+        fn setup(ingest_sensors: IngestSensors, peers: Peers, is_local_config: bool) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-            let pcap_sources = new_pcap_sources();
+            let pcap_sensors = new_pcap_sensors();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
             let (reload_tx, _) = tokio::sync::mpsc::channel::<String>(1);
@@ -1560,8 +1623,8 @@ mod tests {
             let schema = schema(
                 NodeName("giganto1".to_string()),
                 db.clone(),
-                pcap_sources,
-                ingest_sources,
+                pcap_sensors,
+                ingest_sensors,
                 peers,
                 request_client_pool,
                 export_dir.path().to_path_buf(),
@@ -1582,50 +1645,50 @@ mod tests {
         }
 
         pub fn new() -> Self {
-            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-                CURRENT_GIGANTO_INGEST_SOURCES
+            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| source.to_string())
+                    .map(|sensor| sensor.to_string())
                     .collect::<HashSet<String>>(),
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sources, peers, true)
+            Self::setup(ingest_sensors, peers, true)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
-            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-                CURRENT_GIGANTO_INGEST_SOURCES
+            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| source.to_string())
+                    .map(|sensor| sensor.to_string())
                     .collect::<HashSet<String>>(),
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
                 "127.0.0.1".to_string(),
                 PeerInfo {
-                    ingest_sources: PEER_GIGANTO_2_INGEST_SOURCES
+                    ingest_sensors: PEER_GIGANTO_2_INGEST_SENSORS
                         .into_iter()
-                        .map(|source| (source.to_string()))
+                        .map(|sensor| (sensor.to_string()))
                         .collect::<HashSet<String>>(),
                     graphql_port: Some(port),
                     publish_port: None,
                 },
             )])));
 
-            Self::setup(ingest_sources, peers, true)
+            Self::setup(ingest_sensors, peers, true)
         }
 
         pub fn new_with_remote_config() -> Self {
-            let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-                CURRENT_GIGANTO_INGEST_SOURCES
+            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| source.to_string())
+                    .map(|sensor| sensor.to_string())
                     .collect::<HashSet<String>>(),
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sources, peers, false)
+            Self::setup(ingest_sensors, peers, false)
         }
 
         pub async fn execute(&self, query: &str) -> async_graphql::Response {
@@ -1636,13 +1699,12 @@ mod tests {
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        source: String,
         timestamp: DateTime<Utc>,
     }
 
-    impl NodeSource for TestNode {
-        fn source(&self) -> &str {
-            &self.source
+    impl ClusterSortKey for TestNode {
+        fn secondary(&self) -> Option<&str> {
+            None
         }
     }
 
@@ -1651,42 +1713,36 @@ mod tests {
             Edge::new(
                 "warn_001".to_string(),
                 TestNode {
-                    source: "src7".to_string(),
                     timestamp: Utc::now(),
                 },
             ),
             Edge::new(
                 "danger_001".to_string(),
                 TestNode {
-                    source: "src4".to_string(),
                     timestamp: Utc::now(),
                 },
             ),
             Edge::new(
                 "danger_002".to_string(),
                 TestNode {
-                    source: "src5".to_string(),
                     timestamp: Utc::now(),
                 },
             ),
             Edge::new(
                 "info_001".to_string(),
                 TestNode {
-                    source: "src1".to_string(),
                     timestamp: Utc::now(),
                 },
             ),
             Edge::new(
                 "info_002".to_string(),
                 TestNode {
-                    source: "src2".to_string(),
                     timestamp: Utc::now(),
                 },
             ),
             Edge::new(
                 "info_003".to_string(),
                 TestNode {
-                    source: "src3".to_string(),
                     timestamp: Utc::now(),
                 },
             ),

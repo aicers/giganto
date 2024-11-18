@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.22.1"
+version = "0.23.0-alpha.1"
 edition = "2021"
 
 [lib]
@@ -24,7 +24,7 @@ data-encoding = "2.4"
 deluxe = "0.5"
 directories = "5.0"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.20.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "bf8885c" }
 graphql_client = "0.14"
 humantime = "2"
 humantime-serde = "1"

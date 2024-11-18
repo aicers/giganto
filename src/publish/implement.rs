@@ -4,25 +4,25 @@ use anyhow::{bail, Result};
 use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
 
 pub trait RequestStreamMessage {
-    fn channel_key(&self, source: Option<String>, record_type: &str) -> Result<Vec<String>>;
+    fn channel_key(&self, sensor: Option<String>, record_type: &str) -> Result<Vec<String>>;
     fn start_time(&self) -> i64;
     fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool;
-    fn source(&self) -> Result<String>;
+    fn sensor(&self) -> Result<String>;
     fn id(&self) -> Option<String>;
 }
 
 impl RequestStreamMessage for RequestHogStream {
-    fn channel_key(&self, source: Option<String>, record_type: &str) -> Result<Vec<String>> {
-        if let Some(ref source_list) = self.source {
-            let hog_keys = source_list
+    fn channel_key(&self, sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
+        if let Some(ref sensor_list) = self.sensor {
+            let hog_keys = sensor_list
                 .iter()
-                .map(|target_source| {
+                .map(|target_sensor| {
                     let mut key = String::new();
                     key.push_str(&NodeType::Hog.to_string());
                     key.push('\0');
-                    key.push_str(source.as_ref().unwrap());
+                    key.push_str(sensor.as_ref().unwrap());
                     key.push('\0');
-                    key.push_str(target_source);
+                    key.push_str(target_sensor);
                     key.push('\0');
                     key.push_str(record_type);
                     key
@@ -30,7 +30,7 @@ impl RequestStreamMessage for RequestHogStream {
                 .collect::<Vec<String>>();
             return Ok(hog_keys);
         }
-        bail!("Failed to generate hog channel key, source is required.");
+        bail!("Failed to generate hog channel key, sensor is required.");
     }
 
     fn start_time(&self) -> i64 {
@@ -41,8 +41,8 @@ impl RequestStreamMessage for RequestHogStream {
         true
     }
 
-    // Hog don't use source function
-    fn source(&self) -> Result<String> {
+    // Hog don't use sensor function
+    fn sensor(&self) -> Result<String> {
         unreachable!()
     }
 
@@ -53,19 +53,19 @@ impl RequestStreamMessage for RequestHogStream {
 }
 
 impl RequestStreamMessage for RequestCrusherStream {
-    fn channel_key(&self, _source: Option<String>, record_type: &str) -> Result<Vec<String>> {
-        if let Some(ref target_source) = self.source {
+    fn channel_key(&self, _sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
+        if let Some(ref target_sensor) = self.sensor {
             let mut crusher_key = String::new();
             crusher_key.push_str(&NodeType::Crusher.to_string());
             crusher_key.push('\0');
             crusher_key.push_str(&self.id);
             crusher_key.push('\0');
-            crusher_key.push_str(target_source);
+            crusher_key.push_str(target_sensor);
             crusher_key.push('\0');
             crusher_key.push_str(record_type);
             return Ok(vec![crusher_key]);
         }
-        bail!("Failed to generate crusher channel key, source is required.");
+        bail!("Failed to generate crusher channel key, sensor is required.");
     }
 
     fn start_time(&self) -> i64 {
@@ -96,11 +96,11 @@ impl RequestStreamMessage for RequestCrusherStream {
         false
     }
 
-    fn source(&self) -> Result<String> {
-        if let Some(ref source) = self.source {
-            return Ok(source.clone());
+    fn sensor(&self) -> Result<String> {
+        if let Some(ref sensor) = self.sensor {
+            return Ok(sensor.clone());
         }
-        bail!("Failed to generate crusher key, source is required.");
+        bail!("Failed to generate crusher key, sensor is required.");
     }
 
     fn id(&self) -> Option<String> {

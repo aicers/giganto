@@ -34,7 +34,7 @@ use tokio::{
 
 use super::Server;
 use crate::{
-    new_ingest_sources, new_pcap_sources, new_runtime_ingest_sources, new_stream_direct_channels,
+    new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
     storage::{Database, DbOptions},
     to_cert_chain, to_private_key, to_root_cert, Certs,
 };
@@ -50,7 +50,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.22.1";
+const PROTOCOL_VERSION: &str = "0.23.0";
 
 struct TestClient {
     conn: Connection,
@@ -640,6 +640,7 @@ async fn op_log() {
     let (mut send_op_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let op_log_body = OpLog {
+        sensor: String::new(),
         agent_name: "giganto".to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),
@@ -1192,15 +1193,15 @@ async fn one_short_reproduce_channel_close() {
 
 fn run_server(db_dir: TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
-    let ingest_sources = new_ingest_sources(&db);
-    let runtime_ingest_sources = new_runtime_ingest_sources();
+    let pcap_sensors = new_pcap_sensors();
+    let ingest_sensors = new_ingest_sensors(&db);
+    let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     tokio::spawn(server().run(
         db,
-        pcap_sources,
-        ingest_sources,
-        runtime_ingest_sources,
+        pcap_sensors,
+        ingest_sensors,
+        runtime_ingest_sensors,
         stream_direct_channels,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),

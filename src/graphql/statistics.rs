@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use async_graphql::{Context, Error, Object, Result, SimpleObject, StringNumber};
+use async_graphql::{Context, Error, Object, Result, SimpleObject};
 use giganto_client::{ingest::statistics::Statistics, RawEventKind};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
@@ -16,7 +16,7 @@ use rocksdb::Direction;
 use serde::de::DeserializeOwned;
 use tracing::error;
 
-use super::TIMESTAMP_SIZE;
+use super::{client::derives::StringNumberI64, TIMESTAMP_SIZE};
 use crate::{
     graphql::{
         client::derives::{statistics as stats, Statistics as Stats},
@@ -51,7 +51,7 @@ const STATS_ALLOWED_KINDS: [RawEventKind; 18] = [
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [stats::StatisticsStatistics, ])]
 pub struct StatisticsRawEvent {
-    pub source: String,
+    pub sensor: String,
     #[graphql_client_type(recursive_into = true)]
     pub stats: Vec<StatisticsInfo>,
 }
@@ -59,7 +59,7 @@ pub struct StatisticsRawEvent {
 #[derive(SimpleObject, Debug, Clone, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [stats::StatisticsStatisticsStats, ])]
 pub struct StatisticsInfo {
-    pub timestamp: StringNumber<i64>,
+    pub timestamp: StringNumberI64,
     #[graphql_client_type(recursive_into = true)]
     pub detail: Vec<StatisticsDetail>,
 }
@@ -78,7 +78,7 @@ pub(super) struct StatisticsQuery;
 
 async fn handle_statistics(
     ctx: &Context<'_>,
-    sources: &Vec<String>,
+    sensors: &Vec<String>,
     time: &Option<TimeRange>,
     protocols: &Option<Vec<String>>,
 ) -> Result<Vec<StatisticsRawEvent>> {
@@ -97,16 +97,16 @@ async fn handle_statistics(
         STATS_ALLOWED_KINDS.into_iter().collect()
     };
 
-    // Configure statistics results by source.
-    for source in sources {
+    // Configure statistics results by sensor.
+    for sensor in sensors {
         for core in 0..MAX_CORE_SIZE {
-            let stats_iter = get_statistics_iter(&db.statistics_store()?, core, source, time);
+            let stats_iter = get_statistics_iter(&db.statistics_store()?, core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
             if peek_stats_iter.peek().is_some() {
                 stats_iters.push(peek_stats_iter);
             }
         }
-        let stats = gen_statistics(&mut stats_iters, source, time.is_none(), &raw_event_kinds)?;
+        let stats = gen_statistics(&mut stats_iters, sensor, time.is_none(), &raw_event_kinds)?;
         total_stats.push(stats);
     }
     Ok(total_stats)
@@ -117,7 +117,7 @@ impl StatisticsQuery {
     async fn statistics<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        sources: Vec<String>,
+        sensors: Vec<String>,
         time: Option<TimeRange>,
         protocols: Option<Vec<String>>,
         request_from_peer: Option<bool>,
@@ -125,9 +125,9 @@ impl StatisticsQuery {
         let handler = handle_statistics;
 
         events_in_cluster!(
-            multiple_sources
+            multiple_sensors
             ctx,
-            sources,
+            sensors,
             request_from_peer,
             handler,
             Stats,
@@ -146,7 +146,7 @@ impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 fn get_statistics_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     core_id: u32,
-    source: &str,
+    sensor: &str,
     time: &Option<TimeRange>,
 ) -> StatisticsIter<'c, T>
 where
@@ -159,7 +159,7 @@ where
     };
 
     let key_builder = StorageKey::builder()
-        .start_key(source)
+        .start_key(sensor)
         .mid_key(Some(core_id.to_be_bytes().to_vec()));
     let from_key = key_builder.clone().upper_closed_bound_end_key(end).build();
     let to_key = key_builder.lower_closed_bound_end_key(start).build();
@@ -169,7 +169,7 @@ where
 
 fn gen_statistics(
     stats_iters: &mut Vec<Peekable<StatisticsIter<'_, Statistics>>>,
-    source: &str,
+    sensor: &str,
     latest_flag: bool,
     allowed_raw_event_kinds: &HashSet<RawEventKind>,
 ) -> Result<StatisticsRawEvent> {
@@ -250,7 +250,7 @@ fn gen_statistics(
         }
 
         stats_info_vec.push(StatisticsInfo {
-            timestamp: StringNumber(latest_key_timestamp),
+            timestamp: latest_key_timestamp.into(),
             detail: stats_detail_vec.clone(),
         });
         stats_detail_vec.clear();
@@ -262,7 +262,7 @@ fn gen_statistics(
     }
 
     Ok(StatisticsRawEvent {
-        source: source.to_string(),
+        sensor: sensor.to_string(),
         stats: stats_info_vec,
     })
 }
@@ -310,9 +310,9 @@ mod tests {
         let query = r#"
     {
         statistics(
-            sources: ["src 1"]
+            sensors: ["src 1"]
         ) {
-            source,
+            sensor,
             stats {
                 detail {
                     protocol,
@@ -325,21 +325,21 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
     }
 
     fn insert_statistics_raw_event(
         store: &RawEventStore<Statistics>,
         timestamp: i64,
-        source: &str,
+        sensor: &str,
         core: u32,
         period: u16,
         count: u64,
         size: u64,
     ) {
-        let mut key = Vec::with_capacity(source.len() + 1 + std::mem::size_of::<i64>());
-        key.extend_from_slice(source.as_bytes());
+        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
+        key.extend_from_slice(sensor.as_bytes());
         key.push(0);
         key.extend_from_slice(&core.to_be_bytes());
         key.push(0);
@@ -360,9 +360,9 @@ mod tests {
         let query = r#"
         {
             statistics(
-                sources: ["src 2"]
+                sensors: ["src 2"]
             ) {
-                source,
+                sensor,
                 stats {
                     detail {
                         protocol,
@@ -379,7 +379,7 @@ mod tests {
             "data": {
                 "statistics": [
                     {
-                        "source": "src 2",
+                        "sensor": "src 2",
                         "stats": [
                             {
                                 "timestamp": 1702272566,
@@ -418,7 +418,7 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{sensor: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 
         mock.assert_async().await;
@@ -430,9 +430,9 @@ mod tests {
         let query = r#"
         {
             statistics(
-                sources: ["src 2", "src2", "ingest src 2", "src 1"]
+                sensors: ["src 2", "src2", "ingest src 2", "src 1"]
             ) {
-                source,
+                sensor,
                 stats {
                     timestamp
                     detail {
@@ -450,7 +450,7 @@ mod tests {
             "data": {
                 "statistics": [
                     {
-                        "source": "src2",
+                        "sensor": "src2",
                         "stats": [
                             {
                                 "timestamp": 1702272560,
@@ -466,7 +466,7 @@ mod tests {
                         ]
                     },
                     {
-                        "source": "ingest src 2",
+                        "sensor": "ingest src 2",
                         "stats": [
                             {
                                 "timestamp": 1702272560,
@@ -482,7 +482,7 @@ mod tests {
                         ]
                     },
                     {
-                        "source": "src 2",
+                        "sensor": "src 2",
                         "stats": [
                             {
                                 "timestamp": 1702272560,
@@ -528,12 +528,12 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{source: \"src2\", stats: [{timestamp: \"1702272560\", detail: \
-            [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {source: \"ingest src \
+            "{statistics: [{sensor: \"src2\", stats: [{timestamp: \"1702272560\", detail: \
+            [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {sensor: \"ingest src \
              2\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \"Statistics\", \
-             bps: 24000000.0, pps: 10000.0}]}]}, {source: \"src 2\", stats: [{timestamp: \
+             bps: 24000000.0, pps: 10000.0}]}]}, {sensor: \"src 2\", stats: [{timestamp: \
              \"1702272560\", detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}\
-             , {source: \"src 1\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \
+             , {sensor: \"src 1\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \
              \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 

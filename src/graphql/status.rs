@@ -1,12 +1,15 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
 use anyhow::anyhow;
-use async_graphql::{Context, InputObject, Object, Result, SimpleObject, StringNumber};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info, warn};
 
-use super::{PowerOffNotify, RebootNotify, TerminateNotify};
+use super::{
+    client::derives::{StringNumberU32, StringNumberU64},
+    PowerOffNotify, RebootNotify, TerminateNotify,
+};
 use crate::settings::Config;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
@@ -77,16 +80,16 @@ impl Config {
         self.max_open_files
     }
 
-    async fn max_mb_of_level_base(&self) -> StringNumber<u64> {
-        StringNumber(self.max_mb_of_level_base)
+    async fn max_mb_of_level_base(&self) -> StringNumberU64 {
+        self.max_mb_of_level_base.into()
     }
 
     async fn num_of_thread(&self) -> i32 {
         self.num_of_thread
     }
 
-    async fn max_sub_compactions(&self) -> StringNumber<u32> {
-        StringNumber(self.max_sub_compactions)
+    async fn max_sub_compactions(&self) -> StringNumberU32 {
+        self.max_sub_compactions.into()
     }
 
     async fn addr_to_peers(&self) -> Option<String> {
