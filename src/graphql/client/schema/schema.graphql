@@ -1011,6 +1011,12 @@ type OpLogRawEventEdge {
   cursor: String!
 }
 
+input CsvFilter {
+  protocol: String!
+  timestamps: [DateTime!]!
+  sensor: String!
+}
+
 type Packet {
   requestTime: DateTime!
   packetTime: DateTime!
@@ -1238,6 +1244,7 @@ type Query {
     first: Int
     last: Int
   ): OpLogRawEventConnection!
+  csvFormattedRawEvents(filter: CsvFilter!): [String!]!
   connRawEvents(
     filter: NetworkFilter!
     after: String
