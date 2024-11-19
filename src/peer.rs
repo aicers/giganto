@@ -37,10 +37,10 @@ use crate::{
         subject_from_cert_verbose, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
     settings::Settings,
-    IngestSources,
+    IngestSensors,
 };
 
-const PEER_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
+const PEER_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
@@ -50,7 +50,7 @@ pub type PeerIdents = Arc<RwLock<HashSet<PeerIdentity>>>;
 #[allow(clippy::module_name_repetitions)]
 #[derive(Deserialize, Serialize, Debug, Default)]
 pub struct PeerInfo {
-    pub ingest_sources: HashSet<String>,
+    pub ingest_sensors: HashSet<String>,
     pub graphql_port: Option<u16>,
     pub publish_port: Option<u16>,
 }
@@ -63,7 +63,7 @@ pub struct PeerInfo {
 #[non_exhaustive]
 pub enum PeerCode {
     UpdatePeerList = 0,
-    UpdateSourceList = 1,
+    UpdateSensorList = 1,
 }
 
 #[allow(clippy::module_name_repetitions)]
@@ -91,14 +91,14 @@ pub struct PeerConns {
     // `peer_identities` is in sync with config toml's `peers`;
     // e.g. { PeerIdentity {"node2", "1.2.3.2:38384"}, PeerIdentity {"node1", "1.2.3.1:38384"}, }
     peer_identities: PeerIdents,
-    ingest_sources: IngestSources,
-    // Key string is peer's address(without port); Value is `ingest_sources`, `graphql_port`,
+    ingest_sensors: IngestSensors,
+    // Key string is peer's address(without port); Value is `ingest_sensors`, `graphql_port`,
     // and `publish_port` belonging to that peer;
     // e.g. { ("10.20.0.2", PeerInfo { ("ingest_node1", "ingest_node2"),  8443, 38371 }), }
     peers: Peers,
-    peer_sender: Sender<PeerIdentity>, // pita
+    peer_sender: Sender<PeerIdentity>,
     local_address: SocketAddr,
-    notify_source: Arc<Notify>,
+    notify_sensor: Arc<Notify>,
     config_doc: DocumentMut,
     config_path: Option<String>,
 }
@@ -130,10 +130,10 @@ impl Peer {
 
     pub async fn run(
         self,
-        ingest_sources: IngestSources,
+        ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
-        notify_source: Arc<Notify>,
+        notify_sensor: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
         settings: Settings,
     ) -> Result<()> {
@@ -164,10 +164,10 @@ impl Peer {
             peer_conns: Arc::new(RwLock::new(HashMap::new())),
             peer_identities: peer_idents,
             peers,
-            ingest_sources,
+            ingest_sensors,
             peer_sender: sender,
             local_address: self.local_address,
-            notify_source,
+            notify_sensor,
             config_doc,
             config_path: settings.cfg_path,
         };
@@ -292,8 +292,8 @@ async fn client_connection(
                     }
                 };
 
-                let send_source_list: HashSet<String> =
-                    peer_conn_info.ingest_sources.read().await.to_owned();
+                let send_sensor_list: HashSet<String> =
+                    peer_conn_info.ingest_sensors.read().await.to_owned();
 
                 // Add my peer info to the peer list.
                 let mut send_peer_list = peer_conn_info.peer_identities.read().await.clone();
@@ -302,8 +302,8 @@ async fn client_connection(
                     hostname: local_host_name.clone(),
                 });
 
-                // Exchange peer list/source list.
-                let (recv_peer_list, recv_source_list) =
+                // Exchange peer list/sensor list.
+                let (recv_peer_list, recv_sensor_list) =
                     request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
                         &mut send,
                         &mut recv,
@@ -311,7 +311,7 @@ async fn client_connection(
                         (
                             send_peer_list,
                             PeerInfo {
-                                ingest_sources: send_source_list,
+                                ingest_sensors: send_sensor_list,
                                 graphql_port,
                                 publish_port,
                             },
@@ -319,9 +319,9 @@ async fn client_connection(
                     )
                     .await?;
 
-                // Update to the list of received sources.
-                update_to_new_source_list(
-                    recv_source_list,
+                // Update to the list of received sensors.
+                update_to_new_sensor_list(
+                    recv_sensor_list,
                     remote_addr.clone(),
                     peer_conn_info.peers.clone(),
                 )
@@ -382,14 +382,14 @@ async fn client_connection(
                                 }
                             });
                         },
-                        () = peer_conn_info.notify_source.notified() => {
-                            let source_list = peer_conn_info.ingest_sources.read().await.to_owned();
+                        () = peer_conn_info.notify_sensor.notified() => {
+                            let sensor_list = peer_conn_info.ingest_sensors.read().await.to_owned();
                             for conn in (*peer_conn_info.peer_conns.write().await).values() {
                                 tokio::spawn(update_peer_info::<PeerInfo>(
                                     conn.clone(),
-                                    PeerCode::UpdateSourceList,
+                                    PeerCode::UpdateSensorList,
                                     PeerInfo {
-                                        ingest_sources: source_list.clone(),
+                                        ingest_sensors: sensor_list.clone(),
                                         graphql_port,
                                         publish_port,
                                     }
@@ -458,11 +458,11 @@ async fn server_connection(
             }
         };
 
-    let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.to_owned();
+    let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
 
-    // Exchange peer list/source list.
+    // Exchange peer list/sensor list.
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
-    let (recv_peer_list, recv_source_list) =
+    let (recv_peer_list, recv_sensor_list) =
         response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
             &mut send,
             &mut recv,
@@ -470,7 +470,7 @@ async fn server_connection(
             (
                 peer_conn_info.peer_identities.read().await.clone(),
                 PeerInfo {
-                    ingest_sources: source_list,
+                    ingest_sensors: sensor_list,
                     graphql_port,
                     publish_port,
                 },
@@ -478,9 +478,9 @@ async fn server_connection(
         )
         .await?;
 
-    // Update to the list of received sources.
-    update_to_new_source_list(
-        recv_source_list,
+    // Update to the list of received sensors.
+    update_to_new_sensor_list(
+        recv_sensor_list,
         remote_addr.clone(),
         peer_conn_info.peers.clone(),
     )
@@ -541,14 +541,14 @@ async fn server_connection(
                     }
                 });
             },
-            () = peer_conn_info.notify_source.notified() => {
-                let source_list: HashSet<String> = peer_conn_info.ingest_sources.read().await.to_owned();
+            () = peer_conn_info.notify_sensor.notified() => {
+                let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
                 for conn in (*peer_conn_info.peer_conns.read().await).values() {
                     tokio::spawn(update_peer_info::<PeerInfo>(
                         conn.clone(),
-                        PeerCode::UpdateSourceList,
+                        PeerCode::UpdateSensorList,
                         PeerInfo {
-                            ingest_sources: source_list.clone(),
+                            ingest_sensors: sensor_list.clone(),
                             graphql_port,
                             publish_port
                         }
@@ -584,10 +584,10 @@ async fn handle_request(
             update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, path)
                 .await?;
         }
-        PeerCode::UpdateSourceList => {
-            let update_source_list = bincode::deserialize::<PeerInfo>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize source list: {e}"))?;
-            update_to_new_source_list(update_source_list, remote_addr, peers).await;
+        PeerCode::UpdateSensorList => {
+            let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deserialize sensor list: {e}"))?;
+            update_to_new_sensor_list(update_sensor_list, remote_addr, peers).await;
         }
     }
     Ok(())
@@ -718,12 +718,12 @@ async fn update_to_new_peer_list(
     Ok(())
 }
 
-async fn update_to_new_source_list(
-    recv_source_list: PeerInfo,
+async fn update_to_new_sensor_list(
+    recv_sensor_list: PeerInfo,
     remote_addr: String,
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
 ) {
-    peers.write().await.insert(remote_addr, recv_source_list);
+    peers.write().await.insert(remote_addr, recv_sensor_list);
 }
 
 #[cfg(test)]
@@ -761,7 +761,7 @@ pub mod tests {
     const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.22.1";
+    const PROTOCOL_VERSION: &str = "0.23.0";
 
     pub struct TestClient {
         send: SendStream,
@@ -874,14 +874,14 @@ pub mod tests {
         });
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
-        // peer server's source list
-        let source_name = String::from("cluml_source");
-        let mut source_info = HashSet::new();
-        source_info.insert(source_name.clone());
+        // peer server's sensor list
+        let sensor_name = String::from("cluml_sensor");
+        let mut sensor_info = HashSet::new();
+        sensor_info.insert(sensor_name.clone());
 
-        let ingest_sources = Arc::new(RwLock::new(source_info));
+        let ingest_sensors = Arc::new(RwLock::new(sensor_info));
         let peers = Arc::new(RwLock::new(HashMap::new()));
-        let notify_source = Arc::new(Notify::new());
+        let notify_sensor = Arc::new(Notify::new());
 
         // create temp config file
         let tmp_dir = TempDir::new().unwrap();
@@ -893,17 +893,17 @@ pub mod tests {
 
         // run peer
         tokio::spawn(peer_init().run(
-            ingest_sources.clone(),
+            ingest_sensors.clone(),
             peers,
             peer_idents,
-            notify_source.clone(),
+            notify_sensor.clone(),
             Arc::new(Notify::new()),
             settings,
         ));
 
         // run peer client
         let mut peer_client_one = TestClient::new().await;
-        let (recv_peer_list, recv_source_list) =
+        let (recv_peer_list, recv_sensor_list) =
             request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
                 &mut peer_client_one.send,
                 &mut peer_client_one.recv,
@@ -913,30 +913,30 @@ pub mod tests {
             .await
             .unwrap();
 
-        // compare server's peer list/source list
+        // compare server's peer list/sensor list
         assert!(recv_peer_list.contains(&PeerIdentity {
             addr: peer_addr,
             hostname: peer_name,
         }));
-        assert!(recv_source_list.ingest_sources.contains(&source_name));
+        assert!(recv_sensor_list.ingest_sensors.contains(&sensor_name));
 
-        // insert peer server's source value & notify to server
-        let source_name2 = String::from("cluml_source2");
-        ingest_sources.write().await.insert(source_name2.clone());
-        notify_source.notify_one();
+        // insert peer server's sensor value & notify to server
+        let sensor_name2 = String::from("cluml_sensor2");
+        ingest_sensors.write().await.insert(sensor_name2.clone());
+        notify_sensor.notify_one();
 
-        // receive source list
+        // receive sensor list
         let (_, mut recv_pub_resp) = peer_client_one
             .conn
             .accept_bi()
             .await
             .expect("failed to open stream");
         let (msg_type, msg_buf) = receive_peer_data(&mut recv_pub_resp).await.unwrap();
-        let update_source_list = bincode::deserialize::<PeerInfo>(&msg_buf).unwrap();
+        let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf).unwrap();
 
-        // compare server's source list
-        assert_eq!(msg_type, PeerCode::UpdateSourceList);
-        assert!(update_source_list.ingest_sources.contains(&source_name));
-        assert!(update_source_list.ingest_sources.contains(&source_name2));
+        // compare server's sensor list
+        assert_eq!(msg_type, PeerCode::UpdateSensorList);
+        assert!(update_sensor_list.ingest_sensors.contains(&sensor_name));
+        assert!(update_sensor_list.ingest_sensors.contains(&sensor_name2));
     }
 }

@@ -58,9 +58,9 @@ use crate::server::{
     SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
-use crate::{IngestSources, PcapSources, StreamDirectChannels};
+use crate::{IngestSensors, PcapSensors, StreamDirectChannels};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.21.0,<0.23.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -81,9 +81,9 @@ impl Server {
     pub async fn run(
         self,
         db: Database,
-        pcap_sources: PcapSources,
+        pcap_sensors: PcapSensors,
         stream_direct_channels: StreamDirectChannels,
-        ingest_sources: IngestSources,
+        ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
         certs: Arc<Certs>,
@@ -99,10 +99,10 @@ impl Server {
             select! {
                 Some(conn) = endpoint.accept()  => {
                     let db = db.clone();
-                    let pcap_sources = pcap_sources.clone();
+                    let pcap_sensors = pcap_sensors.clone();
                     let stream_direct_channels = stream_direct_channels.clone();
                     let notify_shutdown = notify_shutdown.clone();
-                    let ingest_sources = ingest_sources.clone();
+                    let ingest_sensors = ingest_sensors.clone();
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
                     let certs = certs.clone();
@@ -111,9 +111,9 @@ impl Server {
                         if let Err(e) = handle_connection(
                             conn,
                             db,
-                            pcap_sources,
+                            pcap_sensors,
                             stream_direct_channels,
-                            ingest_sources,
+                            ingest_sensors,
                             peers,
                             peer_idents,
                             certs,
@@ -140,9 +140,9 @@ impl Server {
 async fn handle_connection(
     conn: quinn::Incoming,
     db: Database,
-    pcap_sources: PcapSources,
+    pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
-    ingest_sources: IngestSources,
+    ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
@@ -161,7 +161,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (_, source) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let (_, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
 
     tokio::spawn({
         let certs = certs.clone();
@@ -170,8 +170,8 @@ async fn handle_connection(
             db.clone(),
             send,
             recv,
-            source,
-            pcap_sources.clone(),
+            sensor,
+            pcap_sensors.clone(),
             stream_direct_channels.clone(),
             peers.clone(),
             peer_idents.clone(),
@@ -193,13 +193,13 @@ async fn handle_connection(
                 };
 
                 let db = db.clone();
-                let pcap_sources = pcap_sources.clone();
-                let ingest_sources = ingest_sources.clone();
+                let pcap_sensors = pcap_sensors.clone();
+                let ingest_sensors = ingest_sensors.clone();
                 let peers = peers.clone();
                 let peer_idents = peer_idents.clone();
                 let certs = certs.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, db, pcap_sources, ingest_sources, peers, peer_idents, certs).await {
+                    if let Err(e) = handle_request(stream, db, pcap_sensors, ingest_sensors, peers, peer_idents, certs).await {
                         error!("failed: {}", e);
                     }
                 });
@@ -220,8 +220,8 @@ async fn request_stream(
     stream_db: Database,
     mut send: SendStream,
     mut recv: RecvStream,
-    conn_source: String,
-    pcap_sources: PcapSources,
+    conn_sensor: String,
+    pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
     peers: Peers,
     peer_idents: PeerIdents,
@@ -232,12 +232,12 @@ async fn request_stream(
             Ok((node_type, record_type, raw_data)) => {
                 let db = stream_db.clone();
                 let conn = connection.clone();
-                let source = conn_source.clone();
+                let sensor = conn_sensor.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
                 if record_type == RequestStreamRecord::Pcap {
                     process_pcap_extract(
                         &raw_data,
-                        pcap_sources.clone(),
+                        pcap_sensors.clone(),
                         peers.clone(),
                         peer_idents.clone(),
                         certs.clone(),
@@ -253,7 +253,7 @@ async fn request_stream(
                                         if let Err(e) = process_stream(
                                             db,
                                             conn,
-                                            Some(source),
+                                            Some(sensor),
                                             None,
                                             node_type,
                                             record_type,
@@ -308,7 +308,7 @@ async fn request_stream(
 
 async fn process_pcap_extract(
     filter_data: &[u8],
-    pcap_sources: PcapSources,
+    pcap_sensors: PcapSensors,
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
@@ -333,17 +333,17 @@ async fn process_pcap_extract(
     let certs = certs.clone();
     tokio::spawn(async move {
         for filter in filters {
-            if let Some(source_conn) =
-                get_pcap_conn_if_current_giganto_in_charge(pcap_sources.clone(), &filter.source)
+            if let Some(sensor_conn) =
+                get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
                     .await
             {
                 // send/receive extract request from piglet
-                match pcap_extract_request(&source_conn, &filter).await {
+                match pcap_extract_request(&sensor_conn, &filter).await {
                     Ok(()) => (),
                     Err(e) => debug!("failed to relay pcap request, {e}"),
                 }
             } else if let Some(peer_addr) =
-                peer_in_charge_publish_addr(peers.clone(), &filter.source).await
+                peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
             {
                 let peer_name: String = {
                     let peer_idents_guard = peer_idents.read().await;
@@ -354,7 +354,7 @@ async fn process_pcap_extract(
                     if let Some(peer_ident) = peer_ident {
                         peer_ident.hostname.clone()
                     } else {
-                        error!("Peer giganto's server name cannot be identitified. addr: {peer_addr}, source: {}", filter.source);
+                        error!("Peer giganto's server name cannot be identitified. addr: {peer_addr}, sensor: {}", filter.sensor);
                         continue;
                     }
                 };
@@ -375,8 +375,8 @@ async fn process_pcap_extract(
                 }
             } else {
                 error!(
-                    "Neither current nor peer gigantos are in charge of requested pcap source {}",
-                    filter.source
+                    "Neither current nor peer gigantos are in charge of requested pcap sensor {}",
+                    filter.sensor
                 );
             }
         }
@@ -386,13 +386,13 @@ async fn process_pcap_extract(
 }
 
 async fn get_pcap_conn_if_current_giganto_in_charge(
-    pcap_sources: PcapSources,
-    source: &String,
+    pcap_sensors: PcapSensors,
+    sensor: &String,
 ) -> Option<Connection> {
-    pcap_sources
+    pcap_sensors
         .read()
         .await
-        .get(source)
+        .get(sensor)
         .and_then(|connections| connections.last().cloned())
 }
 
@@ -400,7 +400,7 @@ async fn get_pcap_conn_if_current_giganto_in_charge(
 async fn process_stream<T>(
     db: Database,
     conn: Connection,
-    source: Option<String>,
+    sensor: Option<String>,
     kind: Option<String>,
     node_type: NodeType,
     record_type: RequestStreamRecord,
@@ -418,7 +418,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -438,7 +438,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -458,7 +458,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -478,7 +478,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -498,7 +498,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -518,7 +518,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -538,7 +538,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -558,7 +558,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -578,7 +578,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -598,7 +598,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -618,7 +618,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -638,7 +638,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -658,7 +658,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -678,7 +678,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -698,7 +698,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -718,7 +718,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -738,7 +738,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -758,7 +758,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -779,7 +779,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -799,7 +799,7 @@ where
                     conn,
                     record_type,
                     request_msg,
-                    source,
+                    sensor,
                     kind,
                     node_type,
                     stream_direct_channels,
@@ -821,20 +821,20 @@ pub async fn send_direct_stream(
     network_key: &NetworkKey,
     raw_event: &[u8],
     timestamp: i64,
-    source: &str,
+    sensor: &str,
     stream_direct_channels: StreamDirectChannels,
 ) -> Result<()> {
     for (req_key, sender) in &*stream_direct_channels.read().await {
-        if req_key.contains(&network_key.source_key) || req_key.contains(&network_key.all_key) {
+        if req_key.contains(&network_key.sensor_key) || req_key.contains(&network_key.all_key) {
             let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
             if req_key.contains(&NodeType::Hog.to_string()) {
-                let source_bytes = bincode::serialize(&source)?;
-                let source_len = u32::try_from(source_bytes.len())?.to_le_bytes();
-                send_buf.extend_from_slice(&source_len);
-                send_buf.extend_from_slice(&source_bytes);
+                let sensor_bytes = bincode::serialize(&sensor)?;
+                let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
+                send_buf.extend_from_slice(&sensor_len);
+                send_buf.extend_from_slice(&sensor_bytes);
             }
 
             send_buf.extend_from_slice(&raw_len);
@@ -851,7 +851,7 @@ async fn send_stream<T, N>(
     conn: Connection,
     record_type: RequestStreamRecord,
     msg: N,
-    source: Option<String>,
+    sensor: Option<String>,
     kind: Option<String>,
     node_type: NodeType,
     stream_direct_channels: StreamDirectChannels,
@@ -861,7 +861,7 @@ where
     N: RequestStreamMessage,
 {
     let mut sender = conn.open_uni().await?;
-    let channel_keys = msg.channel_key(source, &record_type.to_string())?;
+    let channel_keys = msg.channel_key(sensor, &record_type.to_string())?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let channel_remove_keys = channel_keys.clone();
@@ -891,7 +891,7 @@ where
             info!("start crusher's publish stream : {:?}", record_type);
 
             let key_builder = StorageKey::builder()
-                .start_key(&msg.source()?)
+                .start_key(&msg.sensor()?)
                 .mid_key(kind.map(|s| s.as_bytes().to_vec()));
             let from_key = key_builder
                 .clone()
@@ -970,8 +970,8 @@ where
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
-    pcap_sources: PcapSources,
-    ingest_sources: IngestSources,
+    pcap_sensors: PcapSensors,
+    ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
@@ -988,7 +988,7 @@ async fn handle_request(
                         &mut send,
                         db.conn_store().context("Failed to open conn store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1001,7 +1001,7 @@ async fn handle_request(
                         &mut send,
                         db.dns_store().context("Failed to open dns store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1014,7 +1014,7 @@ async fn handle_request(
                         &mut send,
                         db.rdp_store().context("Failed to open rdp store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1027,7 +1027,7 @@ async fn handle_request(
                         &mut send,
                         db.http_store().context("Failed to open http store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1040,7 +1040,7 @@ async fn handle_request(
                         &mut send,
                         db.smtp_store().context("Failed to open smtp store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1053,7 +1053,7 @@ async fn handle_request(
                         &mut send,
                         db.log_store().context("Failed to open log store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1066,7 +1066,7 @@ async fn handle_request(
                         &mut send,
                         db.ntlm_store().context("Failed to open ntlm store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1080,7 +1080,7 @@ async fn handle_request(
                         db.kerberos_store()
                             .context("Failed to open kerberos store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1093,7 +1093,7 @@ async fn handle_request(
                         &mut send,
                         db.ssh_store().context("Failed to open ssh store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1106,7 +1106,7 @@ async fn handle_request(
                         &mut send,
                         db.dce_rpc_store().context("Failed to open dce rpc store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1119,7 +1119,7 @@ async fn handle_request(
                         &mut send,
                         db.ftp_store().context("Failed to open ftp store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1132,7 +1132,7 @@ async fn handle_request(
                         &mut send,
                         db.mqtt_store().context("Failed to open mqtt store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1146,7 +1146,7 @@ async fn handle_request(
                         db.periodic_time_series_store()
                             .context("Failed to open periodic time series storage")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1159,7 +1159,7 @@ async fn handle_request(
                         &mut send,
                         db.ldap_store().context("Failed to open ldap store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1172,7 +1172,7 @@ async fn handle_request(
                         &mut send,
                         db.tls_store().context("Failed to open tls store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1185,7 +1185,7 @@ async fn handle_request(
                         &mut send,
                         db.smb_store().context("Failed to open smb store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1198,7 +1198,7 @@ async fn handle_request(
                         &mut send,
                         db.nfs_store().context("Failed to open nfs store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1211,7 +1211,7 @@ async fn handle_request(
                         &mut send,
                         db.bootp_store().context("Failed to open bootp store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1224,7 +1224,7 @@ async fn handle_request(
                         &mut send,
                         db.dhcp_store().context("Failed to open dhcp store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1238,7 +1238,7 @@ async fn handle_request(
                         db.process_create_store()
                             .context("Failed to open process_create store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1252,7 +1252,7 @@ async fn handle_request(
                         db.file_create_time_store()
                             .context("Failed to open file_create_time store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1266,7 +1266,7 @@ async fn handle_request(
                         db.network_connect_store()
                             .context("Failed to open network_connect store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1280,7 +1280,7 @@ async fn handle_request(
                         db.process_terminate_store()
                             .context("Failed to open process_terminate store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1294,7 +1294,7 @@ async fn handle_request(
                         db.image_load_store()
                             .context("Failed to open image_load store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1308,7 +1308,7 @@ async fn handle_request(
                         db.file_create_store()
                             .context("Failed to open file_create store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1322,7 +1322,7 @@ async fn handle_request(
                         db.registry_value_set_store()
                             .context("Failed to open registry_value_set store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1336,7 +1336,7 @@ async fn handle_request(
                         db.registry_key_rename_store()
                             .context("Failed to open registry_key_rename store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1350,7 +1350,7 @@ async fn handle_request(
                         db.file_create_stream_hash_store()
                             .context("Failed to open file_create_stream_hash store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1364,7 +1364,7 @@ async fn handle_request(
                         db.pipe_event_store()
                             .context("Failed to open pipe_event store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1378,7 +1378,7 @@ async fn handle_request(
                         db.dns_query_store()
                             .context("Failed to open dns_query store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1392,7 +1392,7 @@ async fn handle_request(
                         db.file_delete_store()
                             .context("Failed to open file_delete store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1406,7 +1406,7 @@ async fn handle_request(
                         db.process_tamper_store()
                             .context("Failed to open process_tamper store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1420,7 +1420,7 @@ async fn handle_request(
                         db.file_delete_detected_store()
                             .context("Failed to open file_delete_detected store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1434,7 +1434,7 @@ async fn handle_request(
                         db.netflow5_store()
                             .context("Failed to open netflow5 store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1448,7 +1448,7 @@ async fn handle_request(
                         db.netflow9_store()
                             .context("Failed to open netflow9 store")?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1465,7 +1465,7 @@ async fn handle_request(
         MessageCode::Pcap => {
             process_pcap_extract(
                 &msg_buf,
-                pcap_sources.clone(),
+                pcap_sensors.clone(),
                 peers,
                 peer_idents.clone(),
                 certs.clone(),
@@ -1482,7 +1482,7 @@ async fn handle_request(
                         &mut send,
                         db.conn_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1494,7 +1494,7 @@ async fn handle_request(
                         &mut send,
                         db.dns_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1506,7 +1506,7 @@ async fn handle_request(
                         &mut send,
                         db.rdp_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1518,7 +1518,7 @@ async fn handle_request(
                         &mut send,
                         db.http_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1530,7 +1530,7 @@ async fn handle_request(
                         &mut send,
                         db.smtp_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1542,7 +1542,7 @@ async fn handle_request(
                         &mut send,
                         db.ntlm_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1554,7 +1554,7 @@ async fn handle_request(
                         &mut send,
                         db.kerberos_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1566,7 +1566,7 @@ async fn handle_request(
                         &mut send,
                         db.ssh_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1578,7 +1578,7 @@ async fn handle_request(
                         &mut send,
                         db.dce_rpc_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1590,7 +1590,7 @@ async fn handle_request(
                         &mut send,
                         db.ftp_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1602,7 +1602,7 @@ async fn handle_request(
                         &mut send,
                         db.mqtt_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1614,7 +1614,7 @@ async fn handle_request(
                         &mut send,
                         db.ldap_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1626,7 +1626,7 @@ async fn handle_request(
                         &mut send,
                         db.tls_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1638,7 +1638,7 @@ async fn handle_request(
                         &mut send,
                         db.smb_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1650,7 +1650,7 @@ async fn handle_request(
                         &mut send,
                         db.nfs_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1662,7 +1662,7 @@ async fn handle_request(
                         &mut send,
                         db.bootp_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1674,7 +1674,7 @@ async fn handle_request(
                         &mut send,
                         db.dhcp_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1682,12 +1682,12 @@ async fn handle_request(
                     .await?;
                 }
                 RawEventKind::Log => {
-                    // For RawEventKind::LOG, the source_kind is required as the source.
+                    // For RawEventKind::LOG, the kind is required as the sensor.
                     process_raw_events::<Log, u8>(
                         &mut send,
                         db.log_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1699,7 +1699,7 @@ async fn handle_request(
                         &mut send,
                         db.periodic_time_series_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1711,7 +1711,7 @@ async fn handle_request(
                         &mut send,
                         db.process_create_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1723,7 +1723,7 @@ async fn handle_request(
                         &mut send,
                         db.file_create_time_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1735,7 +1735,7 @@ async fn handle_request(
                         &mut send,
                         db.network_connect_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1747,7 +1747,7 @@ async fn handle_request(
                         &mut send,
                         db.process_terminate_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1759,7 +1759,7 @@ async fn handle_request(
                         &mut send,
                         db.image_load_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1771,7 +1771,7 @@ async fn handle_request(
                         &mut send,
                         db.file_create_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1783,7 +1783,7 @@ async fn handle_request(
                         &mut send,
                         db.registry_value_set_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1795,7 +1795,7 @@ async fn handle_request(
                         &mut send,
                         db.registry_key_rename_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1807,7 +1807,7 @@ async fn handle_request(
                         &mut send,
                         db.file_create_stream_hash_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1819,7 +1819,7 @@ async fn handle_request(
                         &mut send,
                         db.pipe_event_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1831,7 +1831,7 @@ async fn handle_request(
                         &mut send,
                         db.dns_query_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1843,7 +1843,7 @@ async fn handle_request(
                         &mut send,
                         db.file_delete_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1855,7 +1855,7 @@ async fn handle_request(
                         &mut send,
                         db.process_tamper_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1867,7 +1867,7 @@ async fn handle_request(
                         &mut send,
                         db.file_delete_detected_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1879,7 +1879,7 @@ async fn handle_request(
                         &mut send,
                         db.netflow5_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1891,7 +1891,7 @@ async fn handle_request(
                         &mut send,
                         db.netflow9_store()?,
                         msg,
-                        ingest_sources,
+                        ingest_sensors,
                         peers,
                         peer_idents,
                         certs.clone(),
@@ -1912,7 +1912,7 @@ async fn process_range_data<'c, T, I>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
     request_range: RequestRange,
-    ingest_sources: IngestSources,
+    ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
@@ -1922,9 +1922,9 @@ where
     T: DeserializeOwned + ResponseRangeData,
     I: DeserializeOwned + Serialize,
 {
-    if is_current_giganto_in_charge(ingest_sources, &request_range.source).await {
+    if is_current_giganto_in_charge(ingest_sensors, &request_range.sensor).await {
         process_range_data_in_current_giganto(send, store, request_range, availed_kind).await?;
-    } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.source).await
+    } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
         process_range_data_in_peer_giganto::<I>(
             send,
@@ -1936,8 +1936,8 @@ where
         .await?;
     } else {
         bail!(
-            "Neither current nor peer gigantos are in charge of requested source {}",
-            &request_range.source
+            "Neither current nor peer gigantos are in charge of requested sensor {}",
+            &request_range.sensor
         )
     }
     send_range_data::<T>(send, None).await?;
@@ -1945,15 +1945,15 @@ where
     Ok(())
 }
 
-async fn is_current_giganto_in_charge(ingest_sources: IngestSources, source: &String) -> bool {
-    ingest_sources.read().await.contains(source)
+async fn is_current_giganto_in_charge(ingest_sensors: IngestSensors, sensor: &String) -> bool {
+    ingest_sensors.read().await.contains(sensor)
 }
 
-async fn peer_in_charge_publish_addr(peers: Peers, source: &String) -> Option<SocketAddr> {
+async fn peer_in_charge_publish_addr(peers: Peers, sensor: &String) -> Option<SocketAddr> {
     peers.read().await.iter().find_map(|(addr_to_peers, peer_info)| {
         peer_info
-            .ingest_sources
-            .contains(source)
+            .ingest_sensors
+            .contains(sensor)
             .then(|| {
                 SocketAddr::new(
                     addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
@@ -1972,7 +1972,7 @@ async fn process_range_data_in_current_giganto<'c, T>(
 where
     T: DeserializeOwned + ResponseRangeData,
 {
-    let key_builder = StorageKey::builder().start_key(&request_range.source);
+    let key_builder = StorageKey::builder().start_key(&request_range.sensor);
     let key_builder = if availed_kind {
         key_builder.mid_key(Some(request_range.kind.as_bytes().to_vec()))
     } else {
@@ -1992,7 +1992,7 @@ where
     for item in iter.take(request_range.count) {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        send_range_data(send, Some((val, timestamp, &request_range.source))).await?;
+        send_range_data(send, Some((val, timestamp, &request_range.sensor))).await?;
     }
 
     Ok(())
@@ -2053,7 +2053,7 @@ async fn process_raw_events<'c, T, I>(
     send: &mut SendStream,
     store: RawEventStore<'c, T>,
     req: RequestRawData,
-    ingest_sources: IngestSources,
+    ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
@@ -2063,7 +2063,7 @@ where
     I: DeserializeOwned + Serialize + Clone,
 {
     let (handle_by_current_giganto, handle_by_peer_gigantos) =
-        req_inputs_by_gigantos_in_charge(ingest_sources, req.input).await;
+        req_inputs_by_gigantos_in_charge(ingest_sensors, req.input).await;
 
     if !handle_by_current_giganto.is_empty() {
         process_raw_event_in_current_giganto(send, store, handle_by_current_giganto).await?;
@@ -2087,13 +2087,13 @@ where
 }
 
 async fn req_inputs_by_gigantos_in_charge(
-    ingest_sources: IngestSources,
+    ingest_sensors: IngestSensors,
     req_inputs: Vec<(String, Vec<i64>)>,
 ) -> (Vec<(String, Vec<i64>)>, Vec<(String, Vec<i64>)>) {
     let mut handle_by_current_giganto = Vec::with_capacity(req_inputs.len());
     let mut handle_by_peer_gigantos = Vec::with_capacity(req_inputs.len());
     for req_input in req_inputs {
-        if ingest_sources.read().await.contains(&req_input.0) {
+        if ingest_sensors.read().await.contains(&req_input.0) {
             handle_by_current_giganto.push(req_input);
         } else {
             handle_by_peer_gigantos.push(req_input);
@@ -2112,13 +2112,13 @@ where
     T: DeserializeOwned + ResponseRangeData,
 {
     let mut output: Vec<(i64, String, Vec<u8>)> = Vec::new();
-    for (source, timestamps) in handle_by_current_giganto {
-        output.extend_from_slice(&store.batched_multi_get_with_source(&source, &timestamps));
+    for (sensor, timestamps) in handle_by_current_giganto {
+        output.extend_from_slice(&store.batched_multi_get_with_sensor(&sensor, &timestamps));
     }
 
-    for (timestamp, source, value) in output {
+    for (timestamp, sensor, value) in output {
         let val = bincode::deserialize::<T>(&value)?;
-        send_range_data(send, Some((val, timestamp, &source))).await?;
+        send_range_data(send, Some((val, timestamp, &sensor))).await?;
     }
 
     Ok(())
@@ -2135,17 +2135,17 @@ async fn process_raw_event_in_peer_gigantos<I>(
 where
     I: DeserializeOwned + Serialize,
 {
-    let peer_gigantos_by_source: HashMap<String, Vec<(String, Vec<i64>)>> = handle_by_peer_gigantos
+    let peer_gigantos_by_sensor: HashMap<String, Vec<(String, Vec<i64>)>> = handle_by_peer_gigantos
         .into_iter()
-        .fold(HashMap::new(), |mut acc, (source, timestamps)| {
-            acc.entry(source.clone())
+        .fold(HashMap::new(), |mut acc, (sensor, timestamps)| {
+            acc.entry(sensor.clone())
                 .or_default()
-                .push((source, timestamps));
+                .push((sensor, timestamps));
             acc
         });
 
-    for (source, input) in peer_gigantos_by_source {
-        if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &source).await {
+    for (sensor, input) in peer_gigantos_by_sensor {
+        if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &sensor).await {
             let peer_name = peer_name(peer_idents.clone(), &peer_addr).await?;
 
             let connection = connect(peer_addr, peer_name.as_str(), certs.clone()).await?;

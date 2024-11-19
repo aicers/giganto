@@ -25,7 +25,7 @@ pub(super) struct SecurityLogQuery;
 #[derive(InputObject, Clone)]
 pub struct SecuLogFilter {
     time: Option<TimeRange>,
-    source: String,
+    sensor: String,
     kind: String,
     orig_addr: Option<IpRange>,
     resp_addr: Option<IpRange>,
@@ -36,7 +36,7 @@ pub struct SecuLogFilter {
 
 impl KeyExtractor for SecuLogFilter {
     fn get_start_key(&self) -> &str {
-        &self.source
+        &self.sensor
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -62,7 +62,7 @@ impl RawEventFilter for SecuLogFilter {
         _log_level: Option<String>,
         log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         _agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
@@ -138,7 +138,7 @@ impl SecurityLogQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -159,7 +159,7 @@ macro_rules! impl_from_giganto_secu_log_filter_for_graphql_client {
                 fn from(filter: SecuLogFilter) -> Self {
                     Self {
                         time : filter.time.map(Into::into),
-                        source : filter.source,
+                        sensor : filter.sensor,
                         kind : filter.kind,
                         orig_addr: filter.orig_addr.map(Into::into),
                         resp_addr: filter.resp_addr.map(Into::into),
@@ -197,7 +197,7 @@ mod tests {
             secuLogRawEvents(
                 filter: {
                     kind: "device",
-                    source: "src1"
+                    sensor: "src1"
                 }
             ) {
                 edges {
@@ -224,7 +224,7 @@ mod tests {
             secuLogRawEvents(
                 filter: {
                     kind: "device",
-                    source: "src2"
+                    sensor: "src2"
                 }
             ) {
                 edges {
@@ -250,7 +250,7 @@ mod tests {
                             "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                             "node": {
                                 "timestamp": "2023-11-16T15:03:45.291779203+00:00",
-                                "source": "src2",
+                                "sensor": "src2",
                                 "logType": "cisco",
                                 "version": "V3",
                                 "proto": 6,
@@ -289,18 +289,17 @@ mod tests {
     fn insert_secu_log_event(
         store: &RawEventStore<SecuLog>,
         kind: &str,
-        source: &str,
+        sensor: &str,
         timestamp: i64,
     ) {
         let mut key: Vec<u8> = Vec::new();
-        key.extend_from_slice(source.as_bytes());
+        key.extend_from_slice(sensor.as_bytes());
         key.push(0);
         key.extend_from_slice(kind.as_bytes());
         key.push(0);
         key.extend_from_slice(&timestamp.to_be_bytes());
 
         let secu_log_body = SecuLog {
-            source: source.to_string(),
             kind: kind.to_string(),
             log_type: "cisco".to_string(),
             version: "V3".to_string(),

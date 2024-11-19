@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     marker::PhantomData,
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -84,9 +84,9 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
     "netflow9",
     "seculog",
 ];
-const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 
-// Not a `source`+`timestamp` event.
+// Not a `sensor`+`timestamp` event.
 const NON_STANDARD_CFS: [&str; 8] = [
     "log",
     "periodic time series",
@@ -327,10 +327,10 @@ impl Database {
         Ok(RawEventStore::new(&self.db, cf))
     }
 
-    /// Returns the store for connection sources
-    pub fn sources_store(&self) -> Result<SourceStore> {
-        let cf = self.get_cf_handle("sources")?;
-        Ok(SourceStore { db: &self.db, cf })
+    /// Returns the store for connection sensors
+    pub fn sensors_store(&self) -> Result<SensorStore> {
+        let cf = self.get_cf_handle("sensors")?;
+        Ok(SensorStore { db: &self.db, cf })
     }
 
     /// Returns the store for Ftp
@@ -520,7 +520,7 @@ impl<'db, T> RawEventStore<'db, T> {
 
     pub fn batched_multi_get_from_ts(
         &self,
-        source: &str,
+        sensor: &str,
         timestamps: &[DateTime<Utc>],
     ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
         let mut timestamps = timestamps.to_vec();
@@ -529,7 +529,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .iter()
             .map(|timestamp| {
                 StorageKey::builder()
-                    .start_key(source)
+                    .start_key(sensor)
                     .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
                     .build()
                     .key()
@@ -549,9 +549,9 @@ impl<'db, T> RawEventStore<'db, T> {
         result_vector
     }
 
-    pub fn batched_multi_get_with_source(
+    pub fn batched_multi_get_with_sensor(
         &self,
-        source: &str,
+        sensor: &str,
         timestamps: &[i64],
     ) -> Vec<(i64, String, Vec<u8>)> {
         let mut timestamps = timestamps.to_vec();
@@ -560,7 +560,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .iter()
             .map(|timestamp| {
                 StorageKey::builder()
-                    .start_key(source)
+                    .start_key(sensor)
                     .end_key(*timestamp)
                     .build()
                     .key()
@@ -574,7 +574,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .filter_map(|(timestamp, result_value)| {
                 result_value.ok().and_then(|val| {
                     val.map(|inner_val| {
-                        (*timestamp, source.to_string(), inner_val.deref().to_vec())
+                        (*timestamp, sensor.to_string(), inner_val.deref().to_vec())
                     })
                 })
             })
@@ -611,15 +611,15 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
     }
 }
 
-pub struct SourceStore<'db> {
+pub struct SensorStore<'db> {
     db: &'db DB,
     cf: &'db ColumnFamily,
 }
 
-impl<'db> SourceStore<'db> {
-    /// Inserts a source name and its last active time.
+impl<'db> SensorStore<'db> {
+    /// Inserts a sensor name and its last active time.
     ///
-    /// If the source already exists, its last active time is updated.
+    /// If the sensor already exists, its last active time is updated.
     pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
         self.db.put_cf(
             self.cf,
@@ -632,7 +632,7 @@ impl<'db> SourceStore<'db> {
         Ok(())
     }
 
-    /// Returns the names of all sources.
+    /// Returns the names of all sensors.
     pub fn names(&self) -> Vec<Vec<u8>> {
         self.db
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
@@ -641,8 +641,8 @@ impl<'db> SourceStore<'db> {
             .collect()
     }
 
-    /// Returns the source list that sent the data to ingest.
-    pub fn source_list(&self) -> HashSet<String> {
+    /// Returns the sensor list that sent the data to ingest.
+    pub fn sensor_list(&self) -> HashSet<String> {
         self.db
             .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
             .flatten()
@@ -653,7 +653,7 @@ impl<'db> SourceStore<'db> {
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
-unsafe impl<'db> Send for SourceStore<'db> {}
+unsafe impl<'db> Send for SensorStore<'db> {}
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Default, Debug, Clone)]
@@ -802,7 +802,7 @@ where
                 elem.1.log_level(),
                 elem.1.log_contents(),
                 elem.1.text(),
-                elem.1.source(),
+                elem.1.sensor(),
                 elem.1.agent_id(),
             ) {
                 return Some(elem);
@@ -902,15 +902,15 @@ pub async fn retain_periodically(
 
                 loop {
                     let retention_timestamp_vec = retention_timestamp.to_be_bytes();
-                    let sources = db.sources_store()?.names();
+                    let sensors = db.sensors_store()?.names();
                     let all_store = db.retain_period_store()?;
 
-                    for source in sources {
-                        let mut from: Vec<u8> = source.clone();
+                    for sensor in sensors {
+                        let mut from: Vec<u8> = sensor.clone();
                         from.push(0x00);
                         from.extend_from_slice(&from_timestamp);
 
-                        let mut to: Vec<u8> = source.clone();
+                        let mut to: Vec<u8> = sensor.clone();
                         to.push(0x00);
                         to.extend_from_slice(&retention_timestamp_vec);
 
@@ -933,7 +933,7 @@ pub async fn retain_periodically(
                         for store in &all_store.non_standard_cfs {
                             let iterator = store
                                 .db
-                                .prefix_iterator_cf(store.cf, source.clone())
+                                .prefix_iterator_cf(store.cf, sensor.clone())
                                 .flatten();
 
                             for (key, _) in iterator {
@@ -1008,4 +1008,8 @@ pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     cf_opts.set_bottommost_zstd_max_train_bytes(0, true);
 
     (db_opts, cf_opts)
+}
+
+pub(crate) fn data_dir_to_db_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("db")
 }

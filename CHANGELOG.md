@@ -16,11 +16,25 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `setConfig` return `Ok(false)` when using local config.
 - Modified the repair mode to operate only with a local configuration. Giganto
   now terminates if the repair option is specified without the `-c` flag.
+- The term source is replaced with the term sensor, resulting in the following
+  major changes:
+  - The `sources` column family in the DB is replaced with `sensors` column
+    family. Running this version of Giganto will migrate the existing data in
+    `sources` column familiy to `sensors` column family.
+  - The `sources` GraphQL API is renamed to `sensors`.
+  - The `sourceId` field in the `export` GraphQL API  is renamed to `sensorId`.
+  - The `source` field in the filter parameters of all GraphQL APIs is changed
+    to `sensor`.
 
 ### Removed
 
 - Removed the GraphQL API `setAckTransmissionCount` as the entire configuration
   is now sent at once when modified through the UI.
+
+### Fixed
+
+- Fixed a missing update to the schema.graphql file necessary for
+  communication within the Giganto cluster.
 
 ## [0.22.1] - 2024-10-22
 

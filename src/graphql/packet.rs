@@ -26,14 +26,14 @@ pub(super) struct PacketQuery;
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject)]
 pub struct PacketFilter {
-    source: String,
+    sensor: String,
     request_time: DateTime<Utc>,
     packet_time: Option<TimeRange>,
 }
 
 impl KeyExtractor for PacketFilter {
     fn get_start_key(&self) -> &str {
-        &self.source
+        &self.sensor
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
@@ -64,7 +64,7 @@ impl RawEventFilter for PacketFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         _agent_id: Option<String>,
     ) -> Result<bool> {
         Ok(true)
@@ -163,7 +163,7 @@ impl PacketQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -182,7 +182,7 @@ impl PacketQuery {
         events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             Pcaps,
             pcaps::Variables,
@@ -199,7 +199,7 @@ macro_rules! impl_from_giganto_packet_filter_for_graphql_client {
             impl From<PacketFilter> for $autogen_mod::PacketFilter {
                 fn from(filter: PacketFilter) -> Self {
                     Self {
-                        source: filter.source,
+                        sensor: filter.sensor,
                         request_time: filter.request_time,
                         packet_time: filter.packet_time.map(Into::into),
                     }
@@ -228,7 +228,7 @@ mod tests {
         {
             packets(
                 filter: {
-                    source: "a"
+                    sensor: "a"
                     requestTime: "1992-06-05T00:00:00Z"
                     packetTime: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 }
@@ -271,7 +271,7 @@ mod tests {
         {
             packets(
                 filter: {
-                    source: "src 1"
+                    sensor: "src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
                 first: 10
@@ -292,7 +292,7 @@ mod tests {
         {
             packets(
                 filter: {
-                    source: "ingest src 1"
+                    sensor: "ingest src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
                 first: 10
@@ -311,7 +311,7 @@ mod tests {
         {
             packets(
                 filter: {
-                    source: "src 1"
+                    sensor: "src 1"
                     requestTime: "2023-01-20T00:00:01Z"
                 }
                 first: 10
@@ -356,7 +356,7 @@ mod tests {
         {
             pcap(
                 filter: {
-                    source: "src 1"
+                    sensor: "src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
@@ -386,7 +386,7 @@ mod tests {
         {
             pcap(
                 filter: {
-                    source: "ingest src 1"
+                    sensor: "ingest src 1"
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
@@ -415,7 +415,7 @@ mod tests {
         {
             pcap(
                 filter: {
-                    source: "src 1"
+                    sensor: "src 1"
                     requestTime: "2023-01-20T00:00:01Z"
                 }
             ) {
@@ -443,14 +443,14 @@ mod tests {
 
     fn insert_packet(
         store: &RawEventStore<pk>,
-        source: &str,
+        sensor: &str,
         req_timestamp: i64,
         pk_timestamp: i64,
     ) {
         let mut key = Vec::with_capacity(
-            source.len() + 1 + mem::size_of::<i64>() + 1 + mem::size_of::<i64>(),
+            sensor.len() + 1 + mem::size_of::<i64>() + 1 + mem::size_of::<i64>(),
         );
-        key.extend_from_slice(source.as_bytes());
+        key.extend_from_slice(sensor.as_bytes());
         key.push(0);
         key.extend(req_timestamp.to_be_bytes());
         key.push(0);

@@ -28,7 +28,7 @@ pub trait EventFilter {
     fn text(&self) -> Option<String> {
         None
     }
-    fn source(&self) -> Option<String> {
+    fn sensor(&self) -> Option<String> {
         None
     }
     fn agent_id(&self) -> Option<String> {
@@ -971,9 +971,6 @@ impl EventFilter for Netflow5 {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn source(&self) -> Option<String> {
-        Some(self.source.clone())
-    }
 }
 
 impl EventFilter for Netflow9 {
@@ -998,9 +995,6 @@ impl EventFilter for Netflow9 {
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
     }
-    fn source(&self) -> Option<String> {
-        Some(self.source.clone())
-    }
 }
 
 impl EventFilter for SecuLog {
@@ -1024,8 +1018,5 @@ impl EventFilter for SecuLog {
     }
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
-    }
-    fn source(&self) -> Option<String> {
-        Some(self.source.clone())
     }
 }

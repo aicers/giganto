@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
 use async_graphql::{
     connection::{query, Connection, Edge},
-    Context, Object, Result, SimpleObject, StringNumber, Union,
+    Context, Object, Result, SimpleObject, Union,
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
@@ -16,9 +16,10 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    base64_engine, check_address, check_agent_id, check_port, collect_exist_timestamp,
-    events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key, handle_paged_events,
-    impl_from_giganto_network_filter_for_graphql_client,
+    base64_engine, check_address, check_agent_id, check_port,
+    client::derives::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize},
+    collect_exist_timestamp, events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key,
+    handle_paged_events, impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
     impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
     Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter,
@@ -49,7 +50,7 @@ pub(super) struct NetworkQuery;
 
 impl KeyExtractor for NetworkFilter {
     fn get_start_key(&self) -> &str {
-        &self.source
+        &self.sensor
     }
 
     // network event don't use mid key
@@ -76,7 +77,7 @@ impl RawEventFilter for NetworkFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         _text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool> {
         if check_address(&self.orig_addr, orig_addr)?
@@ -101,7 +102,7 @@ impl RawEventFilter for SearchFilter {
         _log_level: Option<String>,
         _log_contents: Option<String>,
         text: Option<String>,
-        _source: Option<String>,
+        _sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool> {
         if let Some(keyword) = &self.keyword {
@@ -135,14 +136,14 @@ struct ConnRawEvent {
     resp_port: u16,
     proto: u8,
     conn_state: String,
-    duration: StringNumber<i64>,
+    duration: StringNumberI64,
     service: String,
-    orig_bytes: StringNumber<u64>,
-    resp_bytes: StringNumber<u64>,
-    orig_pkts: StringNumber<u64>,
-    resp_pkts: StringNumber<u64>,
-    orig_l2_bytes: StringNumber<u64>,
-    resp_l2_bytes: StringNumber<u64>,
+    orig_bytes: StringNumberU64,
+    resp_bytes: StringNumberU64,
+    orig_pkts: StringNumberU64,
+    resp_pkts: StringNumberU64,
+    orig_l2_bytes: StringNumberU64,
+    resp_l2_bytes: StringNumberU64,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -155,11 +156,11 @@ struct DnsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
-    rtt: StringNumber<i64>,
+    rtt: StringNumberI64,
     qclass: u16,
     qtype: u16,
     rcode: u16,
@@ -179,15 +180,15 @@ struct HttpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     method: String,
     host: String,
     uri: String,
     referrer: String,
     version: String,
     user_agent: String,
-    request_len: StringNumber<usize>,
-    response_len: StringNumber<usize>,
+    request_len: StringNumberUsize,
+    response_len: StringNumberUsize,
     status_code: u16,
     status_msg: String,
     username: String,
@@ -213,7 +214,7 @@ struct RdpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     cookie: String,
 }
 
@@ -226,7 +227,7 @@ struct SmtpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     mailfrom: String,
     date: String,
     from: String,
@@ -245,7 +246,7 @@ struct NtlmRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     username: String,
     hostname: String,
     domainname: String,
@@ -262,10 +263,10 @@ struct KerberosRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
-    client_time: StringNumber<i64>,
-    server_time: StringNumber<i64>,
-    error_code: StringNumber<u32>,
+    last_time: StringNumberI64,
+    client_time: StringNumberI64,
+    server_time: StringNumberI64,
+    error_code: StringNumberU32,
     client_realm: String,
     cname_type: u8,
     client_name: Vec<String>,
@@ -283,7 +284,7 @@ struct SshRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     client: String,
     server: String,
     cipher_alg: String,
@@ -308,8 +309,8 @@ struct DceRpcRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
-    rtt: StringNumber<i64>,
+    last_time: StringNumberI64,
+    rtt: StringNumberI64,
     named_pipe: String,
     endpoint: String,
     operation: String,
@@ -324,7 +325,7 @@ struct FtpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     user: String,
     password: String,
     command: String,
@@ -335,7 +336,7 @@ struct FtpRawEvent {
     data_resp_addr: String,
     data_resp_port: u16,
     file: String,
-    file_size: StringNumber<u64>,
+    file_size: StringNumberU64,
     file_id: String,
 }
 
@@ -348,7 +349,7 @@ struct MqttRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     protocol: String,
     version: u8,
     client_id: String,
@@ -366,8 +367,8 @@ struct LdapRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
-    message_id: StringNumber<u32>,
+    last_time: StringNumberI64,
+    message_id: StringNumberU32,
     version: u8,
     opcode: Vec<String>,
     result: Vec<String>,
@@ -385,7 +386,7 @@ struct TlsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     server_name: String,
     alpn_protocol: String,
     ja3: String,
@@ -400,8 +401,8 @@ struct TlsRawEvent {
     subject_country: String,
     subject_org_name: String,
     subject_common_name: String,
-    validity_not_before: StringNumber<i64>,
-    validity_not_after: StringNumber<i64>,
+    validity_not_before: StringNumberI64,
+    validity_not_after: StringNumberI64,
     subject_alt_name: String,
     issuer_country: String,
     issuer_org_name: String,
@@ -419,18 +420,18 @@ struct SmbRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     command: u8,
     path: String,
     service: String,
     file_name: String,
-    file_size: StringNumber<u64>,
+    file_size: StringNumberU64,
     resource_type: u16,
     fid: u16,
-    create_time: StringNumber<i64>,
-    access_time: StringNumber<i64>,
-    write_time: StringNumber<i64>,
-    change_time: StringNumber<i64>,
+    create_time: StringNumberI64,
+    access_time: StringNumberI64,
+    write_time: StringNumberI64,
+    change_time: StringNumberI64,
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -442,7 +443,7 @@ struct NfsRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     read_files: Vec<String>,
     write_files: Vec<String>,
 }
@@ -456,11 +457,11 @@ struct BootpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     op: u8,
     htype: u8,
     hops: u8,
-    xid: StringNumber<u32>,
+    xid: StringNumberU32,
     ciaddr: String,
     yiaddr: String,
     siaddr: String,
@@ -468,6 +469,30 @@ struct BootpRawEvent {
     chaddr: Vec<u8>,
     sname: String,
     file: String,
+}
+
+impl From<i64> for StringNumberI64 {
+    fn from(val: i64) -> Self {
+        Self(val)
+    }
+}
+
+impl From<u64> for StringNumberU64 {
+    fn from(val: u64) -> Self {
+        Self(val)
+    }
+}
+
+impl From<u32> for StringNumberU32 {
+    fn from(val: u32) -> Self {
+        Self(val)
+    }
+}
+
+impl From<usize> for StringNumberUsize {
+    fn from(val: usize) -> Self {
+        Self(val)
+    }
 }
 
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
@@ -479,7 +504,7 @@ struct DhcpRawEvent {
     resp_addr: String,
     resp_port: u16,
     proto: u8,
-    last_time: StringNumber<i64>,
+    last_time: StringNumberI64,
     msg_type: u8,
     ciaddr: String,
     yiaddr: String,
@@ -489,12 +514,12 @@ struct DhcpRawEvent {
     router: Vec<String>,
     domain_name_server: Vec<String>,
     req_ip_addr: String,
-    lease_time: StringNumber<u32>,
+    lease_time: StringNumberU32,
     server_id: String,
     param_req_list: Vec<u8>,
     message: String,
-    renewal_time: StringNumber<u32>,
-    rebinding_time: StringNumber<u32>,
+    renewal_time: StringNumberU32,
+    rebinding_time: StringNumberU32,
     class_id: Vec<u8>,
     client_id_type: u8,
     client_id: Vec<u8>,
@@ -597,13 +622,49 @@ macro_rules! from_key_value {
                     )*
                     $(
                         $str_num_field: {
-                            StringNumber(val.$str_num_field)
+                            val.$str_num_field.into()
                         },
                     )*
                 })
             }
         }
     };
+}
+
+impl FromKeyValue<Http> for HttpRawEvent {
+    fn from_key_value(key: &[u8], val: Http) -> Result<Self> {
+        Ok(HttpRawEvent {
+            timestamp: get_timestamp_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            last_time: val.last_time.into(),
+            method: val.method,
+            host: val.host,
+            uri: val.uri,
+            referrer: val.referrer,
+            version: val.version,
+            user_agent: val.user_agent,
+            status_code: val.status_code,
+            status_msg: val.status_msg,
+            username: val.username,
+            password: val.password,
+            cookie: val.cookie,
+            content_encoding: val.content_encoding,
+            content_type: val.content_type,
+            cache_control: val.cache_control,
+            orig_filenames: val.orig_filenames.clone(),
+            orig_mime_types: val.orig_mime_types.clone(),
+            resp_filenames: val.resp_filenames.clone(),
+            resp_mime_types: val.resp_mime_types.clone(),
+            post_body: val.post_body.clone(),
+            state: val.state,
+            request_len: StringNumberUsize(val.request_len),
+            response_len: StringNumberUsize(val.response_len),
+        })
+    }
 }
 
 impl FromKeyValue<Conn> for ConnRawEvent {
@@ -616,14 +677,14 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            duration: StringNumber(val.duration),
+            duration: val.duration.into(),
             service: val.service,
-            orig_bytes: StringNumber(val.orig_bytes),
-            resp_bytes: StringNumber(val.resp_bytes),
-            orig_pkts: StringNumber(val.orig_pkts),
-            resp_pkts: StringNumber(val.resp_pkts),
-            orig_l2_bytes: StringNumber(val.orig_l2_bytes),
-            resp_l2_bytes: StringNumber(val.resp_l2_bytes),
+            orig_bytes: val.orig_bytes.into(),
+            resp_bytes: val.resp_bytes.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
         })
     }
 }
@@ -637,7 +698,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: StringNumber(val.last_time),
+            last_time: val.last_time.into(),
             user: val.user,
             password: val.password,
             command: val.command,
@@ -648,7 +709,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             data_resp_addr: val.data_resp_addr.to_string(),
             data_resp_port: val.data_resp_port,
             file: val.file,
-            file_size: StringNumber(val.file_size),
+            file_size: val.file_size.into(),
             file_id: val.file_id,
         })
     }
@@ -663,11 +724,11 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: StringNumber(val.last_time),
+            last_time: val.last_time.into(),
             op: val.op,
             htype: val.htype,
             hops: val.hops,
-            xid: StringNumber(val.xid),
+            xid: val.xid.into(),
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
             siaddr: val.siaddr.to_string(),
@@ -688,7 +749,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: StringNumber(val.last_time),
+            last_time: val.last_time.into(),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
@@ -702,12 +763,12 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
                 .map(ToString::to_string)
                 .collect(),
             req_ip_addr: val.req_ip_addr.to_string(),
-            lease_time: StringNumber(val.lease_time),
+            lease_time: StringNumberU32(val.lease_time),
             server_id: val.server_id.to_string(),
             param_req_list: val.param_req_list.clone(),
             message: val.message.clone(),
-            renewal_time: StringNumber(val.renewal_time),
-            rebinding_time: StringNumber(val.rebinding_time),
+            renewal_time: StringNumberU32(val.renewal_time),
+            rebinding_time: StringNumberU32(val.rebinding_time),
             class_id: val.class_id.clone(),
             client_id_type: val.client_id_type,
             client_id: val.client_id.clone(),
@@ -715,33 +776,6 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
     }
 }
 
-from_key_value!(
-    HttpRawEvent,
-    Http,
-    method,
-    host,
-    uri,
-    referrer,
-    version,
-    user_agent,
-    status_code,
-    status_msg,
-    username,
-    password,
-    cookie,
-    content_encoding,
-    content_type,
-    cache_control,
-    orig_filenames,
-    orig_mime_types,
-    resp_filenames,
-    resp_mime_types,
-    post_body,
-    state;
-    last_time,
-    request_len,
-    response_len
-);
 from_key_value!(RdpRawEvent, Rdp, cookie; last_time);
 
 from_key_value!(
@@ -1250,7 +1284,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1277,7 +1311,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1304,7 +1338,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1331,7 +1365,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1358,7 +1392,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1385,7 +1419,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1412,7 +1446,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1439,7 +1473,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1466,7 +1500,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1493,7 +1527,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1520,7 +1554,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1547,7 +1581,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1574,7 +1608,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1601,7 +1635,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1627,7 +1661,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1653,7 +1687,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1679,7 +1713,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1706,7 +1740,7 @@ impl NetworkQuery {
         paged_events_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             after,
             before,
             first,
@@ -1728,7 +1762,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.conn_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Conn>(&exist_data, filter))
@@ -1737,7 +1771,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchConnRawEvents,
             search_conn_raw_events::Variables,
@@ -1755,7 +1789,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dns_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Dns>(&exist_data, filter))
@@ -1764,7 +1798,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchDnsRawEvents,
             search_dns_raw_events::Variables,
@@ -1782,7 +1816,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.http_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Http>(&exist_data, filter))
@@ -1790,7 +1824,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchHttpRawEvents,
             search_http_raw_events::Variables,
@@ -1808,7 +1842,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.rdp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Rdp>(&exist_data, filter))
@@ -1817,7 +1851,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchRdpRawEvents,
             search_rdp_raw_events::Variables,
@@ -1835,7 +1869,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.smtp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Smtp>(&exist_data, filter))
@@ -1844,7 +1878,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchSmtpRawEvents,
             search_smtp_raw_events::Variables,
@@ -1862,7 +1896,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ntlm_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Ntlm>(&exist_data, filter))
@@ -1871,7 +1905,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchNtlmRawEvents,
             search_ntlm_raw_events::Variables,
@@ -1889,7 +1923,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.kerberos_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -1898,7 +1932,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchKerberosRawEvents,
             search_kerberos_raw_events::Variables,
@@ -1916,7 +1950,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ssh_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -1926,7 +1960,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchSshRawEvents,
             search_ssh_raw_events::Variables,
@@ -1944,7 +1978,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dce_rpc_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -1954,7 +1988,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchDceRpcRawEvents,
             search_dce_rpc_raw_events::Variables,
@@ -1972,7 +2006,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ftp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -1982,7 +2016,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchFtpRawEvents,
             search_ftp_raw_events::Variables,
@@ -2000,7 +2034,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.mqtt_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2010,7 +2044,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchMqttRawEvents,
             search_mqtt_raw_events::Variables,
@@ -2028,7 +2062,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ldap_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2038,7 +2072,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchLdapRawEvents,
             search_ldap_raw_events::Variables,
@@ -2056,7 +2090,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.tls_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2066,7 +2100,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchTlsRawEvents,
             search_tls_raw_events::Variables,
@@ -2085,7 +2119,7 @@ impl NetworkQuery {
 
             let store = db.smb_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2095,7 +2129,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchSmbRawEvents,
             search_smb_raw_events::Variables,
@@ -2113,7 +2147,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.nfs_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2123,7 +2157,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchNfsRawEvents,
             search_nfs_raw_events::Variables,
@@ -2141,7 +2175,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.bootp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2151,7 +2185,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchBootpRawEvents,
             search_bootp_raw_events::Variables,
@@ -2169,7 +2203,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dhcp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.source, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2179,7 +2213,7 @@ impl NetworkQuery {
         events_vec_in_cluster!(
             ctx,
             filter,
-            filter.source,
+            filter.sensor,
             handler,
             SearchDhcpRawEvents,
             search_dhcp_raw_events::Variables,

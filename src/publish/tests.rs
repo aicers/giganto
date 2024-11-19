@@ -34,7 +34,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use super::Server;
 use crate::{
-    new_pcap_sources, new_peers_data, new_stream_direct_channels,
+    new_pcap_sensors, new_peers_data, new_stream_direct_channels,
     peer::{PeerIdentity, PeerInfo},
     server::Certs,
     storage::{Database, DbOptions, RawEventStore},
@@ -48,7 +48,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-const PROTOCOL_VERSION: &str = "0.22.1";
+const PROTOCOL_VERSION: &str = "0.23.0";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -60,8 +60,8 @@ const NODE2_KEY_PATH: &str = "tests/certs/node2/key.pem";
 const NODE2_HOST: &str = "node2";
 const NODE2_PORT: u16 = 60192;
 
-const NODE1_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src1", "src 1", "ingest src 1"];
-const NODE2_GIGANTO_INGEST_SOURCES: [&str; 3] = ["src2", "src 2", "ingest src 2"];
+const NODE1_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src1", "src 1", "ingest src 1"];
+const NODE2_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src2", "src 2", "ingest src 2"];
 
 struct TestClient {
     send: SendStream,
@@ -167,9 +167,9 @@ fn init_client() -> Endpoint {
     endpoint
 }
 
-fn gen_network_event_key(source: &str, kind: Option<&str>, timestamp: i64) -> Vec<u8> {
+fn gen_network_event_key(sensor: &str, kind: Option<&str>, timestamp: i64) -> Vec<u8> {
     let mut key = Vec::new();
-    key.extend_from_slice(source.as_bytes());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     if let Some(kind) = kind {
         key.extend_from_slice(kind.as_bytes());
@@ -594,43 +594,43 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
     bincode::serialize(&dhcp_body).unwrap()
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
     store.append(&key, &ser_conn_body).unwrap();
     ser_conn_body
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_dns_body = gen_dns_raw_event();
     store.append(&key, &ser_dns_body).unwrap();
     ser_dns_body
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_rdp_body = gen_rdp_raw_event();
     store.append(&key, &ser_rdp_body).unwrap();
     ser_rdp_body
 }
 
-fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_http_body = gen_http_raw_event();
     store.append(&key, &ser_http_body).unwrap();
     ser_http_body
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_smtp_body = gen_smtp_raw_event();
     store.append(&key, &ser_smtp_body).unwrap();
     ser_smtp_body
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ntlm_body = gen_ntlm_raw_event();
     store.append(&key, &ser_ntlm_body).unwrap();
     ser_ntlm_body
@@ -638,17 +638,17 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i
 
 fn insert_kerberos_raw_event(
     store: &RawEventStore<Kerberos>,
-    source: &str,
+    sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_kerberos_body = gen_kerberos_raw_event();
     store.append(&key, &ser_kerberos_body).unwrap();
     ser_kerberos_body
 }
 
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ssh_body = gen_ssh_raw_event();
     store.append(&key, &ser_ssh_body).unwrap();
     ser_ssh_body
@@ -656,10 +656,10 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64
 
 fn insert_dce_rpc_raw_event(
     store: &RawEventStore<DceRpc>,
-    source: &str,
+    sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_dce_rpc_body = gen_dce_rpc_raw_event();
     store.append(&key, &ser_dce_rpc_body).unwrap();
     ser_dce_rpc_body
@@ -667,11 +667,11 @@ fn insert_dce_rpc_raw_event(
 
 fn insert_log_raw_event(
     store: &RawEventStore<Log>,
-    source: &str,
+    sensor: &str,
     kind: &str,
     timestamp: i64,
 ) -> Vec<u8> {
-    let key = gen_network_event_key(source, Some(kind), timestamp);
+    let key = gen_network_event_key(sensor, Some(kind), timestamp);
     let ser_log_body = gen_log_raw_event();
     store.append(&key, &ser_log_body).unwrap();
     ser_log_body
@@ -679,66 +679,66 @@ fn insert_log_raw_event(
 
 fn insert_periodic_time_series_raw_event(
     store: &RawEventStore<PeriodicTimeSeries>,
-    source: &str,
+    sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_periodic_time_series_body = gen_periodic_time_series_raw_event();
     store.append(&key, &ser_periodic_time_series_body).unwrap();
     ser_periodic_time_series_body
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ftp_body = gen_ftp_raw_event();
     store.append(&key, &ser_ftp_body).unwrap();
     ser_ftp_body
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_mqtt_body = gen_mqtt_raw_event();
     store.append(&key, &ser_mqtt_body).unwrap();
     ser_mqtt_body
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ldap_body = gen_ldap_raw_event();
     store.append(&key, &ser_ldap_body).unwrap();
     ser_ldap_body
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_tls_body = gen_tls_raw_event();
     store.append(&key, &ser_tls_body).unwrap();
     ser_tls_body
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_smb_body = gen_smb_raw_event();
     store.append(&key, &ser_smb_body).unwrap();
     ser_smb_body
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_nfs_body = gen_nfs_raw_event();
     store.append(&key, &ser_nfs_body).unwrap();
     ser_nfs_body
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_bootp_body = gen_bootp_raw_event();
     store.append(&key, &ser_bootp_body).unwrap();
     ser_bootp_body
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(source, None, timestamp);
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
     let ser_dhcp_body = gen_dhcp_raw_event();
     store.append(&key, &ser_dhcp_body).unwrap();
     ser_dhcp_body
@@ -747,7 +747,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i
 #[tokio::test]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "ingest src 1";
+    const SENSOR: &str = "ingest src 1";
     const CONN_KIND: &str = "conn";
     const DNS_KIND: &str = "dns";
     const HTTP_KIND: &str = "http";
@@ -769,12 +769,12 @@ async fn request_range_data_with_protocol() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| (source.to_string()))
+            .map(|sensor| (sensor.to_string()))
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -794,9 +794,9 @@ async fn request_range_data_with_protocol() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -812,7 +812,7 @@ async fn request_range_data_with_protocol() {
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
             &conn_store,
-            SOURCE,
+            SENSOR,
             send_conn_time,
         ))
         .unwrap();
@@ -832,7 +832,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(CONN_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -862,7 +862,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            conn_data.response_data(send_conn_time, SOURCE).unwrap(),
+            conn_data.response_data(send_conn_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -875,7 +875,7 @@ async fn request_range_data_with_protocol() {
         let dns_store = db.dns_store().unwrap();
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dns_data =
-            bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SOURCE, send_dns_time))
+            bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -893,7 +893,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(DNS_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -923,7 +923,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            dns_data.response_data(send_dns_time, SOURCE).unwrap(),
+            dns_data.response_data(send_dns_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -937,7 +937,7 @@ async fn request_range_data_with_protocol() {
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
             &http_store,
-            SOURCE,
+            SENSOR,
             send_http_time,
         ))
         .unwrap();
@@ -957,7 +957,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(HTTP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -987,7 +987,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            http_data.response_data(send_http_time, SOURCE).unwrap(),
+            http_data.response_data(send_http_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1000,7 +1000,7 @@ async fn request_range_data_with_protocol() {
         let rdp_store = db.rdp_store().unwrap();
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let rdp_data =
-            bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SOURCE, send_rdp_time))
+            bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1018,7 +1018,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(RDP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1048,7 +1048,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            rdp_data.response_data(send_rdp_time, SOURCE).unwrap(),
+            rdp_data.response_data(send_rdp_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1062,7 +1062,7 @@ async fn request_range_data_with_protocol() {
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
             &smtp_store,
-            SOURCE,
+            SENSOR,
             send_smtp_time,
         ))
         .unwrap();
@@ -1082,7 +1082,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(SMTP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1112,7 +1112,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            smtp_data.response_data(send_smtp_time, SOURCE).unwrap(),
+            smtp_data.response_data(send_smtp_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1126,7 +1126,7 @@ async fn request_range_data_with_protocol() {
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
             &ntlm_store,
-            SOURCE,
+            SENSOR,
             send_ntlm_time,
         ))
         .unwrap();
@@ -1146,7 +1146,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(NTLM_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1176,7 +1176,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            ntlm_data.response_data(send_ntlm_time, SOURCE).unwrap(),
+            ntlm_data.response_data(send_ntlm_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1190,7 +1190,7 @@ async fn request_range_data_with_protocol() {
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
             &kerberos_store,
-            SOURCE,
+            SENSOR,
             send_kerberos_time,
         ))
         .unwrap();
@@ -1210,7 +1210,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(KERBEROS_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1240,7 +1240,7 @@ async fn request_range_data_with_protocol() {
         );
         assert_eq!(
             kerberos_data
-                .response_data(send_kerberos_time, SOURCE)
+                .response_data(send_kerberos_time, SENSOR)
                 .unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
@@ -1254,7 +1254,7 @@ async fn request_range_data_with_protocol() {
         let ssh_store = db.ssh_store().unwrap();
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ssh_data =
-            bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SOURCE, send_ssh_time))
+            bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1272,7 +1272,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(SSH_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1302,7 +1302,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            ssh_data.response_data(send_ssh_time, SOURCE).unwrap(),
+            ssh_data.response_data(send_ssh_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1316,7 +1316,7 @@ async fn request_range_data_with_protocol() {
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
             &dce_rpc_store,
-            SOURCE,
+            SENSOR,
             send_dce_rpc_time,
         ))
         .unwrap();
@@ -1336,7 +1336,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(DCE_RPC_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1367,7 +1367,7 @@ async fn request_range_data_with_protocol() {
         );
         assert_eq!(
             dce_rpc_data
-                .response_data(send_dce_rpc_time, SOURCE)
+                .response_data(send_dce_rpc_time, SENSOR)
                 .unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
@@ -1381,7 +1381,7 @@ async fn request_range_data_with_protocol() {
         let ftp_store = db.ftp_store().unwrap();
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ftp_data =
-            bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SOURCE, send_ftp_time))
+            bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1399,7 +1399,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(FTP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1429,7 +1429,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            ftp_data.response_data(send_ftp_time, SOURCE).unwrap(),
+            ftp_data.response_data(send_ftp_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1443,7 +1443,7 @@ async fn request_range_data_with_protocol() {
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
             &mqtt_store,
-            SOURCE,
+            SENSOR,
             send_mqtt_time,
         ))
         .unwrap();
@@ -1463,7 +1463,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(MQTT_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1493,7 +1493,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            mqtt_data.response_data(send_mqtt_time, SOURCE).unwrap(),
+            mqtt_data.response_data(send_mqtt_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1507,7 +1507,7 @@ async fn request_range_data_with_protocol() {
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ldap_data = bincode::deserialize::<Ldap>(&insert_ldap_raw_event(
             &ldap_store,
-            SOURCE,
+            SENSOR,
             send_ldap_time,
         ))
         .unwrap();
@@ -1527,7 +1527,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(LDAP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1557,7 +1557,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            ldap_data.response_data(send_ldap_time, SOURCE).unwrap(),
+            ldap_data.response_data(send_ldap_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1570,7 +1570,7 @@ async fn request_range_data_with_protocol() {
         let tls_store = db.tls_store().unwrap();
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let tls_data =
-            bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SOURCE, send_tls_time))
+            bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1588,7 +1588,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(TLS_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1618,7 +1618,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            tls_data.response_data(send_tls_time, SOURCE).unwrap(),
+            tls_data.response_data(send_tls_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1631,7 +1631,7 @@ async fn request_range_data_with_protocol() {
         let smb_store = db.smb_store().unwrap();
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smb_data =
-            bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SOURCE, send_smb_time))
+            bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1649,7 +1649,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(SMB_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1679,7 +1679,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            smb_data.response_data(send_smb_time, SOURCE).unwrap(),
+            smb_data.response_data(send_smb_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1692,7 +1692,7 @@ async fn request_range_data_with_protocol() {
         let nfs_store = db.nfs_store().unwrap();
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let nfs_data =
-            bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SOURCE, send_nfs_time))
+            bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time))
                 .unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
@@ -1710,7 +1710,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(NFS_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1740,7 +1740,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            nfs_data.response_data(send_nfs_time, SOURCE).unwrap(),
+            nfs_data.response_data(send_nfs_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1754,7 +1754,7 @@ async fn request_range_data_with_protocol() {
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let bootp_data = bincode::deserialize::<Bootp>(&insert_bootp_raw_event(
             &bootp_store,
-            SOURCE,
+            SENSOR,
             send_bootp_time,
         ))
         .unwrap();
@@ -1774,7 +1774,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(BOOTP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1804,7 +1804,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            bootp_data.response_data(send_bootp_time, SOURCE).unwrap(),
+            bootp_data.response_data(send_bootp_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1818,7 +1818,7 @@ async fn request_range_data_with_protocol() {
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dhcp_data = bincode::deserialize::<Dhcp>(&insert_dhcp_raw_event(
             &dhcp_store,
-            SOURCE,
+            SENSOR,
             send_dhcp_time,
         ))
         .unwrap();
@@ -1838,7 +1838,7 @@ async fn request_range_data_with_protocol() {
             Utc,
         );
         let message = RequestRange {
-            source: String::from(SOURCE),
+            sensor: String::from(SENSOR),
             kind: String::from(DHCP_KIND),
             start: start.timestamp_nanos_opt().unwrap(),
             end: end.timestamp_nanos_opt().unwrap(),
@@ -1868,7 +1868,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap()
         );
         assert_eq!(
-            dhcp_data.response_data(send_dhcp_time, SOURCE).unwrap(),
+            dhcp_data.response_data(send_dhcp_time, SENSOR).unwrap(),
             bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
                 .unwrap()
         );
@@ -1881,18 +1881,18 @@ async fn request_range_data_with_protocol() {
 #[tokio::test]
 async fn request_range_data_with_log() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "src1";
+    const SENSOR: &str = "src1";
     const KIND: &str = "Hello";
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| source.to_string())
+            .map(|sensor| sensor.to_string())
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -1912,9 +1912,9 @@ async fn request_range_data_with_log() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -1928,7 +1928,7 @@ async fn request_range_data_with_log() {
     let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
     let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
         &log_store,
-        SOURCE,
+        SENSOR,
         KIND,
         send_log_time,
     ))
@@ -1949,7 +1949,7 @@ async fn request_range_data_with_log() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SOURCE),
+        sensor: String::from(SENSOR),
         kind: String::from(KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -1977,7 +1977,7 @@ async fn request_range_data_with_log() {
         bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
-        log_data.response_data(send_log_time, SOURCE).unwrap(),
+        log_data.response_data(send_log_time, SENSOR).unwrap(),
         bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
     );
 
@@ -1988,18 +1988,18 @@ async fn request_range_data_with_log() {
 #[tokio::test]
 async fn request_range_data_with_period_time_series() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SAMPLING_POLICY_ID_AS_SOURCE: &str = "ingest src 1";
+    const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 1";
     const KIND: &str = "timeseries";
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| source.to_string())
+            .map(|sensor| sensor.to_string())
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -2019,9 +2019,9 @@ async fn request_range_data_with_period_time_series() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -2036,7 +2036,7 @@ async fn request_range_data_with_period_time_series() {
     let time_series_data =
         bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
             &time_series_store,
-            SAMPLING_POLICY_ID_AS_SOURCE,
+            SAMPLING_POLICY_ID_AS_SENSOR,
             send_time_series_time,
         ))
         .unwrap();
@@ -2056,7 +2056,7 @@ async fn request_range_data_with_period_time_series() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SAMPLING_POLICY_ID_AS_SOURCE),
+        sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
         kind: String::from(KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -2085,7 +2085,7 @@ async fn request_range_data_with_period_time_series() {
     );
     assert_eq!(
         time_series_data
-            .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SOURCE)
+            .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
             .unwrap(),
         bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
     );
@@ -2119,9 +2119,9 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_BOOTP: RequestStreamRecord = RequestStreamRecord::Bootp;
     const NETWORK_STREAM_DHCP: RequestStreamRecord = RequestStreamRecord::Dhcp;
 
-    const SOURCE_HOG_ONE: &str = "src1";
-    const SOURCE_HOG_TWO: &str = "src2";
-    const SOURCE_CRUSHER_THREE: &str = "src3";
+    const SENSOR_HOG_ONE: &str = "src1";
+    const SENSOR_HOG_TWO: &str = "src2";
+    const SENSOR_CRUSHER_THREE: &str = "src3";
     const POLICY_ID: u32 = 1;
 
     let _lock = get_token().lock().await;
@@ -2130,9 +2130,9 @@ async fn request_network_event_stream() {
 
     let hog_msg = RequestHogStream {
         start: 0,
-        source: Some(vec![
-            String::from(SOURCE_HOG_ONE),
-            String::from(SOURCE_HOG_TWO),
+        sensor: Some(vec![
+            String::from(SENSOR_HOG_ONE),
+            String::from(SENSOR_HOG_TWO),
         ]),
     };
     let crusher_msg = RequestCrusherStream {
@@ -2140,14 +2140,14 @@ async fn request_network_event_stream() {
         id: POLICY_ID.to_string(),
         src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
         dst_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
-        source: Some(String::from(SOURCE_CRUSHER_THREE)),
+        sensor: Some(String::from(SENSOR_CRUSHER_THREE)),
     };
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| source.to_string())
+            .map(|sensor| sensor.to_string())
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -2167,9 +2167,9 @@ async fn request_network_event_stream() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels.clone(),
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -2199,13 +2199,13 @@ async fn request_network_event_stream() {
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "conn");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2217,13 +2217,13 @@ async fn request_network_event_stream() {
         assert_eq!(conn_data, recv_data[20..]);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "conn");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2235,7 +2235,7 @@ async fn request_network_event_stream() {
 
         // database conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = insert_conn_raw_event(&conn_store, SOURCE_CRUSHER_THREE, send_conn_time);
+        let conn_data = insert_conn_raw_event(&conn_store, SENSOR_CRUSHER_THREE, send_conn_time);
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_CONN,
@@ -2262,14 +2262,14 @@ async fn request_network_event_stream() {
 
         // direct conn network event for crusher
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "conn");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "conn");
         let conn_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2304,13 +2304,13 @@ async fn request_network_event_stream() {
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "dns");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2322,13 +2322,13 @@ async fn request_network_event_stream() {
         assert_eq!(dns_data, recv_data[20..]);
 
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "dns");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2341,7 +2341,7 @@ async fn request_network_event_stream() {
 
         // database dns network event for crusher
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dns_data = insert_dns_raw_event(&dns_store, SOURCE_CRUSHER_THREE, send_dns_time);
+        let dns_data = insert_dns_raw_event(&dns_store, SENSOR_CRUSHER_THREE, send_dns_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2369,14 +2369,14 @@ async fn request_network_event_stream() {
 
         // direct dns network event for crusher
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dns");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dns");
         let dns_data = gen_dns_raw_event();
 
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2411,13 +2411,13 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "rdp");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2429,13 +2429,13 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_data, recv_data[20..]);
 
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "rdp");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2448,7 +2448,7 @@ async fn request_network_event_stream() {
 
         // database rdp network event for crusher
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let rdp_data = insert_rdp_raw_event(&rdp_store, SOURCE_CRUSHER_THREE, send_rdp_time);
+        let rdp_data = insert_rdp_raw_event(&rdp_store, SENSOR_CRUSHER_THREE, send_rdp_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2476,13 +2476,13 @@ async fn request_network_event_stream() {
 
         // direct rdp network event for crusher
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "rdp");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2518,14 +2518,14 @@ async fn request_network_event_stream() {
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "http");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "http");
         let http_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2537,14 +2537,14 @@ async fn request_network_event_stream() {
         assert_eq!(http_data, recv_data[20..]);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "http");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "http");
         let http_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2557,7 +2557,7 @@ async fn request_network_event_stream() {
 
         // database http network event for crusher
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let http_data = insert_http_raw_event(&http_store, SOURCE_CRUSHER_THREE, send_http_time);
+        let http_data = insert_http_raw_event(&http_store, SENSOR_CRUSHER_THREE, send_http_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2585,13 +2585,13 @@ async fn request_network_event_stream() {
 
         // direct http network event for crusher
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "http");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "http");
         let http_data = gen_http_raw_event();
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2627,14 +2627,14 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "smtp");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2646,14 +2646,14 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_data, recv_data[20..]);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "smtp");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2666,7 +2666,7 @@ async fn request_network_event_stream() {
 
         // database smtp network event for crusher
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smtp_data = insert_smtp_raw_event(&smtp_store, SOURCE_CRUSHER_THREE, send_smtp_time);
+        let smtp_data = insert_smtp_raw_event(&smtp_store, SENSOR_CRUSHER_THREE, send_smtp_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2694,13 +2694,13 @@ async fn request_network_event_stream() {
 
         // direct smtp network event for crusher
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "smtp");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "smtp");
         let smtp_data = gen_smtp_raw_event();
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2736,14 +2736,14 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "ntlm");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2755,14 +2755,14 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_data, recv_data[20..]);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "ntlm");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2775,7 +2775,7 @@ async fn request_network_event_stream() {
 
         // database ntlm network event for crusher
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ntlm_data = insert_ntlm_raw_event(&ntlm_store, SOURCE_CRUSHER_THREE, send_ntlm_time);
+        let ntlm_data = insert_ntlm_raw_event(&ntlm_store, SENSOR_CRUSHER_THREE, send_ntlm_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2803,13 +2803,13 @@ async fn request_network_event_stream() {
 
         //direct ntlm network event for crusher
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ntlm");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2844,14 +2844,14 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "kerberos");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2863,14 +2863,14 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_data, recv_data[20..]);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "kerberos");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2884,7 +2884,7 @@ async fn request_network_event_stream() {
         // database kerberos network event for crusher
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let kerberos_data =
-            insert_kerberos_raw_event(&kerberos_store, SOURCE_CRUSHER_THREE, send_kerberos_time);
+            insert_kerberos_raw_event(&kerberos_store, SENSOR_CRUSHER_THREE, send_kerberos_time);
 
         send_stream_request(
             &mut publish.send,
@@ -2912,13 +2912,13 @@ async fn request_network_event_stream() {
 
         //direct kerberos network event for crusher
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "kerberos");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2953,14 +2953,14 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "ssh");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -2972,14 +2972,14 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_data, recv_data[20..]);
 
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "ssh");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -2992,7 +2992,7 @@ async fn request_network_event_stream() {
 
         // database ssh network event for crusher
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ssh_data = insert_ssh_raw_event(&ssh_store, SOURCE_CRUSHER_THREE, send_ssh_time);
+        let ssh_data = insert_ssh_raw_event(&ssh_store, SENSOR_CRUSHER_THREE, send_ssh_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3020,13 +3020,13 @@ async fn request_network_event_stream() {
 
         //direct ssh network event for crusher
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ssh");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ssh");
         let ssh_data = gen_ssh_raw_event();
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3062,14 +3062,14 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "dce rpc");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3081,14 +3081,14 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "dce rpc");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3102,7 +3102,7 @@ async fn request_network_event_stream() {
         // database dce_rpc network event for crusher
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dce_rpc_data =
-            insert_dce_rpc_raw_event(&dce_rpc_store, SOURCE_CRUSHER_THREE, send_dce_rpc_time);
+            insert_dce_rpc_raw_event(&dce_rpc_store, SENSOR_CRUSHER_THREE, send_dce_rpc_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3130,13 +3130,13 @@ async fn request_network_event_stream() {
 
         //direct dce_rpc network event for crusher
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dce rpc");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3171,14 +3171,14 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
 
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "ftp");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3190,14 +3190,14 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_data, recv_data[20..]);
 
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "ftp");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3210,7 +3210,7 @@ async fn request_network_event_stream() {
 
         // database ftp network event for crusher
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ftp_data = insert_ftp_raw_event(&ftp_store, SOURCE_CRUSHER_THREE, send_ftp_time);
+        let ftp_data = insert_ftp_raw_event(&ftp_store, SENSOR_CRUSHER_THREE, send_ftp_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3238,13 +3238,13 @@ async fn request_network_event_stream() {
 
         //direct ftp network event for crusher
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ftp");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ftp");
         let ftp_data = gen_ftp_raw_event();
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3280,14 +3280,14 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "mqtt");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3299,14 +3299,14 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_data, recv_data[20..]);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "mqtt");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3319,7 +3319,7 @@ async fn request_network_event_stream() {
 
         // database mqtt network event for crusher
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let mqtt_data = insert_mqtt_raw_event(&mqtt_store, SOURCE_CRUSHER_THREE, send_mqtt_time);
+        let mqtt_data = insert_mqtt_raw_event(&mqtt_store, SENSOR_CRUSHER_THREE, send_mqtt_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3347,13 +3347,13 @@ async fn request_network_event_stream() {
 
         //direct mqtt network event for crusher
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "mqtt");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3389,14 +3389,14 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "ldap");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3408,14 +3408,14 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_data, recv_data[20..]);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "ldap");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3428,7 +3428,7 @@ async fn request_network_event_stream() {
 
         // database ldap network event for crusher
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ldap_data = insert_ldap_raw_event(&ldap_store, SOURCE_CRUSHER_THREE, send_ldap_time);
+        let ldap_data = insert_ldap_raw_event(&ldap_store, SENSOR_CRUSHER_THREE, send_ldap_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3456,13 +3456,13 @@ async fn request_network_event_stream() {
 
         //direct ldap network event for crusher
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "ldap");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ldap");
         let ldap_data = gen_ldap_raw_event();
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3497,14 +3497,14 @@ async fn request_network_event_stream() {
         assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
 
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "tls");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "tls");
         let tls_data = gen_tls_raw_event();
 
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3516,14 +3516,14 @@ async fn request_network_event_stream() {
         assert_eq!(tls_data, recv_data[20..]);
 
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "tls");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "tls");
         let tls_data = gen_tls_raw_event();
 
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3536,7 +3536,7 @@ async fn request_network_event_stream() {
 
         // database tls network event for crusher
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let tls_data = insert_tls_raw_event(&tls_store, SOURCE_CRUSHER_THREE, send_tls_time);
+        let tls_data = insert_tls_raw_event(&tls_store, SENSOR_CRUSHER_THREE, send_tls_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3564,13 +3564,13 @@ async fn request_network_event_stream() {
 
         //direct tls network event for crusher
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "tls");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "tls");
         let tls_data = gen_tls_raw_event();
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3605,14 +3605,14 @@ async fn request_network_event_stream() {
         assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
 
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "smb");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "smb");
         let smb_data = gen_smb_raw_event();
 
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3624,14 +3624,14 @@ async fn request_network_event_stream() {
         assert_eq!(smb_data, recv_data[20..]);
 
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "smb");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "smb");
         let smb_data = gen_smb_raw_event();
 
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3644,7 +3644,7 @@ async fn request_network_event_stream() {
 
         // database smb network event for crusher
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smb_data = insert_smb_raw_event(&smb_store, SOURCE_CRUSHER_THREE, send_smb_time);
+        let smb_data = insert_smb_raw_event(&smb_store, SENSOR_CRUSHER_THREE, send_smb_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3672,13 +3672,13 @@ async fn request_network_event_stream() {
 
         //direct smb network event for crusher
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "smb");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "smb");
         let smb_data = gen_smb_raw_event();
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3713,14 +3713,14 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
 
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "nfs");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3732,14 +3732,14 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_data, recv_data[20..]);
 
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "nfs");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3752,7 +3752,7 @@ async fn request_network_event_stream() {
 
         // database nfs network event for crusher
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let nfs_data = insert_nfs_raw_event(&nfs_store, SOURCE_CRUSHER_THREE, send_nfs_time);
+        let nfs_data = insert_nfs_raw_event(&nfs_store, SENSOR_CRUSHER_THREE, send_nfs_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3780,13 +3780,13 @@ async fn request_network_event_stream() {
 
         //direct nfs network event for crusher
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "nfs");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "nfs");
         let nfs_data = gen_nfs_raw_event();
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3822,14 +3822,14 @@ async fn request_network_event_stream() {
         assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "bootp");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3841,14 +3841,14 @@ async fn request_network_event_stream() {
         assert_eq!(bootp_data, recv_data[20..]);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "bootp");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3862,7 +3862,7 @@ async fn request_network_event_stream() {
         // database bootp network event for crusher
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let bootp_data =
-            insert_bootp_raw_event(&bootp_store, SOURCE_CRUSHER_THREE, send_bootp_time);
+            insert_bootp_raw_event(&bootp_store, SENSOR_CRUSHER_THREE, send_bootp_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3890,13 +3890,13 @@ async fn request_network_event_stream() {
 
         //direct bootp network event for crusher
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "bootp");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "bootp");
         let bootp_data = gen_bootp_raw_event();
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3932,14 +3932,14 @@ async fn request_network_event_stream() {
         assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_ONE, "dhcp");
+        let key = NetworkKey::new(SENSOR_HOG_ONE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SOURCE_HOG_ONE,
+            SENSOR_HOG_ONE,
             stream_direct_channels.clone(),
         )
         .await
@@ -3951,14 +3951,14 @@ async fn request_network_event_stream() {
         assert_eq!(dhcp_data, recv_data[20..]);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_HOG_TWO, "dhcp");
+        let key = NetworkKey::new(SENSOR_HOG_TWO, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SOURCE_HOG_TWO,
+            SENSOR_HOG_TWO,
             stream_direct_channels.clone(),
         )
         .await
@@ -3971,7 +3971,7 @@ async fn request_network_event_stream() {
 
         // database dhcp network event for crusher
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dhcp_data = insert_dhcp_raw_event(&dhcp_store, SOURCE_CRUSHER_THREE, send_dhcp_time);
+        let dhcp_data = insert_dhcp_raw_event(&dhcp_store, SENSOR_CRUSHER_THREE, send_dhcp_time);
 
         send_stream_request(
             &mut publish.send,
@@ -3999,13 +3999,13 @@ async fn request_network_event_stream() {
 
         //direct dhcp network event for crusher
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SOURCE_CRUSHER_THREE, "dhcp");
+        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SOURCE_CRUSHER_THREE,
+            SENSOR_CRUSHER_THREE,
             stream_direct_channels.clone(),
         )
         .await
@@ -4025,19 +4025,19 @@ async fn request_network_event_stream() {
 
 #[tokio::test]
 async fn request_raw_events() {
-    const SOURCE: &str = "src 1";
+    const SENSOR: &str = "src 1";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| source.to_string())
+            .map(|sensor| sensor.to_string())
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -4057,9 +4057,9 @@ async fn request_raw_events() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -4072,13 +4072,13 @@ async fn request_raw_events() {
 
     let conn_store = db.conn_store().unwrap();
     let send_conn_time = TIMESTAMP;
-    let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
+    let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
     let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
-    let raw_data = conn_data.response_data(TIMESTAMP, SOURCE).unwrap();
+    let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
     let message = RequestRawData {
         kind: String::from(KIND),
-        input: vec![(String::from(SOURCE), vec![TIMESTAMP])],
+        input: vec![(String::from(SENSOR), vec![TIMESTAMP])],
     };
 
     send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
@@ -4099,7 +4099,7 @@ async fn request_raw_events() {
     }
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
-    assert_eq!(&result_data[0].1, SOURCE);
+    assert_eq!(&result_data[0].1, SENSOR);
     assert_eq!(
         raw_data,
         bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()
@@ -4110,7 +4110,7 @@ async fn request_raw_events() {
 #[serial]
 async fn request_range_data_with_protocol_giganto_cluster() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "ingest src 2";
+    const SENSOR: &str = "ingest src 2";
     const CONN_KIND: &str = "conn";
 
     let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
@@ -4119,12 +4119,12 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let pcap_sources = new_pcap_sources();
+        let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SOURCES
+        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| source.to_string())
+                .map(|sensor| sensor.to_string())
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4143,9 +4143,9 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
             PeerInfo {
-                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| (source.to_string()))
+                    .map(|sensor| (sensor.to_string()))
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4166,12 +4166,12 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
             &conn_store,
-            SOURCE,
+            SENSOR,
             send_conn_time,
         ))
         .unwrap();
 
-        if let Err(_) = oneshot_send.send(conn_data.response_data(send_conn_time, SOURCE).unwrap())
+        if let Err(_) = oneshot_send.send(conn_data.response_data(send_conn_time, SENSOR).unwrap())
         {
             eprintln!("the receiver is dropped");
         }
@@ -4183,9 +4183,9 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         node2_server
             .run(
                 db,
-                pcap_sources,
+                pcap_sensors,
                 stream_direct_channels,
-                ingest_sources,
+                ingest_sensors,
                 peers,
                 peer_idents,
                 certs,
@@ -4197,21 +4197,21 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| (source.to_string()))
+            .map(|sensor| (sensor.to_string()))
             .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
         PeerInfo {
-            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| (source.to_string()))
+                .map(|sensor| (sensor.to_string()))
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4240,9 +4240,9 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -4269,7 +4269,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SOURCE),
+        sensor: String::from(SENSOR),
         kind: String::from(CONN_KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -4317,7 +4317,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 #[serial]
 async fn request_range_data_with_log_giganto_cluster() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SOURCE: &str = "src2";
+    const SENSOR: &str = "src2";
     const KIND: &str = "Hello";
 
     let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
@@ -4326,12 +4326,12 @@ async fn request_range_data_with_log_giganto_cluster() {
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let pcap_sources = new_pcap_sources();
+        let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SOURCES
+        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| source.to_string())
+                .map(|sensor| sensor.to_string())
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4350,9 +4350,9 @@ async fn request_range_data_with_log_giganto_cluster() {
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
             PeerInfo {
-                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| (source.to_string()))
+                    .map(|sensor| (sensor.to_string()))
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4373,13 +4373,13 @@ async fn request_range_data_with_log_giganto_cluster() {
         let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
         let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
             &log_store,
-            SOURCE,
+            SENSOR,
             KIND,
             send_log_time,
         ))
         .unwrap();
 
-        if let Err(_) = oneshot_send.send(log_data.response_data(send_log_time, SOURCE).unwrap()) {
+        if let Err(_) = oneshot_send.send(log_data.response_data(send_log_time, SENSOR).unwrap()) {
             eprintln!("the receiver is dropped");
         }
 
@@ -4390,9 +4390,9 @@ async fn request_range_data_with_log_giganto_cluster() {
         node2_server
             .run(
                 db,
-                pcap_sources,
+                pcap_sensors,
                 stream_direct_channels,
-                ingest_sources,
+                ingest_sensors,
                 peers,
                 peer_idents,
                 certs,
@@ -4404,21 +4404,21 @@ async fn request_range_data_with_log_giganto_cluster() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| (source.to_string()))
+            .map(|sensor| (sensor.to_string()))
             .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
         PeerInfo {
-            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| (source.to_string()))
+                .map(|sensor| (sensor.to_string()))
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4447,9 +4447,9 @@ async fn request_range_data_with_log_giganto_cluster() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -4474,7 +4474,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SOURCE),
+        sensor: String::from(SENSOR),
         kind: String::from(KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -4522,7 +4522,7 @@ async fn request_range_data_with_log_giganto_cluster() {
 #[serial]
 async fn request_range_data_with_period_time_series_giganto_cluster() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
-    const SAMPLING_POLICY_ID_AS_SOURCE: &str = "ingest src 2";
+    const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 2";
     const KIND: &str = "timeseries";
 
     let (oneshot_send, oneshot_recv) = tokio::sync::oneshot::channel();
@@ -4531,12 +4531,12 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let pcap_sources = new_pcap_sources();
+        let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SOURCES
+        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| source.to_string())
+                .map(|sensor| sensor.to_string())
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4555,9 +4555,9 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
             PeerInfo {
-                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| (source.to_string()))
+                    .map(|sensor| (sensor.to_string()))
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4579,14 +4579,14 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let time_series_data =
             bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
                 &time_series_store,
-                SAMPLING_POLICY_ID_AS_SOURCE,
+                SAMPLING_POLICY_ID_AS_SENSOR,
                 send_time_series_time,
             ))
             .unwrap();
 
         if let Err(_) = oneshot_send.send(
             time_series_data
-                .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SOURCE)
+                .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
                 .unwrap(),
         ) {
             eprintln!("the receiver is dropped");
@@ -4599,9 +4599,9 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         node2_server
             .run(
                 db,
-                pcap_sources,
+                pcap_sensors,
                 stream_direct_channels,
-                ingest_sources,
+                ingest_sensors,
                 peers,
                 peer_idents,
                 certs,
@@ -4613,21 +4613,21 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| (source.to_string()))
+            .map(|sensor| (sensor.to_string()))
             .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
         PeerInfo {
-            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| (source.to_string()))
+                .map(|sensor| (sensor.to_string()))
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4657,9 +4657,9 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -4684,7 +4684,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         Utc,
     );
     let message = RequestRange {
-        source: String::from(SAMPLING_POLICY_ID_AS_SOURCE),
+        sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
         kind: String::from(KIND),
         start: start.timestamp_nanos_opt().unwrap(),
         end: end.timestamp_nanos_opt().unwrap(),
@@ -4731,7 +4731,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 #[tokio::test]
 #[serial]
 async fn request_raw_events_giganto_cluster() {
-    const SOURCE: &str = "src 2";
+    const SENSOR: &str = "src 2";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
 
@@ -4741,12 +4741,12 @@ async fn request_raw_events_giganto_cluster() {
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let pcap_sources = new_pcap_sources();
+        let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SOURCES
+        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+            NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| source.to_string())
+                .map(|sensor| sensor.to_string())
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4765,9 +4765,9 @@ async fn request_raw_events_giganto_cluster() {
         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
             PeerInfo {
-                ingest_sources: NODE1_GIGANTO_INGEST_SOURCES
+                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|source| (source.to_string()))
+                    .map(|sensor| (sensor.to_string()))
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4786,9 +4786,9 @@ async fn request_raw_events_giganto_cluster() {
         // prepare data in node2 database
         let conn_store = db.conn_store().unwrap();
         let send_conn_time = TIMESTAMP;
-        let conn_raw_data = insert_conn_raw_event(&conn_store, SOURCE, send_conn_time);
+        let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
         let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
-        let raw_data = conn_data.response_data(TIMESTAMP, SOURCE).unwrap();
+        let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
         if let Err(_) = oneshot_send.send(raw_data) {
             eprintln!("the receiver is dropped");
@@ -4801,9 +4801,9 @@ async fn request_raw_events_giganto_cluster() {
         node2_server
             .run(
                 db,
-                pcap_sources,
+                pcap_sensors,
                 stream_direct_channels,
-                ingest_sources,
+                ingest_sensors,
                 peers,
                 peer_idents,
                 certs,
@@ -4815,21 +4815,21 @@ async fn request_raw_events_giganto_cluster() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sources = new_pcap_sources();
+    let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sources = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SOURCES
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|source| (source.to_string()))
+            .map(|sensor| (sensor.to_string()))
             .collect::<HashSet<String>>(),
     ));
 
     let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
         PeerInfo {
-            ingest_sources: NODE2_GIGANTO_INGEST_SOURCES
+            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|source| (source.to_string()))
+                .map(|sensor| (sensor.to_string()))
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4859,9 +4859,9 @@ async fn request_raw_events_giganto_cluster() {
 
     tokio::spawn(server().run(
         db.clone(),
-        pcap_sources,
+        pcap_sensors,
         stream_direct_channels,
-        ingest_sources,
+        ingest_sensors,
         peers,
         peer_idents,
         certs,
@@ -4874,7 +4874,7 @@ async fn request_raw_events_giganto_cluster() {
 
     let message = RequestRawData {
         kind: String::from(KIND),
-        input: vec![(String::from(SOURCE), vec![TIMESTAMP])],
+        input: vec![(String::from(SENSOR), vec![TIMESTAMP])],
     };
 
     send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
@@ -4904,7 +4904,7 @@ async fn request_raw_events_giganto_cluster() {
 
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
-    assert_eq!(&result_data[0].1, SOURCE);
+    assert_eq!(&result_data[0].1, SENSOR);
     assert_eq!(
         raw_data,
         bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()

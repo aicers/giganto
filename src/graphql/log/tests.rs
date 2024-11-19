@@ -26,7 +26,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(3)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -53,7 +53,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(3)),
                 end: None,
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -84,7 +84,7 @@ async fn load_time_range() {
                 start: None,
                 end: Some(DateTime::from_timestamp_nanos(4)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -115,7 +115,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(3)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -142,7 +142,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(3)),
                 end: None,
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -173,7 +173,7 @@ async fn load_time_range() {
                 start: None,
                 end: Some(DateTime::from_timestamp_nanos(3)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -200,7 +200,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(3)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -227,7 +227,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(2)),
                 end: None,
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -254,7 +254,7 @@ async fn load_time_range() {
                 start: None,
                 end: Some(DateTime::from_timestamp_nanos(5)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -285,7 +285,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(4)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
@@ -312,7 +312,7 @@ async fn load_time_range() {
                 start: Some(DateTime::from_timestamp_nanos(2)),
                 end: None,
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03")),
@@ -339,7 +339,7 @@ async fn load_time_range() {
                 start: None,
                 end: Some(DateTime::from_timestamp_nanos(4)),
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
@@ -366,7 +366,7 @@ async fn load_time_range() {
                 start: None,
                 end: None,
             }),
-            source: "src1".to_string(),
+            sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
         },
         None,
@@ -391,7 +391,7 @@ async fn log_empty() {
     let schema = TestSchema::new();
     let query = r#"
         {
-            logRawEvents (filter: {source: "cluml", kind: "Hello"}, first: 1) {
+            logRawEvents (filter: {sensor: "cluml", kind: "Hello"}, first: 1) {
                 edges {
                     node {
                         log
@@ -413,7 +413,7 @@ async fn log_with_data() {
 
     let query = r#"
         {
-            logRawEvents (filter: {source: "src 1", kind: "kind 1"}, first: 1) {
+            logRawEvents (filter: {sensor: "src 1", kind: "kind 1"}, first: 1) {
                 edges {
                     node {
                         log
@@ -509,13 +509,13 @@ async fn load_oplog() {
 
 fn insert_log_raw_event(
     store: &RawEventStore<Log>,
-    source: &str,
+    sensor: &str,
     timestamp: i64,
     kind: &str,
     body: &[u8],
 ) {
     let mut key: Vec<u8> = Vec::new();
-    key.extend_from_slice(source.as_bytes());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend_from_slice(kind.as_bytes());
     key.push(0);
@@ -536,6 +536,7 @@ fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timest
     key.extend_from_slice(&timestamp.to_be_bytes());
 
     let oplog_body = OpLog {
+        sensor: "sensor".to_string(),
         agent_name: agent_id.to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),

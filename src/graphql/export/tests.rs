@@ -24,7 +24,7 @@ async fn invalid_query() {
         export(
             filter:{
                 protocol: "log",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
             }
@@ -39,7 +39,7 @@ async fn invalid_query() {
         export(
             filter:{
                 protocol: "conn",
-                sourceId: "src1",
+                sensorId: "src1",
                 kind: "log1"
             }
             ,exportType:"json")
@@ -53,7 +53,7 @@ async fn invalid_query() {
         export(
             filter:{
                 protocol: "conn",
-                sourceId: "src1",
+                sensorId: "src1",
             }
             ,exportType:"ppt")
     }"#;
@@ -66,7 +66,7 @@ async fn invalid_query() {
          export(
              filter:{
                  protocol: "invalid_proto",
-                 sourceId: "src1",
+                 sensorId: "src1",
              }
              ,exportType:"json")
      }"#;
@@ -92,7 +92,7 @@ async fn export_conn() {
         export(
             filter:{
                 protocol: "conn",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -110,7 +110,7 @@ async fn export_conn() {
         export(
             filter:{
                 protocol: "conn",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -123,9 +123,9 @@ async fn export_conn() {
     assert!(res.data.to_string().contains("conn"));
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -169,7 +169,7 @@ async fn export_dns() {
         export(
             filter:{
                 protocol: "dns",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
@@ -187,7 +187,7 @@ async fn export_dns() {
         export(
             filter:{
                 protocol: "dns",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
@@ -200,9 +200,9 @@ async fn export_dns() {
     assert!(res.data.to_string().contains("dns"));
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -249,7 +249,7 @@ async fn export_http() {
         export(
             filter:{
                 protocol: "http",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -267,7 +267,7 @@ async fn export_http() {
         export(
             filter:{
                 protocol: "http",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -280,9 +280,9 @@ async fn export_http() {
     assert!(res.data.to_string().contains("http"));
 }
 
-fn insert_http_raw_event(store: &RawEventStore<Http>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -339,7 +339,7 @@ async fn export_rdp() {
         export(
             filter:{
                 protocol: "rdp",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -357,7 +357,7 @@ async fn export_rdp() {
         export(
             filter:{
                 protocol: "rdp",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -370,9 +370,9 @@ async fn export_rdp() {
     assert!(res.data.to_string().contains("rdp"));
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -408,7 +408,7 @@ async fn export_smtp() {
         export(
             filter:{
                 protocol: "smtp",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.70", end: "192.168.4.78" }
@@ -426,7 +426,7 @@ async fn export_smtp() {
         export(
             filter:{
                 protocol: "smtp",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.70", end: "192.168.4.78" }
@@ -439,9 +439,9 @@ async fn export_smtp() {
     assert!(res.data.to_string().contains("smtp"));
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -483,7 +483,7 @@ async fn export_ntlm() {
         export(
             filter:{
                 protocol: "ntlm",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -501,7 +501,7 @@ async fn export_ntlm() {
         export(
             filter:{
                 protocol: "ntlm",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -514,9 +514,9 @@ async fn export_ntlm() {
     assert!(res.data.to_string().contains("ntlm"));
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -556,7 +556,7 @@ async fn export_kerberos() {
         export(
             filter:{
                 protocol: "kerberos",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -574,7 +574,7 @@ async fn export_kerberos() {
         export(
             filter:{
                 protocol: "kerberos",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -587,9 +587,9 @@ async fn export_kerberos() {
     assert!(res.data.to_string().contains("kerberos"));
 }
 
-fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -633,7 +633,7 @@ async fn export_ssh() {
         export(
             filter:{
                 protocol: "ssh",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -651,7 +651,7 @@ async fn export_ssh() {
         export(
             filter:{
                 protocol: "ssh",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -663,9 +663,9 @@ async fn export_ssh() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ssh"));
 }
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -713,7 +713,7 @@ async fn export_dce_rpc() {
         export(
             filter:{
                 protocol: "dce rpc",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -731,7 +731,7 @@ async fn export_dce_rpc() {
         export(
             filter:{
                 protocol: "dce rpc",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -743,9 +743,9 @@ async fn export_dce_rpc() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dcerpc"));
 }
-fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -792,7 +792,7 @@ async fn export_log() {
         export(
             filter:{
                 protocol: "log",
-                sourceId: "src1",
+                sensorId: "src1",
                 kind: "kind1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
             }
@@ -807,7 +807,7 @@ async fn export_log() {
                 export(
                     filter:{
                         protocol: "log",
-                        sourceId: "ingest src 1",
+                        sensorId: "ingest src 1",
                         kind: "kind2",
                         time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                     }
@@ -819,13 +819,13 @@ async fn export_log() {
 
 fn insert_log_raw_event(
     store: &RawEventStore<Log>,
-    source: &str,
+    sensor: &str,
     timestamp: i64,
     kind: &str,
     body: &[u8],
 ) {
     let mut key: Vec<u8> = Vec::new();
-    key.extend_from_slice(source.as_bytes());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend_from_slice(kind.as_bytes());
     key.push(0);
@@ -862,7 +862,7 @@ async fn export_time_series() {
         export(
             filter:{
                 protocol: "periodic time series",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
             }
             ,exportType:"csv")
@@ -876,7 +876,7 @@ async fn export_time_series() {
         export(
             filter:{
                 protocol: "periodic time series",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
             }
             ,exportType:"json")
@@ -917,7 +917,7 @@ async fn export_op_log() {
         export(
             filter:{
                 protocol: "op_log",
-                sourceId: "src1",
+                sensorId: "src1",
             }
             ,exportType:"csv")
     }"#;
@@ -930,7 +930,7 @@ async fn export_op_log() {
         export(
             filter:{
                 protocol: "op_log",
-                sourceId: "src1",
+                sensorId: "src1",
             }
             ,exportType:"json")
     }"#;
@@ -946,6 +946,7 @@ fn insert_op_log_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, times
     key.extend_from_slice(&timestamp.to_be_bytes());
 
     let op_log_body = OpLog {
+        sensor: "sensor".to_string(),
         agent_name: agent_id.to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),
@@ -974,7 +975,7 @@ async fn export_ftp() {
         export(
             filter:{
                 protocol: "ftp",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -992,7 +993,7 @@ async fn export_ftp() {
         export(
             filter:{
                 protocol: "ftp",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1005,9 +1006,9 @@ async fn export_ftp() {
     assert!(res.data.to_string().contains("ftp"));
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1054,7 +1055,7 @@ async fn export_mqtt() {
         export(
             filter:{
                 protocol: "mqtt",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1072,7 +1073,7 @@ async fn export_mqtt() {
         export(
             filter:{
                 protocol: "mqtt",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1085,9 +1086,9 @@ async fn export_mqtt() {
     assert!(res.data.to_string().contains("mqtt"));
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1128,7 +1129,7 @@ async fn export_ldap() {
         export(
             filter:{
                 protocol: "ldap",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1146,7 +1147,7 @@ async fn export_ldap() {
         export(
             filter:{
                 protocol: "ldap",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1159,9 +1160,9 @@ async fn export_ldap() {
     assert!(res.data.to_string().contains("ldap"));
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1203,7 +1204,7 @@ async fn export_tls() {
         export(
             filter:{
                 protocol: "tls",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1221,7 +1222,7 @@ async fn export_tls() {
         export(
             filter:{
                 protocol: "tls",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1234,9 +1235,9 @@ async fn export_tls() {
     assert!(res.data.to_string().contains("tls"));
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1292,7 +1293,7 @@ async fn export_smb() {
         export(
             filter:{
                 protocol: "smb",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1310,7 +1311,7 @@ async fn export_smb() {
         export(
             filter:{
                 protocol: "smb",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1323,9 +1324,9 @@ async fn export_smb() {
     assert!(res.data.to_string().contains("smb"));
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1371,7 +1372,7 @@ async fn export_nfs() {
         export(
             filter:{
                 protocol: "nfs",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1389,7 +1390,7 @@ async fn export_nfs() {
         export(
             filter:{
                 protocol: "nfs",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1402,9 +1403,9 @@ async fn export_nfs() {
     assert!(res.data.to_string().contains("nfs"));
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1441,7 +1442,7 @@ async fn export_bootp() {
         export(
             filter:{
                 protocol: "bootp",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1459,7 +1460,7 @@ async fn export_bootp() {
         export(
             filter:{
                 protocol: "bootp",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1472,9 +1473,9 @@ async fn export_bootp() {
     assert!(res.data.to_string().contains("bootp"));
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
@@ -1520,7 +1521,7 @@ async fn export_dhcp() {
         export(
             filter:{
                 protocol: "dhcp",
-                sourceId: "src1",
+                sensorId: "src1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1538,7 +1539,7 @@ async fn export_dhcp() {
         export(
             filter:{
                 protocol: "dhcp",
-                sourceId: "ingest src 1",
+                sensorId: "ingest src 1",
                 time: { start: "1992-06-05T00:00:00Z", end: "2023-09-22T00:00:00Z" }
                 origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -1551,9 +1552,9 @@ async fn export_dhcp() {
     assert!(res.data.to_string().contains("dhcp"));
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, source: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(source.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(source.as_bytes());
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 

@@ -50,9 +50,9 @@ use crate::{
 const ONE_DAY: u64 = 60 * 60 * 24;
 const WAIT_SHUTDOWN: u64 = 15;
 
-pub type PcapSources = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
-pub type IngestSources = Arc<RwLock<HashSet<String>>>;
-pub type RunTimeIngestSources = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
+pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
+pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 pub type AckTransmissionCount = Arc<RwLock<u16>>;
 
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
 
     let _guard = init_tracing(&settings.config.log_dir)?;
 
-    let db_path = settings.config.data_dir.join("db");
+    let db_path = storage::data_dir_to_db_path(&settings.config.data_dir);
     let db_options = crate::storage::DbOptions::new(
         settings.config.max_open_files,
         settings.config.max_mb_of_level_base,
@@ -112,12 +112,12 @@ async fn main() -> Result<()> {
     let mut is_reboot = false;
     let mut is_power_off = false;
 
-    let database = storage::Database::open(&db_path, &db_options)?;
-
-    if let Err(e) = migrate_data_dir(&settings.config.data_dir, &database) {
+    if let Err(e) = migrate_data_dir(&settings.config.data_dir, &db_options) {
         error!("migration failed: {e}");
-        return Ok(());
+        bail!("migration failed")
     }
+
+    let database = storage::Database::open(&db_path, &db_options)?;
 
     let notify_terminate = Arc::new(Notify::new());
     let r = notify_terminate.clone();
@@ -132,23 +132,23 @@ async fn main() -> Result<()> {
         .expect("Failed to build request client pool");
 
     loop {
-        let pcap_sources = new_pcap_sources();
-        let ingest_sources = new_ingest_sources(&database);
-        let runtime_ingest_sources = new_runtime_ingest_sources();
+        let pcap_sensors = new_pcap_sensors();
+        let ingest_sensors = new_ingest_sensors(&database);
+        let runtime_ingest_sensors = new_runtime_ingest_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
         let (reload_tx, mut reload_rx) = mpsc::channel::<String>(1);
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
         let notify_power_off = Arc::new(Notify::new());
-        let mut notify_source_change = None;
+        let mut notify_sensor_change = None;
         let ack_transmission_cnt = new_ack_transmission_count(settings.config.ack_transmission);
 
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
             database.clone(),
-            pcap_sources.clone(),
-            ingest_sources.clone(),
+            pcap_sensors.clone(),
+            ingest_sensors.clone(),
             peers.clone(),
             request_client_pool.clone(),
             settings.config.export_dir.clone(),
@@ -193,24 +193,24 @@ async fn main() -> Result<()> {
 
         if let Some(addr_to_peers) = settings.config.addr_to_peers {
             let peer_server = peer::Peer::new(addr_to_peers, &certs.clone())?;
-            let notify_source = Arc::new(Notify::new());
+            let notify_sensor = Arc::new(Notify::new());
             task::spawn(peer_server.run(
-                ingest_sources.clone(),
+                ingest_sensors.clone(),
                 peers.clone(),
                 peer_idents.clone(),
-                notify_source.clone(),
+                notify_sensor.clone(),
                 notify_shutdown.clone(),
                 settings.clone(),
             ));
-            notify_source_change = Some(notify_source);
+            notify_sensor_change = Some(notify_sensor);
         }
 
         let publish_server = publish::Server::new(settings.config.publish_srv_addr, &certs.clone());
         task::spawn(publish_server.run(
             database.clone(),
-            pcap_sources.clone(),
+            pcap_sensors.clone(),
             stream_direct_channels.clone(),
-            ingest_sources.clone(),
+            ingest_sensors.clone(),
             peers.clone(),
             peer_idents.clone(),
             certs.clone(),
@@ -220,12 +220,12 @@ async fn main() -> Result<()> {
         let ingest_server = ingest::Server::new(settings.config.ingest_srv_addr, &certs.clone());
         task::spawn(ingest_server.run(
             database.clone(),
-            pcap_sources,
-            ingest_sources,
-            runtime_ingest_sources,
+            pcap_sensors,
+            ingest_sensors,
+            runtime_ingest_sensors,
             stream_direct_channels,
             notify_shutdown.clone(),
-            notify_source_change,
+            notify_sensor_change,
             ack_transmission_cnt,
         ));
 
@@ -347,16 +347,16 @@ fn to_hms(dur: Duration) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
-fn new_pcap_sources() -> PcapSources {
+fn new_pcap_sensors() -> PcapSensors {
     Arc::new(RwLock::new(HashMap::<String, Vec<Connection>>::new()))
 }
 
-fn new_ingest_sources(db: &Database) -> IngestSources {
-    let source_store = db.sources_store().expect("Failed to open source store");
-    Arc::new(RwLock::new(source_store.source_list()))
+fn new_ingest_sensors(db: &Database) -> IngestSensors {
+    let sensor_store = db.sensors_store().expect("Failed to open sensor store");
+    Arc::new(RwLock::new(sensor_store.sensor_list()))
 }
 
-fn new_runtime_ingest_sources() -> RunTimeIngestSources {
+fn new_runtime_ingest_sensors() -> RunTimeIngestSensors {
     Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
 }
 
