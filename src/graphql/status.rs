@@ -183,8 +183,8 @@ impl ConfigMutation {
         let is_local = ctx.data::<bool>()?;
 
         if *is_local {
-            warn!("Config is local");
-            return Ok(false);
+            warn!("The request to the GraphQL API to change the configuration was ignored because this is running with a local configuration.");
+            return Err("Config is local".to_string().into());
         }
 
         let config_draft: Config = toml::from_str(&draft)?;
@@ -370,7 +370,10 @@ mod tests {
 
         let res = schema.execute(&query).await;
 
-        assert_eq!(res.data.to_string(), "{setConfig: false}");
+        assert_eq!(
+            res.errors.first().unwrap().message,
+            "Config is local".to_string()
+        );
     }
 
     #[tokio::test]

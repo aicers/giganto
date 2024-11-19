@@ -16,9 +16,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Remote configuration is no longer stored in a temporary file, nor does it
   overwrite the existing configuration file.
-- Changed GraphQL APIs `config` and `setConfig` when using local configuration.
-  - `config` return error when using local config.
-  - `setConfig` return `Ok(false)` when using local config.
+- Changed GraphQL APIs `config` and `setConfig` to return error when using local
+  configuration.
 - Modified the repair mode to operate only with a local configuration. Giganto
   now terminates if the repair option is specified without the `-c` flag.
 - The term source is replaced with the term sensor, resulting in the following
