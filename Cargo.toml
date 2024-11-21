@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.23.0-alpha.1"
+version = "0.23.0"
 edition = "2021"
 
 [lib]
@@ -11,20 +11,20 @@ proc-macro = true
 name = "giganto"
 
 [dependencies]
-anyhow = "1.0"
-async-graphql = { version = "7.0", features = ["chrono", "string_number"] }
-async-graphql-warp = "7.0"
+anyhow = "1"
+async-graphql = { version = "7", features = ["chrono", "string_number"] }
+async-graphql-warp = "7"
 base64 = "0.22"
-bincode = "1.3"
+bincode = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.14", features = ["toml"], default-features = false }
 ctrlc = { version = "3", features = ["termination"] }
-data-encoding = "2.4"
+data-encoding = "2"
 deluxe = "0.5"
-directories = "5.0"
+directories = "5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "bf8885c" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.21.0" }
 graphql_client = "0.14"
 humantime = "2"
 humantime-serde = "1"
@@ -32,9 +32,9 @@ libc = "0.2"
 num_enum = "0.7"
 num-traits = "0.2"
 pcap = "2"
-proc-macro2 = "1.0"
+proc-macro2 = "1"
 quinn = { version = "0.11", features = ["ring"] }
-quote = "1.0"
+quote = "1"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 rocksdb = "0.22"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.2.1" }
@@ -42,11 +42,11 @@ rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
 ] }
-rustls-pemfile = "2.1"
+rustls-pemfile = "2"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-syn = "2.0"
+syn = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "0.8"
@@ -58,9 +58,9 @@ warp = { version = "0.3", features = ["tls"] }
 x509-parser = "0.16"
 
 [dev-dependencies]
-mockito = "1.2.0"
+mockito = "1"
 regex = "1"
-serial_test = "3.0.0"
+serial_test = "3"
 tempfile = "3"
 url = "2"
 

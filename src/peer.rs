@@ -40,7 +40,7 @@ use crate::{
     IngestSensors,
 };
 
-const PEER_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
+const PEER_VERSION_REQ: &str = ">=0.23.0,<0.24.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
