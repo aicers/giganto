@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.23.0] - 2024-11-21
 
 ### Added
 
@@ -29,6 +29,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - The `sourceId` field in the `export` GraphQL API is renamed to `sensorId`.
   - The `source` field in the filter parameters of all GraphQL APIs is changed
     to `sensor`.
+- Update the compatibility version of the quic communication modules.
+  - Changed `PEER_VERSION_REQ` to ">=0.23.0,<0.24.0".
+  - Changed `INGEST_VERSION_REQ` to ">=0.23.0,<0.24.0".
+  - Changed `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.24.0".
 
 ### Removed
 
@@ -612,7 +616,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.22.1...main
+[0.23.0]: https://github.com/aicers/giganto/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/giganto/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/giganto/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/aicers/giganto/compare/0.20.0...0.21.0

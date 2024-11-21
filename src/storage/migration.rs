@@ -29,7 +29,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.23.0-alpha.1,<0.24.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.23.0,<0.24.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -58,7 +58,7 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
         ),
         (
             VersionReq::parse(">=0.21.0,<0.23.0").expect("valid version requirement"),
-            Version::parse("0.23.0-alpha.1").expect("valid version"),
+            Version::parse("0.23.0").expect("valid version"),
             migrate_0_21_to_0_23,
         ),
     ];
