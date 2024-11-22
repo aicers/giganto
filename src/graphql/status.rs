@@ -97,7 +97,9 @@ impl Config {
     }
 
     async fn peers(&self) -> Option<Vec<PeerIdentity>> {
-        self.peers.clone().map(|peers| peers.into_iter().collect())
+        self.peers
+            .as_ref()
+            .map(|peers| peers.iter().cloned().collect())
     }
 
     async fn ack_transmission(&self) -> u16 {
@@ -191,21 +193,18 @@ impl ConfigMutation {
 
         let s = ctx.data::<Settings>()?;
 
-        let config = s.config.clone();
-
-        if config == config_draft {
+        if s.config == config_draft {
             info!("No changes.");
             return Err("No changes".to_string().into());
         }
 
         let reload_tx = ctx.data::<Sender<String>>()?;
-        let draft_clone = draft.clone();
         let tx_clone = reload_tx.clone();
 
         tokio::spawn(async move {
             // Used to complete the response of a graphql Mutation.
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
-            tx_clone.send(draft_clone).await.map_err(|e| {
+            tx_clone.send(draft).await.map_err(|e| {
                 error!("Failed to send config: {:?}", e);
                 "Failed to send config".to_string()
             })
@@ -218,8 +217,7 @@ impl ConfigMutation {
     #[allow(clippy::unused_async)]
     async fn stop<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
         let terminate_notify = ctx.data::<TerminateNotify>()?;
-        let notify_terminate = terminate_notify.0.clone();
-        notify_terminate.notify_one();
+        terminate_notify.0.notify_one();
 
         Ok(true)
     }
@@ -227,8 +225,7 @@ impl ConfigMutation {
     #[allow(clippy::unused_async)]
     async fn reboot<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
         let reboot_notify = ctx.data::<RebootNotify>()?;
-        let notify_reboot = reboot_notify.0.clone();
-        notify_reboot.notify_one();
+        reboot_notify.0.notify_one();
 
         Ok(true)
     }
@@ -236,8 +233,7 @@ impl ConfigMutation {
     #[allow(clippy::unused_async)]
     async fn shutdown<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
         let power_off_notify = ctx.data::<PowerOffNotify>()?;
-        let notify_power_off = power_off_notify.0.clone();
-        notify_power_off.notify_one();
+        power_off_notify.0.notify_one();
 
         Ok(true)
     }
