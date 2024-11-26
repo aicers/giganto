@@ -31,7 +31,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::{
     base64_engine,
     client::derives::{
-        csv_formatted_raw_events, log_raw_events, CsvFormattedRawEvents, LogRawEvents,
+        log_raw_events, tsv_formatted_raw_events, LogRawEvents, TsvFormattedRawEvents,
     },
     events_vec_in_cluster, get_timestamp_from_key, handle_paged_events,
     impl_from_giganto_time_range_struct_for_graphql_client, load_connection,
@@ -47,7 +47,7 @@ pub(super) struct LogQuery;
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
-struct CsvFilter {
+struct TsvFilter {
     protocol: String,
     timestamps: Vec<DateTime<Utc>>,
     sensor: String,
@@ -264,90 +264,90 @@ impl LogQuery {
         .await
     }
 
-    async fn csv_formatted_raw_events<'ctx>(
+    async fn tsv_formatted_raw_events<'ctx>(
         &self,
         ctx: &Context<'ctx>,
-        filter: CsvFilter,
+        filter: TsvFilter,
     ) -> Result<Vec<String>> {
-        let handler = |ctx: &Context<'ctx>, filter: &CsvFilter| -> Result<Vec<String>> {
+        let handler = |ctx: &Context<'ctx>, filter: &TsvFilter| -> Result<Vec<String>> {
             let db = ctx.data::<Database>()?;
             match filter.protocol.as_str() {
-                "conn" => Ok(gen_csv_format_events::<Conn>(&db.conn_store()?, filter)),
-                "dns" => Ok(gen_csv_format_events::<Dns>(&db.dns_store()?, filter)),
-                "http" => Ok(gen_csv_format_events::<Http>(&db.http_store()?, filter)),
-                "rdp" => Ok(gen_csv_format_events::<Rdp>(&db.rdp_store()?, filter)),
-                "smtp" => Ok(gen_csv_format_events::<Smtp>(&db.smtp_store()?, filter)),
-                "ntlm" => Ok(gen_csv_format_events::<Ntlm>(&db.ntlm_store()?, filter)),
-                "kerberos" => Ok(gen_csv_format_events::<Kerberos>(
+                "conn" => Ok(gen_tsv_format_events::<Conn>(&db.conn_store()?, filter)),
+                "dns" => Ok(gen_tsv_format_events::<Dns>(&db.dns_store()?, filter)),
+                "http" => Ok(gen_tsv_format_events::<Http>(&db.http_store()?, filter)),
+                "rdp" => Ok(gen_tsv_format_events::<Rdp>(&db.rdp_store()?, filter)),
+                "smtp" => Ok(gen_tsv_format_events::<Smtp>(&db.smtp_store()?, filter)),
+                "ntlm" => Ok(gen_tsv_format_events::<Ntlm>(&db.ntlm_store()?, filter)),
+                "kerberos" => Ok(gen_tsv_format_events::<Kerberos>(
                     &db.kerberos_store()?,
                     filter,
                 )),
-                "ssh" => Ok(gen_csv_format_events::<Ssh>(&db.ssh_store()?, filter)),
-                "dce_rpc" => Ok(gen_csv_format_events::<DceRpc>(
+                "ssh" => Ok(gen_tsv_format_events::<Ssh>(&db.ssh_store()?, filter)),
+                "dce_rpc" => Ok(gen_tsv_format_events::<DceRpc>(
                     &db.dce_rpc_store()?,
                     filter,
                 )),
-                "ftp" => Ok(gen_csv_format_events::<Ftp>(&db.ftp_store()?, filter)),
-                "mqtt" => Ok(gen_csv_format_events::<Mqtt>(&db.mqtt_store()?, filter)),
-                "ldap" => Ok(gen_csv_format_events::<Ldap>(&db.ldap_store()?, filter)),
-                "tls" => Ok(gen_csv_format_events::<Tls>(&db.tls_store()?, filter)),
-                "smb" => Ok(gen_csv_format_events::<Smb>(&db.smb_store()?, filter)),
-                "nfs" => Ok(gen_csv_format_events::<Nfs>(&db.nfs_store()?, filter)),
-                "bootp" => Ok(gen_csv_format_events::<Bootp>(&db.bootp_store()?, filter)),
-                "dhcp" => Ok(gen_csv_format_events::<Dhcp>(&db.dhcp_store()?, filter)),
-                "process_create" => Ok(gen_csv_format_events::<ProcessCreate>(
+                "ftp" => Ok(gen_tsv_format_events::<Ftp>(&db.ftp_store()?, filter)),
+                "mqtt" => Ok(gen_tsv_format_events::<Mqtt>(&db.mqtt_store()?, filter)),
+                "ldap" => Ok(gen_tsv_format_events::<Ldap>(&db.ldap_store()?, filter)),
+                "tls" => Ok(gen_tsv_format_events::<Tls>(&db.tls_store()?, filter)),
+                "smb" => Ok(gen_tsv_format_events::<Smb>(&db.smb_store()?, filter)),
+                "nfs" => Ok(gen_tsv_format_events::<Nfs>(&db.nfs_store()?, filter)),
+                "bootp" => Ok(gen_tsv_format_events::<Bootp>(&db.bootp_store()?, filter)),
+                "dhcp" => Ok(gen_tsv_format_events::<Dhcp>(&db.dhcp_store()?, filter)),
+                "process_create" => Ok(gen_tsv_format_events::<ProcessCreate>(
                     &db.process_create_store()?,
                     filter,
                 )),
-                "file_create_time" => Ok(gen_csv_format_events::<FileCreationTimeChanged>(
+                "file_create_time" => Ok(gen_tsv_format_events::<FileCreationTimeChanged>(
                     &db.file_create_time_store()?,
                     filter,
                 )),
-                "network_connect" => Ok(gen_csv_format_events::<NetworkConnection>(
+                "network_connect" => Ok(gen_tsv_format_events::<NetworkConnection>(
                     &db.network_connect_store()?,
                     filter,
                 )),
-                "process_terminate" => Ok(gen_csv_format_events::<ProcessTerminated>(
+                "process_terminate" => Ok(gen_tsv_format_events::<ProcessTerminated>(
                     &db.process_terminate_store()?,
                     filter,
                 )),
-                "image_load" => Ok(gen_csv_format_events::<ImageLoaded>(
+                "image_load" => Ok(gen_tsv_format_events::<ImageLoaded>(
                     &db.image_load_store()?,
                     filter,
                 )),
-                "file_create" => Ok(gen_csv_format_events::<FileCreate>(
+                "file_create" => Ok(gen_tsv_format_events::<FileCreate>(
                     &db.file_create_store()?,
                     filter,
                 )),
-                "registry_value_set" => Ok(gen_csv_format_events::<RegistryValueSet>(
+                "registry_value_set" => Ok(gen_tsv_format_events::<RegistryValueSet>(
                     &db.registry_value_set_store()?,
                     filter,
                 )),
-                "registry_key_rename" => Ok(gen_csv_format_events::<RegistryKeyValueRename>(
+                "registry_key_rename" => Ok(gen_tsv_format_events::<RegistryKeyValueRename>(
                     &db.registry_key_rename_store()?,
                     filter,
                 )),
-                "file_create_stream_hash" => Ok(gen_csv_format_events::<FileCreateStreamHash>(
+                "file_create_stream_hash" => Ok(gen_tsv_format_events::<FileCreateStreamHash>(
                     &db.file_create_stream_hash_store()?,
                     filter,
                 )),
-                "pipe_event" => Ok(gen_csv_format_events::<PipeEvent>(
+                "pipe_event" => Ok(gen_tsv_format_events::<PipeEvent>(
                     &db.pipe_event_store()?,
                     filter,
                 )),
-                "dns_query" => Ok(gen_csv_format_events::<DnsEvent>(
+                "dns_query" => Ok(gen_tsv_format_events::<DnsEvent>(
                     &db.dns_query_store()?,
                     filter,
                 )),
-                "file_delete" => Ok(gen_csv_format_events::<FileDelete>(
+                "file_delete" => Ok(gen_tsv_format_events::<FileDelete>(
                     &db.file_delete_store()?,
                     filter,
                 )),
-                "process_tamper" => Ok(gen_csv_format_events::<ProcessTampering>(
+                "process_tamper" => Ok(gen_tsv_format_events::<ProcessTampering>(
                     &db.process_tamper_store()?,
                     filter,
                 )),
-                "file_delete_detected" => Ok(gen_csv_format_events::<FileDeleteDetected>(
+                "file_delete_detected" => Ok(gen_tsv_format_events::<FileDeleteDetected>(
                     &db.file_delete_detected_store()?,
                     filter,
                 )),
@@ -359,15 +359,15 @@ impl LogQuery {
             filter,
             filter.sensor,
             handler,
-            CsvFormattedRawEvents,
-            csv_formatted_raw_events::Variables,
-            csv_formatted_raw_events::ResponseData,
-            csv_formatted_raw_events
+            TsvFormattedRawEvents,
+            tsv_formatted_raw_events::Variables,
+            tsv_formatted_raw_events::ResponseData,
+            tsv_formatted_raw_events
         )
     }
 }
 
-fn gen_csv_format_events<T>(store: &RawEventStore<'_, T>, filter: &CsvFilter) -> Vec<String>
+fn gen_tsv_format_events<T>(store: &RawEventStore<'_, T>, filter: &TsvFilter) -> Vec<String>
 where
     T: DeserializeOwned + Display,
 {
@@ -397,11 +397,11 @@ macro_rules! impl_from_giganto_log_filter_for_graphql_client {
         )*
     };
 }
-macro_rules! impl_from_giganto_csv_formatted_raw_events_filter_for_graphql_client {
+macro_rules! impl_from_giganto_tsv_formatted_raw_events_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
-            impl From<CsvFilter> for $autogen_mod::CsvFilter {
-                fn from(filter: CsvFilter) -> Self {
+            impl From<TsvFilter> for $autogen_mod::TsvFilter {
+                fn from(filter: TsvFilter) -> Self {
                     Self {
                         protocol: filter.protocol,
                         timestamps: filter.timestamps,
@@ -414,4 +414,4 @@ macro_rules! impl_from_giganto_csv_formatted_raw_events_filter_for_graphql_clien
 }
 impl_from_giganto_time_range_struct_for_graphql_client!(log_raw_events);
 impl_from_giganto_log_filter_for_graphql_client!(log_raw_events);
-impl_from_giganto_csv_formatted_raw_events_filter_for_graphql_client!(csv_formatted_raw_events);
+impl_from_giganto_tsv_formatted_raw_events_filter_for_graphql_client!(tsv_formatted_raw_events);

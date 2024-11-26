@@ -553,10 +553,10 @@ fn insert_oplog_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timest
 }
 
 #[tokio::test]
-async fn csv_formatted_raw_event_with_data() {
+async fn tsv_formatted_raw_event_with_data() {
     let schema = TestSchema::new();
 
-    // dns csv formatted raw event
+    // dns tsv formatted raw event
     let dns_store = schema.db.dns_store().unwrap();
     let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
     let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
@@ -565,7 +565,7 @@ async fn csv_formatted_raw_event_with_data() {
 
     let query = r#"
     {
-        csvFormattedRawEvents(
+        tsvFormattedRawEvents(
             filter: {
                 protocol: "dns"
                 timestamps: ["2023-01-20T00:00:00Z", "2023-01-20T00:00:01Z"]
@@ -576,7 +576,7 @@ async fn csv_formatted_raw_event_with_data() {
 
     let res = schema.execute(&query).await;
     let res_json = res.data.into_json().unwrap();
-    let extracted_list = res_json["csvFormattedRawEvents"].as_array().unwrap();
+    let extracted_list = res_json["tsvFormattedRawEvents"].as_array().unwrap();
 
     assert_eq!(
         extracted_list.get(0).unwrap().as_str().unwrap(),
@@ -587,14 +587,14 @@ async fn csv_formatted_raw_event_with_data() {
         format!("{dt2}\t{value2}")
     );
 
-    // smtp csv formatted raw event
+    // smtp tsv formatted raw event
     let smtp_store = schema.db.smtp_store().unwrap();
     let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
     let value3 = insert_smtp_raw_event(&smtp_store, "src 1", dt3.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
-        csvFormattedRawEvents(
+        tsvFormattedRawEvents(
             filter: {
                 protocol: "smtp"
                 timestamps: ["2023-01-20T00:00:02Z"]
@@ -605,7 +605,7 @@ async fn csv_formatted_raw_event_with_data() {
 
     let res = schema.execute(&query).await;
     let res_json = res.data.into_json().unwrap();
-    let extracted_list = res_json["csvFormattedRawEvents"].as_array().unwrap();
+    let extracted_list = res_json["tsvFormattedRawEvents"].as_array().unwrap();
 
     assert_eq!(
         extracted_list.get(0).unwrap().as_str().unwrap(),

@@ -1,0 +1,3 @@
+query TsvFormattedRawEvents($filter: TsvFilter!) {
+  tsvFormattedRawEvents(filter: $filter)
+}
