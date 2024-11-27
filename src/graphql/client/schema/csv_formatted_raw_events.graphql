@@ -1,3 +1,0 @@
-query CsvFormattedRawEvents($filter: CsvFilter!) {
-  csvFormattedRawEvents(filter: $filter)
-}
