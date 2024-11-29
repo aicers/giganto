@@ -69,7 +69,7 @@ impl RawEventFilter for SecuLogFilter {
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_contents(self.log.as_ref(), log_contents)
+            && check_contents(self.log.as_deref(), log_contents)
         {
             return Ok(true);
         }
