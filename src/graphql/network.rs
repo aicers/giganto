@@ -80,11 +80,11 @@ impl RawEventFilter for NetworkFilter {
         _sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool> {
-        if check_address(&self.orig_addr, orig_addr)?
-            && check_address(&self.resp_addr, resp_addr)?
-            && check_port(&self.orig_port, orig_port)
-            && check_port(&self.resp_port, resp_port)
-            && check_agent_id(&self.agent_id, &agent_id)
+        if check_address(self.orig_addr.as_ref(), orig_addr)?
+            && check_address(self.resp_addr.as_ref(), resp_addr)?
+            && check_port(self.orig_port.as_ref(), orig_port)
+            && check_port(self.resp_port.as_ref(), resp_port)
+            && check_agent_id(self.agent_id.as_ref(), agent_id.as_ref())
         {
             return Ok(true);
         }
@@ -114,11 +114,11 @@ impl RawEventFilter for SearchFilter {
                 return Ok(false);
             }
         }
-        if check_address(&self.orig_addr, orig_addr)?
-            && check_address(&self.resp_addr, resp_addr)?
-            && check_port(&self.orig_port, orig_port)
-            && check_port(&self.resp_port, resp_port)
-            && check_agent_id(&self.agent_id, &agent_id)
+        if check_address(self.orig_addr.as_ref(), orig_addr)?
+            && check_address(self.resp_addr.as_ref(), resp_addr)?
+            && check_port(self.orig_port.as_ref(), orig_port)
+            && check_port(self.resp_port.as_ref(), resp_port)
+            && check_agent_id(self.agent_id.as_ref(), agent_id.as_ref())
         {
             return Ok(true);
         }
@@ -1187,55 +1187,55 @@ async fn handle_network_raw_events<'ctx>(
         last,
         |after, before, first, last| async move {
             let (conn_iter, size) =
-                get_peekable_iter(&db.conn_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.conn_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (dns_iter, _) =
-                get_peekable_iter(&db.dns_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.dns_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (http_iter, _) =
-                get_peekable_iter(&db.http_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.http_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (rdp_iter, _) =
-                get_peekable_iter(&db.rdp_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.rdp_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (ntlm_iter, _) =
-                get_peekable_iter(&db.ntlm_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.ntlm_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (kerberos_iter, _) =
-                get_peekable_iter(&db.kerberos_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.kerberos_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (ssh_iter, _) =
-                get_peekable_iter(&db.ssh_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.ssh_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (dce_rpc_iter, _) =
-                get_peekable_iter(&db.dce_rpc_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.dce_rpc_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (ftp_iter, _) =
-                get_peekable_iter(&db.ftp_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.ftp_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (mqtt_iter, _) =
-                get_peekable_iter(&db.mqtt_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.mqtt_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (ldap_iter, _) =
-                get_peekable_iter(&db.ldap_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.ldap_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (tls_iter, _) =
-                get_peekable_iter(&db.tls_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.tls_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (smb_iter, _) =
-                get_peekable_iter(&db.smb_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.smb_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (nfs_iter, _) =
-                get_peekable_iter(&db.nfs_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.nfs_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (smtp_iter, _) =
-                get_peekable_iter(&db.smtp_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.smtp_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (bootp_iter, _) =
-                get_peekable_iter(&db.bootp_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.bootp_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let (dhcp_iter, _) =
-                get_peekable_iter(&db.dhcp_store()?, &filter, &after, &before, first, last)?;
+                get_peekable_iter(&db.dhcp_store()?, &filter, after.as_ref(), before.as_ref(), first, last)?;
 
             let mut is_forward: bool = true;
             if before.is_some() || last.is_some() {

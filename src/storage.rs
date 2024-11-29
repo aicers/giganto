@@ -105,7 +105,7 @@ pub struct RetentionStores<'db, T> {
     pub non_standard_cfs: Vec<RawEventStore<'db, T>>,
 }
 
-impl<'db, T> RetentionStores<'db, T> {
+impl<T> RetentionStores<'_, T> {
     fn new() -> Self {
         RetentionStores {
             standard_cfs: Vec::new(),
@@ -492,7 +492,7 @@ pub struct RawEventStore<'db, T> {
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
-unsafe impl<'db, T> Send for RawEventStore<'db, T> {}
+unsafe impl<T> Send for RawEventStore<'_, T> {}
 
 impl<'db, T> RawEventStore<'db, T> {
     fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<'db, T> {
@@ -616,7 +616,7 @@ pub struct SensorStore<'db> {
     cf: &'db ColumnFamily,
 }
 
-impl<'db> SensorStore<'db> {
+impl SensorStore<'_> {
     /// Inserts a sensor name and its last active time.
     ///
     /// If the sensor already exists, its last active time is updated.
@@ -653,7 +653,7 @@ impl<'db> SensorStore<'db> {
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
-unsafe impl<'db> Send for SensorStore<'db> {}
+unsafe impl Send for SensorStore<'_> {}
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Default, Debug, Clone)]
@@ -761,7 +761,7 @@ impl<'d, T> StatisticsIter<'d, T> {
     }
 }
 
-impl<'d, T> Iterator for StatisticsIter<'d, T>
+impl<T> Iterator for StatisticsIter<'_, T>
 where
     T: DeserializeOwned,
 {
@@ -786,7 +786,7 @@ impl<'d, T> FilteredIter<'d, T> {
     }
 }
 
-impl<'d, T> Iterator for FilteredIter<'d, T>
+impl<T> Iterator for FilteredIter<'_, T>
 where
     T: DeserializeOwned + EventFilter,
 {
@@ -826,7 +826,7 @@ impl<'d, T> BoundaryIter<'d, T> {
     }
 }
 
-impl<'d, T> Iterator for BoundaryIter<'d, T>
+impl<T> Iterator for BoundaryIter<'_, T>
 where
     T: DeserializeOwned,
 {
@@ -854,7 +854,7 @@ impl<'d> Iter<'d> {
     }
 }
 
-impl<'d> Iterator for Iter<'d> {
+impl Iterator for Iter<'_> {
     type Item = anyhow::Result<RawValue>;
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -1640,11 +1640,11 @@ impl RawEventFilter for ExportFilter {
         _sensor: Option<String>,
         agent_id: Option<String>,
     ) -> Result<bool> {
-        if check_address(&self.orig_addr, orig_addr)?
-            && check_address(&self.resp_addr, resp_addr)?
-            && check_port(&self.orig_port, orig_port)
-            && check_port(&self.resp_port, resp_port)
-            && check_agent_id(&self.agent_id, &agent_id)
+        if check_address(self.orig_addr.as_ref(), orig_addr)?
+            && check_address(self.resp_addr.as_ref(), resp_addr)?
+            && check_port(self.orig_port.as_ref(), orig_port)
+            && check_port(self.resp_port.as_ref(), resp_port)
+            && check_agent_id(self.agent_id.as_ref(), agent_id.as_ref())
         {
             return Ok(true);
         }
