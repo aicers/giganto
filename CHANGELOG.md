@@ -54,10 +54,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - The `sourceId` field in the `export` GraphQL API is renamed to `sensorId`.
   - The `source` field in the filter parameters of all GraphQL APIs is changed
     to `sensor`.
-- Update the compatibility version of the quic communication modules.
-  - Changed `PEER_VERSION_REQ` to ">=0.23.0,<0.24.0".
+- Update the compatibility version of the quic communication modules, due to the
+  update of giganto-client to 0.21.0.
   - Changed `INGEST_VERSION_REQ` to ">=0.23.0,<0.24.0".
   - Changed `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.24.0".
+- Updated `PEER_VERSION_REQ` to ">=0.23.0,<0.24.0" to ensure compatibility
+  between Giganto instances in the cluster. This change reflects updates to the
+  GraphQL API version and event protocol, which require consistent versions
+  across all nodes.
 
 ### Removed
 

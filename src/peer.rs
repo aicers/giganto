@@ -40,6 +40,13 @@ use crate::{
     IngestSensors,
 };
 
+// The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
+// Reasons for updating this version include, but not be limited to:
+// - Updates of GraphQL API version: Since Giganto acts as both a client and server for other
+//   Gigantos in the cluster, maintaining the same API version is necessary for the communication
+//   within the cluster.
+// - Updates of event protocol structures: Any changes to giganto-client's event protocols require
+//   all Gigantos in the cluster to use the same protocol version for compatibility.
 const PEER_VERSION_REQ: &str = ">=0.24.0-alpha.1,<0.25.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
