@@ -196,7 +196,7 @@ fn collect_exist_timestamp<T>(
 where
     T: EventFilter + DeserializeOwned,
 {
-    let (start, end) = time_range(&filter.time);
+    let (start, end) = time_range(filter.time.as_ref());
     let search_time = target_data
         .iter()
         .filter_map(|(time, value)| {
@@ -224,7 +224,7 @@ where
     search_time
 }
 
-fn time_range(time_range: &Option<TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
     let (start, end) = if let Some(time) = time_range {
         (time.start, time.end)
     } else {
@@ -606,8 +606,8 @@ pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
-    after: &Option<String>,
-    before: &Option<String>,
+    after: Option<&String>,
+    before: Option<&String>,
     first: Option<usize>,
     last: Option<usize>,
 ) -> Result<(std::iter::Peekable<FilteredIter<'c, T>>, usize)>
@@ -630,8 +630,8 @@ where
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
-    after: &Option<String>,
-    before: &Option<String>,
+    after: Option<&String>,
+    before: Option<&String>,
     first: Option<usize>,
     last: Option<usize>,
 ) -> Result<(FilteredIter<'c, T>, Option<Vec<u8>>, usize)>
@@ -784,7 +784,7 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
+fn check_address(filter_addr: Option<&IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
     if let Some(ip_range) = filter_addr {
         if let Some(addr) = target_addr {
             if let Some(start) = ip_range.start.as_deref() {
@@ -804,7 +804,7 @@ fn check_address(filter_addr: &Option<IpRange>, target_addr: Option<IpAddr>) -> 
     Ok(true)
 }
 
-fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool {
+fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool {
     if let Some(port_range) = filter_port {
         if let Some(port) = target_port {
             if let Some(start) = port_range.start {
@@ -818,17 +818,17 @@ fn check_port(filter_port: &Option<PortRange>, target_port: Option<u16>) -> bool
     true
 }
 
-fn check_contents(filter_str: &Option<String>, target_str: Option<String>) -> bool {
+fn check_contents(filter_str: Option<&String>, target_str: Option<String>) -> bool {
     filter_str.as_ref().map_or(true, |filter_str| {
-        target_str.map_or(false, |contents| contents.contains(filter_str))
+        target_str.map_or(false, |contents| contents.contains(*filter_str))
     })
 }
 
-fn check_agent_id(filter_agent_id: &Option<String>, target_agent_id: &Option<String>) -> bool {
+fn check_agent_id(filter_agent_id: Option<&String>, target_agent_id: Option<&String>) -> bool {
     filter_by_str(filter_agent_id, target_agent_id)
 }
 
-fn filter_by_str(filter_str: &Option<String>, target_str: &Option<String>) -> bool {
+fn filter_by_str(filter_str: Option<&String>, target_str: Option<&String>) -> bool {
     filter_str.as_ref().map_or(true, |filter_id| {
         target_str
             .as_ref()
@@ -967,7 +967,7 @@ macro_rules! events_in_cluster {
      $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
         if $request_from_peer.unwrap_or_default() {
-            return $handler($ctx, &$sensors, $($($handler_arg,)*)*).await;
+            return $handler($ctx, $sensors.as_ref(), $($($handler_arg,)*)*).await;
         }
 
         let sensors_set: HashSet<_> = $sensors.iter().map(|s| s.as_str()).collect();
@@ -979,7 +979,7 @@ macro_rules! events_in_cluster {
             !peers_in_charge_graphql_addrs.is_empty(),
         ) {
             (true, true) => {
-                let current_giganto_result_fut = $handler($ctx, &sensors_to_handle_by_current_giganto, $($($handler_arg,)*)*);
+                let current_giganto_result_fut = $handler($ctx, sensors_to_handle_by_current_giganto.as_ref(), $($($handler_arg,)*)*);
 
                 let peer_results_fut = crate::graphql::request_selected_peers_for_events_fut!(
                     $ctx,
@@ -1033,7 +1033,7 @@ macro_rules! events_in_cluster {
                 Ok(peer_results.into_iter().flatten().collect())
             }
             (true, false) => {
-                $handler($ctx, &sensors_to_handle_by_current_giganto, $($($handler_arg,)*)*).await
+                $handler($ctx, sensors_to_handle_by_current_giganto.as_ref(), $($($handler_arg,)*)*).await
             }
             (false, false) => Ok(Vec::new()),
         }
@@ -1323,7 +1323,7 @@ pub(crate) use paged_events_in_cluster;
 fn combine_results<N>(
     current_giganto_result: Connection<String, N>,
     peer_results: Vec<Connection<String, N>>,
-    before: &Option<String>,
+    before: Option<&String>,
     first: Option<i32>,
     last: Option<i32>,
 ) -> Connection<String, N>
@@ -1366,7 +1366,7 @@ enum TakeDirection {
 #[allow(unused)]
 fn sort_and_trunk_edges<N>(
     mut edges: Vec<Edge<String, N, EmptyFields>>,
-    before: &Option<String>,
+    before: Option<&String>,
     first: Option<i32>,
     last: Option<i32>,
 ) -> Vec<Edge<String, N, EmptyFields>>
@@ -1912,41 +1912,41 @@ mod tests {
     #[test]
     fn test_sort_and_trunk_edges() {
         let empty_vec = Vec::<Edge<String, TestNode, EmptyFields>>::new();
-        let result = sort_and_trunk_edges(empty_vec, &None, None, None);
+        let result = sort_and_trunk_edges(empty_vec, None, None, None);
         assert!(result.is_empty());
 
-        let result = sort_and_trunk_edges(edges_fixture(), &None, None, None);
+        let result = sort_and_trunk_edges(edges_fixture(), None, None, None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), &None, Some(5), None);
+        let result = sort_and_trunk_edges(edges_fixture(), None, Some(5), None);
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), &None, Some(10), None);
+        let result = sort_and_trunk_edges(edges_fixture(), None, Some(10), None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), &None, None, Some(5));
+        let result = sort_and_trunk_edges(edges_fixture(), None, None, Some(5));
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_002".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), &None, None, Some(10));
+        let result = sort_and_trunk_edges(edges_fixture(), None, None, Some(10));
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
         let result =
-            sort_and_trunk_edges(edges_fixture(), &Some("zebra_001".to_string()), None, None);
+            sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
@@ -1954,7 +1954,7 @@ mod tests {
 
         let result = sort_and_trunk_edges(
             edges_fixture(),
-            &Some("zebra_001".to_string()),
+            Some("zebra_001".to_string()),
             None,
             Some(5),
         );
@@ -1965,7 +1965,7 @@ mod tests {
 
         let result = sort_and_trunk_edges(
             edges_fixture(),
-            &Some("zebra_001".to_string()),
+            Some("zebra_001".to_string()),
             None,
             Some(10),
         );

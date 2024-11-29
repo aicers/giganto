@@ -1540,8 +1540,8 @@ async fn handle_sysmon_events<'ctx>(
             let (process_create_iter, size) = get_peekable_iter(
                 &db.process_create_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1549,8 +1549,8 @@ async fn handle_sysmon_events<'ctx>(
             let (file_create_time_iter, _) = get_peekable_iter(
                 &db.file_create_time_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1558,8 +1558,8 @@ async fn handle_sysmon_events<'ctx>(
             let (network_connect_iter, _) = get_peekable_iter(
                 &db.network_connect_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1567,8 +1567,8 @@ async fn handle_sysmon_events<'ctx>(
             let (process_terminate_iter, _) = get_peekable_iter(
                 &db.process_terminate_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1576,8 +1576,8 @@ async fn handle_sysmon_events<'ctx>(
             let (image_load_iter, _) = get_peekable_iter(
                 &db.image_load_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1585,8 +1585,8 @@ async fn handle_sysmon_events<'ctx>(
             let (file_create_iter, _) = get_peekable_iter(
                 &db.file_create_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1594,8 +1594,8 @@ async fn handle_sysmon_events<'ctx>(
             let (registry_value_set_iter, _) = get_peekable_iter(
                 &db.registry_value_set_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1603,8 +1603,8 @@ async fn handle_sysmon_events<'ctx>(
             let (registry_key_rename_iter, _) = get_peekable_iter(
                 &db.registry_key_rename_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1612,8 +1612,8 @@ async fn handle_sysmon_events<'ctx>(
             let (file_create_stream_hash_iter, _) = get_peekable_iter(
                 &db.file_create_stream_hash_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1621,8 +1621,8 @@ async fn handle_sysmon_events<'ctx>(
             let (pipe_event_iter, _) = get_peekable_iter(
                 &db.pipe_event_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1630,8 +1630,8 @@ async fn handle_sysmon_events<'ctx>(
             let (dns_query_iter, _) = get_peekable_iter(
                 &db.dns_query_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1639,8 +1639,8 @@ async fn handle_sysmon_events<'ctx>(
             let (file_delete_iter, _) = get_peekable_iter(
                 &db.file_delete_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1648,8 +1648,8 @@ async fn handle_sysmon_events<'ctx>(
             let (process_tamper_iter, _) = get_peekable_iter(
                 &db.process_tamper_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;
@@ -1657,8 +1657,8 @@ async fn handle_sysmon_events<'ctx>(
             let (file_delete_detected_iter, _) = get_peekable_iter(
                 &db.file_delete_detected_store()?,
                 &filter,
-                &after,
-                &before,
+                after.as_ref(),
+                before.as_ref(),
                 first,
                 last,
             )?;

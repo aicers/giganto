@@ -79,15 +79,15 @@ pub(super) struct StatisticsQuery;
 async fn handle_statistics(
     ctx: &Context<'_>,
     sensors: &Vec<String>,
-    time: &Option<TimeRange>,
-    protocols: &Option<Vec<String>>,
+    time: Option<&TimeRange>,
+    protocols: Option<&Vec<String>>,
 ) -> Result<Vec<StatisticsRawEvent>> {
     let db = ctx.data::<Database>()?;
     let mut total_stats: Vec<StatisticsRawEvent> = Vec::new();
     let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
 
     // Configure the protocol HashSet for which statistics output is allowed.
-    let raw_event_kinds = if let Some(protocols) = &protocols {
+    let raw_event_kinds = if let Some(protocols) = protocols {
         let mut records = HashSet::new();
         for proto in protocols {
             records.insert(convert_to_stats_allowed_type(proto)?);
@@ -135,7 +135,7 @@ impl StatisticsQuery {
             stats::ResponseData,
             statistics,
             Vec<StatisticsRawEvent>,
-            with_extra_handler_args (&time, &protocols),
+            with_extra_handler_args (time.as_ref(), protocols.as_ref()),
             with_extra_query_args (time := time.clone().map(Into::into), protocols := protocols.clone() )
         )
     }
@@ -147,7 +147,7 @@ fn get_statistics_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     core_id: u32,
     sensor: &str,
-    time: &Option<TimeRange>,
+    time: Option<&TimeRange>,
 ) -> StatisticsIter<'c, T>
 where
     T: DeserializeOwned,
