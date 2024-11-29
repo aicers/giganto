@@ -1644,7 +1644,7 @@ impl RawEventFilter for ExportFilter {
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_agent_id(self.agent_id.as_ref(), agent_id.as_ref())
+            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref())
         {
             return Ok(true);
         }

@@ -448,8 +448,8 @@ pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
-    after: Option<&String>,
-    before: Option<&String>,
+    after: Option<&str>,
+    before: Option<&str>,
     first: Option<usize>,
     last: Option<usize>,
 ) -> Result<(std::iter::Peekable<FilteredIter<'c, T>>, usize)>
@@ -472,8 +472,8 @@ where
 fn get_filtered_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
-    after: Option<&String>,
-    before: Option<&String>,
+    after: Option<&str>,
+    before: Option<&str>,
     first: Option<usize>,
     last: Option<usize>,
 ) -> Result<(FilteredIter<'c, T>, Option<Vec<u8>>, usize)>
@@ -660,17 +660,17 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
     true
 }
 
-fn check_contents(filter_str: Option<&String>, target_str: Option<String>) -> bool {
+fn check_contents(filter_str: Option<&str>, target_str: Option<String>) -> bool {
     filter_str.as_ref().map_or(true, |filter_str| {
         target_str.map_or(false, |contents| contents.contains(*filter_str))
     })
 }
 
-fn check_agent_id(filter_agent_id: Option<&String>, target_agent_id: Option<&String>) -> bool {
+fn check_agent_id(filter_agent_id: Option<&str>, target_agent_id: Option<&str>) -> bool {
     filter_by_str(filter_agent_id, target_agent_id)
 }
 
-fn filter_by_str(filter_str: Option<&String>, target_str: Option<&String>) -> bool {
+fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     filter_str.as_ref().map_or(true, |filter_id| {
         target_str
             .as_ref()
@@ -1165,7 +1165,7 @@ pub(crate) use paged_events_in_cluster;
 fn combine_results<N>(
     current_giganto_result: Connection<String, N>,
     peer_results: Vec<Connection<String, N>>,
-    before: Option<&String>,
+    before: Option<&str>,
     first: Option<i32>,
     last: Option<i32>,
 ) -> Connection<String, N>
@@ -1208,7 +1208,7 @@ enum TakeDirection {
 #[allow(unused)]
 fn sort_and_trunk_edges<N>(
     mut edges: Vec<Edge<String, N, EmptyFields>>,
-    before: Option<&String>,
+    before: Option<&str>,
     first: Option<i32>,
     last: Option<i32>,
 ) -> Vec<Edge<String, N, EmptyFields>>
@@ -1785,30 +1785,19 @@ mod tests {
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result =
-            sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, None);
+        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(
-            edges_fixture(),
-            Some("zebra_001".to_string()),
-            None,
-            Some(5),
-        );
+        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, Some(5));
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_002".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(
-            edges_fixture(),
-            Some("zebra_001".to_string()),
-            None,
-            Some(10),
-        );
+        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, Some(10));
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());

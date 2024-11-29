@@ -387,7 +387,7 @@ async fn process_pcap_extract(
 
 async fn get_pcap_conn_if_current_giganto_in_charge(
     pcap_sensors: PcapSensors,
-    sensor: &String,
+    sensor: &str,
 ) -> Option<Connection> {
     pcap_sensors
         .read()
@@ -1945,11 +1945,11 @@ where
     Ok(())
 }
 
-async fn is_current_giganto_in_charge(ingest_sensors: IngestSensors, sensor: &String) -> bool {
+async fn is_current_giganto_in_charge(ingest_sensors: IngestSensors, sensor: &str) -> bool {
     ingest_sensors.read().await.contains(sensor)
 }
 
-async fn peer_in_charge_publish_addr(peers: Peers, sensor: &String) -> Option<SocketAddr> {
+async fn peer_in_charge_publish_addr(peers: Peers, sensor: &str) -> Option<SocketAddr> {
     peers.read().await.iter().find_map(|(addr_to_peers, peer_info)| {
         peer_info
             .ingest_sensors
