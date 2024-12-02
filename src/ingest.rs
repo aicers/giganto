@@ -1,7 +1,9 @@
+pub mod generation;
 pub mod implement;
 #[cfg(test)]
 mod tests;
 
+use std::sync::OnceLock;
 use std::{
     net::SocketAddr,
     sync::{
@@ -39,6 +41,7 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
+use crate::ingest::generation::SequenceGenerator;
 use crate::publish::send_direct_stream;
 use crate::server::{
     config_server, extract_cert_from_conn, subject_from_cert_verbose, Certs,
@@ -54,9 +57,11 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.23.0,<0.24.0";
+const INGEST_VERSION_REQ: &str = ">=0.24.0-alpha.1,<0.25.0";
 
 type SensorInfo = (String, DateTime<Utc>, ConnState, bool);
+
+static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
 enum ConnState {
     Connected,
@@ -865,7 +870,7 @@ async fn handle_data<T>(
                 let mut packet_size = 0_u64;
                 #[cfg(feature = "benchmark")]
                 let mut packet_count = 0_u64;
-                for (timestamp, raw_event) in recv_buf {
+                for (timestamp, mut raw_event) in recv_buf {
                     last_timestamp = timestamp;
                     if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                         && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
@@ -879,16 +884,17 @@ async fn handle_data<T>(
                         }
                         continue;
                     }
-                    let key_builder = StorageKey::builder().start_key(&sensor);
-                    let key_builder = match raw_event_kind {
+                    let storage_key = match raw_event_kind {
                         RawEventKind::Log => {
                             let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize Log".to_string());
                                 break;
                             };
-                            key_builder
+                            StorageKey::builder()
+                                .start_key(&sensor)
                                 .mid_key(Some(log.kind.as_bytes().to_vec()))
                                 .end_key(timestamp)
+                                .build()
                         }
                         RawEventKind::PeriodicTimeSeries => {
                             let Ok(time_series) =
@@ -901,25 +907,38 @@ async fn handle_data<T>(
                             StorageKey::builder()
                                 .start_key(&time_series.id)
                                 .end_key(timestamp)
+                                .build()
                         }
                         RawEventKind::OpLog => {
-                            let Ok(op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
+                            let Ok(mut op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize OpLog".to_string());
                                 break;
                             };
-                            let agent_id = format!("{}@{sensor}", op_log.agent_name);
-                            StorageKey::builder()
-                                .start_key(&agent_id)
-                                .end_key(timestamp)
+                            op_log.sensor.clone_from(&sensor);
+                            let Ok(op_log) = bincode::serialize(&op_log) else {
+                                err_msg = Some("Failed to serialize OpLog".to_string());
+                                break;
+                            };
+                            raw_event.clone_from(&op_log);
+
+                            let generator =
+                                GENERATOR.get_or_init(SequenceGenerator::init_generator);
+                            let sequence_number = generator.generate_sequence_number();
+                            StorageKey::timestamp_builder()
+                                .start_key(timestamp)
+                                .mid_key(sequence_number)
+                                .build()
                         }
                         RawEventKind::Packet => {
                             let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize Packet".to_string());
                                 break;
                             };
-                            key_builder
+                            StorageKey::builder()
+                                .start_key(&sensor)
                                 .mid_key(Some(timestamp.to_be_bytes().to_vec()))
                                 .end_key(packet.packet_timestamp)
+                                .build()
                         }
                         RawEventKind::Statistics => {
                             let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event)
@@ -936,25 +955,31 @@ async fn handle_data<T>(
                                 packet_count += t_packet_count;
                                 packet_size += t_packet_size;
                             }
-                            key_builder
+                            StorageKey::builder()
+                                .start_key(&sensor)
                                 .mid_key(Some(statistics.core.to_be_bytes().to_vec()))
                                 .end_key(timestamp)
+                                .build()
                         }
                         RawEventKind::SecuLog => {
                             let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize SecuLog".to_string());
                                 break;
                             };
-                            key_builder
+                            StorageKey::builder()
+                                .start_key(&sensor)
                                 .mid_key(Some(secu_log.kind.as_bytes().to_vec()))
                                 .end_key(timestamp)
+                                .build()
                         }
-                        _ => key_builder.end_key(timestamp),
+                        _ => StorageKey::builder()
+                            .start_key(&sensor)
+                            .end_key(timestamp)
+                            .build(),
                     };
 
                     recv_events_cnt += 1;
                     recv_events_len += raw_event.len();
-                    let storage_key = key_builder.build();
                     store.append(&storage_key.key(), &raw_event)?;
                     if let Some(network_key) = network_key.as_ref() {
                         if let Err(e) = send_direct_stream(

@@ -980,7 +980,8 @@ type NtlmRawEventEdge {
 
 input OpLogFilter {
   time: TimeRange
-  agentId: String!
+  sensor: String
+  agentId: String
   logLevel: String
   contents: String
 }
@@ -989,6 +990,8 @@ type OpLogRawEvent {
   timestamp: DateTime!
   level: String!
   contents: String!
+  agentName: String!
+  sensor: String!
 }
 
 type OpLogRawEventConnection {

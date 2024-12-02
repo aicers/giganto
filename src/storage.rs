@@ -665,6 +665,10 @@ impl StorageKey {
         StorageKeyBuilder::default()
     }
 
+    pub fn timestamp_builder() -> StorageTimestampKeyBuilder {
+        StorageTimestampKeyBuilder::default()
+    }
+
     pub fn key(self) -> Vec<u8> {
         self.0
     }
@@ -674,6 +678,10 @@ pub trait KeyExtractor {
     fn get_start_key(&self) -> &str;
     fn get_mid_key(&self) -> Option<Vec<u8>>;
     fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+}
+
+pub trait TimestampKeyExtractor {
+    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 }
 
 #[allow(clippy::module_name_repetitions)]
@@ -729,6 +737,68 @@ impl StorageKeyBuilder {
     }
 
     pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        if let Some(time) = time {
+            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
+            if let Some(ns) = ns.checked_sub(1) {
+                if ns >= 0 {
+                    self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                    return self;
+                }
+            }
+        }
+        self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
+        self
+    }
+
+    pub fn build(self) -> StorageKey {
+        StorageKey(self.pre_key)
+    }
+}
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(Default, Debug, Clone)]
+pub struct StorageTimestampKeyBuilder {
+    pre_key: Vec<u8>,
+}
+
+impl StorageTimestampKeyBuilder {
+    pub fn start_key(mut self, key: i64) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        self.pre_key.extend_from_slice(&key.to_be_bytes());
+        self
+    }
+
+    pub fn mid_key(mut self, key: usize) -> Self {
+        let mid_key = key.to_be_bytes();
+        self.pre_key.reserve(mid_key.len());
+        self.pre_key.extend_from_slice(&mid_key);
+        self
+    }
+
+    pub fn lower_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        let ns = if let Some(time) = time {
+            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        } else {
+            0
+        };
+        self.pre_key.extend_from_slice(&ns.to_be_bytes());
+        self
+    }
+
+    pub fn upper_open_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+        self.pre_key.reserve(TIMESTAMP_SIZE);
+        let ns = if let Some(time) = time {
+            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        } else {
+            i64::MAX
+        };
+        self.pre_key.extend_from_slice(&ns.to_be_bytes());
+        self
+    }
+
+    pub fn upper_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);

@@ -1,6 +1,7 @@
 //! Routines to check the database format version and migrate it if necessary.
 mod migration_structures;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     fs::{create_dir_all, File},
     io::{Read, Write},
@@ -18,18 +19,19 @@ use self::migration_structures::{
     SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
 use super::{data_dir_to_db_path, Database, RAW_DATA_COLUMN_FAMILY_NAMES};
+use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
     graphql::TIMESTAMP_SIZE,
     ingest::implement::EventFilter,
     storage::{
         rocksdb_options, Conn as ConnFromV21, DbOptions, Http as HttpFromV21,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21,
-        RawEventStore, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21,
-        StorageKey, Tls as TlsFromV21,
+        OpLog as OpLogFromV24, RawEventStore, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21,
+        Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.23.0,<0.24.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.24.0-alpha.1,<0.25.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -60,6 +62,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.21.0,<0.23.0").expect("valid version requirement"),
             Version::parse("0.23.0").expect("valid version"),
             migrate_0_21_to_0_23,
+        ),
+        (
+            VersionReq::parse(">=0.23.0,<0.24.0").expect("valid version requirement"),
+            Version::parse("0.24.0").expect("valid version"),
+            migrate_0_23_to_0_24,
         ),
     ];
 
@@ -286,6 +293,12 @@ fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
+fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    migrate_0_23_0_to_0_24_0_op_log(&db)?;
+    Ok(())
+}
+
 fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
     let store = db.netflow5_store()?;
     for raw_event in store.iter_forward() {
@@ -322,6 +335,46 @@ fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
         store.append(&key, &new)?;
     }
     info!("secu log migration complete");
+    Ok(())
+}
+
+fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
+    info!("start migration for oplog");
+    let store = db.op_log_store()?;
+    let counter = AtomicUsize::new(0);
+
+    for raw_event in store.iter_forward() {
+        let Ok((key, value)) = raw_event else {
+            continue;
+        };
+
+        let (Ok(timestamp), Ok(old)) = (
+            get_timestamp_from_key(&key),
+            bincode::deserialize::<OpLogBeforeV24>(&value),
+        ) else {
+            continue;
+        };
+
+        if key.len() > TIMESTAMP_SIZE + 1 {
+            let old_start_key = String::from_utf8_lossy(&key[..(key.len() - (TIMESTAMP_SIZE + 1))]);
+            let split_start_key: Vec<_> = old_start_key.split('@').collect();
+            let mut convert_new: OpLogFromV24 = old.into();
+            let Some(sensor) = split_start_key.get(1) else {
+                continue;
+            };
+            convert_new.sensor.clone_from(&(*sensor).to_string());
+            let new = bincode::serialize(&convert_new)?;
+
+            let storage_key = StorageKey::timestamp_builder()
+                .start_key(timestamp)
+                .mid_key(counter.fetch_add(1, Ordering::Relaxed))
+                .build();
+
+            store.append(&storage_key.key(), &new)?;
+            store.delete(&key)?;
+        }
+    }
+    info!("oplog migration complete");
     Ok(())
 }
 
@@ -379,23 +432,39 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::fs::File;
+    use std::io::Write;
     use std::net::IpAddr;
+    use std::path::PathBuf;
 
     use chrono::Utc;
+    use giganto_client::ingest::log::OpLogLevel;
     use rocksdb::{Options, WriteBatch, DB};
     use semver::{Version, VersionReq};
+    use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
+    use crate::storage::migration::migration_structures::OpLogBeforeV24;
     use crate::storage::{
-        data_dir_to_db_path,
+        data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
             ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23,
             NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
         },
         Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, SecuLog as SecuLogFromV23,
-        Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
+        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
+        Tls as TlsFromV21,
     };
+
+    fn mock_version_file(dir: &TempDir, version_content: &str) -> PathBuf {
+        let version_path = dir.path().join("VERSION");
+        let mut file = File::create(&version_path).expect("Failed to create VERSION file");
+        file.write_all(version_content.as_bytes())
+            .expect("Failed to write version");
+        version_path
+    }
 
     #[test]
     fn version() {
@@ -1112,5 +1181,67 @@ mod tests {
 
         assert_eq!(result_value_1, b"test_value_1");
         assert_eq!(result_value_2, b"test_value_2");
+    }
+
+    #[test]
+    fn migrate_0_23_to_0_24_0_oplog() {
+        const TEST_TIMESTAMP: i64 = 1000;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let op_log_store = db.op_log_store().unwrap();
+
+        let old_op_log = OpLogBeforeV24 {
+            agent_name: "local".to_string(),
+            log_level: OpLogLevel::Info,
+            contents: "test".to_string(),
+        };
+
+        let serialized_old_op_log = bincode::serialize(&old_op_log).unwrap();
+        let op_log_old_key = StorageKey::builder()
+            .start_key("local@sr1")
+            .end_key(TEST_TIMESTAMP)
+            .build()
+            .key();
+
+        op_log_store
+            .append(&op_log_old_key, &serialized_old_op_log)
+            .unwrap();
+
+        super::migrate_0_23_0_to_0_24_0_op_log(&db).unwrap();
+
+        let count = op_log_store.iter_forward().count();
+        assert_eq!(count, 1);
+
+        for log in op_log_store.iter_forward() {
+            let Ok((_key, value)) = log else {
+                continue;
+            };
+
+            let Ok(oplog) = bincode::deserialize::<OpLogFromV24>(&value) else {
+                continue;
+            };
+
+            assert_eq!(oplog.sensor, "sr1".to_string());
+            assert_eq!(oplog.agent_name, "local".to_string());
+        }
+    }
+
+    #[test]
+    fn migrate_data_dir_version_test() {
+        let version_dir = tempfile::tempdir().unwrap();
+
+        mock_version_file(&version_dir, "0.13.0");
+
+        let db_options = DbOptions::new(8000, 512, 8, 2);
+
+        let result = migrate_data_dir(version_dir.path(), &db_options);
+        assert!(result.is_ok());
+
+        if let Ok(updated_version) = fs::read_to_string(version_dir.path().join("VERSION")) {
+            let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
+            let diff = Version::parse(&updated_version).expect("valid semver");
+            assert_eq!(current, diff)
+        }
     }
 }

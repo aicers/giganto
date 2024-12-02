@@ -1,5 +1,6 @@
 use std::mem;
 use std::net::IpAddr;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, Utc};
 use giganto_client::ingest::{
@@ -12,6 +13,7 @@ use giganto_client::ingest::{
 };
 
 use crate::graphql::tests::TestSchema;
+use crate::ingest::generation::SequenceGenerator;
 use crate::storage::RawEventStore;
 
 #[tokio::test]
@@ -907,9 +909,10 @@ fn insert_time_series(
 async fn export_op_log() {
     let schema = TestSchema::new();
     let store = schema.db.op_log_store().unwrap();
+    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_op_log_raw_event(&store, "agent1", 1);
-    insert_op_log_raw_event(&store, "agent2", 1);
+    insert_op_log_raw_event(&store, "agent1", "src1", 1, &generator).await;
+    insert_op_log_raw_event(&store, "agent2", "src1", 1, &generator).await;
 
     // export csv file
     let query = r#"
@@ -938,16 +941,23 @@ async fn export_op_log() {
     assert!(res.data.to_string().contains("op_log"));
 }
 
-fn insert_op_log_raw_event(store: &RawEventStore<OpLog>, agent_name: &str, timestamp: i64) {
+async fn insert_op_log_raw_event(
+    store: &RawEventStore<'_, OpLog>,
+    agent_name: &str,
+    sensor: &str,
+    timestamp: i64,
+    generator: &OnceLock<Arc<SequenceGenerator>>,
+) {
+    let generator = generator.get_or_init(SequenceGenerator::init_generator);
+    let sequence_number = generator.generate_sequence_number();
+
     let mut key: Vec<u8> = Vec::new();
-    let agent_id = format!("{agent_name}@src1");
-    key.extend_from_slice(agent_id.as_bytes());
-    key.push(0);
     key.extend_from_slice(&timestamp.to_be_bytes());
+    key.extend_from_slice(&sequence_number.to_be_bytes());
 
     let op_log_body = OpLog {
-        sensor: "sensor".to_string(),
-        agent_name: agent_id.to_string(),
+        sensor: sensor.to_string(),
+        agent_name: agent_name.to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),
     };

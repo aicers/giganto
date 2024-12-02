@@ -305,6 +305,13 @@ impl EventFilter for OpLog {
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
     }
+    fn agent_id(&self) -> Option<String> {
+        Some(self.agent_name.clone())
+    }
+
+    fn sensor(&self) -> Option<String> {
+        Some(self.sensor.clone())
+    }
 }
 
 impl EventFilter for PeriodicTimeSeries {
