@@ -396,7 +396,7 @@ async fn get_pcap_conn_if_current_giganto_in_charge(
         .and_then(|connections| connections.last().cloned())
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn process_stream<T>(
     db: Database,
     conn: Connection,
@@ -410,408 +410,53 @@ async fn process_stream<T>(
 where
     T: RequestStreamMessage,
 {
-    match record_type {
-        RequestStreamRecord::Conn => {
-            if let Ok(store) = db.conn_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
+    macro_rules! handle_store {
+        ($store_fn:ident, $store_name:expr) => {
+            match db.$store_fn() {
+                Ok(store) => {
+                    if let Err(e) = send_stream(
+                        store,
+                        conn,
+                        record_type,
+                        request_msg,
+                        sensor,
+                        kind,
+                        node_type,
+                        stream_direct_channels,
+                    )
+                    .await
+                    {
+                        error!("Failed to send network stream : {}", e);
+                    }
                 }
-            } else {
-                error!("Failed to open conn store");
-            }
-        }
-        RequestStreamRecord::Dns => {
-            if let Ok(store) = db.dns_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
+                Err(_) => {
+                    error!("Failed to open {} store", $store_name);
                 }
-            } else {
-                error!("Failed to open dns store");
             }
-        }
-        RequestStreamRecord::Rdp => {
-            if let Ok(store) = db.rdp_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open rdp store");
-            }
-        }
-        RequestStreamRecord::Http => {
-            if let Ok(store) = db.http_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open http store");
-            }
-        }
-        RequestStreamRecord::Log => {
-            if let Ok(store) = db.log_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open log store");
-            }
-        }
-        RequestStreamRecord::Smtp => {
-            if let Ok(store) = db.smtp_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open smtp store");
-            }
-        }
-        RequestStreamRecord::Ntlm => {
-            if let Ok(store) = db.ntlm_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open ntlm store");
-            }
-        }
-        RequestStreamRecord::Kerberos => {
-            if let Ok(store) = db.kerberos_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open kerberos store");
-            }
-        }
-        RequestStreamRecord::Ssh => {
-            if let Ok(store) = db.ssh_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open ssh store");
-            }
-        }
-        RequestStreamRecord::DceRpc => {
-            if let Ok(store) = db.dce_rpc_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open dce rpc store");
-            }
-        }
-        RequestStreamRecord::Ftp => {
-            if let Ok(store) = db.ftp_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open ftp store");
-            }
-        }
-        RequestStreamRecord::Mqtt => {
-            if let Ok(store) = db.mqtt_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open mqtt store");
-            }
-        }
-        RequestStreamRecord::Ldap => {
-            if let Ok(store) = db.ldap_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open ldap store");
-            }
-        }
-        RequestStreamRecord::Tls => {
-            if let Ok(store) = db.tls_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open tls store");
-            }
-        }
-        RequestStreamRecord::Smb => {
-            if let Ok(store) = db.smb_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open smb store");
-            }
-        }
-        RequestStreamRecord::Nfs => {
-            if let Ok(store) = db.nfs_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open nfs store");
-            }
-        }
-        RequestStreamRecord::Bootp => {
-            if let Ok(store) = db.bootp_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open bootp store");
-            }
-        }
-        RequestStreamRecord::Dhcp => {
-            if let Ok(store) = db.dhcp_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send network stream : {}", e);
-                }
-            } else {
-                error!("Failed to open dhcp store");
-            }
-        }
+        };
+    }
 
-        RequestStreamRecord::FileCreate => {
-            if let Ok(store) = db.file_create_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send sysmon stream : {}", e);
-                }
-            } else {
-                error!("Failed to open file_create store");
-            }
-        }
-        RequestStreamRecord::FileDelete => {
-            if let Ok(store) = db.file_delete_store() {
-                if let Err(e) = send_stream(
-                    store,
-                    conn,
-                    record_type,
-                    request_msg,
-                    sensor,
-                    kind,
-                    node_type,
-                    stream_direct_channels,
-                )
-                .await
-                {
-                    error!("Failed to send sysmon stream : {}", e);
-                }
-            } else {
-                error!("Failed to open file_delete store");
-            }
-        }
+    match record_type {
+        RequestStreamRecord::Conn => handle_store!(conn_store, "conn"),
+        RequestStreamRecord::Dns => handle_store!(dns_store, "dns"),
+        RequestStreamRecord::Rdp => handle_store!(rdp_store, "rdp"),
+        RequestStreamRecord::Http => handle_store!(http_store, "http"),
+        RequestStreamRecord::Log => handle_store!(log_store, "log"),
+        RequestStreamRecord::Smtp => handle_store!(smtp_store, "smtp"),
+        RequestStreamRecord::Ntlm => handle_store!(ntlm_store, "ntlm"),
+        RequestStreamRecord::Kerberos => handle_store!(kerberos_store, "kerberos"),
+        RequestStreamRecord::Ssh => handle_store!(ssh_store, "ssh"),
+        RequestStreamRecord::DceRpc => handle_store!(dce_rpc_store, "dce rpc"),
+        RequestStreamRecord::Ftp => handle_store!(ftp_store, "ftp"),
+        RequestStreamRecord::Mqtt => handle_store!(mqtt_store, "mqtt"),
+        RequestStreamRecord::Ldap => handle_store!(ldap_store, "ldap"),
+        RequestStreamRecord::Tls => handle_store!(tls_store, "tls"),
+        RequestStreamRecord::Smb => handle_store!(smb_store, "smb"),
+        RequestStreamRecord::Nfs => handle_store!(nfs_store, "nfs"),
+        RequestStreamRecord::Bootp => handle_store!(bootp_store, "bootp"),
+        RequestStreamRecord::Dhcp => handle_store!(dhcp_store, "dhcp"),
+        RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
+        RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
         RequestStreamRecord::Pcap => {}
     };
     Ok(())
