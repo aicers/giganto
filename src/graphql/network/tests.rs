@@ -223,7 +223,7 @@ async fn conn_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
@@ -3161,7 +3161,7 @@ async fn union() {
             edges {
                 node {
                     ... on ConnRawEvent {
-                        timestamp
+                        time
                     }
                     ... on DnsRawEvent {
                         timestamp
@@ -3217,7 +3217,7 @@ async fn union() {
         }
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {timestamp: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {timestamp: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {timestamp: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {timestamp: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {timestamp: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {timestamp: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {timestamp: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {timestamp: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {timestamp: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {timestamp: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {timestamp: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {timestamp: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}");
+    assert_eq!(res.data.to_string(), "{networkRawEvents: {edges: [{node: {timestamp: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {timestamp: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {timestamp: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {timestamp: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {timestamp: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {timestamp: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {timestamp: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {timestamp: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {timestamp: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {timestamp: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {timestamp: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {timestamp: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {timestamp: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}");
 }
 
 #[tokio::test]

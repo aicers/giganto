@@ -61,7 +61,7 @@ type Config {
 }
 
 type ConnRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
