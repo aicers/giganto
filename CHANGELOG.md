@@ -9,26 +9,24 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Added `sensor` field to `OpLog`.
-  - Added the `load_connection_by_prefix_timestamp_key` function and
-    `TimestampKeyExtractor` trait to enable querying of keys prefixed with
-    `timestamp`.
-  - The `opLogRawEvents` GraphQL API no longer requires `agentId` and now
-    accepts it as an optional parameter. Additionally, the API response now
-    includes logs from all agents displayed in chronological order, rather than
-    being limited to the logs of a single agent.
+- Added the `load_connection_by_prefix_timestamp_key` function and
+  `TimestampKeyExtractor` trait to enable querying of keys prefixed with
+  `timestamp`.
+- The `opLogRawEvents` GraphQL API no longer requires `agentId` and now accepts
+  it as an optional parameter. Additionally, the API response now includes logs
+  from all agents displayed in chronological order, rather than being limited to
+  the logs of a single agent.
 
 ### Changed
 
 - Rename the `csvFormattedRawEvents` GraphQL API to `tsvFormattedRawEvents`.
-- Update the compatibility version of the quic communication modules.
-  - Changed `PEER_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
-  - Changed `INGEST_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
-  - Changed `PUBLISH_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
+- Updated `PEER_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0" to ensure
+  compatibility between Giganto instances in the cluster. This change reflects
+  updates of GraphQL API.
 - Modify the code related to migration.
-  - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0
-  - Added migration function in `migrate_0_23_0_to_0_24_0_op_log`. This function
-    performs a migration to change the `key`, `value` of `Oplog`.
+  - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
+  - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
+    performs a migration to change the key and value of `Oplog`.
 
 ## [0.23.0] - 2024-11-21
 
