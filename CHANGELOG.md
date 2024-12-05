@@ -27,6 +27,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
   - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
     performs a migration to change the key and value of `Oplog`.
+- Documentation of the following GraphQL APIs is updated:
+  - `connRawEvents`
+  - `networkRawEvents`, specifically when the response is of type
+    `ConnRawEvent`.
+- `timestamp` field is renamed to `time` in the `connRawEvents` GraphQL API.
 
 ## [0.23.0] - 2024-11-21
 
