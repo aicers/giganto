@@ -895,7 +895,7 @@ pub mod tests {
         let file_path = tmp_dir.path().join("config.toml");
         File::create(&file_path).unwrap();
 
-        let mut settings = Settings::new().unwrap();
+        let mut settings = Settings::from_file("tests/config.toml").unwrap();
         settings.cfg_path = Some(file_path.to_str().unwrap().to_string());
 
         // run peer

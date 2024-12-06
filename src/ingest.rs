@@ -110,6 +110,7 @@ impl Server {
             runtime_ingest_sensors,
             rx,
             notify_sensor,
+            notify_shutdown.clone(),
         ));
 
         let shutdown_signal = Arc::new(AtomicBool::new(false));
@@ -1074,6 +1075,7 @@ async fn check_sensors_conn(
     runtime_ingest_sensors: RunTimeIngestSensors,
     mut rx: Receiver<SensorInfo>,
     notify_sensor: Option<Arc<Notify>>,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let mut itv = time::interval(time::Duration::from_secs(SENSOR_INTERVAL));
     itv.reset();
@@ -1121,8 +1123,14 @@ async fn check_sensors_conn(
                     }
                 }
             }
+
+            () = notify_shutdown.notified() => {
+                break;
+            },
         }
     }
+
+    Ok(())
 }
 
 pub struct NetworkKey {
