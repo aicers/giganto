@@ -10,7 +10,7 @@ use crate::peer::PeerIdentity;
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
-const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8442";
+pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8442";
 const DEFAULT_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
@@ -88,30 +88,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Creates a new `Settings` instance, populated from the default
-    /// configuration file if it exists.
-    pub fn new() -> Result<Self, ConfigError> {
-        let dirs = directories::ProjectDirs::from("com", "cluml", "giganto").expect("unreachable");
-        let config_path = dirs.config_dir().join("config.toml");
-        if config_path.exists() {
-            // `config::File` requires a `&str` path, so we can't use `config_path` directly.
-            if let Some(path) = config_path.to_str() {
-                Self::from_file(path)
-            } else {
-                Err(ConfigError::Message(
-                    "config path must be a valid UTF-8 string".to_string(),
-                ))
-            }
-        } else {
-            let config: Config = default_config_builder().build()?.try_deserialize()?;
-
-            Ok(Self {
-                config,
-                cfg_path: None,
-            })
-        }
-    }
-
     /// Creates a new `Settings` instance, populated from the given
     /// configuration file.
     pub fn from_file(cfg_path: &str) -> Result<Self, ConfigError> {
@@ -146,19 +122,6 @@ impl Settings {
 
 /// Creates a new `ConfigBuilder` instance with the default configuration.
 fn default_config_builder() -> ConfigBuilder<DefaultState> {
-    let db_dir =
-        directories::ProjectDirs::from_path(PathBuf::from("db")).expect("unreachable db dir");
-    let log_dir = directories::ProjectDirs::from_path(PathBuf::from("logs/apps"))
-        .expect("unreachable logs dir");
-    let export_dir = directories::ProjectDirs::from_path(PathBuf::from("export"))
-        .expect("unreachable export dir");
-    let db_path = db_dir.data_dir().to_str().expect("unreachable db path");
-    let log_path = log_dir.data_dir().to_str().expect("unreachable log path");
-    let export_path = export_dir
-        .data_dir()
-        .to_str()
-        .expect("unreachable export path");
-
     ConfConfig::builder()
         .set_default("ingest_srv_addr", DEFAULT_INGEST_SRV_ADDR)
         .expect("valid address")
@@ -166,14 +129,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("valid address")
         .set_default("graphql_srv_addr", DEFAULT_GRAPHQL_SRV_ADDR)
         .expect("local address")
-        .set_default("data_dir", db_path)
-        .expect("data dir")
         .set_default("retention", DEFAULT_RETENTION)
         .expect("retention")
-        .set_default("log_dir", log_path)
-        .expect("log dir")
-        .set_default("export_dir", export_path)
-        .expect("export_dir")
         .set_default("max_open_files", DEFAULT_MAX_OPEN_FILES)
         .expect("default max open files")
         .set_default("max_mb_of_level_base", DEFAULT_MAX_MB_OF_LEVEL_BASE)

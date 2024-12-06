@@ -7,8 +7,9 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     path::{Path, PathBuf},
+    process::exit,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -41,6 +42,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
     ingest::implement::EventFilter,
+    to_hms,
 };
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
@@ -1082,4 +1084,47 @@ pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
 
 pub(crate) fn data_dir_to_db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("db")
+}
+
+pub fn db_path_and_option(
+    data_dir: &Path,
+    max_open_files: i32,
+    max_mb_of_level_base: u64,
+    num_of_thread: i32,
+    max_sub_compactions: u32,
+) -> (PathBuf, DbOptions) {
+    let db_path = data_dir_to_db_path(data_dir);
+    let db_options = DbOptions::new(
+        max_open_files,
+        max_mb_of_level_base,
+        num_of_thread,
+        max_sub_compactions,
+    );
+    (db_path, db_options)
+}
+
+pub fn repair_db(
+    data_dir: &Path,
+    max_open_files: i32,
+    max_mb_of_level_base: u64,
+    num_of_thread: i32,
+    max_sub_compactions: u32,
+) {
+    let (db_path, db_options) = db_path_and_option(
+        data_dir,
+        max_open_files,
+        max_mb_of_level_base,
+        num_of_thread,
+        max_sub_compactions,
+    );
+    let start = Instant::now();
+    let (db_opts, _) = rocksdb_options(&db_options);
+    info!("repair db start.");
+    match DB::repair(&db_opts, db_path) {
+        Ok(()) => info!("repair ok"),
+        Err(e) => error!("repair error: {e}"),
+    }
+    let dur = start.elapsed();
+    info!("{}", to_hms(dur));
+    exit(0);
 }

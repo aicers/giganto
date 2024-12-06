@@ -22,7 +22,6 @@ config = { version = "0.14", features = ["toml"], default-features = false }
 ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
-directories = "5"
 futures-util = "0.3"
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.21.0" }
 graphql_client = "0.14"
