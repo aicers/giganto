@@ -9,7 +9,7 @@ query ImageLoadEvents($filter: NetworkFilter!, $after: String, $before: String, 
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid

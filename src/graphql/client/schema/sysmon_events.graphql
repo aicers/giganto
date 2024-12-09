@@ -11,7 +11,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
             node {
                 __typename
                 ... on ProcessCreateEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -37,7 +37,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     parentUser
                 }
                 ... on FileCreationTimeChangedEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -49,7 +49,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on NetworkConnectionEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -70,7 +70,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     destinationPortName
                 }
                 ... on ProcessTerminatedEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -79,7 +79,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on ImageLoadedEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -98,7 +98,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on FileCreateEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -109,7 +109,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on RegistryValueSetEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     eventType
@@ -121,7 +121,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on RegistryKeyValueRenameEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     eventType
@@ -133,7 +133,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on FileCreateStreamHashEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -146,7 +146,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on PipeEventEvent {
-                timestamp
+                time
                     agentName
                     agentId
                     eventType
@@ -157,7 +157,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on DnsEventEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -169,7 +169,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on FileDeleteEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -182,7 +182,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     archived
                 }
                 ... on ProcessTamperingEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid
@@ -192,7 +192,7 @@ query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                     user
                 }
                 ... on FileDeleteDetectedEvent {
-                    timestamp
+                    time
                     agentName
                     agentId
                     processGuid

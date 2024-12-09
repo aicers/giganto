@@ -9,7 +9,7 @@ query LogRawEvents($filter: LogFilter!, $after: String, $before: String, $first:
         edges {
             cursor
             node {
-                timestamp
+                time
                 log
             }
         }

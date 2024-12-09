@@ -9,7 +9,7 @@ query MqttRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
         edges {
             cursor
             node {
-                timestamp
+                time
                 origAddr
                 respAddr
                 origPort

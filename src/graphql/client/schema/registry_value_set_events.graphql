@@ -9,7 +9,7 @@ query RegistryValueSetEvents($filter: NetworkFilter!, $after: String, $before: S
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 eventType

@@ -1090,28 +1090,28 @@ async fn check_sensors_conn(
                 let keys: Vec<String> = runtime_sensors.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for sensor_key in keys {
-                    let timestamp = Utc::now();
-                    if sensor_store.insert(&sensor_key, timestamp).is_err(){
+                    let time = Utc::now();
+                    if sensor_store.insert(&sensor_key, time).is_err(){
                         error!("Failed to append sensor store");
                     }
-                    runtime_sensors.insert(sensor_key, timestamp);
+                    runtime_sensors.insert(sensor_key, time);
                 }
             }
 
-            Some((sensor_key, timestamp_val, conn_state, rep)) = rx.recv() => {
+            Some((sensor_key, time_val, conn_state, rep)) = rx.recv() => {
                 match conn_state {
                     ConnState::Connected => {
-                        if sensor_store.insert(&sensor_key, timestamp_val).is_err() {
+                        if sensor_store.insert(&sensor_key, time_val).is_err() {
                             error!("Failed to append sensor store");
                         }
-                        runtime_ingest_sensors.write().await.insert(sensor_key.clone(), timestamp_val);
+                        runtime_ingest_sensors.write().await.insert(sensor_key.clone(), time_val);
                         ingest_sensors.write().await.insert(sensor_key);
                         if let Some(ref notify) = notify_sensor {
                             notify.notify_one();
                         }
                     }
                     ConnState::Disconnected => {
-                        if sensor_store.insert(&sensor_key, timestamp_val).is_err() {
+                        if sensor_store.insert(&sensor_key, time_val).is_err() {
                             error!("Failed to append sensor store");
                         }
                         if !rep {

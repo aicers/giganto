@@ -150,14 +150,14 @@ impl RawEventFilter for OpLogFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [log_raw_events::LogRawEventsLogRawEventsEdgesNode, ])]
 struct LogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     log: String,
 }
 
 impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             log: base64_engine.encode(l.log),
         })
     }
@@ -165,7 +165,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     level: String,
     contents: String,
     agent_name: String,
@@ -175,7 +175,7 @@ struct OpLogRawEvent {
 impl FromKeyValue<OpLog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            timestamp: get_timestamp_from_key_prefix(key)?,
+            time: get_timestamp_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
             agent_name: l.agent_name,

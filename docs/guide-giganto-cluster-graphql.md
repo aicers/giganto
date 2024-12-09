@@ -177,7 +177,7 @@ async_graphql 응답 상 `Node` 로 활용되는 것입니다. (대표적으로 
 #[graphql_client_type(names = [
     conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, ])]
 struct ConnRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,

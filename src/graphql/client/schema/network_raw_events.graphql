@@ -11,7 +11,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
             node {
                 __typename
                 ... on ConnRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -28,7 +28,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     respL2Bytes
                 }
                 ... on DnsRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -49,7 +49,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     ttl
                 }
                 ... on HttpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -80,7 +80,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     state
                 }
                 ... on RdpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -90,7 +90,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     cookie
                 }
                 ... on NtlmRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -104,7 +104,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     protocol
                 }
                 ... on KerberosRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -122,7 +122,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     serviceName
                 }
                 ... on SshRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -144,7 +144,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     serverShka
                 }
                 ... on DceRpcRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -157,7 +157,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     operation
                 }
                 ... on FtpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -178,7 +178,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     fileId
                 }
                 ... on MqttRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -193,7 +193,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     subackReason
                 }
                 ... on LdapRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -209,7 +209,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     argument
                 }
                 ... on TlsRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -239,7 +239,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     lastAlert
                 }
                 ... on SmbRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -259,7 +259,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     changeTime
                 }
                 ... on NfsRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -270,7 +270,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     writeFiles
                 }
                 ... on SmtpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -286,7 +286,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     state
                 }
                 ... on BootpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort
@@ -306,7 +306,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     file
                 }
                 ... on DhcpRawEvent {
-                    timestamp
+                    time
                     origAddr
                     respAddr
                     origPort

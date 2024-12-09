@@ -9,7 +9,7 @@ query Netflow9RawEvents($filter: NetflowFilter!, $after: String, $before: String
         edges {
             cursor
             node {
-                timestamp
+                time
                 sequence
                 sourceId
                 templateId

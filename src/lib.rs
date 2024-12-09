@@ -60,7 +60,7 @@ extern crate proc_macro;
 /// #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
 /// #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 /// struct ConnRawEvent {
-///     timestamp: DateTime,
+///     time: DateTime,
 ///     orig_port: Option<u16>,
 ///     proto: u8,
 ///     duration: i64,
@@ -95,7 +95,7 @@ extern crate proc_macro;
 /// impl From<conn_raw_events::ConnRawEventsConnRawEventsEdgesNode> for ConnRawEvent {
 ///     fn from(node: conn_raw_events::ConnRawEventsConnRawEventsEdgesNode) -> Self {
 ///         Self {
-///             timestamp: node.timestamp,
+///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
 ///             duration: node.duration as __,
@@ -112,7 +112,7 @@ extern crate proc_macro;
 /// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent> for ConnRawEvent {
 ///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent) -> Self {
 ///         Self {
-///             timestamp: node.timestamp,
+///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
 ///             duration: node.duration as __,
