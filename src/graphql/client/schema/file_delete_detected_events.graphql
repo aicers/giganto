@@ -9,7 +9,7 @@ query FileDeleteDetectedEvents($filter: NetworkFilter!, $after: String, $before:
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid

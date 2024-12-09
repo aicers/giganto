@@ -9,7 +9,7 @@ query FileCreateEvents($filter: NetworkFilter!, $after: String, $before: String,
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid
