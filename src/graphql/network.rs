@@ -18,7 +18,7 @@ use graphql_client::GraphQLQuery;
 use super::{
     base64_engine, check_address, check_agent_id, check_port,
     client::derives::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize},
-    collect_exist_timestamp, events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key,
+    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
     handle_paged_events, impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
     impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
@@ -609,7 +609,7 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty,$( $plain_field:ident ),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let time = get_timestamp_from_key(key)?;
+                let time = get_time_from_key(key)?;
                 Ok(Self {
                     time,
                     orig_addr: val.orig_addr.to_string(),
@@ -634,7 +634,7 @@ macro_rules! from_key_value {
 impl FromKeyValue<Http> for HttpRawEvent {
     fn from_key_value(key: &[u8], val: Http) -> Result<Self> {
         Ok(HttpRawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -670,7 +670,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
 impl FromKeyValue<Conn> for ConnRawEvent {
     fn from_key_value(key: &[u8], val: Conn) -> Result<Self> {
         Ok(ConnRawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -692,7 +692,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
 impl FromKeyValue<Ftp> for FtpRawEvent {
     fn from_key_value(key: &[u8], val: Ftp) -> Result<Self> {
         Ok(FtpRawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -718,7 +718,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
 impl FromKeyValue<Bootp> for BootpRawEvent {
     fn from_key_value(key: &[u8], val: Bootp) -> Result<Self> {
         Ok(BootpRawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             orig_port: val.orig_port,
             resp_addr: val.resp_addr.to_string(),
@@ -743,7 +743,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
 impl FromKeyValue<Dhcp> for DhcpRawEvent {
     fn from_key_value(key: &[u8], val: Dhcp) -> Result<Self> {
         Ok(DhcpRawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             orig_port: val.orig_port,
             resp_addr: val.resp_addr.to_string(),
@@ -1868,7 +1868,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Conn>(&exist_data, filter))
+            Ok(collect_exist_times::<Conn>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -1895,7 +1895,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Dns>(&exist_data, filter))
+            Ok(collect_exist_times::<Dns>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -1922,7 +1922,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Http>(&exist_data, filter))
+            Ok(collect_exist_times::<Http>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1948,7 +1948,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Rdp>(&exist_data, filter))
+            Ok(collect_exist_times::<Rdp>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -1975,7 +1975,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Smtp>(&exist_data, filter))
+            Ok(collect_exist_times::<Smtp>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2002,7 +2002,7 @@ impl NetworkQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<Ntlm>(&exist_data, filter))
+            Ok(collect_exist_times::<Ntlm>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2030,7 +2030,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Kerberos>(&exist_data, filter))
+            Ok(collect_exist_times::<Kerberos>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -2057,7 +2057,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Ssh>(&exist_data, filter))
+            Ok(collect_exist_times::<Ssh>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2085,7 +2085,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<DceRpc>(&exist_data, filter))
+            Ok(collect_exist_times::<DceRpc>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2113,7 +2113,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Ftp>(&exist_data, filter))
+            Ok(collect_exist_times::<Ftp>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2141,7 +2141,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Mqtt>(&exist_data, filter))
+            Ok(collect_exist_times::<Mqtt>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2169,7 +2169,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Ldap>(&exist_data, filter))
+            Ok(collect_exist_times::<Ldap>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2197,7 +2197,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Tls>(&exist_data, filter))
+            Ok(collect_exist_times::<Tls>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2226,7 +2226,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Smb>(&exist_data, filter))
+            Ok(collect_exist_times::<Smb>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2254,7 +2254,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Nfs>(&exist_data, filter))
+            Ok(collect_exist_times::<Nfs>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2282,7 +2282,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Bootp>(&exist_data, filter))
+            Ok(collect_exist_times::<Bootp>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2310,7 +2310,7 @@ impl NetworkQuery {
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-            Ok(collect_exist_timestamp::<Dhcp>(&exist_data, filter))
+            Ok(collect_exist_times::<Dhcp>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -2348,7 +2348,7 @@ fn network_connection(
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
-    let timestamp = min_max_time(is_forward);
+    let time = min_max_time(is_forward);
     let mut result_vec: Vec<Edge<String, NetworkRawEvents, _>> = Vec::new();
     let mut has_previous_page: bool = false;
     let mut has_next_page: bool = false;
@@ -2374,109 +2374,109 @@ fn network_connection(
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dns_ts = if let Some((ref key, _)) = dns_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let http_ts = if let Some((ref key, _)) = http_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let rdp_ts = if let Some((ref key, _)) = rdp_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ntlm_ts = if let Some((ref key, _)) = ntlm_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let kerberos_ts = if let Some((ref key, _)) = kerberos_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ssh_ts = if let Some((ref key, _)) = ssh_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dce_rpc_ts = if let Some((ref key, _)) = dce_rpc_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ftp_ts = if let Some((ref key, _)) = ftp_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let mqtt_ts = if let Some((ref key, _)) = mqtt_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let ldap_ts = if let Some((ref key, _)) = ldap_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let tls_ts = if let Some((ref key, _)) = tls_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let smb_ts = if let Some((ref key, _)) = smb_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let nfs_ts = if let Some((ref key, _)) = nfs_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let smtp_ts = if let Some((ref key, _)) = smtp_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let bootp_ts = if let Some((ref key, _)) = bootp_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dhcp_ts = if let Some((ref key, _)) = dhcp_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let selected = if is_forward {
-            timestamp.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
+            time.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
                 kerberos_ts.min(
                     ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(mqtt_ts.min(ldap_ts.min(
                         tls_ts.min(smb_ts.min(nfs_ts.min(smtp_ts.min(bootp_ts.min(dhcp_ts))))),
@@ -2484,7 +2484,7 @@ fn network_connection(
                 ),
             ))))))
         } else {
-            timestamp.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
+            time.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
                 kerberos_ts.max(
                     ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(mqtt_ts.max(ldap_ts.max(
                         tls_ts.max(smb_ts.max(nfs_ts.max(smtp_ts.max(bootp_ts.max(dhcp_ts))))),
