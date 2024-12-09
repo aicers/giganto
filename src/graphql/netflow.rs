@@ -7,10 +7,9 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    check_address, check_contents, check_port, client::derives::StringNumberU32,
-    get_timestamp_from_key, handle_paged_events,
-    impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster, FromKeyValue,
-    IpRange, PortRange,
+    check_address, check_contents, check_port, client::derives::StringNumberU32, get_time_from_key,
+    handle_paged_events, impl_from_giganto_range_structs_for_graphql_client,
+    paged_events_in_cluster, FromKeyValue, IpRange, PortRange,
 };
 use crate::{
     graphql::{
@@ -124,7 +123,7 @@ pub struct Netflow5RawEvent {
 impl FromKeyValue<Netflow5> for Netflow5RawEvent {
     fn from_key_value(key: &[u8], val: Netflow5) -> Result<Self> {
         Ok(Netflow5RawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             src_addr: val.src_addr.to_string(),
             dst_addr: val.dst_addr.to_string(),
             next_hop: val.next_hop.to_string(),
@@ -171,7 +170,7 @@ pub struct Netflow9RawEvent {
 impl FromKeyValue<Netflow9> for Netflow9RawEvent {
     fn from_key_value(key: &[u8], val: Netflow9) -> Result<Self> {
         Ok(Netflow9RawEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             sequence: val.sequence.into(),
             source_id: val.source_id.into(),
             template_id: val.template_id,
