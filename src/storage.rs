@@ -532,10 +532,10 @@ impl<'db, T> RawEventStore<'db, T> {
         times.sort_unstable();
         let keys = times
             .iter()
-            .map(|timestamp| {
+            .map(|time| {
                 StorageKey::builder()
                     .start_key(sensor)
-                    .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                    .end_key(time.timestamp_nanos_opt().unwrap_or(i64::MAX))
                     .build()
                     .key()
             })
@@ -545,10 +545,10 @@ impl<'db, T> RawEventStore<'db, T> {
         let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = times
             .iter()
             .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
-            .filter_map(|(timestamp, result_value)| {
+            .filter_map(|(time, result_value)| {
                 result_value
                     .ok()
-                    .and_then(|val| val.map(|inner_val| (*timestamp, inner_val.deref().to_vec())))
+                    .and_then(|val| val.map(|inner_val| (*time, inner_val.deref().to_vec())))
             })
             .collect();
         result_vector

@@ -2688,16 +2688,16 @@ where
         value.agent_id(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
-        let timestamp = DateTime::from_timestamp_nanos(timestamp)
+        let time = DateTime::from_timestamp_nanos(timestamp)
             .format("%s%.9f")
             .to_string();
 
         match export_type {
             "csv" => {
-                writeln!(writer, "{timestamp}\t{sensor}\t{value}")?;
+                writeln!(writer, "{time}\t{sensor}\t{value}")?;
             }
             "json" => {
-                let json_data = value.convert_json_output(timestamp, sensor.to_string())?;
+                let json_data = value.convert_json_output(time, sensor.to_string())?;
                 let json_data = serde_json::to_string(&json_data)?;
                 writeln!(writer, "{json_data}")?;
             }

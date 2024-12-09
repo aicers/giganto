@@ -215,7 +215,7 @@ pub fn minimal_schema(
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
-fn collect_exist_timestamp<T>(
+fn collect_exist_times<T>(
     target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
     filter: &SearchFilter,
 ) -> Vec<DateTime<Utc>>
@@ -613,7 +613,7 @@ where
     (records, has_more)
 }
 
-pub fn get_timestamp_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
         return Ok(Utc.timestamp_nanos(timestamp));
@@ -621,7 +621,7 @@ pub fn get_timestamp_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         return Ok(Utc.timestamp_nanos(nanos));
