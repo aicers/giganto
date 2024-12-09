@@ -80,7 +80,7 @@ impl RawEventFilter for SecuLogFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode])]
 struct SecuLogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -94,7 +94,7 @@ struct SecuLogRawEvent {
 impl FromKeyValue<SecuLog> for SecuLogRawEvent {
     fn from_key_value(key: &[u8], sl: SecuLog) -> Result<Self> {
         Ok(SecuLogRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             log_type: sl.log_type,
             version: sl.version,
             orig_addr: sl.orig_addr.map(|addr| addr.to_string()),
@@ -249,7 +249,7 @@ mod tests {
                         {
                             "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                             "node": {
-                                "timestamp": "2023-11-16T15:03:45.291779203+00:00",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
                                 "sensor": "src2",
                                 "logType": "cisco",
                                 "version": "V3",

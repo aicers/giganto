@@ -696,7 +696,7 @@ async fn tsv_formatted_raw_event_with_data() {
         tsvFormattedRawEvents(
             filter: {
                 protocol: "dns"
-                timestamps: ["2023-01-20T00:00:00Z", "2023-01-20T00:00:01Z"]
+                times: ["2023-01-20T00:00:00Z", "2023-01-20T00:00:01Z"]
                 sensor: "src 1"
             }
         )
@@ -725,7 +725,7 @@ async fn tsv_formatted_raw_event_with_data() {
         tsvFormattedRawEvents(
             filter: {
                 protocol: "smtp"
-                timestamps: ["2023-01-20T00:00:02Z"]
+                times: ["2023-01-20T00:00:02Z"]
                 sensor: "src 1"
             }
         )
