@@ -9,7 +9,7 @@ query DnsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
         edges {
             cursor
             node {
-                timestamp
+                time
                 origAddr
                 respAddr
                 origPort

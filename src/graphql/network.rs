@@ -129,7 +129,7 @@ impl RawEventFilter for SearchFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 struct ConnRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -150,7 +150,7 @@ struct ConnRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
 struct DnsRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -174,7 +174,7 @@ struct DnsRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
 struct HttpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -208,7 +208,7 @@ struct HttpRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
 struct RdpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -221,7 +221,7 @@ struct RdpRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
 struct SmtpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -240,7 +240,7 @@ struct SmtpRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
 struct NtlmRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -257,7 +257,7 @@ struct NtlmRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
 struct KerberosRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -278,7 +278,7 @@ struct KerberosRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
 struct SshRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -303,7 +303,7 @@ struct SshRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
 struct DceRpcRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -319,7 +319,7 @@ struct DceRpcRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
 struct FtpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -343,7 +343,7 @@ struct FtpRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
 struct MqttRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -361,7 +361,7 @@ struct MqttRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
 struct LdapRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -380,7 +380,7 @@ struct LdapRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
 struct TlsRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -414,7 +414,7 @@ struct TlsRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
 struct SmbRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -437,7 +437,7 @@ struct SmbRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
 struct NfsRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -451,7 +451,7 @@ struct NfsRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [bootp_raw_events::BootpRawEventsBootpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnBootpRawEvent])]
 struct BootpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -498,7 +498,7 @@ impl From<usize> for StringNumberUsize {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEvent])]
 struct DhcpRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     orig_addr: String,
     orig_port: u16,
     resp_addr: String,
@@ -609,9 +609,9 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty,$( $plain_field:ident ),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let timestamp = get_timestamp_from_key(key)?;
+                let time = get_timestamp_from_key(key)?;
                 Ok(Self {
-                    timestamp,
+                    time,
                     orig_addr: val.orig_addr.to_string(),
                     resp_addr: val.resp_addr.to_string(),
                     orig_port: val.orig_port,
@@ -634,7 +634,7 @@ macro_rules! from_key_value {
 impl FromKeyValue<Http> for HttpRawEvent {
     fn from_key_value(key: &[u8], val: Http) -> Result<Self> {
         Ok(HttpRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -670,7 +670,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
 impl FromKeyValue<Conn> for ConnRawEvent {
     fn from_key_value(key: &[u8], val: Conn) -> Result<Self> {
         Ok(ConnRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -692,7 +692,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
 impl FromKeyValue<Ftp> for FtpRawEvent {
     fn from_key_value(key: &[u8], val: Ftp) -> Result<Self> {
         Ok(FtpRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
@@ -718,7 +718,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
 impl FromKeyValue<Bootp> for BootpRawEvent {
     fn from_key_value(key: &[u8], val: Bootp) -> Result<Self> {
         Ok(BootpRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             orig_port: val.orig_port,
             resp_addr: val.resp_addr.to_string(),
@@ -743,7 +743,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
 impl FromKeyValue<Dhcp> for DhcpRawEvent {
     fn from_key_value(key: &[u8], val: Dhcp) -> Result<Self> {
         Ok(DhcpRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             orig_addr: val.orig_addr.to_string(),
             orig_port: val.orig_port,
             resp_addr: val.resp_addr.to_string(),
@@ -1865,7 +1865,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.conn_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Conn>(&exist_data, filter))
@@ -1892,7 +1892,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dns_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Dns>(&exist_data, filter))
@@ -1919,7 +1919,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.http_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Http>(&exist_data, filter))
@@ -1945,7 +1945,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.rdp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Rdp>(&exist_data, filter))
@@ -1972,7 +1972,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.smtp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Smtp>(&exist_data, filter))
@@ -1999,7 +1999,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ntlm_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<Ntlm>(&exist_data, filter))
@@ -2026,7 +2026,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.kerberos_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2053,7 +2053,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ssh_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2081,7 +2081,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dce_rpc_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2109,7 +2109,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ftp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2137,7 +2137,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.mqtt_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2165,7 +2165,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.ldap_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2193,7 +2193,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.tls_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2222,7 +2222,7 @@ impl NetworkQuery {
 
             let store = db.smb_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2250,7 +2250,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.nfs_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2278,7 +2278,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.bootp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
@@ -2306,7 +2306,7 @@ impl NetworkQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dhcp_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 

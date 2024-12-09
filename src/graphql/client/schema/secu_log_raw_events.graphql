@@ -9,7 +9,7 @@ query SecuLogRawEvents($filter: SecuLogFilter!, $after: String, $before: String,
         edges {
             cursor
             node {
-                timestamp
+                time
                 logType
                 version
                 origAddr

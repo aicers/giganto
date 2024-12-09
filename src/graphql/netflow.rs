@@ -95,7 +95,7 @@ impl RawEventFilter for NetflowFilter {
 #[graphql_client_type(names = [netflow5_raw_events::Netflow5RawEventsNetflow5RawEventsEdgesNode])]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -124,7 +124,7 @@ pub struct Netflow5RawEvent {
 impl FromKeyValue<Netflow5> for Netflow5RawEvent {
     fn from_key_value(key: &[u8], val: Netflow5) -> Result<Self> {
         Ok(Netflow5RawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             src_addr: val.src_addr.to_string(),
             dst_addr: val.dst_addr.to_string(),
             next_hop: val.next_hop.to_string(),
@@ -156,7 +156,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 #[graphql_client_type(names = [netflow9_raw_events::Netflow9RawEventsNetflow9RawEventsEdgesNode])]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     sequence: StringNumberU32,
     source_id: StringNumberU32,
     template_id: u16,
@@ -171,7 +171,7 @@ pub struct Netflow9RawEvent {
 impl FromKeyValue<Netflow9> for Netflow9RawEvent {
     fn from_key_value(key: &[u8], val: Netflow9) -> Result<Self> {
         Ok(Netflow9RawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             sequence: val.sequence.into(),
             source_id: val.source_id.into(),
             template_id: val.template_id,

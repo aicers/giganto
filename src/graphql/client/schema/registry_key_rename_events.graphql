@@ -9,7 +9,7 @@ query RegistryKeyRenameEvents($filter: NetworkFilter!, $after: String, $before: 
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 eventType

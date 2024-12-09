@@ -9,7 +9,7 @@ query ProcessTamperEvents($filter: NetworkFilter!, $after: String, $before: Stri
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid

@@ -115,7 +115,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub timestamps: Vec<DateTime<Utc>>,
+    pub times: Vec<DateTime<Utc>>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -1748,7 +1748,7 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
                         resp_port: filter.resp_port.map(Into::into),
                         log_level: filter.log_level,
                         log_contents: filter.log_contents,
-                        timestamps: filter.timestamps,
+                        times: filter.times,
                         keyword: filter.keyword,
                         agent_id: filter.agent_id,
                     }
@@ -1882,7 +1882,7 @@ mod tests {
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        timestamp: DateTime<Utc>,
+        time: DateTime<Utc>,
     }
 
     impl ClusterSortKey for TestNode {
@@ -1893,42 +1893,12 @@ mod tests {
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
         vec![
-            Edge::new(
-                "warn_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "danger_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "danger_002".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_002".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_003".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
+            Edge::new("warn_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("danger_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("danger_002".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_002".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_003".to_string(), TestNode { time: Utc::now() }),
         ]
     }
 

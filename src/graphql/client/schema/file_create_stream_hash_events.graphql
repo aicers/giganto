@@ -9,7 +9,7 @@ query FileCreateStreamHashEvents($filter: NetworkFilter!, $after: String, $befor
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid
