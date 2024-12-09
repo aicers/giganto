@@ -51,7 +51,7 @@ pub(super) struct SysmonQuery;
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent])]
 struct ProcessCreateEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -80,7 +80,7 @@ struct ProcessCreateEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent])]
 struct FileCreationTimeChangedEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -95,7 +95,7 @@ struct FileCreationTimeChangedEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent])]
 struct NetworkConnectionEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -119,7 +119,7 @@ struct NetworkConnectionEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent])]
 struct ProcessTerminatedEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -131,7 +131,7 @@ struct ProcessTerminatedEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [image_load_events::ImageLoadEventsImageLoadEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent])]
 struct ImageLoadedEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -153,7 +153,7 @@ struct ImageLoadedEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [file_create_events::FileCreateEventsFileCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent])]
 struct FileCreateEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -167,7 +167,7 @@ struct FileCreateEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent])]
 struct RegistryValueSetEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -182,7 +182,7 @@ struct RegistryValueSetEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent])]
 struct RegistryKeyValueRenameEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -197,7 +197,7 @@ struct RegistryKeyValueRenameEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent])]
 struct FileCreateStreamHashEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -213,7 +213,7 @@ struct FileCreateStreamHashEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent])]
 struct PipeEventEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -227,7 +227,7 @@ struct PipeEventEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent])]
 struct DnsEventEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -242,7 +242,7 @@ struct DnsEventEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent])]
 struct FileDeleteEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -258,7 +258,7 @@ struct FileDeleteEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent])]
 struct ProcessTamperingEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -271,7 +271,7 @@ struct ProcessTamperingEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent])]
 struct FileDeleteDetectedEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -327,9 +327,9 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let timestamp = get_timestamp_from_key(key)?;
+                let time = get_timestamp_from_key(key)?;
                 Ok(Self {
-                    timestamp,
+                    time,
                     agent_name: val.agent_name,
                     agent_id: val.agent_id,
                     process_guid: val.process_guid,
@@ -503,7 +503,7 @@ from_key_value!(
 impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     fn from_key_value(key: &[u8], value: NetworkConnection) -> Result<Self> {
         Ok(NetworkConnectionEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_timestamp_from_key(key)?,
             agent_name: value.agent_name,
             agent_id: value.agent_id,
             process_guid: value.process_guid,
@@ -1107,7 +1107,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.process_create_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<ProcessCreate>(
@@ -1136,7 +1136,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_time_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
@@ -1166,7 +1166,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.network_connect_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<NetworkConnection>(
@@ -1195,7 +1195,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.process_terminate_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<ProcessTerminated>(
@@ -1224,7 +1224,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.image_load_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, filter))
@@ -1250,7 +1250,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<FileCreate>(&exist_data, filter))
@@ -1277,7 +1277,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.registry_value_set_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<RegistryValueSet>(
@@ -1306,7 +1306,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.registry_key_rename_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
@@ -1335,7 +1335,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_stream_hash_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<FileCreateStreamHash>(
@@ -1365,7 +1365,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.pipe_event_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, filter))
@@ -1391,7 +1391,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.dns_query_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, filter))
@@ -1417,7 +1417,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<FileDelete>(&exist_data, filter))
@@ -1444,7 +1444,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.process_tamper_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<ProcessTampering>(
@@ -1473,7 +1473,7 @@ impl SysmonQuery {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_detected_store()?;
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
             Ok(collect_exist_timestamp::<FileDeleteDetected>(
@@ -1710,7 +1710,7 @@ fn sysmon_connection(
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, SysmonEvents>> {
-    let timestamp = min_max_time(is_forward);
+    let time = min_max_time(is_forward);
     let mut result_vec: Vec<Edge<String, SysmonEvents, _>> = Vec::new();
     let mut has_previous_page: bool = false;
     let mut has_next_page: bool = false;
@@ -1816,28 +1816,31 @@ fn sysmon_connection(
             min_max_time(is_forward)
         };
 
-        let selected =
-            if is_forward {
-                timestamp.min(file_create_time_ts.min(process_create_ts.min(
-                    network_connect_ts.min(process_terminate_ts.min(image_load_ts.min(
-                        file_create_ts.min(registry_value_set_ts.min(registry_key_rename_ts.min(
+        let selected = if is_forward {
+            time.min(
+                file_create_time_ts.min(process_create_ts.min(network_connect_ts.min(
+                    process_terminate_ts.min(image_load_ts.min(file_create_ts.min(
+                        registry_value_set_ts.min(registry_key_rename_ts.min(
                             file_create_stream_hash_ts.min(pipe_event_ts.min(dns_query_ts.min(
                                 file_delete_ts.min(process_tamper_ts.min(file_delete_detected_ts)),
                             ))),
-                        ))),
+                        )),
                     ))),
-                )))
-            } else {
-                timestamp.max(file_create_time_ts.max(process_create_ts.max(
-                    network_connect_ts.max(process_terminate_ts.max(image_load_ts.max(
-                        file_create_ts.max(registry_value_set_ts.max(registry_key_rename_ts.max(
+                ))),
+            )
+        } else {
+            time.max(
+                file_create_time_ts.max(process_create_ts.max(network_connect_ts.max(
+                    process_terminate_ts.max(image_load_ts.max(file_create_ts.max(
+                        registry_value_set_ts.max(registry_key_rename_ts.max(
                             file_create_stream_hash_ts.max(pipe_event_ts.max(dns_query_ts.max(
                                 file_delete_ts.max(process_tamper_ts.max(file_delete_detected_ts)),
                             ))),
-                        ))),
+                        )),
                     ))),
-                )))
-            };
+                ))),
+            )
+        };
 
         match selected {
             _ if selected == process_create_ts => {
