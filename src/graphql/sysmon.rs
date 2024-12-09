@@ -16,7 +16,7 @@ use graphql_client::GraphQLQuery;
 use super::{
     base64_engine,
     client::derives::{StringNumberI64, StringNumberU32},
-    collect_exist_timestamp, events_vec_in_cluster, get_peekable_iter, get_timestamp_from_key,
+    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
     handle_paged_events, impl_from_giganto_network_filter_for_graphql_client,
     impl_from_giganto_range_structs_for_graphql_client,
     impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
@@ -327,7 +327,7 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let time = get_timestamp_from_key(key)?;
+                let time = get_time_from_key(key)?;
                 Ok(Self {
                     time,
                     agent_name: val.agent_name,
@@ -503,7 +503,7 @@ from_key_value!(
 impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     fn from_key_value(key: &[u8], value: NetworkConnection) -> Result<Self> {
         Ok(NetworkConnectionEvent {
-            time: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             agent_name: value.agent_name,
             agent_id: value.agent_id,
             process_guid: value.process_guid,
@@ -1110,10 +1110,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<ProcessCreate>(
-                &exist_data,
-                filter,
-            ))
+            Ok(collect_exist_times::<ProcessCreate>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1139,7 +1136,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<FileCreationTimeChanged>(
+            Ok(collect_exist_times::<FileCreationTimeChanged>(
                 &exist_data,
                 filter,
             ))
@@ -1169,7 +1166,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<NetworkConnection>(
+            Ok(collect_exist_times::<NetworkConnection>(
                 &exist_data,
                 filter,
             ))
@@ -1198,7 +1195,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<ProcessTerminated>(
+            Ok(collect_exist_times::<ProcessTerminated>(
                 &exist_data,
                 filter,
             ))
@@ -1227,7 +1224,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<ImageLoaded>(&exist_data, filter))
+            Ok(collect_exist_times::<ImageLoaded>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1253,7 +1250,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<FileCreate>(&exist_data, filter))
+            Ok(collect_exist_times::<FileCreate>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -1280,10 +1277,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<RegistryValueSet>(
-                &exist_data,
-                filter,
-            ))
+            Ok(collect_exist_times::<RegistryValueSet>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1309,7 +1303,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<RegistryKeyValueRename>(
+            Ok(collect_exist_times::<RegistryKeyValueRename>(
                 &exist_data,
                 filter,
             ))
@@ -1338,7 +1332,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<FileCreateStreamHash>(
+            Ok(collect_exist_times::<FileCreateStreamHash>(
                 &exist_data,
                 filter,
             ))
@@ -1368,7 +1362,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<PipeEvent>(&exist_data, filter))
+            Ok(collect_exist_times::<PipeEvent>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1394,7 +1388,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<DnsEvent>(&exist_data, filter))
+            Ok(collect_exist_times::<DnsEvent>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1420,7 +1414,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<FileDelete>(&exist_data, filter))
+            Ok(collect_exist_times::<FileDelete>(&exist_data, filter))
         };
 
         events_vec_in_cluster!(
@@ -1447,10 +1441,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<ProcessTampering>(
-                &exist_data,
-                filter,
-            ))
+            Ok(collect_exist_times::<ProcessTampering>(&exist_data, filter))
         };
         events_vec_in_cluster!(
             ctx,
@@ -1476,7 +1467,7 @@ impl SysmonQuery {
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
                 .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
-            Ok(collect_exist_timestamp::<FileDeleteDetected>(
+            Ok(collect_exist_times::<FileDeleteDetected>(
                 &exist_data,
                 filter,
             ))
@@ -1733,85 +1724,85 @@ fn sysmon_connection(
 
     loop {
         let process_create_ts = if let Some((ref key, _)) = process_create_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let file_create_time_ts = if let Some((ref key, _)) = file_create_time_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let network_connect_ts = if let Some((ref key, _)) = network_connect_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let process_terminate_ts = if let Some((ref key, _)) = process_terminate_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let image_load_ts = if let Some((ref key, _)) = image_load_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let file_create_ts = if let Some((ref key, _)) = file_create_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let registry_value_set_ts = if let Some((ref key, _)) = registry_value_set_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let registry_key_rename_ts = if let Some((ref key, _)) = registry_key_rename_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let file_create_stream_hash_ts = if let Some((ref key, _)) = file_create_stream_hash_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let pipe_event_ts = if let Some((ref key, _)) = pipe_event_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let dns_query_ts = if let Some((ref key, _)) = dns_query_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let file_delete_ts = if let Some((ref key, _)) = file_delete_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let process_tamper_ts = if let Some((ref key, _)) = process_tamper_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
 
         let file_delete_detected_ts = if let Some((ref key, _)) = file_delete_detected_data {
-            get_timestamp_from_key(key)?
+            get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
         };
