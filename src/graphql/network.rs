@@ -126,23 +126,57 @@ impl RawEventFilter for SearchFilter {
     }
 }
 
+/// Represents an event extracted from a session.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 struct ConnRawEvent {
+    /// Start Time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// Connection state. This is only used in TCP connections.
+    ///
+    /// The connection state is a string of letters that represent the state of the connection. The
+    /// letters are as follows:
+    ///
+    /// - S: The originator sent a SYN segment.
+    /// - h: The responder sent a SYN ACK segment.
+    /// - A: The originator sent an ACK segment.
+    /// - D: The originator sent at least one segment with payload data. In this case, that was HTTP
+    ///   over TCP.
+    /// - a: The responder replied with an ACK segment.
+    /// - d: The responder replied with at least one segment with payload data.
+    /// - F: The originator sent a FIN ACK segment.
+    /// - f: The responder replied with a FIN ACK segment.
+    /// - R: The originator sent a RST segment.
+    /// - r: The responder sent a RST segment.
+    /// - T: Timeout
+    ///
+    /// For example, `ShDdAaFf` indicates a session without packet loss.
     conn_state: String,
+    /// Duration. It is in nanoseconds.
     duration: StringNumberI64,
+    /// Service name.
     service: String,
+    /// Bytes sent by source.
     orig_bytes: StringNumberU64,
+    /// Bytes received by destination.
     resp_bytes: StringNumberU64,
+    /// Packets sent by source.
     orig_pkts: StringNumberU64,
+    /// Packets received by destination.
     resp_pkts: StringNumberU64,
+    /// Layer 2 bytes sent by source.
     orig_l2_bytes: StringNumberU64,
+    /// Layer 2 bytes received by destination.
     resp_l2_bytes: StringNumberU64,
 }
 
