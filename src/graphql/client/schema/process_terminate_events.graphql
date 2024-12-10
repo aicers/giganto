@@ -9,7 +9,7 @@ query ProcessTerminateEvents($filter: NetworkFilter!, $after: String, $before: S
         edges {
             cursor
             node {
-                timestamp
+                time
                 agentName
                 agentId
                 processGuid

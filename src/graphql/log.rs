@@ -33,8 +33,8 @@ use super::{
     client::derives::{
         log_raw_events, tsv_formatted_raw_events, LogRawEvents, TsvFormattedRawEvents,
     },
-    events_vec_in_cluster, get_timestamp_from_key, get_timestamp_from_key_prefix,
-    handle_paged_events, impl_from_giganto_time_range_struct_for_graphql_client,
+    events_vec_in_cluster, get_time_from_key, get_time_from_key_prefix, handle_paged_events,
+    impl_from_giganto_time_range_struct_for_graphql_client,
     load_connection_by_prefix_timestamp_key, paged_events_in_cluster, Engine, FromKeyValue,
 };
 use crate::{
@@ -49,7 +49,7 @@ pub(super) struct LogQuery;
 #[derive(InputObject, Serialize)]
 struct TsvFilter {
     protocol: String,
-    timestamps: Vec<DateTime<Utc>>,
+    times: Vec<DateTime<Utc>>,
     sensor: String,
 }
 
@@ -175,14 +175,14 @@ impl RawEventFilter for OpLogFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [log_raw_events::LogRawEventsLogRawEventsEdgesNode, ])]
 struct LogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     log: String,
 }
 
 impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             log: base64_engine.encode(l.log),
         })
     }
@@ -190,7 +190,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     level: String,
     contents: String,
     agent_name: String,
@@ -200,7 +200,7 @@ struct OpLogRawEvent {
 impl FromKeyValue<OpLog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            timestamp: get_timestamp_from_key_prefix(key)?,
+            time: get_time_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
             agent_name: l.agent_name,
@@ -387,12 +387,12 @@ where
     T: DeserializeOwned + Display,
 {
     store
-        .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
+        .batched_multi_get_from_ts(&filter.sensor, &filter.times)
         .into_iter()
-        .filter_map(|(timestamp, value)| {
+        .filter_map(|(time, value)| {
             bincode::deserialize::<T>(&value)
                 .ok()
-                .map(|v| format!("{timestamp}\t{v}"))
+                .map(|v| format!("{time}\t{v}"))
         })
         .collect()
 }
@@ -419,7 +419,7 @@ macro_rules! impl_from_giganto_tsv_formatted_raw_events_filter_for_graphql_clien
                 fn from(filter: TsvFilter) -> Self {
                     Self {
                         protocol: filter.protocol,
-                        timestamps: filter.timestamps,
+                        times: filter.times,
                         sensor: filter.sensor,
                     }
                 }
