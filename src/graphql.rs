@@ -67,6 +67,9 @@ pub struct Query(
 );
 
 #[derive(Default, MergedObject)]
+pub struct MinimalQuery(status::StatusQuery);
+
+#[derive(Default, MergedObject)]
 pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone)]
@@ -141,7 +144,8 @@ pub trait ClusterSortKey {
     fn secondary(&self) -> Option<&str>;
 }
 
-pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
+type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
+type MinimalSchema = async_graphql::Schema<MinimalQuery, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub struct NodeName(pub String);
@@ -164,7 +168,7 @@ pub fn schema(
     notify_terminate: Arc<Notify>,
     ack_transmission_cnt: AckTransmissionCount,
     is_local_config: bool,
-    settings: Settings,
+    settings: Option<Settings>,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -182,6 +186,28 @@ pub fn schema(
         .data(is_local_config)
         .data(settings)
         .finish()
+}
+
+pub fn minimal_schema(
+    reload_tx: Sender<String>,
+    notify_reboot: Arc<Notify>,
+    notify_power_off: Arc<Notify>,
+    notify_terminate: Arc<Notify>,
+    is_local_config: bool,
+    settings: Option<Settings>,
+) -> MinimalSchema {
+    MinimalSchema::build(
+        MinimalQuery::default(),
+        Mutation::default(),
+        EmptySubscription,
+    )
+    .data(reload_tx)
+    .data(TerminateNotify(notify_terminate))
+    .data(RebootNotify(notify_reboot))
+    .data(PowerOffNotify(notify_power_off))
+    .data(is_local_config)
+    .data(settings)
+    .finish()
 }
 
 /// The default page size for connections when neither `first` nor `last` is
@@ -1779,7 +1805,7 @@ mod tests {
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
-            let settings = Settings::new().unwrap();
+            let settings = Settings::from_file("tests/config.toml").unwrap();
             let schema = schema(
                 NodeName("giganto1".to_string()),
                 db.clone(),
@@ -1794,7 +1820,7 @@ mod tests {
                 notify_terminate,
                 Arc::new(RwLock::new(1024)),
                 is_local_config,
-                settings,
+                Some(settings),
             );
 
             Self {

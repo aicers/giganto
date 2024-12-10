@@ -166,9 +166,11 @@ impl StatusQuery {
         if *is_local {
             Err(anyhow!("Config is local").into())
         } else {
-            let s = ctx.data::<Settings>()?;
-
-            Ok(s.config.clone())
+            let s = ctx.data::<Option<Settings>>()?;
+            if let Some(settings) = s {
+                return Ok(settings.config.clone());
+            }
+            Err(anyhow!("The config doesn't exist and needs to be set up remotely.").into())
         }
     }
 
@@ -191,11 +193,13 @@ impl ConfigMutation {
 
         let config_draft: Config = toml::from_str(&draft)?;
 
-        let s = ctx.data::<Settings>()?;
+        let s = ctx.data::<Option<Settings>>()?;
 
-        if s.config == config_draft {
-            info!("No changes.");
-            return Err("No changes".to_string().into());
+        if let Some(settings) = s {
+            if settings.config == config_draft {
+                info!("No changes.");
+                return Err("No changes".to_string().into());
+            }
         }
 
         let reload_tx = ctx.data::<Sender<String>>()?;
@@ -247,7 +251,11 @@ pub fn settings_to_doc(settings: &Settings) -> Result<DocumentMut> {
 
 pub fn write_toml_file(doc: &DocumentMut, path: &str) -> Result<()> {
     let output = doc.to_string();
-    let mut config_file = OpenOptions::new().write(true).truncate(true).open(path)?;
+    let mut config_file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)?;
     writeln!(config_file, "{output}")?;
     Ok(())
 }
@@ -438,8 +446,8 @@ mod tests {
             max_mb_of_level_base = 512
             num_of_thread = 8
             max_sub_compactions = 2
-            addr_to_peers = "127.0.0.1:48383"
-            peers = [{ addr = "127.0.0.1:60192", hostname = "node2" }]
+            addr_to_peers = "127.0.0.1:48382"
+            peers = [{ addr = "127.0.0.1:60193", hostname = "node3" }]
             "#
         .to_string()
     }
