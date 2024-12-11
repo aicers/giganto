@@ -32,7 +32,7 @@ use tokio::{
         Notify, RwLock,
     },
     task,
-    time::{self, sleep},
+    time::sleep,
 };
 use tracing::{error, info, metadata::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -47,7 +47,7 @@ use crate::{
     storage::migrate_data_dir,
 };
 
-const ONE_DAY: u64 = 60 * 60 * 24;
+const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
                 .build()
                 .expect("Cannot create runtime for retain_periodically.")
                 .block_on(storage::retain_periodically(
-                    time::Duration::from_secs(ONE_DAY),
+                    ONE_DAY,
                     settings.config.retention,
                     db,
                     notify_shutdown_copy,
