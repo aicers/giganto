@@ -27,6 +27,21 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
   - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
     performs a migration to change the key and value of `Oplog`.
+- Added minimal mode to improve behavior in remote configuration mode.
+  - If local configuration is not used when running Giganto, it will run in
+    minimal mode, with only the GraphQL server running. Retain task, peer server
+    task, ingest task, publish task, and DB migration are not executed.
+  - In minimal mode, the APIs provided by the GraphQL server are limited. In
+    this mode, only the APIs provided by `graphql::status` are available.
+  - If the configuration is received successfully via the `setConfig` GraphQL
+    API, it will switch to normal mode, where all task and DB migrations run
+    as normal, just like when running Giganto with local settings.
+
+### Removed
+
+- Removed OS-specific configuration directory.
+  - Linux: $HOME/.config/giganto/config.toml
+  - macOS: $HOME/Library/Application Support/com.cluml.giganto/config.toml
 
 ## [0.23.0] - 2024-11-21
 
