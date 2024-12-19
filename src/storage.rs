@@ -88,7 +88,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 
-// Not a `sensor`+`timestamp` event.
+// Not a `sensor`+`time` event.
 const NON_STANDARD_CFS: [&str; 8] = [
     "log",
     "periodic time series",
@@ -96,8 +96,8 @@ const NON_STANDARD_CFS: [&str; 8] = [
     "oplog",
     "packet",
     "seculog",
-    "netflow5", // netflow5 + timestamp
-    "netflow9", // netflow9 + timestamp
+    "netflow5", // netflow5 + time
+    "netflow9", // netflow9 + time
 ];
 const USAGE_THRESHOLD: u64 = 95;
 const USAGE_LOW: u64 = 85;
@@ -523,29 +523,29 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn batched_multi_get_from_ts(
         &self,
         sensor: &str,
-        timestamps: &[DateTime<Utc>],
+        times: &[DateTime<Utc>],
     ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
-        let mut timestamps = timestamps.to_vec();
-        timestamps.sort_unstable();
-        let keys = timestamps
+        let mut times = times.to_vec();
+        times.sort_unstable();
+        let keys = times
             .iter()
-            .map(|timestamp| {
+            .map(|time| {
                 StorageKey::builder()
                     .start_key(sensor)
-                    .end_key(timestamp.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                    .end_key(time.timestamp_nanos_opt().unwrap_or(i64::MAX))
                     .build()
                     .key()
             })
             .collect::<Vec<Vec<u8>>>();
         let keys = keys.iter().map(std::vec::Vec::as_slice);
 
-        let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = timestamps
+        let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = times
             .iter()
             .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
-            .filter_map(|(timestamp, result_value)| {
+            .filter_map(|(time, result_value)| {
                 result_value
                     .ok()
-                    .and_then(|val| val.map(|inner_val| (*timestamp, inner_val.deref().to_vec())))
+                    .and_then(|val| val.map(|inner_val| (*time, inner_val.deref().to_vec())))
             })
             .collect();
         result_vector
