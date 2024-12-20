@@ -9,7 +9,7 @@ query OpLogRawEvents($filter: OpLogFilter!, $after: String, $before: String, $fi
         edges {
             cursor
             node {
-                timestamp
+                time
                 level
                 contents
                 agentName

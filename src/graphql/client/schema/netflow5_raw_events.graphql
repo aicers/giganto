@@ -9,7 +9,7 @@ query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String
         edges {
             cursor
             node {
-                timestamp
+                time
                 srcAddr
                 dstAddr
                 nextHop
