@@ -560,14 +560,14 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.14.1"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68578f196d2a33ff61b27fae256c3164f65e36382648e30666dde05b8cc9dfdf"
+checksum = "d73c1a90f0e9b8aa27881dedf820679d851991c138a3371d6364a38ea0a59552"
 dependencies = [
- "nom",
  "pathdiff",
  "serde",
  "toml",
+ "winnow 0.6.20",
 ]
 
 [[package]]
