@@ -717,8 +717,12 @@ async fn update_to_new_peer_list(
         if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
             error!("{e:?}");
         }
-        if let Err(e) = write_toml_file(&doc, &path.unwrap()) {
-            error!("{e:?}");
+        if let Some(path) = path {
+            if let Err(e) = write_toml_file(&doc, &path) {
+                error!("{e:?}");
+            }
+        } else {
+            error!("Configuration path is None, unable to write to the TOML file.");
         }
     }
 
