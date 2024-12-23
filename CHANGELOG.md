@@ -19,7 +19,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Rename the `csvFormattedRawEvents` GraphQL API to `tsvFormattedRawEvents`.
 - Updated `PEER_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0" to ensure
   compatibility between Giganto instances in the cluster. This change reflects
   updates of GraphQL API.
@@ -42,6 +41,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Removed OS-specific configuration directory.
   - Linux: $HOME/.config/giganto/config.toml
   - macOS: $HOME/Library/Application Support/com.cluml.giganto/config.toml
+- Removed the GraphQL API `csvFormattedRawEvents`.
 
 ## [0.23.0] - 2024-11-21
 

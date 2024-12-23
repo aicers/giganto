@@ -1,10 +1,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::{
-    fmt::{Debug, Display},
-    net::IpAddr,
-};
+use std::{fmt::Debug, net::IpAddr};
 
 use anyhow::anyhow;
 use async_graphql::{
@@ -12,46 +9,24 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
 };
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::{
-    log::{Log, OpLog},
-    network::{
-        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
-        Ssh, Tls,
-    },
-    sysmon::{
-        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-    },
-};
+use giganto_client::ingest::log::{Log, OpLog};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
-use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     base64_engine,
-    client::derives::{
-        log_raw_events, tsv_formatted_raw_events, LogRawEvents, TsvFormattedRawEvents,
-    },
-    events_vec_in_cluster, get_timestamp_from_key, get_timestamp_from_key_prefix,
-    handle_paged_events, impl_from_giganto_time_range_struct_for_graphql_client,
+    client::derives::{log_raw_events, LogRawEvents},
+    get_timestamp_from_key, get_timestamp_from_key_prefix, handle_paged_events,
+    impl_from_giganto_time_range_struct_for_graphql_client,
     load_connection_by_prefix_timestamp_key, paged_events_in_cluster, Engine, FromKeyValue,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
-    storage::{Database, KeyExtractor, RawEventStore, TimestampKeyExtractor},
+    storage::{Database, KeyExtractor, TimestampKeyExtractor},
 };
 
 #[derive(Default)]
 pub(super) struct LogQuery;
-
-#[allow(clippy::module_name_repetitions)]
-#[derive(InputObject, Serialize)]
-struct TsvFilter {
-    protocol: String,
-    timestamps: Vec<DateTime<Utc>>,
-    sensor: String,
-}
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject)]
@@ -278,123 +253,6 @@ impl LogQuery {
         )
         .await
     }
-
-    async fn tsv_formatted_raw_events<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: TsvFilter,
-    ) -> Result<Vec<String>> {
-        let handler = |ctx: &Context<'ctx>, filter: &TsvFilter| -> Result<Vec<String>> {
-            let db = ctx.data::<Database>()?;
-            match filter.protocol.as_str() {
-                "conn" => Ok(gen_tsv_format_events::<Conn>(&db.conn_store()?, filter)),
-                "dns" => Ok(gen_tsv_format_events::<Dns>(&db.dns_store()?, filter)),
-                "http" => Ok(gen_tsv_format_events::<Http>(&db.http_store()?, filter)),
-                "rdp" => Ok(gen_tsv_format_events::<Rdp>(&db.rdp_store()?, filter)),
-                "smtp" => Ok(gen_tsv_format_events::<Smtp>(&db.smtp_store()?, filter)),
-                "ntlm" => Ok(gen_tsv_format_events::<Ntlm>(&db.ntlm_store()?, filter)),
-                "kerberos" => Ok(gen_tsv_format_events::<Kerberos>(
-                    &db.kerberos_store()?,
-                    filter,
-                )),
-                "ssh" => Ok(gen_tsv_format_events::<Ssh>(&db.ssh_store()?, filter)),
-                "dce_rpc" => Ok(gen_tsv_format_events::<DceRpc>(
-                    &db.dce_rpc_store()?,
-                    filter,
-                )),
-                "ftp" => Ok(gen_tsv_format_events::<Ftp>(&db.ftp_store()?, filter)),
-                "mqtt" => Ok(gen_tsv_format_events::<Mqtt>(&db.mqtt_store()?, filter)),
-                "ldap" => Ok(gen_tsv_format_events::<Ldap>(&db.ldap_store()?, filter)),
-                "tls" => Ok(gen_tsv_format_events::<Tls>(&db.tls_store()?, filter)),
-                "smb" => Ok(gen_tsv_format_events::<Smb>(&db.smb_store()?, filter)),
-                "nfs" => Ok(gen_tsv_format_events::<Nfs>(&db.nfs_store()?, filter)),
-                "bootp" => Ok(gen_tsv_format_events::<Bootp>(&db.bootp_store()?, filter)),
-                "dhcp" => Ok(gen_tsv_format_events::<Dhcp>(&db.dhcp_store()?, filter)),
-                "process_create" => Ok(gen_tsv_format_events::<ProcessCreate>(
-                    &db.process_create_store()?,
-                    filter,
-                )),
-                "file_create_time" => Ok(gen_tsv_format_events::<FileCreationTimeChanged>(
-                    &db.file_create_time_store()?,
-                    filter,
-                )),
-                "network_connect" => Ok(gen_tsv_format_events::<NetworkConnection>(
-                    &db.network_connect_store()?,
-                    filter,
-                )),
-                "process_terminate" => Ok(gen_tsv_format_events::<ProcessTerminated>(
-                    &db.process_terminate_store()?,
-                    filter,
-                )),
-                "image_load" => Ok(gen_tsv_format_events::<ImageLoaded>(
-                    &db.image_load_store()?,
-                    filter,
-                )),
-                "file_create" => Ok(gen_tsv_format_events::<FileCreate>(
-                    &db.file_create_store()?,
-                    filter,
-                )),
-                "registry_value_set" => Ok(gen_tsv_format_events::<RegistryValueSet>(
-                    &db.registry_value_set_store()?,
-                    filter,
-                )),
-                "registry_key_rename" => Ok(gen_tsv_format_events::<RegistryKeyValueRename>(
-                    &db.registry_key_rename_store()?,
-                    filter,
-                )),
-                "file_create_stream_hash" => Ok(gen_tsv_format_events::<FileCreateStreamHash>(
-                    &db.file_create_stream_hash_store()?,
-                    filter,
-                )),
-                "pipe_event" => Ok(gen_tsv_format_events::<PipeEvent>(
-                    &db.pipe_event_store()?,
-                    filter,
-                )),
-                "dns_query" => Ok(gen_tsv_format_events::<DnsEvent>(
-                    &db.dns_query_store()?,
-                    filter,
-                )),
-                "file_delete" => Ok(gen_tsv_format_events::<FileDelete>(
-                    &db.file_delete_store()?,
-                    filter,
-                )),
-                "process_tamper" => Ok(gen_tsv_format_events::<ProcessTampering>(
-                    &db.process_tamper_store()?,
-                    filter,
-                )),
-                "file_delete_detected" => Ok(gen_tsv_format_events::<FileDeleteDetected>(
-                    &db.file_delete_detected_store()?,
-                    filter,
-                )),
-                none => Err(anyhow!("{}: Unknown protocol", none).into()),
-            }
-        };
-        events_vec_in_cluster!(
-            ctx,
-            filter,
-            filter.sensor,
-            handler,
-            TsvFormattedRawEvents,
-            tsv_formatted_raw_events::Variables,
-            tsv_formatted_raw_events::ResponseData,
-            tsv_formatted_raw_events
-        )
-    }
-}
-
-fn gen_tsv_format_events<T>(store: &RawEventStore<'_, T>, filter: &TsvFilter) -> Vec<String>
-where
-    T: DeserializeOwned + Display,
-{
-    store
-        .batched_multi_get_from_ts(&filter.sensor, &filter.timestamps)
-        .into_iter()
-        .filter_map(|(timestamp, value)| {
-            bincode::deserialize::<T>(&value)
-                .ok()
-                .map(|v| format!("{timestamp}\t{v}"))
-        })
-        .collect()
 }
 
 macro_rules! impl_from_giganto_log_filter_for_graphql_client {
@@ -412,21 +270,5 @@ macro_rules! impl_from_giganto_log_filter_for_graphql_client {
         )*
     };
 }
-macro_rules! impl_from_giganto_tsv_formatted_raw_events_filter_for_graphql_client {
-    ($($autogen_mod:ident),*) => {
-        $(
-            impl From<TsvFilter> for $autogen_mod::TsvFilter {
-                fn from(filter: TsvFilter) -> Self {
-                    Self {
-                        protocol: filter.protocol,
-                        timestamps: filter.timestamps,
-                        sensor: filter.sensor,
-                    }
-                }
-            }
-        )*
-    };
-}
 impl_from_giganto_time_range_struct_for_graphql_client!(log_raw_events);
 impl_from_giganto_log_filter_for_graphql_client!(log_raw_events);
-impl_from_giganto_tsv_formatted_raw_events_filter_for_graphql_client!(tsv_formatted_raw_events);
