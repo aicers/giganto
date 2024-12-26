@@ -9,22 +9,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-    - name: Increase ulimit size
-      run: ulimit -n 8096
-    - name: Install Rust
-      uses: hecrj/setup-rust-action@v1
-      with:
-        rust-version: stable
-    - uses: actions/checkout@v2
-    - uses: ./.github/cache-cargo
-    - name: Check formatting
-      run: cargo fmt -- --check --config group_imports=StdExternalCrate
-    - name: Clippy
-      run: cargo clippy -- -D warnings -W clippy::pedantic
-    - name: Detect Cargo.lock changes
-      run: git diff-index --quiet HEAD --
-    - name: markdownlint
-      uses: articulate/actions-markdownlint@v1
+      - name: Increase ulimit size
+        run: ulimit -n 8096
+      - name: Install Rust
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
+      - uses: actions/checkout@v2
+      - uses: ./.github/cache-cargo
+      - name: Check formatting
+        run: cargo fmt -- --check --config group_imports=StdExternalCrate
+      - name: Clippy
+        run: cargo clippy --tests -- -D warnings -W clippy::pedantic
+      - name: Detect Cargo.lock changes
+        run: git diff-index --quiet HEAD --
+      - name: markdownlint
+        uses: articulate/actions-markdownlint@v1
 
   test:
     runs-on: ${{ matrix.os }}
@@ -32,45 +32,45 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest]
     steps:
-    - name: Increase ulimit size
-      run: ulimit -n 8096
-    - name: Install Rust
-      uses: hecrj/setup-rust-action@v1
-      with:
-        rust-version: stable
-    - uses: actions/checkout@v2
-    - uses: ./.github/cache-cargo
-    - name: Install libcap on Ubuntu
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-             sudo apt-get install libpcap-dev libpcap0.8
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Increase ulimit size
+        run: ulimit -n 8096
+      - name: Install Rust
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
+      - uses: actions/checkout@v2
+      - uses: ./.github/cache-cargo
+      - name: Install libcap on Ubuntu
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install libpcap-dev libpcap0.8
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
 
   coverage:
     runs-on: ubuntu-latest
     steps:
-    - name: Increase ulimit size
-      run: ulimit -n 8096
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-    - uses: actions/checkout@v4
-    - uses: ./.github/cache-cargo
-    - name: Install libcap on Ubuntu
-      run: |
+      - name: Increase ulimit size
+        run: ulimit -n 8096
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: ./.github/cache-cargo
+      - name: Install libcap on Ubuntu
+        run: |
           sudo apt-get install libpcap-dev libpcap0.8
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@v2
-      with:
-        tool: cargo-llvm-cov
-    - name: Generate code coverage
-      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      with:
-        files: lcov.info
-        fail_ci_if_error: true
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate code coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: lcov.info
+          fail_ci_if_error: true

@@ -489,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrate_0_13_to_0_19() {
         const OLD_NETFLOW5_PREFIX_KEY: &str = "netflow5";
         const OLD_NETFLOW9_PREFIX_KEY: &str = "netflow9";
@@ -514,8 +515,8 @@ mod tests {
             output: 1,
             d_pkts: 1,
             d_octets: 464,
-            first: 3477280180,
-            last: 3477280180,
+            first: 3_477_280_180,
+            last: 3_477_280_180,
             src_port: 9,
             dst_port: 771,
             tcp_flags: 0,
@@ -540,7 +541,7 @@ mod tests {
             .key();
         let netflow9_body = Netflow9BeforeV23 {
             source: TEST_SENSOR.to_string(),
-            sequence: 3282250832,
+            sequence: 3_282_250_832,
             source_id: 17,
             template_id: 260,
             orig_addr: "192.168.4.75".parse::<IpAddr>().unwrap(),
@@ -643,6 +644,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrate_0_19_to_0_21_0() {
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
@@ -746,7 +748,7 @@ mod tests {
             resp_port: 80,
             proto: 17,
             last_time: 1,
-            version: 01,
+            version: 1,
             auth_success: "auth_success".to_string(),
             auth_attempts: 3,
             direction: "direction".to_string(),
@@ -985,6 +987,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrate_0_21_to_0_23() {
         const TEST_SENSOR: &str = "src1";
         const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
@@ -1000,7 +1003,7 @@ mod tests {
             .build()
             .key();
         let netflow5_old = Netflow5BeforeV23 {
-            source: "".to_string(),
+            source: String::new(),
             src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             next_hop: "192.168.4.78".parse::<IpAddr>().unwrap(),
@@ -1008,8 +1011,8 @@ mod tests {
             output: 1,
             d_pkts: 1,
             d_octets: 464,
-            first: 3477280180,
-            last: 3477280180,
+            first: 3_477_280_180,
+            last: 3_477_280_180,
             src_port: 9,
             dst_port: 771,
             tcp_flags: 0,
@@ -1033,8 +1036,8 @@ mod tests {
             .build()
             .key();
         let netflow9_old = Netflow9BeforeV23 {
-            source: "".to_string(),
-            sequence: 3282250832,
+            source: String::new(),
+            sequence: 3_282_250_832,
             source_id: 17,
             template_id: 260,
             orig_addr: "192.168.4.75".parse::<IpAddr>().unwrap(),
@@ -1053,7 +1056,7 @@ mod tests {
             .build()
             .key();
         let secu_log_old = SecuLogBeforeV23 {
-            source: "".to_string(),
+            source: String::new(),
             kind: TEST_KIND.to_string(),
             log_type: TEST_KIND.to_string(),
             version: "V3".to_string(),
@@ -1142,7 +1145,7 @@ mod tests {
 
         // create old cf and insert data
         {
-            let db = DB::open_cf(&db_opts, db_path, &[OLD_CF]).unwrap();
+            let db = DB::open_cf(&db_opts, db_path, [OLD_CF]).unwrap();
 
             let old_cf = db.cf_handle(OLD_CF).unwrap();
             let mut batch = WriteBatch::default();
@@ -1156,14 +1159,14 @@ mod tests {
         assert!(!old_cfs.iter().any(|cf| cf == NEW_CF));
 
         // run migration
-        super::migrate_0_21_to_0_23(&db_path, &DbOptions::default()).unwrap();
+        super::migrate_0_21_to_0_23(db_path, &DbOptions::default()).unwrap();
 
         let new_cfs: Vec<String> = DB::list_cf(&db_opts, db_path).unwrap_or_default();
         assert!(!new_cfs.iter().any(|cf| cf == OLD_CF));
         assert!(new_cfs.iter().any(|cf| cf == NEW_CF));
 
         let db_after_renaming =
-            DB::open_cf_for_read_only(&Options::default(), db_path, &[NEW_CF], false).unwrap();
+            DB::open_cf_for_read_only(&Options::default(), db_path, [NEW_CF], false).unwrap();
 
         assert!(db_after_renaming.cf_handle(NEW_CF).is_some());
 
@@ -1241,7 +1244,7 @@ mod tests {
         if let Ok(updated_version) = fs::read_to_string(version_dir.path().join("VERSION")) {
             let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
             let diff = Version::parse(&updated_version).expect("valid semver");
-            assert_eq!(current, diff)
+            assert_eq!(current, diff);
         }
     }
 }

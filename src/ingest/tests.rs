@@ -96,17 +96,12 @@ fn server() -> Server {
 }
 
 fn init_client() -> Endpoint {
-    let (cert, key) = match fs::read(CERT_PATH)
-        .map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
+    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) =
+        fs::read(CERT_PATH).map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
     {
-        Ok(x) => x,
-        Err(_) => {
-            panic!(
-                "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                CERT_PATH,
-                KEY_PATH,
-            );
-        }
+        x
+    } else {
+        panic!("failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
     };
 
     let pv_key = if Path::new(KEY_PATH)
@@ -155,7 +150,7 @@ async fn conn() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
 
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -201,7 +196,7 @@ async fn dns() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -250,7 +245,7 @@ async fn log() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_log, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -282,7 +277,7 @@ async fn http() {
     const RAW_EVENT_KIND_HTTP: RawEventKind = RawEventKind::Http;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -340,7 +335,7 @@ async fn rdp() {
     const RAW_EVENT_KIND_RDP: RawEventKind = RawEventKind::Rdp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -377,7 +372,7 @@ async fn periodic_time_series() {
     const RAW_EVENT_KIND_PERIOD_TIME_SERIES: RawEventKind = RawEventKind::PeriodicTimeSeries;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_periodic_time_series, _) =
@@ -415,7 +410,7 @@ async fn smtp() {
     const RAW_EVENT_KIND_SMTP: RawEventKind = RawEventKind::Smtp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_smtp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -458,7 +453,7 @@ async fn ntlm() {
     const RAW_EVENT_KIND_NTLM: RawEventKind = RawEventKind::Ntlm;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ntlm, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -499,7 +494,7 @@ async fn kerberos() {
     const RAW_EVENT_KIND_KERBEROS: RawEventKind = RawEventKind::Kerberos;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_kerberos, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -544,7 +539,7 @@ async fn ssh() {
     const RAW_EVENT_KIND_SSH: RawEventKind = RawEventKind::Ssh;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ssh, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -593,7 +588,7 @@ async fn dce_rpc() {
     const RAW_EVENT_KIND_DCE_RPC: RawEventKind = RawEventKind::DceRpc;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dce_rpc, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -634,7 +629,7 @@ async fn op_log() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_op_log, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -669,7 +664,7 @@ async fn packet() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_packet, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -702,7 +697,7 @@ async fn ftp() {
     const RAW_EVENT_KIND_FTP: RawEventKind = RawEventKind::Ftp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ftp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -750,7 +745,7 @@ async fn mqtt() {
     const RAW_EVENT_KIND_MQTT: RawEventKind = RawEventKind::Mqtt;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_mqtt, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -792,7 +787,7 @@ async fn ldap() {
     const RAW_EVENT_KIND_LDAP: RawEventKind = RawEventKind::Ldap;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ldap, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -835,7 +830,7 @@ async fn tls() {
     const RAW_EVENT_KIND_TLS: RawEventKind = RawEventKind::Tls;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_tls, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -892,7 +887,7 @@ async fn smb() {
     const RAW_EVENT_KIND_SMB: RawEventKind = RawEventKind::Smb;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_smb, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -911,10 +906,10 @@ async fn smb() {
         file_size: 10,
         resource_type: 20,
         fid: 30,
-        create_time: 10000000,
-        access_time: 20000000,
-        write_time: 10000000,
-        change_time: 20000000,
+        create_time: 10_000_000,
+        access_time: 20_000_000,
+        write_time: 10_000_000,
+        change_time: 20_000_000,
     };
 
     send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
@@ -939,7 +934,7 @@ async fn nfs() {
     const RAW_EVENT_KIND_NFS: RawEventKind = RawEventKind::Nfs;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_nfs, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -977,7 +972,7 @@ async fn bootp() {
     const RAW_EVENT_KIND_BOOTP: RawEventKind = RawEventKind::Bootp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_bootp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -1024,7 +1019,7 @@ async fn dhcp() {
     const RAW_EVENT_KIND_DHCP: RawEventKind = RawEventKind::Dhcp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dhcp, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -1083,7 +1078,7 @@ async fn statistics() {
     const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_statistics, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -1091,7 +1086,7 @@ async fn statistics() {
     let statistics_body = Statistics {
         core: 1,
         period: 600,
-        stats: vec![(RAW_EVENT_KIND_STATISTICS, 1000, 10001000)],
+        stats: vec![(RAW_EVENT_KIND_STATISTICS, 1000, 10_001_000)],
     };
 
     send_record_header(&mut send_statistics, RAW_EVENT_KIND_STATISTICS)
@@ -1117,7 +1112,7 @@ async fn ack_info() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
@@ -1165,7 +1160,7 @@ async fn one_short_reproduce_channel_close() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(db_dir);
+    run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
@@ -1191,7 +1186,7 @@ async fn one_short_reproduce_channel_close() {
     assert_eq!(CHANNEL_CLOSE_TIMESTAMP, recv_timestamp);
 }
 
-fn run_server(db_dir: TempDir) -> JoinHandle<()> {
+fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);

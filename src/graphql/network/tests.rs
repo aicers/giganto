@@ -712,6 +712,7 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn http_with_data_giganto_cluster() {
     // given
     let query = r#"
@@ -2414,10 +2415,10 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         file_size: 10,
         resource_type: 20,
         fid: 30,
-        create_time: 10000000,
-        access_time: 20000000,
-        write_time: 10000000,
-        change_time: 20000000,
+        create_time: 10_000_000,
+        access_time: 20_000_000,
+        write_time: 10_000_000,
+        change_time: 20_000_000,
     };
     let ser_smb_body = bincode::serialize(&smb_body).unwrap();
 
@@ -2991,6 +2992,7 @@ async fn conn_with_start_or_end() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn union() {
     let schema = TestSchema::new();
     let conn_store = schema.db.conn_store().unwrap();

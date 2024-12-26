@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -112,20 +111,15 @@ fn server() -> Server {
 }
 
 fn init_client() -> Endpoint {
-    let (cert, key) = match fs::read(NODE1_CERT_PATH).map(|x| {
+    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) = fs::read(NODE1_CERT_PATH).map(|x| {
         (
             x,
             fs::read(NODE1_KEY_PATH).expect("Failed to Read key file"),
         )
     }) {
-        Ok(x) => x,
-        Err(_) => {
-            panic!(
-                "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                NODE1_CERT_PATH,
-                NODE1_KEY_PATH,
-            );
-        }
+        x
+    } else {
+        panic!("failed to read (cert, key) file, {NODE1_CERT_PATH}, {NODE1_KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
     };
 
     let pv_key = if Path::new(NODE1_KEY_PATH)
@@ -509,10 +503,10 @@ fn gen_smb_raw_event() -> Vec<u8> {
         file_size: 10,
         resource_type: 20,
         fid: 30,
-        create_time: 10000000,
-        access_time: 20000000,
-        write_time: 10000000,
-        change_time: 20000000,
+        create_time: 10_000_000,
+        access_time: 20_000_000,
+        write_time: 10_000_000,
+        change_time: 20_000_000,
     };
 
     bincode::serialize(&smb_body).unwrap()
@@ -745,6 +739,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn request_range_data_with_protocol() {
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "ingest src 1";
@@ -774,7 +769,7 @@ async fn request_range_data_with_protocol() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| (sensor.to_string()))
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -1892,7 +1887,7 @@ async fn request_range_data_with_log() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| sensor.to_string())
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -1999,7 +1994,7 @@ async fn request_range_data_with_period_time_series() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| sensor.to_string())
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -2095,6 +2090,7 @@ async fn request_range_data_with_period_time_series() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn request_network_event_stream() {
     use crate::ingest::NetworkKey;
     use crate::publish::send_direct_stream;
@@ -2147,7 +2143,7 @@ async fn request_network_event_stream() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| sensor.to_string())
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -2190,12 +2186,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
 
-        let conn_start_msg =
-            receive_hog_stream_start_message(&mut (*send_conn_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let conn_start_msg = receive_hog_stream_start_message(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2211,9 +2206,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_conn_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_conn_stream).await.unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2228,9 +2221,7 @@ async fn request_network_event_stream() {
         )
         .await
         .unwrap();
-        let recv_data = receive_hog_data(&mut (*send_conn_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_conn_stream).await.unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
         // database conn network event for crusher
@@ -2245,18 +2236,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_conn_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-
-        let conn_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_conn_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
+        let conn_start_msg = receive_crusher_stream_start_message(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(conn_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_conn_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_conn_stream).await.unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
@@ -2276,9 +2263,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_conn_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_conn_stream).await.unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
     }
@@ -2296,9 +2281,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dns_start_msg = receive_hog_stream_start_message(&mut (*send_dns_stream.borrow_mut()))
+        let dns_start_msg = receive_hog_stream_start_message(&mut send_dns_stream)
             .await
             .unwrap();
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
@@ -2316,9 +2301,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dns_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dns_stream).await.unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2334,9 +2317,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dns_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dns_stream).await.unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
         // database dns network event for crusher
@@ -2352,18 +2333,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dns_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dns_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_dns_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let dns_start_msg = receive_crusher_stream_start_message(&mut send_dns_stream)
+            .await
+            .unwrap();
         assert_eq!(dns_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dns_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dns_stream).await.unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
@@ -2382,10 +2359,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dns_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dns_stream).await.unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
     }
@@ -2403,9 +2377,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let rdp_start_msg = receive_hog_stream_start_message(&mut (*send_rdp_stream.borrow_mut()))
+        let rdp_start_msg = receive_hog_stream_start_message(&mut send_rdp_stream)
             .await
             .unwrap();
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
@@ -2423,9 +2397,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_rdp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_rdp_stream).await.unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2441,9 +2413,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_rdp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_rdp_stream).await.unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
         // database rdp network event for crusher
@@ -2459,18 +2429,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_rdp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let rdp_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_rdp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let rdp_start_msg = receive_crusher_stream_start_message(&mut send_rdp_stream)
+            .await
+            .unwrap();
         assert_eq!(rdp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_rdp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_rdp_stream).await.unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
@@ -2488,10 +2454,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_rdp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_rdp_stream).await.unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
     }
@@ -2509,12 +2472,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
 
-        let http_start_msg =
-            receive_hog_stream_start_message(&mut (*send_http_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let http_start_msg = receive_hog_stream_start_message(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2531,9 +2493,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_http_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_http_stream).await.unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2550,9 +2510,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_http_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_http_stream).await.unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
         // database http network event for crusher
@@ -2568,18 +2526,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_http_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
 
-        let http_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_http_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let http_start_msg = receive_crusher_stream_start_message(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(http_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_http_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_http_stream).await.unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
@@ -2598,9 +2553,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_http_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_http_stream).await.unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
     }
@@ -2618,12 +2571,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_smtp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smtp_start_msg =
-            receive_hog_stream_start_message(&mut (*send_smtp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let smtp_start_msg = receive_hog_stream_start_message(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2640,9 +2592,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_smtp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_smtp_stream).await.unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2659,9 +2609,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_smtp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_smtp_stream).await.unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
         // database smtp network event for crusher
@@ -2677,18 +2625,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_smtp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smtp_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_smtp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let smtp_start_msg = receive_crusher_stream_start_message(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(smtp_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_smtp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_smtp_stream).await.unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
 
@@ -2707,9 +2652,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_smtp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_smtp_stream).await.unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
     }
@@ -2727,12 +2670,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ntlm_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ntlm_start_msg =
-            receive_hog_stream_start_message(&mut (*send_ntlm_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ntlm_start_msg = receive_hog_stream_start_message(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2749,9 +2691,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ntlm_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ntlm_stream).await.unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2768,9 +2708,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ntlm_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ntlm_stream).await.unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
         // database ntlm network event for crusher
@@ -2786,18 +2724,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ntlm_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ntlm_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_ntlm_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ntlm_start_msg = receive_crusher_stream_start_message(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(ntlm_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ntlm_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_ntlm_stream).await.unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
 
@@ -2816,9 +2751,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ntlm_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_ntlm_stream).await.unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
     }
@@ -2836,11 +2769,10 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_kerberos_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
-        let kerberos_start_msg =
-            receive_hog_stream_start_message(&mut (*send_kerberos_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
+        let kerberos_start_msg = receive_hog_stream_start_message(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2857,9 +2789,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_kerberos_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_kerberos_stream).await.unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2876,9 +2806,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_kerberos_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_kerberos_stream).await.unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
         // database kerberos network event for crusher
@@ -2895,18 +2823,16 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_kerberos_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
 
-        let kerberos_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_kerberos_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let kerberos_start_msg = receive_crusher_stream_start_message(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(kerberos_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_kerberos_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
 
@@ -2924,10 +2850,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_kerberos_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
     }
@@ -2945,9 +2870,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ssh_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ssh_start_msg = receive_hog_stream_start_message(&mut (*send_ssh_stream.borrow_mut()))
+        let ssh_start_msg = receive_hog_stream_start_message(&mut send_ssh_stream)
             .await
             .unwrap();
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
@@ -2966,9 +2891,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ssh_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ssh_stream).await.unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2985,9 +2908,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ssh_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ssh_stream).await.unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
         // database ssh network event for crusher
@@ -3003,18 +2924,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ssh_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ssh_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_ssh_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ssh_start_msg = receive_crusher_stream_start_message(&mut send_ssh_stream)
+            .await
+            .unwrap();
         assert_eq!(ssh_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ssh_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ssh_stream).await.unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
 
@@ -3032,10 +2949,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ssh_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ssh_stream).await.unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
     }
@@ -3053,12 +2967,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dce_rpc_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dce_rpc_start_msg =
-            receive_hog_stream_start_message(&mut (*send_dce_rpc_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let dce_rpc_start_msg = receive_hog_stream_start_message(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3075,9 +2988,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dce_rpc_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dce_rpc_stream).await.unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3094,9 +3005,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dce_rpc_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dce_rpc_stream).await.unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         // database dce_rpc network event for crusher
@@ -3113,18 +3022,16 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dce_rpc_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dce_rpc_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_dce_rpc_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let dce_rpc_start_msg = receive_crusher_stream_start_message(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(dce_rpc_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dce_rpc_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
 
@@ -3142,10 +3049,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dce_rpc_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
     }
@@ -3163,9 +3069,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ftp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ftp_start_msg = receive_hog_stream_start_message(&mut (*send_ftp_stream.borrow_mut()))
+        let ftp_start_msg = receive_hog_stream_start_message(&mut send_ftp_stream)
             .await
             .unwrap();
         assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
@@ -3184,9 +3090,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ftp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ftp_stream).await.unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3203,9 +3107,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ftp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ftp_stream).await.unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
         // database ftp network event for crusher
@@ -3221,18 +3123,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ftp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ftp_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_ftp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ftp_start_msg = receive_crusher_stream_start_message(&mut send_ftp_stream)
+            .await
+            .unwrap();
         assert_eq!(ftp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ftp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ftp_stream).await.unwrap();
         assert_eq!(send_ftp_time, recv_timestamp);
         assert_eq!(ftp_data, recv_data);
 
@@ -3250,10 +3148,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ftp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ftp_stream).await.unwrap();
         assert_eq!(send_ftp_time, recv_timestamp);
         assert_eq!(ftp_data, recv_data);
     }
@@ -3271,12 +3166,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_mqtt_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
 
-        let mqtt_start_msg =
-            receive_hog_stream_start_message(&mut (*send_mqtt_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let mqtt_start_msg = receive_hog_stream_start_message(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3293,9 +3187,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_mqtt_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_mqtt_stream).await.unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3312,9 +3204,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_mqtt_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_mqtt_stream).await.unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
         // database mqtt network event for crusher
@@ -3330,18 +3220,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_mqtt_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
 
-        let mqtt_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_mqtt_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let mqtt_start_msg = receive_crusher_stream_start_message(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(mqtt_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_mqtt_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_mqtt_stream).await.unwrap();
         assert_eq!(send_mqtt_time, recv_timestamp);
         assert_eq!(mqtt_data, recv_data);
 
@@ -3360,9 +3247,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_mqtt_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_mqtt_stream).await.unwrap();
         assert_eq!(send_mqtt_time, recv_timestamp);
         assert_eq!(mqtt_data, recv_data);
     }
@@ -3380,12 +3265,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ldap_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ldap_start_msg =
-            receive_hog_stream_start_message(&mut (*send_ldap_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ldap_start_msg = receive_hog_stream_start_message(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3402,9 +3286,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ldap_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ldap_stream).await.unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3421,9 +3303,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_ldap_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_ldap_stream).await.unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
         // database ldap network event for crusher
@@ -3439,18 +3319,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_ldap_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ldap_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_ldap_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let ldap_start_msg = receive_crusher_stream_start_message(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(ldap_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ldap_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_ldap_stream).await.unwrap();
         assert_eq!(send_ldap_time, recv_timestamp);
         assert_eq!(ldap_data, recv_data);
 
@@ -3469,9 +3346,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_ldap_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_ldap_stream).await.unwrap();
         assert_eq!(send_ldap_time, recv_timestamp);
         assert_eq!(ldap_data, recv_data);
     }
@@ -3489,9 +3364,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_tls_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
 
-        let tls_start_msg = receive_hog_stream_start_message(&mut (*send_tls_stream.borrow_mut()))
+        let tls_start_msg = receive_hog_stream_start_message(&mut send_tls_stream)
             .await
             .unwrap();
         assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
@@ -3510,9 +3385,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_tls_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_tls_stream).await.unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3529,9 +3402,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_tls_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_tls_stream).await.unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
         // database tls network event for crusher
@@ -3547,18 +3418,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_tls_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
 
-        let tls_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_tls_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let tls_start_msg = receive_crusher_stream_start_message(&mut send_tls_stream)
+            .await
+            .unwrap();
         assert_eq!(tls_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_tls_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_tls_stream).await.unwrap();
         assert_eq!(send_tls_time, recv_timestamp);
         assert_eq!(tls_data, recv_data);
 
@@ -3576,10 +3443,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_tls_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_tls_stream).await.unwrap();
         assert_eq!(send_tls_time, recv_timestamp);
         assert_eq!(tls_data, recv_data);
     }
@@ -3597,9 +3461,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_smb_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smb_start_msg = receive_hog_stream_start_message(&mut (*send_smb_stream.borrow_mut()))
+        let smb_start_msg = receive_hog_stream_start_message(&mut send_smb_stream)
             .await
             .unwrap();
         assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
@@ -3618,9 +3482,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_smb_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_smb_stream).await.unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3637,9 +3499,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_smb_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_smb_stream).await.unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
         // database smb network event for crusher
@@ -3655,18 +3515,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_smb_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smb_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_smb_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let smb_start_msg = receive_crusher_stream_start_message(&mut send_smb_stream)
+            .await
+            .unwrap();
         assert_eq!(smb_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_smb_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_smb_stream).await.unwrap();
         assert_eq!(send_smb_time, recv_timestamp);
         assert_eq!(smb_data, recv_data);
 
@@ -3684,10 +3540,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_smb_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_smb_stream).await.unwrap();
         assert_eq!(send_smb_time, recv_timestamp);
         assert_eq!(smb_data, recv_data);
     }
@@ -3705,9 +3558,9 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_nfs_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
 
-        let nfs_start_msg = receive_hog_stream_start_message(&mut (*send_nfs_stream.borrow_mut()))
+        let nfs_start_msg = receive_hog_stream_start_message(&mut send_nfs_stream)
             .await
             .unwrap();
         assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
@@ -3726,9 +3579,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_nfs_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_nfs_stream).await.unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3745,9 +3596,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_nfs_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_nfs_stream).await.unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
         // database nfs network event for crusher
@@ -3763,18 +3612,14 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_nfs_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
 
-        let nfs_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_nfs_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let nfs_start_msg = receive_crusher_stream_start_message(&mut send_nfs_stream)
+            .await
+            .unwrap();
         assert_eq!(nfs_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_nfs_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_nfs_stream).await.unwrap();
         assert_eq!(send_nfs_time, recv_timestamp);
         assert_eq!(nfs_data, recv_data);
 
@@ -3792,10 +3637,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_nfs_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_nfs_stream).await.unwrap();
         assert_eq!(send_nfs_time, recv_timestamp);
         assert_eq!(nfs_data, recv_data);
     }
@@ -3813,12 +3655,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_bootp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let bootp_start_msg =
-            receive_hog_stream_start_message(&mut (*send_bootp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let bootp_start_msg = receive_hog_stream_start_message(&mut send_bootp_stream)
+            .await
+            .unwrap();
         assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3835,9 +3676,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_bootp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_bootp_stream).await.unwrap();
         assert_eq!(bootp_data, recv_data[20..]);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3854,9 +3693,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_bootp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_bootp_stream).await.unwrap();
         assert_eq!(bootp_data, recv_data[20..]);
 
         // database bootp network event for crusher
@@ -3873,18 +3710,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_bootp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let bootp_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_bootp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let bootp_start_msg = receive_crusher_stream_start_message(&mut send_bootp_stream)
+            .await
+            .unwrap();
         assert_eq!(bootp_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_bootp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_bootp_stream).await.unwrap();
         assert_eq!(send_bootp_time, recv_timestamp);
         assert_eq!(bootp_data, recv_data);
 
@@ -3903,9 +3737,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_bootp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_bootp_stream).await.unwrap();
         assert_eq!(send_bootp_time, recv_timestamp);
         assert_eq!(bootp_data, recv_data);
     }
@@ -3923,12 +3755,11 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dhcp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dhcp_start_msg =
-            receive_hog_stream_start_message(&mut (*send_dhcp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let dhcp_start_msg = receive_hog_stream_start_message(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3945,9 +3776,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dhcp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dhcp_stream).await.unwrap();
         assert_eq!(dhcp_data, recv_data[20..]);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -3964,9 +3793,7 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut (*send_dhcp_stream.borrow_mut()))
-            .await
-            .unwrap();
+        let recv_data = receive_hog_data(&mut send_dhcp_stream).await.unwrap();
         assert_eq!(dhcp_data, recv_data[20..]);
 
         // database dhcp network event for crusher
@@ -3982,18 +3809,15 @@ async fn request_network_event_stream() {
         .await
         .unwrap();
 
-        let send_dhcp_stream = Arc::new(RefCell::new(publish.conn.accept_uni().await.unwrap()));
+        let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dhcp_start_msg =
-            receive_crusher_stream_start_message(&mut (*send_dhcp_stream.borrow_mut()))
-                .await
-                .unwrap();
+        let dhcp_start_msg = receive_crusher_stream_start_message(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(dhcp_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dhcp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_dhcp_stream).await.unwrap();
         assert_eq!(send_dhcp_time, recv_timestamp);
         assert_eq!(dhcp_data, recv_data);
 
@@ -4012,9 +3836,7 @@ async fn request_network_event_stream() {
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut (*send_dhcp_stream.borrow_mut()))
-                .await
-                .unwrap();
+            receive_crusher_data(&mut send_dhcp_stream).await.unwrap();
         assert_eq!(send_dhcp_time, recv_timestamp);
         assert_eq!(dhcp_data, recv_data);
     }
@@ -4037,7 +3859,7 @@ async fn request_raw_events() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| sensor.to_string())
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
     let (peers, peer_idents) = new_peers_data(None);
@@ -4124,7 +3946,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| sensor.to_string())
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4145,7 +3967,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
             PeerInfo {
                 ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| (sensor.to_string()))
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4171,7 +3993,9 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         ))
         .unwrap();
 
-        if let Err(_) = oneshot_send.send(conn_data.response_data(send_conn_time, SENSOR).unwrap())
+        if oneshot_send
+            .send(conn_data.response_data(send_conn_time, SENSOR).unwrap())
+            .is_err()
         {
             eprintln!("the receiver is dropped");
         }
@@ -4191,7 +4015,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
                 certs,
                 notify_shutdown,
             )
-            .await
+            .await;
     });
 
     let _lock = get_token().lock().await;
@@ -4202,7 +4026,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| (sensor.to_string()))
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
 
@@ -4211,7 +4035,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         PeerInfo {
             ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| (sensor.to_string()))
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4220,7 +4044,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let mut peer_identities = HashSet::new();
     let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers.clone(),
+        addr: addr_to_peers,
         hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
@@ -4292,12 +4116,11 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         }
     }
 
-    let raw_data = match oneshot_recv.await {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("the sender dropped");
-            Vec::new()
-        }
+    let raw_data = if let Ok(v) = oneshot_recv.await {
+        v
+    } else {
+        eprintln!("the sender dropped");
+        Vec::new()
     };
 
     assert_eq!(
@@ -4331,7 +4154,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| sensor.to_string())
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4352,7 +4175,7 @@ async fn request_range_data_with_log_giganto_cluster() {
             PeerInfo {
                 ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| (sensor.to_string()))
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4379,7 +4202,10 @@ async fn request_range_data_with_log_giganto_cluster() {
         ))
         .unwrap();
 
-        if let Err(_) = oneshot_send.send(log_data.response_data(send_log_time, SENSOR).unwrap()) {
+        if oneshot_send
+            .send(log_data.response_data(send_log_time, SENSOR).unwrap())
+            .is_err()
+        {
             eprintln!("the receiver is dropped");
         }
 
@@ -4398,7 +4224,7 @@ async fn request_range_data_with_log_giganto_cluster() {
                 certs,
                 notify_shutdown,
             )
-            .await
+            .await;
     });
 
     let _lock = get_token().lock().await;
@@ -4409,7 +4235,7 @@ async fn request_range_data_with_log_giganto_cluster() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| (sensor.to_string()))
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
 
@@ -4418,7 +4244,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         PeerInfo {
             ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| (sensor.to_string()))
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4427,7 +4253,7 @@ async fn request_range_data_with_log_giganto_cluster() {
     let mut peer_identities = HashSet::new();
     let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers.clone(),
+        addr: addr_to_peers,
         hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
@@ -4497,12 +4323,11 @@ async fn request_range_data_with_log_giganto_cluster() {
         }
     }
 
-    let raw_data = match oneshot_recv.await {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("the sender dropped");
-            Vec::new()
-        }
+    let raw_data = if let Ok(v) = oneshot_recv.await {
+        v
+    } else {
+        eprintln!("the sender dropped");
+        Vec::new()
     };
 
     assert_eq!(
@@ -4536,7 +4361,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| sensor.to_string())
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4557,7 +4382,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
             PeerInfo {
                 ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| (sensor.to_string()))
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4584,11 +4409,14 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
             ))
             .unwrap();
 
-        if let Err(_) = oneshot_send.send(
-            time_series_data
-                .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
-                .unwrap(),
-        ) {
+        if oneshot_send
+            .send(
+                time_series_data
+                    .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
+                    .unwrap(),
+            )
+            .is_err()
+        {
             eprintln!("the receiver is dropped");
         }
 
@@ -4607,7 +4435,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
                 certs,
                 notify_shutdown,
             )
-            .await
+            .await;
     });
 
     let _lock = get_token().lock().await;
@@ -4618,7 +4446,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| (sensor.to_string()))
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
 
@@ -4627,7 +4455,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         PeerInfo {
             ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| (sensor.to_string()))
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4637,7 +4465,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let mut peer_identities = HashSet::new();
     let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers.clone(),
+        addr: addr_to_peers,
         hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
@@ -4707,12 +4535,11 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         }
     }
 
-    let raw_data = match oneshot_recv.await {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("the sender dropped");
-            Vec::new()
-        }
+    let raw_data = if let Ok(v) = oneshot_recv.await {
+        v
+    } else {
+        eprintln!("the sender dropped");
+        Vec::new()
     };
 
     assert_eq!(
@@ -4746,7 +4573,7 @@ async fn request_raw_events_giganto_cluster() {
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
             NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| sensor.to_string())
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
         ));
 
@@ -4767,7 +4594,7 @@ async fn request_raw_events_giganto_cluster() {
             PeerInfo {
                 ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| (sensor.to_string()))
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
                 graphql_port: None,
                 publish_port: Some(NODE1_TEST_PORT),
@@ -4790,7 +4617,7 @@ async fn request_raw_events_giganto_cluster() {
         let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
         let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
-        if let Err(_) = oneshot_send.send(raw_data) {
+        if oneshot_send.send(raw_data).is_err() {
             eprintln!("the receiver is dropped");
         }
 
@@ -4809,7 +4636,7 @@ async fn request_raw_events_giganto_cluster() {
                 certs,
                 notify_shutdown,
             )
-            .await
+            .await;
     });
 
     let _lock = get_token().lock().await;
@@ -4820,7 +4647,7 @@ async fn request_raw_events_giganto_cluster() {
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
         NODE1_GIGANTO_INGEST_SENSORS
             .into_iter()
-            .map(|sensor| (sensor.to_string()))
+            .map(str::to_string)
             .collect::<HashSet<String>>(),
     ));
 
@@ -4829,7 +4656,7 @@ async fn request_raw_events_giganto_cluster() {
         PeerInfo {
             ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
                 .into_iter()
-                .map(|sensor| (sensor.to_string()))
+                .map(str::to_string)
                 .collect::<HashSet<String>>(),
             graphql_port: None,
             publish_port: Some(NODE2_PORT),
@@ -4839,7 +4666,7 @@ async fn request_raw_events_giganto_cluster() {
     let mut peer_identities = HashSet::new();
     let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
     peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers.clone(),
+        addr: addr_to_peers,
         hostname: NODE2_HOST.to_string(),
     });
     let peer_idents = Arc::new(RwLock::new(peer_identities));
@@ -4894,12 +4721,11 @@ async fn request_raw_events_giganto_cluster() {
         }
     }
 
-    let raw_data = match oneshot_recv.await {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("the sender dropped");
-            Vec::new()
-        }
+    let raw_data = if let Ok(v) = oneshot_recv.await {
+        v
+    } else {
+        eprintln!("the sender dropped");
+        Vec::new()
     };
 
     assert_eq!(result_data.len(), 1);
