@@ -376,11 +376,11 @@ mod tests {
             .collect();
 
         // Change to the UTC timezone by applying an offset
-        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
-        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = convert_to_utc_timezone(timestamps[0]);
+        let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(timestamp2, "2023-01-20 00:00:01.404277 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:01.404277 UTC");
 
         let query = r#"
         {
@@ -405,11 +405,11 @@ mod tests {
             .collect();
 
         // Change to the UTC timezone by applying an offset
-        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
-        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = convert_to_utc_timezone(timestamps[0]);
+        let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
 
         let query = r#"
         {
@@ -434,11 +434,11 @@ mod tests {
             .collect();
 
         // Change to the UTC timezone by applying an offset
-        let timestamp1 = convert_to_utc_timezone(timestamps[0]);
-        let timestamp2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = convert_to_utc_timezone(timestamps[0]);
+        let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(timestamp1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(timestamp2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
     }
 
     fn insert_packet(

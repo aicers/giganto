@@ -36,10 +36,10 @@ mod tests {
     #[tokio::test]
     async fn sensors_test() {
         let schema = TestSchema::new();
-        let query = r#"
+        let query = r"
         {
             sensors
-        }"#;
+        }";
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
@@ -51,10 +51,10 @@ mod tests {
     async fn sensors_with_giganto_cluster() {
         const TEMP_PORT: u16 = 9999;
         let schema = TestSchema::new_with_graphql_peer(TEMP_PORT);
-        let query = r#"
+        let query = r"
         {
             sensors
-        }"#;
+        }";
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),

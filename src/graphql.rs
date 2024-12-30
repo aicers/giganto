@@ -1834,7 +1834,7 @@ mod tests {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| sensor.to_string())
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
             ));
 
@@ -1846,7 +1846,7 @@ mod tests {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| sensor.to_string())
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
             ));
 
@@ -1855,7 +1855,7 @@ mod tests {
                 PeerInfo {
                     ingest_sensors: PEER_GIGANTO_2_INGEST_SENSORS
                         .into_iter()
-                        .map(|sensor| (sensor.to_string()))
+                        .map(str::to_string)
                         .collect::<HashSet<String>>(),
                     graphql_port: Some(port),
                     publish_port: None,
@@ -1869,7 +1869,7 @@ mod tests {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
-                    .map(|sensor| sensor.to_string())
+                    .map(str::to_string)
                     .collect::<HashSet<String>>(),
             ));
 

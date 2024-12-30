@@ -12,6 +12,7 @@ use crate::{
 };
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn load_time_range() {
     let schema = TestSchema::new();
     let store = schema.db.log_store().unwrap();
@@ -458,7 +459,7 @@ async fn oplog_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
-    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator);
 
     let query = r#"
         {
@@ -484,15 +485,15 @@ async fn load_oplog() {
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator).await;
-    insert_oplog_raw_event(&store, "giganto", "src1", 2, &generator).await;
-    insert_oplog_raw_event(&store, "review", "src1", 2, &generator).await;
-    insert_oplog_raw_event(&store, "review", "src1", 3, &generator).await;
-    insert_oplog_raw_event(&store, "giganto", "src1", 3, &generator).await;
-    insert_oplog_raw_event(&store, "giganto", "src1", 4, &generator).await;
-    insert_oplog_raw_event(&store, "giganto", "src1", 5, &generator).await;
-    insert_oplog_raw_event(&store, "review", "src1", 5, &generator).await;
-    insert_oplog_raw_event(&store, "aice", "src1", 5, &generator).await;
+    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator);
+    insert_oplog_raw_event(&store, "giganto", "src1", 2, &generator);
+    insert_oplog_raw_event(&store, "review", "src1", 2, &generator);
+    insert_oplog_raw_event(&store, "review", "src1", 3, &generator);
+    insert_oplog_raw_event(&store, "giganto", "src1", 3, &generator);
+    insert_oplog_raw_event(&store, "giganto", "src1", 4, &generator);
+    insert_oplog_raw_event(&store, "giganto", "src1", 5, &generator);
+    insert_oplog_raw_event(&store, "review", "src1", 5, &generator);
+    insert_oplog_raw_event(&store, "aice", "src1", 5, &generator);
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
@@ -518,22 +519,23 @@ async fn load_oplog() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn load_connection_by_prefix_timestamp_key() {
     let schema = TestSchema::new();
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
-    let mut key_list: Vec<Vec<u8>> = Vec::new();
-
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 1, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 2, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 2, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 3, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 3, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src1", 4, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src2", 5, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "piglet", "src2", 6, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "review", "src1", 4, &generator).await);
-    key_list.push(insert_oplog_raw_event(&store, "review", "src2", 5, &generator).await);
+    let key_list: Vec<Vec<u8>> = vec![
+        insert_oplog_raw_event(&store, "piglet", "src1", 1, &generator),
+        insert_oplog_raw_event(&store, "piglet", "src1", 2, &generator),
+        insert_oplog_raw_event(&store, "review", "src1", 2, &generator),
+        insert_oplog_raw_event(&store, "review", "src1", 3, &generator),
+        insert_oplog_raw_event(&store, "piglet", "src1", 3, &generator),
+        insert_oplog_raw_event(&store, "piglet", "src1", 4, &generator),
+        insert_oplog_raw_event(&store, "piglet", "src2", 5, &generator),
+        insert_oplog_raw_event(&store, "piglet", "src2", 6, &generator),
+        insert_oplog_raw_event(&store, "review", "src1", 4, &generator),
+        insert_oplog_raw_event(&store, "review", "src2", 5, &generator),
+    ];
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
@@ -649,7 +651,7 @@ fn insert_log_raw_event(
     store.append(&key, &value).unwrap();
 }
 
-async fn insert_oplog_raw_event(
+fn insert_oplog_raw_event(
     store: &RawEventStore<'_, OpLog>,
     agent_name: &str,
     sensor: &str,

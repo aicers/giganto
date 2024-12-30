@@ -303,9 +303,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1000000, 300000000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2000000, 600000000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3000000, 900000000);
+        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         let query = r#"
     {
@@ -425,6 +425,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_statistics_giganto_cluster_combined() {
         // given
         let query = r#"
@@ -516,11 +517,11 @@ mod tests {
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
         let store = schema.db.statistics_store().unwrap();
-        let timestamp: i64 = 1702272560;
+        let timestamp: i64 = 1_702_272_560;
 
-        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1000000, 300000000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2000000, 600000000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3000000, 900000000);
+        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         // when
         let res = schema.execute(query).await;

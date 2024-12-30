@@ -795,15 +795,12 @@ pub mod tests {
     }
 
     fn init_client() -> Endpoint {
-        let (cert, key) = match fs::read(CERT_PATH)
-            .map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
+        let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) =
+            fs::read(CERT_PATH).map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
         {
-            Ok(x) => x,
-            Err(_) => {
-                panic!(
-                    "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder",
-                );
-            }
+            x
+        } else {
+            panic!("failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
         };
 
         let pv_key = if Path::new(KEY_PATH)

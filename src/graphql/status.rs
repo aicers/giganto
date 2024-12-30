@@ -308,7 +308,7 @@ mod tests {
     async fn test_status() {
         let schema = TestSchema::new();
 
-        let query = r#"
+        let query = r"
         {
             status {
                 name
@@ -319,7 +319,7 @@ mod tests {
                 usedDiskSpace
             }
         }
-        "#;
+        ";
 
         let res = schema.execute(query).await;
         assert!(res.errors.is_empty());
@@ -332,7 +332,7 @@ mod tests {
         let schema = TestSchema::new();
 
         // config
-        let query = r#"
+        let query = r"
             {
                 config {
                     ingestSrvAddr
@@ -354,7 +354,7 @@ mod tests {
                     }
                 }
             }
-        "#;
+        ";
 
         let res = schema.execute(query).await;
 
@@ -385,7 +385,7 @@ mod tests {
         let schema = TestSchema::new_with_remote_config();
 
         // config
-        let query = r#"
+        let query = r"
             {
                 config {
                     ingestSrvAddr
@@ -407,7 +407,7 @@ mod tests {
                     }
                 }
             }
-        "#;
+        ";
 
         let res = schema.execute(query).await;
 

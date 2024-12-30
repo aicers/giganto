@@ -911,8 +911,8 @@ async fn export_op_log() {
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_op_log_raw_event(&store, "agent1", "src1", 1, &generator).await;
-    insert_op_log_raw_event(&store, "agent2", "src1", 1, &generator).await;
+    insert_op_log_raw_event(&store, "agent1", "src1", 1, &generator);
+    insert_op_log_raw_event(&store, "agent2", "src1", 1, &generator);
 
     // export csv file
     let query = r#"
@@ -941,7 +941,7 @@ async fn export_op_log() {
     assert!(res.data.to_string().contains("op_log"));
 }
 
-async fn insert_op_log_raw_event(
+fn insert_op_log_raw_event(
     store: &RawEventStore<'_, OpLog>,
     agent_name: &str,
     sensor: &str,
@@ -1354,10 +1354,10 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         file_size: 10,
         resource_type: 20,
         fid: 30,
-        create_time: 10000000,
-        access_time: 20000000,
-        write_time: 10000000,
-        change_time: 20000000,
+        create_time: 10_000_000,
+        access_time: 20_000_000,
+        write_time: 10_000_000,
+        change_time: 20_000_000,
     };
     let ser_smb_body = bincode::serialize(&smb_body).unwrap();
 
