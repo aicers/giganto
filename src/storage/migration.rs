@@ -196,7 +196,7 @@ where
             continue;
         };
         let new_key = StorageKey::builder()
-            .start_key(&netflow_raw_event.sensor().unwrap())
+            .start_key(&netflow_raw_event.sensor().expect("Netflow source field is always populated during processing, ensuring sensor value exists."))
             .end_key(timestamp)
             .build();
         store.append(&new_key.key(), &value)?;

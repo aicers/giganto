@@ -528,8 +528,7 @@ where
             info!("start hog's publish stream : {:?}", record_type);
         }
         NodeType::Crusher => {
-            // crusher's policy Id always exists.
-            let id = msg.id().unwrap();
+            let id = msg.id().expect("Crusher always sends RequestCrusherStream with an id, so this value is guaranteed to exist.");
             send_crusher_stream_start_message(&mut sender, id)
                 .await
                 .map_err(|e| anyhow!("Failed to write crusher start message: {}", e))?;

@@ -1,6 +1,6 @@
 use std::{net::IpAddr, vec};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
 
 pub trait RequestStreamMessage {
@@ -13,6 +13,9 @@ pub trait RequestStreamMessage {
 
 impl RequestStreamMessage for RequestHogStream {
     fn channel_key(&self, sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
+        let sensor = sensor.ok_or_else(|| {
+            anyhow!("Failed to generate semi-supervised channel key, sensor is required.")
+        })?;
         if let Some(ref sensor_list) = self.sensor {
             let hog_keys = sensor_list
                 .iter()
@@ -20,7 +23,7 @@ impl RequestStreamMessage for RequestHogStream {
                     let mut key = String::new();
                     key.push_str(&NodeType::Hog.to_string());
                     key.push('\0');
-                    key.push_str(sensor.as_ref().unwrap());
+                    key.push_str(&sensor);
                     key.push('\0');
                     key.push_str(target_sensor);
                     key.push('\0');

@@ -165,8 +165,10 @@ extern crate proc_macro;
 /// ```
 #[proc_macro_derive(ConvertGraphQLEdgesNode, attributes(graphql_client_type))]
 pub fn derive_from_graphql_client_autogen(input: TokenStream) -> TokenStream {
-    derive_from_graphql_client_autogen_2(input.into())
-        .unwrap()
+    derive_from_graphql_client_autogen_2(input.clone().into())
+        .unwrap_or_else(|e| {
+            panic!("ConvertGraphQLEdgesNode macro is not correctly used for {input:?}: {e}")
+        })
         .into()
 }
 

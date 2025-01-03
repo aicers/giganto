@@ -8,7 +8,10 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     process::exit,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -943,7 +946,7 @@ pub async fn retain_periodically(
     retention_period: Duration,
     db: Database,
     notify_shutdown: Arc<Notify>,
-    running_flag: Arc<Mutex<bool>>,
+    running_flag: Arc<AtomicBool>,
 ) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
     const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
@@ -955,10 +958,8 @@ pub async fn retain_periodically(
         select! {
             _ = itv.tick() => {
                 info!("Begin to cleanup the database.");
-                {
-                    let mut running_flag = running_flag.lock().unwrap();
-                    *running_flag = true;
-                }
+                running_flag.store(true, Ordering::Relaxed);
+
                 let now = Utc::now();
                 let mut retention_timestamp = now
                     .timestamp_nanos_opt()
@@ -1037,10 +1038,7 @@ pub async fn retain_periodically(
                     }
                 }
                 info!("Database cleanup completed.");
-                {
-                    let mut running_flag = running_flag.lock().unwrap();
-                    *running_flag = false;
-                }
+                running_flag.store(false, Ordering::Relaxed);
             },
             () = notify_shutdown.notified() => {
                 return Ok(());

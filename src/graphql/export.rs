@@ -2669,8 +2669,9 @@ fn export_statistic_file(
             loop {
                 match iter.next() {
                     Some(Ok(item)) => {
-                        // replace new value (min_index's vector value is always exist)
-                        *iter_next_values.get_mut(min_index).unwrap() = item;
+                        *iter_next_values
+                            .get_mut(min_index)
+                            .expect("The index is one of the actual elements in the vector, so it is always valid.") = item;
                         break;
                     }
                     Some(Err(_)) => {

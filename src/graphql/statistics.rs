@@ -224,8 +224,7 @@ fn gen_statistics(
         for idx in next_candidate {
             if let Some(iter) = stats_iters.get_mut(idx) {
                 if let Some(item) = iter.next() {
-                    // replace new value (value is always exist)
-                    *iter_next_values.get_mut(idx).unwrap() = item;
+                    *iter_next_values.get_mut(idx).expect("`next_candidate` is generated during iteration over `iter_next_values`, ensuring all its indices are valid within the latter.") = item;
                 } else {
                     // No value to call with the iterator.
                     let _ = stats_iters.remove(idx);

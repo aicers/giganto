@@ -12,7 +12,10 @@ use std::{
     fs,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -126,7 +129,7 @@ async fn main() -> Result<()> {
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
         let notify_power_off = Arc::new(Notify::new());
-        let retain_flag = Arc::new(Mutex::new(false));
+        let retain_flag = Arc::new(AtomicBool::new(false));
 
         let database = if let Some(settings) = settings.clone() {
             let (db_path, db_options) = db_path_and_option(
@@ -312,11 +315,8 @@ async fn main() -> Result<()> {
 
         if is_reboot || is_power_off || is_reload_config {
             loop {
-                {
-                    let retain_flag = retain_flag.lock().unwrap();
-                    if !*retain_flag {
-                        break;
-                    }
+                if !retain_flag.load(Ordering::Relaxed) {
+                    break;
                 }
                 sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
             }
