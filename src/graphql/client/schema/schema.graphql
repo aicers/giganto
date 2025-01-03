@@ -3,7 +3,7 @@
 directive @oneOf on INPUT_OBJECT
 
 type BootpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -60,21 +60,69 @@ type Config {
   ackTransmission: Int!
 }
 
+# Represents an event extracted from a session.
 type ConnRawEvent {
-  timestamp: DateTime!
+  # Start Time.
+  time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # Connection state. This is only used in TCP connections.
+  #
+  # The connection state is a string of letters that represent the state of the connection. The
+  # letters are as follows:
+  #
+  # - S: The originator sent a SYN segment.
+  # - h: The responder sent a SYN ACK segment.
+  # - A: The originator sent an ACK segment.
+  # - D: The originator sent at least one segment with payload data. In this case, that was HTTP
+  # over TCP.
+  # - a: The responder replied with an ACK segment.
+  # - d: The responder replied with at least one segment with payload data.
+  # - F: The originator sent a FIN ACK segment.
+  # - f: The responder replied with a FIN ACK segment.
+  # - R: The originator sent a RST segment.
+  # - r: The responder sent a RST segment.
+  # - T: Timeout
+  #
+  # For example, `ShDdAaFf` indicates a session without packet loss.
   connState: String!
+
+  # Duration. It is in nanoseconds.
   duration: StringNumberI64!
+
+  # Service name.
   service: String!
+
+  # Bytes sent by source.
   origBytes: StringNumberU64!
+
+  # Bytes received by destination.
   respBytes: StringNumberU64!
+
+  # Packets sent by source.
   origPkts: StringNumberU64!
+
+  # Packets received by destination.
   respPkts: StringNumberU64!
+
+  # Layer 2 bytes sent by source.
   origL2Bytes: StringNumberU64!
+
+  # Layer 2 bytes received by destination.
   respL2Bytes: StringNumberU64!
 }
 
@@ -104,7 +152,7 @@ type ConnRawEventEdge {
 scalar DateTime
 
 type DceRpcRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -138,7 +186,7 @@ type DceRpcRawEventEdge {
 }
 
 type DhcpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -186,7 +234,7 @@ type DhcpRawEventEdge {
 }
 
 type DnsEventEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -219,7 +267,7 @@ type DnsEventEventEdge {
 }
 
 type DnsRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -274,7 +322,7 @@ input ExportFilter {
 }
 
 type FileCreateEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -306,7 +354,7 @@ type FileCreateEventEdge {
 }
 
 type FileCreateStreamHashEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -340,7 +388,7 @@ type FileCreateStreamHashEventEdge {
 }
 
 type FileCreationTimeChangedEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -373,7 +421,7 @@ type FileCreationTimeChangedEventEdge {
 }
 
 type FileDeleteDetectedEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -406,7 +454,7 @@ type FileDeleteDetectedEventEdge {
 }
 
 type FileDeleteEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -440,7 +488,7 @@ type FileDeleteEventEdge {
 }
 
 type FtpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -482,7 +530,7 @@ type FtpRawEventEdge {
 }
 
 type HttpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -534,7 +582,7 @@ type HttpRawEventEdge {
 }
 
 type ImageLoadedEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -579,7 +627,7 @@ input IpRange {
 }
 
 type KerberosRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -618,7 +666,7 @@ type KerberosRawEventEdge {
 }
 
 type LdapRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -661,7 +709,7 @@ input LogFilter {
 }
 
 type LogRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   log: String!
 }
 
@@ -686,7 +734,7 @@ type LogRawEventEdge {
 }
 
 type MqttRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -729,7 +777,7 @@ type Mutation {
 }
 
 type Netflow5RawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   srcAddr: String!
   dstAddr: String!
   nextHop: String!
@@ -776,7 +824,7 @@ type Netflow5RawEventEdge {
 }
 
 type Netflow9RawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   sequence: StringNumberU32!
   sourceId: StringNumberU32!
   templateId: Int!
@@ -819,7 +867,7 @@ input NetflowFilter {
 }
 
 type NetworkConnectionEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -912,7 +960,7 @@ type NetworkRawEventsEdge {
 }
 
 type NfsRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -944,7 +992,7 @@ type NfsRawEventEdge {
 }
 
 type NtlmRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -987,7 +1035,7 @@ input OpLogFilter {
 }
 
 type OpLogRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   level: String!
   contents: String!
   agentName: String!
@@ -1072,7 +1120,7 @@ type PeerIdentity {
 }
 
 type PipeEventEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   eventType: String!
@@ -1109,7 +1157,7 @@ input PortRange {
 }
 
 type ProcessCreateEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -1156,7 +1204,7 @@ type ProcessCreateEventEdge {
 }
 
 type ProcessTamperingEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -1187,7 +1235,7 @@ type ProcessTamperingEventEdge {
 }
 
 type ProcessTerminatedEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   processGuid: String!
@@ -1554,7 +1602,7 @@ type Query {
 }
 
 type RdpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1585,7 +1633,7 @@ type RdpRawEventEdge {
 }
 
 type RegistryKeyValueRenameEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   eventType: String!
@@ -1618,7 +1666,7 @@ type RegistryKeyValueRenameEventEdge {
 }
 
 type RegistryValueSetEvent {
-  timestamp: DateTime!
+  time: DateTime!
   agentName: String!
   agentId: String!
   eventType: String!
@@ -1659,7 +1707,7 @@ input SearchFilter {
   respPort: PortRange
   logLevel: String
   logContents: String
-  timestamps: [DateTime!]!
+  times: [DateTime!]!
   keyword: String
   agentId: String
 }
@@ -1676,7 +1724,7 @@ input SecuLogFilter {
 }
 
 type SecuLogRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   logType: String!
   version: String!
   origAddr: String
@@ -1708,7 +1756,7 @@ type SecuLogRawEventEdge {
 }
 
 type SmbRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1749,7 +1797,7 @@ type SmbRawEventEdge {
 }
 
 type SmtpRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1786,7 +1834,7 @@ type SmtpRawEventEdge {
 }
 
 type SshRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1935,7 +1983,7 @@ input TimeSeriesFilter {
 }
 
 type TlsRawEvent {
-  timestamp: DateTime!
+  time: DateTime!
   origAddr: String!
   origPort: Int!
   respAddr: String!
@@ -1983,4 +2031,10 @@ type TlsRawEventEdge {
 
   # A cursor for use in pagination
   cursor: String!
+}
+
+input TsvFilter {
+  protocol: String!
+  times: [DateTime!]!
+  sensor: String!
 }

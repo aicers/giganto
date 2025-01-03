@@ -115,7 +115,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub timestamps: Vec<DateTime<Utc>>,
+    pub times: Vec<DateTime<Utc>>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -215,7 +215,7 @@ pub fn minimal_schema(
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
-fn collect_exist_timestamp<T>(
+fn collect_exist_times<T>(
     target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
     filter: &SearchFilter,
 ) -> Vec<DateTime<Utc>>
@@ -613,7 +613,7 @@ where
     (records, has_more)
 }
 
-pub fn get_timestamp_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
         return Ok(Utc.timestamp_nanos(timestamp));
@@ -621,7 +621,7 @@ pub fn get_timestamp_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_timestamp_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         return Ok(Utc.timestamp_nanos(nanos));
@@ -1751,7 +1751,7 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
                         resp_port: filter.resp_port.map(Into::into),
                         log_level: filter.log_level,
                         log_contents: filter.log_contents,
-                        timestamps: filter.timestamps,
+                        times: filter.times,
                         keyword: filter.keyword,
                         agent_id: filter.agent_id,
                     }
@@ -1885,7 +1885,7 @@ mod tests {
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        timestamp: DateTime<Utc>,
+        time: DateTime<Utc>,
     }
 
     impl ClusterSortKey for TestNode {
@@ -1896,42 +1896,12 @@ mod tests {
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
         vec![
-            Edge::new(
-                "warn_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "danger_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "danger_002".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_001".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_002".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
-            Edge::new(
-                "info_003".to_string(),
-                TestNode {
-                    timestamp: Utc::now(),
-                },
-            ),
+            Edge::new("warn_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("danger_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("danger_002".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_002".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("info_003".to_string(), TestNode { time: Utc::now() }),
         ]
     }
 
