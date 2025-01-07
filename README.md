@@ -21,40 +21,65 @@ processing and real-time analytics.
 
 ## Usage
 
-You can run giganto by invoking the following command:
+You can run Giganto by invoking the following command:
 
 ```sh
 giganto --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_CERT_PATH> \
 --ca-certs <CA_CERT_PATH>
 ```
 
-If you want to run giganto with local configuration file,
+If you want to run Giganto with local configuration file,
 
 ```sh
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 <CA_CERT_PATH> --ca-certs <CA_CERT_PATH>
 ```
 
+## Configuration
+
 In the config file, you can specify the following options:
 
+<!-- markdownlint-disable -->
+
+| Field                  | Description                          | Required | Default                |
+| ---------------------- | ------------------------------------ | -------- | ---------------------- |
+| `ingest_srv_addr`      | Address to listen for ingest QUIC    | No       | [::]:38370             |
+| `publish_srv_addr`     | Address to listen for publish QUIC   | No       | [::]:38371             |
+| `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8442              |
+| `data_dir`             | Path to directory to store data      | Yes      | -                      |
+| `retention`            | Retention period for data            | No       | 100d                   |
+| `log_dir`              | Path to Giganto's syslog file        | Yes      | -                      |
+| `export_dir`           | Path to Giganto's export file        | Yes      | -                      |
+| `max_open_files`       | Max open files for database          | No       | 8000                   |
+| `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                    |
+| `num_of_thread`        | Number of background threads for DB  | No       | 8                      |
+| `max_sub_compactions`  | Number of sub-compactions allowed    | No       | 2                      |
+| `ack_transmission`     | Ack count for ingestion data         | No       | 1024                   |
+| `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383  |
+| `peers`                | List of peer addresses and hostnames | No       | -                      |
+
+<!-- markdownlint-enable -->
+
+The following is an example of how to configure the config file:
+
 ```toml
-ingest_srv_addr = "0.0.0.0:38370"          # address to listen for ingest QUIC.
-publish_srv_addr = "0.0.0.0:38371"         # address to listen for publish QUIC.
-graphql_srv_addr = "127.0.0.1:8442"        # giganto's graphql address.
-data_dir = "tests/data"                    # path to directory to store data.
-retention = "100d"                         # retention period for data.
-log_dir = "/data/logs/apps"                # path to giganto's syslog file.
-export_dir = "tests/export"                # path to giganto's export file.
-max_open_files = 8000                      # db options max open files.
-max_mb_of_level_base = 512                 # db options max MB of rocksDB Level 1.
-num_of_thread = 8                          # db options for background thread.
-max_sub_compactions = 2                    # db options for sub-compaction.
-ack_transmission = 1024                    # ack count for ingestion data.
-addr_to_peers = "10.10.11.1:38383"          # address to listen for peers QUIC.
-peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]     # list of peer info.
+ingest_srv_addr = "0.0.0.0:38370"
+publish_srv_addr = "0.0.0.0:38371"
+graphql_srv_addr = "127.0.0.1:8442"
+data_dir = "tests/data"
+retention = "100d"
+log_dir = "/data/logs/apps"
+export_dir = "tests/export"
+max_open_files = 8000
+max_mb_of_level_base = 512
+num_of_thread = 8
+max_sub_compactions = 2
+ack_transmission = 1024
+addr_to_peers = "10.10.11.1:38383"
+peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
 ```
 
-By default, giganto reads the config file from the following directories:
+By default, Giganto reads the config file from the following directories:
 
 * Linux: `$HOME/.config/giganto/config.toml`
 * macOS: `$HOME/Library/Application Support/com.cluml.giganto/config.toml`
@@ -74,7 +99,7 @@ standalone mode, and if there is, it runs in cluster mode for P2P.
 
 ## Test
 
-Run giganto with the prepared configuration file. (Settings to use the
+Run Giganto with the prepared configuration file. (Settings to use the
 certificate/key from the tests folder.)
 
 ```sh
