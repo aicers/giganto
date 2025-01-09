@@ -33,9 +33,12 @@ use giganto_client::{
     publish::{
         pcap_extract_request,
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
-        receive_range_data_request, receive_stream_request, send_err,
-        send_hog_stream_start_message, send_ok, send_range_data,
-        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+        receive_range_data_request, receive_stream_request, send_err, send_ok, send_range_data,
+        send_semi_supervised_stream_start_message,
+        stream::{
+            NodeType, RequestSemiSupervisedStream, RequestStreamRecord,
+            RequestTimeSeriesGeneratorStream,
+        },
         PcapFilter,
     },
     RawEventKind,
@@ -247,8 +250,9 @@ async fn request_stream(
                 } else {
                     tokio::spawn(async move {
                         match node_type {
-                            NodeType::Hog => {
-                                match bincode::deserialize::<RequestHogStream>(&raw_data) {
+                            NodeType::SemiSupervised => {
+                                match bincode::deserialize::<RequestSemiSupervisedStream>(&raw_data)
+                                {
                                     Ok(msg) => {
                                         if let Err(e) = process_stream(
                                             db,
@@ -266,18 +270,22 @@ async fn request_stream(
                                         }
                                     }
                                     Err(_) => {
-                                        error!("Failed to deserialize hog message");
+                                        error!(
+                                            "Failed to deserialize the Semi-supervised Engine message"
+                                        );
                                     }
                                 }
                             }
-                            NodeType::Crusher => {
-                                match bincode::deserialize::<RequestCrusherStream>(&raw_data) {
+                            NodeType::TimeSeriesGenerator => {
+                                match bincode::deserialize::<RequestTimeSeriesGeneratorStream>(
+                                    &raw_data,
+                                ) {
                                     Ok(msg) => {
                                         if let Err(e) = process_stream(
                                             db,
                                             conn,
                                             None,
-                                            None, //if crusher supports generating time series of logs, It will change to valid values.
+                                            None, //if the Time Series Generator supports generating time series of logs, It will change to valid values.
                                             node_type,
                                             record_type,
                                             msg,
@@ -289,7 +297,9 @@ async fn request_stream(
                                         }
                                     }
                                     Err(_) => {
-                                        error!("Failed to deserialize crusher message");
+                                        error!(
+                                            "Failed to deserialize the Time Series Generator message"
+                                        );
                                     }
                                 }
                             }
@@ -337,7 +347,7 @@ async fn process_pcap_extract(
                 get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
                     .await
             {
-                // send/receive extract request from piglet
+                // send/receive extract request from the Sensor
                 match pcap_extract_request(&sensor_conn, &filter).await {
                     Ok(()) => (),
                     Err(e) => debug!("failed to relay pcap request, {e}"),
@@ -475,7 +485,7 @@ pub async fn send_direct_stream(
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
-            if req_key.contains(&NodeType::Hog.to_string()) {
+            if req_key.contains(&NodeType::SemiSupervised.to_string()) {
                 let sensor_bytes = bincode::serialize(&sensor)?;
                 let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&sensor_len);
@@ -521,18 +531,34 @@ where
 
     // send stored record raw data
     match node_type {
-        NodeType::Hog => {
-            send_hog_stream_start_message(&mut sender, record_type)
+        NodeType::SemiSupervised => {
+            send_semi_supervised_stream_start_message(&mut sender, record_type)
                 .await
-                .map_err(|e| anyhow!("Failed to write hog start message: {}", e))?;
-            info!("start hog's publish stream : {:?}", record_type);
+                .map_err(|e| {
+                    anyhow!(
+                        "Failed to write the Semi-supervised Engine start message: {}",
+                        e
+                    )
+                })?;
+            info!(
+                "start the Semi-supervised Engine's publish stream : {:?}",
+                record_type
+            );
         }
-        NodeType::Crusher => {
-            let id = msg.id().expect("Crusher always sends RequestCrusherStream with an id, so this value is guaranteed to exist.");
-            send_crusher_stream_start_message(&mut sender, id)
+        NodeType::TimeSeriesGenerator => {
+            let id = msg.id().expect("The Time Series Generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
+            send_time_series_generator_stream_start_message(&mut sender, id)
                 .await
-                .map_err(|e| anyhow!("Failed to write crusher start message: {}", e))?;
-            info!("start crusher's publish stream : {:?}", record_type);
+                .map_err(|e| {
+                    anyhow!(
+                        "Failed to write the Time Series Generator start message: {}",
+                        e
+                    )
+                })?;
+            info!(
+                "start time-series-generator's publish stream : {:?}",
+                record_type
+            );
 
             let key_builder = StorageKey::builder()
                 .start_key(&msg.sensor()?)
@@ -552,7 +578,7 @@ where
                 if msg.filter_ip(orig_addr, resp_addr) {
                     let timestamp =
                         i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                    send_crusher_data(&mut sender, timestamp, val).await?;
+                    send_time_series_generator_data(&mut sender, timestamp, val).await?;
                     last_ts = timestamp;
                 }
             }
@@ -585,12 +611,15 @@ where
     Ok(())
 }
 
-/// Sends the crusher stream start message from giganto's publish module.
+/// Sends the Time Series Generator stream start message from giganto's publish module.
 ///
 /// # Errors
 ///
 /// Returns an error if the message could not be sent.
-async fn send_crusher_stream_start_message(send: &mut SendStream, start_msg: String) -> Result<()> {
+async fn send_time_series_generator_stream_start_message(
+    send: &mut SendStream,
+    start_msg: String,
+) -> Result<()> {
     frame::send_raw(send, start_msg.as_bytes()).await?;
     Ok(())
 }
@@ -600,7 +629,11 @@ async fn send_crusher_stream_start_message(send: &mut SendStream, start_msg: Str
 /// # Errors
 ///
 /// Returns an error if the message could not be sent.
-async fn send_crusher_data<T>(send: &mut SendStream, timestamp: i64, record_data: T) -> Result<()>
+async fn send_time_series_generator_data<T>(
+    send: &mut SendStream,
+    timestamp: i64,
+    record_data: T,
+) -> Result<()>
 where
     T: Serialize,
 {

@@ -487,12 +487,12 @@ async fn load_oplog() {
 
     insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator);
     insert_oplog_raw_event(&store, "giganto", "src1", 2, &generator);
-    insert_oplog_raw_event(&store, "review", "src1", 2, &generator);
-    insert_oplog_raw_event(&store, "review", "src1", 3, &generator);
+    insert_oplog_raw_event(&store, "manager", "src1", 2, &generator);
+    insert_oplog_raw_event(&store, "manager", "src1", 3, &generator);
     insert_oplog_raw_event(&store, "giganto", "src1", 3, &generator);
     insert_oplog_raw_event(&store, "giganto", "src1", 4, &generator);
     insert_oplog_raw_event(&store, "giganto", "src1", 5, &generator);
-    insert_oplog_raw_event(&store, "review", "src1", 5, &generator);
+    insert_oplog_raw_event(&store, "manager", "src1", 5, &generator);
     insert_oplog_raw_event(&store, "aice", "src1", 5, &generator);
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
@@ -525,16 +525,16 @@ async fn load_connection_by_prefix_timestamp_key() {
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
     let key_list: Vec<Vec<u8>> = vec![
-        insert_oplog_raw_event(&store, "piglet", "src1", 1, &generator),
-        insert_oplog_raw_event(&store, "piglet", "src1", 2, &generator),
-        insert_oplog_raw_event(&store, "review", "src1", 2, &generator),
-        insert_oplog_raw_event(&store, "review", "src1", 3, &generator),
-        insert_oplog_raw_event(&store, "piglet", "src1", 3, &generator),
-        insert_oplog_raw_event(&store, "piglet", "src1", 4, &generator),
-        insert_oplog_raw_event(&store, "piglet", "src2", 5, &generator),
-        insert_oplog_raw_event(&store, "piglet", "src2", 6, &generator),
-        insert_oplog_raw_event(&store, "review", "src1", 4, &generator),
-        insert_oplog_raw_event(&store, "review", "src2", 5, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src1", 1, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src1", 2, &generator),
+        insert_oplog_raw_event(&store, "manager", "src1", 2, &generator),
+        insert_oplog_raw_event(&store, "manager", "src1", 3, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src1", 3, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src1", 4, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src2", 5, &generator),
+        insert_oplog_raw_event(&store, "sensor", "src2", 6, &generator),
+        insert_oplog_raw_event(&store, "manager", "src1", 4, &generator),
+        insert_oplog_raw_event(&store, "manager", "src2", 5, &generator),
     ];
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
@@ -544,7 +544,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("review".to_string()),
+            agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -568,7 +568,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("review".to_string()),
+            agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -592,7 +592,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("review".to_string()),
+            agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -614,7 +614,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("piglet".to_string()),
+            agent_id: Some("sensor".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src2".to_string()),

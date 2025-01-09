@@ -20,10 +20,14 @@ use giganto_client::{
     },
     publish::{
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
-        receive_crusher_data, receive_crusher_stream_start_message, receive_hog_data,
-        receive_hog_stream_start_message, receive_range_data, send_range_data_request,
+        receive_range_data, receive_semi_supervised_data,
+        receive_semi_supervised_stream_start_message, receive_time_series_generator_data,
+        receive_time_series_generator_stream_start_message, send_range_data_request,
         send_stream_request,
-        stream::{NodeType, RequestCrusherStream, RequestHogStream, RequestStreamRecord},
+        stream::{
+            NodeType, RequestSemiSupervisedStream, RequestStreamRecord,
+            RequestTimeSeriesGeneratorStream,
+        },
     },
 };
 use quinn::{Connection, Endpoint, SendStream};
@@ -2095,8 +2099,8 @@ async fn request_network_event_stream() {
     use crate::ingest::NetworkKey;
     use crate::publish::send_direct_stream;
 
-    const HOG_TYPE: NodeType = NodeType::Hog;
-    const CRUSHER_TYPE: NodeType = NodeType::Crusher;
+    const SEMI_SUPERVISED_TYPE: NodeType = NodeType::SemiSupervised;
+    const TIME_SERIES_GENERATOR_TYPE: NodeType = NodeType::TimeSeriesGenerator;
     const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
     const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
     const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;
@@ -2115,28 +2119,28 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_BOOTP: RequestStreamRecord = RequestStreamRecord::Bootp;
     const NETWORK_STREAM_DHCP: RequestStreamRecord = RequestStreamRecord::Dhcp;
 
-    const SENSOR_HOG_ONE: &str = "src1";
-    const SENSOR_HOG_TWO: &str = "src2";
-    const SENSOR_CRUSHER_THREE: &str = "src3";
+    const SENSOR_SEMI_SUPERVISED_ONE: &str = "src1";
+    const SENSOR_SEMI_SUPERVISED_TWO: &str = "src2";
+    const SENSOR_TIME_SERIES_GENERATOR_THREE: &str = "src3";
     const POLICY_ID: u32 = 1;
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
 
-    let hog_msg = RequestHogStream {
+    let semi_supervised_msg = RequestSemiSupervisedStream {
         start: 0,
         sensor: Some(vec![
-            String::from(SENSOR_HOG_ONE),
-            String::from(SENSOR_HOG_TWO),
+            String::from(SENSOR_SEMI_SUPERVISED_ONE),
+            String::from(SENSOR_SEMI_SUPERVISED_TWO),
         ]),
     };
-    let crusher_msg = RequestCrusherStream {
+    let time_series_generator_msg = RequestTimeSeriesGeneratorStream {
         start: 0,
         id: POLICY_ID.to_string(),
         src_ip: Some("192.168.4.76".parse::<IpAddr>().unwrap()),
         dst_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
-        sensor: Some(String::from(SENSOR_CRUSHER_THREE)),
+        sensor: Some(String::from(SENSOR_TIME_SERIES_GENERATOR_THREE)),
     };
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
@@ -2176,94 +2180,105 @@ async fn request_network_event_stream() {
     {
         let conn_store = db.conn_store().unwrap();
 
-        // direct conn network event for hog (src1,src2)
+        // direct conn network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_CONN,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
 
-        let conn_start_msg = receive_hog_stream_start_message(&mut send_conn_stream)
+        let conn_start_msg = receive_semi_supervised_stream_start_message(&mut send_conn_stream)
             .await
             .unwrap();
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "conn");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_conn_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "conn");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
-        let recv_data = receive_hog_data(&mut send_conn_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
-        // database conn network event for crusher
+        // database conn network event for the Time Series Generator
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = insert_conn_raw_event(&conn_store, SENSOR_CRUSHER_THREE, send_conn_time);
+        let conn_data = insert_conn_raw_event(
+            &conn_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_conn_time,
+        );
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_CONN,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
-        let conn_start_msg = receive_crusher_stream_start_message(&mut send_conn_stream)
-            .await
-            .unwrap();
+        let conn_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_conn_stream)
+                .await
+                .unwrap();
         assert_eq!(conn_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_conn_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
 
-        // direct conn network event for crusher
+        // direct conn network event for the Time Series Generator
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "conn");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "conn");
         let conn_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &conn_data,
             send_conn_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_conn_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_conn_stream)
+            .await
+            .unwrap();
         assert_eq!(send_conn_time, recv_timestamp);
         assert_eq!(conn_data, recv_data);
     }
@@ -2271,95 +2286,108 @@ async fn request_network_event_stream() {
     {
         let dns_store = db.dns_store().unwrap();
 
-        // direct dns network event for hog (src1,src2)
+        // direct dns network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DNS,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dns_start_msg = receive_hog_stream_start_message(&mut send_dns_stream)
+        let dns_start_msg = receive_semi_supervised_stream_start_message(&mut send_dns_stream)
             .await
             .unwrap();
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "dns");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dns_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dns_stream)
+            .await
+            .unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "dns");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dns_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dns_stream)
+            .await
+            .unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
-        // database dns network event for crusher
+        // database dns network event for the Time Series Generator
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dns_data = insert_dns_raw_event(&dns_store, SENSOR_CRUSHER_THREE, send_dns_time);
+        let dns_data = insert_dns_raw_event(
+            &dns_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_dns_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DNS,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dns_start_msg = receive_crusher_stream_start_message(&mut send_dns_stream)
-            .await
-            .unwrap();
+        let dns_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_dns_stream)
+                .await
+                .unwrap();
         assert_eq!(dns_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dns_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dns_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
 
-        // direct dns network event for crusher
+        // direct dns network event for the Time Series Generator
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dns");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dns");
         let dns_data = gen_dns_raw_event();
 
         send_direct_stream(
             &key,
             &dns_data,
             send_dns_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dns_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dns_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dns_time, recv_timestamp);
         assert_eq!(dns_data, recv_data);
     }
@@ -2367,94 +2395,107 @@ async fn request_network_event_stream() {
     {
         let rdp_store = db.rdp_store().unwrap();
 
-        // direct rdp network event for hog (src1,src2)
+        // direct rdp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_RDP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let rdp_start_msg = receive_hog_stream_start_message(&mut send_rdp_stream)
+        let rdp_start_msg = receive_semi_supervised_stream_start_message(&mut send_rdp_stream)
             .await
             .unwrap();
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "rdp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_rdp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_rdp_stream)
+            .await
+            .unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "rdp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_rdp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_rdp_stream)
+            .await
+            .unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
-        // database rdp network event for crusher
+        // database rdp network event for the Time Series Generator
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let rdp_data = insert_rdp_raw_event(&rdp_store, SENSOR_CRUSHER_THREE, send_rdp_time);
+        let rdp_data = insert_rdp_raw_event(
+            &rdp_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_rdp_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_RDP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let rdp_start_msg = receive_crusher_stream_start_message(&mut send_rdp_stream)
-            .await
-            .unwrap();
+        let rdp_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_rdp_stream)
+                .await
+                .unwrap();
         assert_eq!(rdp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_rdp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_rdp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
 
-        // direct rdp network event for crusher
+        // direct rdp network event for the Time Series Generator
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "rdp");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_stream(
             &key,
             &rdp_data,
             send_rdp_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_rdp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_rdp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_rdp_time, recv_timestamp);
         assert_eq!(rdp_data, recv_data);
     }
@@ -2462,98 +2503,109 @@ async fn request_network_event_stream() {
     {
         let http_store = db.http_store().unwrap();
 
-        // direct http network event for hog (src1,src2)
+        // direct http network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_HTTP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
 
-        let http_start_msg = receive_hog_stream_start_message(&mut send_http_stream)
+        let http_start_msg = receive_semi_supervised_stream_start_message(&mut send_http_stream)
             .await
             .unwrap();
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "http");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "http");
         let http_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_http_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "http");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "http");
         let http_data = gen_conn_raw_event();
 
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_http_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
-        // database http network event for crusher
+        // database http network event for the Time Series Generator
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let http_data = insert_http_raw_event(&http_store, SENSOR_CRUSHER_THREE, send_http_time);
+        let http_data = insert_http_raw_event(
+            &http_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_http_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_HTTP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
 
-        let http_start_msg = receive_crusher_stream_start_message(&mut send_http_stream)
-            .await
-            .unwrap();
+        let http_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_http_stream)
+                .await
+                .unwrap();
         assert_eq!(http_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_http_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
 
-        // direct http network event for crusher
+        // direct http network event for the Time Series Generator
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "http");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "http");
         let http_data = gen_http_raw_event();
         send_direct_stream(
             &key,
             &http_data,
             send_http_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_http_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_http_stream)
+            .await
+            .unwrap();
         assert_eq!(send_http_time, recv_timestamp);
         assert_eq!(http_data, recv_data);
     }
@@ -2561,98 +2613,109 @@ async fn request_network_event_stream() {
     {
         let smtp_store = db.smtp_store().unwrap();
 
-        // direct smtp network event for hog (src1,src2)
+        // direct smtp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMTP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smtp_start_msg = receive_hog_stream_start_message(&mut send_smtp_stream)
+        let smtp_start_msg = receive_semi_supervised_stream_start_message(&mut send_smtp_stream)
             .await
             .unwrap();
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "smtp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_smtp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "smtp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_smtp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
-        // database smtp network event for crusher
+        // database smtp network event for the Time Series Generator
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smtp_data = insert_smtp_raw_event(&smtp_store, SENSOR_CRUSHER_THREE, send_smtp_time);
+        let smtp_data = insert_smtp_raw_event(
+            &smtp_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_smtp_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMTP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smtp_start_msg = receive_crusher_stream_start_message(&mut send_smtp_stream)
-            .await
-            .unwrap();
+        let smtp_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_smtp_stream)
+                .await
+                .unwrap();
         assert_eq!(smtp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_smtp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
 
-        // direct smtp network event for crusher
+        // direct smtp network event for the Time Series Generator
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "smtp");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smtp");
         let smtp_data = gen_smtp_raw_event();
         send_direct_stream(
             &key,
             &smtp_data,
             send_smtp_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_smtp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smtp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_smtp_time, recv_timestamp);
         assert_eq!(smtp_data, recv_data);
     }
@@ -2660,98 +2723,109 @@ async fn request_network_event_stream() {
     {
         let ntlm_store = db.ntlm_store().unwrap();
 
-        // direct ntlm network event for hog (src1,src2)
+        // direct ntlm network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NTLM,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ntlm_start_msg = receive_hog_stream_start_message(&mut send_ntlm_stream)
+        let ntlm_start_msg = receive_semi_supervised_stream_start_message(&mut send_ntlm_stream)
             .await
             .unwrap();
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "ntlm");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ntlm_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "ntlm");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ntlm_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
-        // database ntlm network event for crusher
+        // database ntlm network event for the Time Series Generator
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ntlm_data = insert_ntlm_raw_event(&ntlm_store, SENSOR_CRUSHER_THREE, send_ntlm_time);
+        let ntlm_data = insert_ntlm_raw_event(
+            &ntlm_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_ntlm_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NTLM,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ntlm_start_msg = receive_crusher_stream_start_message(&mut send_ntlm_stream)
-            .await
-            .unwrap();
+        let ntlm_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_ntlm_stream)
+                .await
+                .unwrap();
         assert_eq!(ntlm_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_ntlm_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
 
-        //direct ntlm network event for crusher
+        // direct ntlm network event for the Time Series Generator
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ntlm");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
         send_direct_stream(
             &key,
             &ntlm_data,
             send_ntlm_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_ntlm_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ntlm_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ntlm_time, recv_timestamp);
         assert_eq!(ntlm_data, recv_data);
     }
@@ -2759,100 +2833,111 @@ async fn request_network_event_stream() {
     {
         let kerberos_store = db.kerberos_store().unwrap();
 
-        // direct kerberos network event for hog (src1,src2)
+        // direct kerberos network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_KERBEROS,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
-        let kerberos_start_msg = receive_hog_stream_start_message(&mut send_kerberos_stream)
-            .await
-            .unwrap();
+        let kerberos_start_msg =
+            receive_semi_supervised_stream_start_message(&mut send_kerberos_stream)
+                .await
+                .unwrap();
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "kerberos");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_kerberos_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "kerberos");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_kerberos_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_kerberos_stream)
+            .await
+            .unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
-        // database kerberos network event for crusher
+        // database kerberos network event for the Time Series Generator
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let kerberos_data =
-            insert_kerberos_raw_event(&kerberos_store, SENSOR_CRUSHER_THREE, send_kerberos_time);
+        let kerberos_data = insert_kerberos_raw_event(
+            &kerberos_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_kerberos_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_KERBEROS,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
 
-        let kerberos_start_msg = receive_crusher_stream_start_message(&mut send_kerberos_stream)
-            .await
-            .unwrap();
+        let kerberos_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_kerberos_stream)
+                .await
+                .unwrap();
         assert_eq!(kerberos_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_kerberos_stream)
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_kerberos_stream)
+                .await
+                .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
 
-        //direct kerberos network event for crusher
+        // direct kerberos network event for the Time Series Generator
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "kerberos");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
         send_direct_stream(
             &key,
             &kerberos_data,
             send_kerberos_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_kerberos_stream)
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_kerberos_stream)
+                .await
+                .unwrap();
         assert_eq!(send_kerberos_time, recv_timestamp);
         assert_eq!(kerberos_data, recv_data);
     }
@@ -2860,96 +2945,109 @@ async fn request_network_event_stream() {
     {
         let ssh_store = db.ssh_store().unwrap();
 
-        // direct ssh network event for hog (src1,src2)
+        // direct ssh network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SSH,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ssh_start_msg = receive_hog_stream_start_message(&mut send_ssh_stream)
+        let ssh_start_msg = receive_semi_supervised_stream_start_message(&mut send_ssh_stream)
             .await
             .unwrap();
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "ssh");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ssh_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ssh_stream)
+            .await
+            .unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "ssh");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ssh_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ssh_stream)
+            .await
+            .unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
-        // database ssh network event for crusher
+        // database ssh network event for the Time Series Generator
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ssh_data = insert_ssh_raw_event(&ssh_store, SENSOR_CRUSHER_THREE, send_ssh_time);
+        let ssh_data = insert_ssh_raw_event(
+            &ssh_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_ssh_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SSH,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ssh_start_msg = receive_crusher_stream_start_message(&mut send_ssh_stream)
-            .await
-            .unwrap();
+        let ssh_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_ssh_stream)
+                .await
+                .unwrap();
         assert_eq!(ssh_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ssh_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ssh_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
 
-        //direct ssh network event for crusher
+        // direct ssh network event for the Time Series Generator
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ssh");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ssh");
         let ssh_data = gen_ssh_raw_event();
         send_direct_stream(
             &key,
             &ssh_data,
             send_ssh_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ssh_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ssh_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ssh_time, recv_timestamp);
         assert_eq!(ssh_data, recv_data);
     }
@@ -2957,101 +3055,112 @@ async fn request_network_event_stream() {
     {
         let dce_rpc_store = db.dce_rpc_store().unwrap();
 
-        // direct dce_rpc network event for hog (src1,src2)
+        // direct dce_rpc network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DCE_RPC,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dce_rpc_start_msg = receive_hog_stream_start_message(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
+        let dce_rpc_start_msg =
+            receive_semi_supervised_stream_start_message(&mut send_dce_rpc_stream)
+                .await
+                .unwrap();
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "dce rpc");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dce_rpc_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "dce rpc");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dce_rpc_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dce_rpc_stream)
+            .await
+            .unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
-        // database dce_rpc network event for crusher
+        // database dce_rpc network event for the Time Series Generator
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dce_rpc_data =
-            insert_dce_rpc_raw_event(&dce_rpc_store, SENSOR_CRUSHER_THREE, send_dce_rpc_time);
+        let dce_rpc_data = insert_dce_rpc_raw_event(
+            &dce_rpc_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_dce_rpc_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DCE_RPC,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dce_rpc_start_msg = receive_crusher_stream_start_message(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
+        let dce_rpc_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_dce_rpc_stream)
+                .await
+                .unwrap();
         assert_eq!(dce_rpc_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_dce_rpc_stream)
+                .await
+                .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
 
-        //direct dce_rpc network event for crusher
+        // direct dce_rpc network event for the Time Series Generator
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dce rpc");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
         send_direct_stream(
             &key,
             &dce_rpc_data,
             send_dce_rpc_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_dce_rpc_stream)
+                .await
+                .unwrap();
         assert_eq!(send_dce_rpc_time, recv_timestamp);
         assert_eq!(dce_rpc_data, recv_data);
     }
@@ -3059,96 +3168,109 @@ async fn request_network_event_stream() {
     {
         let ftp_store = db.ftp_store().unwrap();
 
-        // direct ftp network event for hog (src1,src2)
+        // direct ftp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_FTP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ftp_start_msg = receive_hog_stream_start_message(&mut send_ftp_stream)
+        let ftp_start_msg = receive_semi_supervised_stream_start_message(&mut send_ftp_stream)
             .await
             .unwrap();
         assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
 
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "ftp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ftp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ftp_stream)
+            .await
+            .unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "ftp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ftp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ftp_stream)
+            .await
+            .unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
-        // database ftp network event for crusher
+        // database ftp network event for the Time Series Generator
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ftp_data = insert_ftp_raw_event(&ftp_store, SENSOR_CRUSHER_THREE, send_ftp_time);
+        let ftp_data = insert_ftp_raw_event(
+            &ftp_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_ftp_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_FTP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ftp_start_msg = receive_crusher_stream_start_message(&mut send_ftp_stream)
-            .await
-            .unwrap();
+        let ftp_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_ftp_stream)
+                .await
+                .unwrap();
         assert_eq!(ftp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ftp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ftp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ftp_time, recv_timestamp);
         assert_eq!(ftp_data, recv_data);
 
-        //direct ftp network event for crusher
+        // direct ftp network event for the Time Series Generator
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ftp");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ftp");
         let ftp_data = gen_ftp_raw_event();
         send_direct_stream(
             &key,
             &ftp_data,
             send_ftp_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_ftp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ftp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ftp_time, recv_timestamp);
         assert_eq!(ftp_data, recv_data);
     }
@@ -3156,98 +3278,109 @@ async fn request_network_event_stream() {
     {
         let mqtt_store = db.mqtt_store().unwrap();
 
-        // direct mqtt network event for hog (src1,src2)
+        // direct mqtt network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_MQTT,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
 
-        let mqtt_start_msg = receive_hog_stream_start_message(&mut send_mqtt_stream)
+        let mqtt_start_msg = receive_semi_supervised_stream_start_message(&mut send_mqtt_stream)
             .await
             .unwrap();
         assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "mqtt");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_mqtt_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "mqtt");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_mqtt_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
-        // database mqtt network event for crusher
+        // database mqtt network event for the Time Series Generator
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let mqtt_data = insert_mqtt_raw_event(&mqtt_store, SENSOR_CRUSHER_THREE, send_mqtt_time);
+        let mqtt_data = insert_mqtt_raw_event(
+            &mqtt_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_mqtt_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_MQTT,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
 
-        let mqtt_start_msg = receive_crusher_stream_start_message(&mut send_mqtt_stream)
-            .await
-            .unwrap();
+        let mqtt_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_mqtt_stream)
+                .await
+                .unwrap();
         assert_eq!(mqtt_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_mqtt_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(send_mqtt_time, recv_timestamp);
         assert_eq!(mqtt_data, recv_data);
 
-        //direct mqtt network event for crusher
+        // direct mqtt network event for the Time Series Generator
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "mqtt");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
         send_direct_stream(
             &key,
             &mqtt_data,
             send_mqtt_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_mqtt_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_mqtt_stream)
+            .await
+            .unwrap();
         assert_eq!(send_mqtt_time, recv_timestamp);
         assert_eq!(mqtt_data, recv_data);
     }
@@ -3255,98 +3388,109 @@ async fn request_network_event_stream() {
     {
         let ldap_store = db.ldap_store().unwrap();
 
-        // direct ldap network event for hog (src1,src2)
+        // direct ldap network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_LDAP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ldap_start_msg = receive_hog_stream_start_message(&mut send_ldap_stream)
+        let ldap_start_msg = receive_semi_supervised_stream_start_message(&mut send_ldap_stream)
             .await
             .unwrap();
         assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "ldap");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ldap_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "ldap");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_ldap_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
-        // database ldap network event for crusher
+        // database ldap network event for the Time Series Generator
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ldap_data = insert_ldap_raw_event(&ldap_store, SENSOR_CRUSHER_THREE, send_ldap_time);
+        let ldap_data = insert_ldap_raw_event(
+            &ldap_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_ldap_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_LDAP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
 
-        let ldap_start_msg = receive_crusher_stream_start_message(&mut send_ldap_stream)
-            .await
-            .unwrap();
+        let ldap_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_ldap_stream)
+                .await
+                .unwrap();
         assert_eq!(ldap_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_ldap_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ldap_time, recv_timestamp);
         assert_eq!(ldap_data, recv_data);
 
-        //direct ldap network event for crusher
+        // direct ldap network event for the Time Series Generator
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "ldap");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ldap");
         let ldap_data = gen_ldap_raw_event();
         send_direct_stream(
             &key,
             &ldap_data,
             send_ldap_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_ldap_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ldap_stream)
+            .await
+            .unwrap();
         assert_eq!(send_ldap_time, recv_timestamp);
         assert_eq!(ldap_data, recv_data);
     }
@@ -3354,96 +3498,109 @@ async fn request_network_event_stream() {
     {
         let tls_store = db.tls_store().unwrap();
 
-        // direct tls network event for hog (src1,src2)
+        // direct tls network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_TLS,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
 
-        let tls_start_msg = receive_hog_stream_start_message(&mut send_tls_stream)
+        let tls_start_msg = receive_semi_supervised_stream_start_message(&mut send_tls_stream)
             .await
             .unwrap();
         assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
 
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "tls");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "tls");
         let tls_data = gen_tls_raw_event();
 
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_tls_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_tls_stream)
+            .await
+            .unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "tls");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "tls");
         let tls_data = gen_tls_raw_event();
 
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_tls_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_tls_stream)
+            .await
+            .unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
-        // database tls network event for crusher
+        // database tls network event for the Time Series Generator
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let tls_data = insert_tls_raw_event(&tls_store, SENSOR_CRUSHER_THREE, send_tls_time);
+        let tls_data = insert_tls_raw_event(
+            &tls_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_tls_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_TLS,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
 
-        let tls_start_msg = receive_crusher_stream_start_message(&mut send_tls_stream)
-            .await
-            .unwrap();
+        let tls_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_tls_stream)
+                .await
+                .unwrap();
         assert_eq!(tls_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_tls_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_tls_stream)
+            .await
+            .unwrap();
         assert_eq!(send_tls_time, recv_timestamp);
         assert_eq!(tls_data, recv_data);
 
-        //direct tls network event for crusher
+        // direct tls network event for the Time Series Generator
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "tls");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "tls");
         let tls_data = gen_tls_raw_event();
         send_direct_stream(
             &key,
             &tls_data,
             send_tls_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_tls_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_tls_stream)
+            .await
+            .unwrap();
         assert_eq!(send_tls_time, recv_timestamp);
         assert_eq!(tls_data, recv_data);
     }
@@ -3451,96 +3608,109 @@ async fn request_network_event_stream() {
     {
         let smb_store = db.smb_store().unwrap();
 
-        // direct smb network event for hog (src1,src2)
+        // direct smb network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMB,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smb_start_msg = receive_hog_stream_start_message(&mut send_smb_stream)
+        let smb_start_msg = receive_semi_supervised_stream_start_message(&mut send_smb_stream)
             .await
             .unwrap();
         assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
 
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "smb");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smb");
         let smb_data = gen_smb_raw_event();
 
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_smb_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_smb_stream)
+            .await
+            .unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "smb");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smb");
         let smb_data = gen_smb_raw_event();
 
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_smb_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_smb_stream)
+            .await
+            .unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
-        // database smb network event for crusher
+        // database smb network event for the Time Series Generator
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smb_data = insert_smb_raw_event(&smb_store, SENSOR_CRUSHER_THREE, send_smb_time);
+        let smb_data = insert_smb_raw_event(
+            &smb_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_smb_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_SMB,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
 
-        let smb_start_msg = receive_crusher_stream_start_message(&mut send_smb_stream)
-            .await
-            .unwrap();
+        let smb_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_smb_stream)
+                .await
+                .unwrap();
         assert_eq!(smb_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_smb_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smb_stream)
+            .await
+            .unwrap();
         assert_eq!(send_smb_time, recv_timestamp);
         assert_eq!(smb_data, recv_data);
 
-        //direct smb network event for crusher
+        // direct smb network event for the Time Series Generator
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "smb");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smb");
         let smb_data = gen_smb_raw_event();
         send_direct_stream(
             &key,
             &smb_data,
             send_smb_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_smb_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smb_stream)
+            .await
+            .unwrap();
         assert_eq!(send_smb_time, recv_timestamp);
         assert_eq!(smb_data, recv_data);
     }
@@ -3548,96 +3718,109 @@ async fn request_network_event_stream() {
     {
         let nfs_store = db.nfs_store().unwrap();
 
-        // direct nfs network event for hog (src1,src2)
+        // direct nfs network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NFS,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
 
-        let nfs_start_msg = receive_hog_stream_start_message(&mut send_nfs_stream)
+        let nfs_start_msg = receive_semi_supervised_stream_start_message(&mut send_nfs_stream)
             .await
             .unwrap();
         assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
 
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "nfs");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_nfs_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_nfs_stream)
+            .await
+            .unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "nfs");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_nfs_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_nfs_stream)
+            .await
+            .unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
-        // database nfs network event for crusher
+        // database nfs network event for the Time Series Generator
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let nfs_data = insert_nfs_raw_event(&nfs_store, SENSOR_CRUSHER_THREE, send_nfs_time);
+        let nfs_data = insert_nfs_raw_event(
+            &nfs_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_nfs_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_NFS,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
 
-        let nfs_start_msg = receive_crusher_stream_start_message(&mut send_nfs_stream)
-            .await
-            .unwrap();
+        let nfs_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_nfs_stream)
+                .await
+                .unwrap();
         assert_eq!(nfs_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_nfs_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_nfs_stream)
+            .await
+            .unwrap();
         assert_eq!(send_nfs_time, recv_timestamp);
         assert_eq!(nfs_data, recv_data);
 
-        //direct nfs network event for crusher
+        // direct nfs network event for the Time Series Generator
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "nfs");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "nfs");
         let nfs_data = gen_nfs_raw_event();
         send_direct_stream(
             &key,
             &nfs_data,
             send_nfs_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_crusher_data(&mut send_nfs_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_nfs_stream)
+            .await
+            .unwrap();
         assert_eq!(send_nfs_time, recv_timestamp);
         assert_eq!(nfs_data, recv_data);
     }
@@ -3645,99 +3828,111 @@ async fn request_network_event_stream() {
     {
         let bootp_store = db.bootp_store().unwrap();
 
-        // direct bootp network event for hog (src1,src2)
+        // direct bootp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_BOOTP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let bootp_start_msg = receive_hog_stream_start_message(&mut send_bootp_stream)
+        let bootp_start_msg = receive_semi_supervised_stream_start_message(&mut send_bootp_stream)
             .await
             .unwrap();
         assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "bootp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_bootp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_bootp_stream)
+            .await
+            .unwrap();
         assert_eq!(bootp_data, recv_data[20..]);
 
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "bootp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_bootp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_bootp_stream)
+            .await
+            .unwrap();
         assert_eq!(bootp_data, recv_data[20..]);
 
-        // database bootp network event for crusher
+        // database bootp network event for the Time Series Generator
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let bootp_data =
-            insert_bootp_raw_event(&bootp_store, SENSOR_CRUSHER_THREE, send_bootp_time);
+        let bootp_data = insert_bootp_raw_event(
+            &bootp_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_bootp_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_BOOTP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let bootp_start_msg = receive_crusher_stream_start_message(&mut send_bootp_stream)
-            .await
-            .unwrap();
+        let bootp_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_bootp_stream)
+                .await
+                .unwrap();
         assert_eq!(bootp_start_msg, POLICY_ID);
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_bootp_stream).await.unwrap();
+            receive_time_series_generator_data(&mut send_bootp_stream)
+                .await
+                .unwrap();
         assert_eq!(send_bootp_time, recv_timestamp);
         assert_eq!(bootp_data, recv_data);
 
-        //direct bootp network event for crusher
+        // direct bootp network event for the Time Series Generator
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "bootp");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "bootp");
         let bootp_data = gen_bootp_raw_event();
         send_direct_stream(
             &key,
             &bootp_data,
             send_bootp_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
         let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_bootp_stream).await.unwrap();
+            receive_time_series_generator_data(&mut send_bootp_stream)
+                .await
+                .unwrap();
         assert_eq!(send_bootp_time, recv_timestamp);
         assert_eq!(bootp_data, recv_data);
     }
@@ -3745,98 +3940,109 @@ async fn request_network_event_stream() {
     {
         let dhcp_store = db.dhcp_store().unwrap();
 
-        // direct dhcp network event for hog (src1,src2)
+        // direct dhcp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DHCP,
-            HOG_TYPE,
-            hog_msg.clone(),
+            SEMI_SUPERVISED_TYPE,
+            semi_supervised_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dhcp_start_msg = receive_hog_stream_start_message(&mut send_dhcp_stream)
+        let dhcp_start_msg = receive_semi_supervised_stream_start_message(&mut send_dhcp_stream)
             .await
             .unwrap();
         assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_ONE, "dhcp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SENSOR_HOG_ONE,
+            SENSOR_SEMI_SUPERVISED_ONE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dhcp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(dhcp_data, recv_data[20..]);
 
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_HOG_TWO, "dhcp");
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SENSOR_HOG_TWO,
+            SENSOR_SEMI_SUPERVISED_TWO,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let recv_data = receive_hog_data(&mut send_dhcp_stream).await.unwrap();
+        let recv_data = receive_semi_supervised_data(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(dhcp_data, recv_data[20..]);
 
-        // database dhcp network event for crusher
+        // database dhcp network event for the Time Series Generator
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dhcp_data = insert_dhcp_raw_event(&dhcp_store, SENSOR_CRUSHER_THREE, send_dhcp_time);
+        let dhcp_data = insert_dhcp_raw_event(
+            &dhcp_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_dhcp_time,
+        );
 
         send_stream_request(
             &mut publish.send,
             NETWORK_STREAM_DHCP,
-            CRUSHER_TYPE,
-            crusher_msg.clone(),
+            TIME_SERIES_GENERATOR_TYPE,
+            time_series_generator_msg.clone(),
         )
         .await
         .unwrap();
 
         let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
 
-        let dhcp_start_msg = receive_crusher_stream_start_message(&mut send_dhcp_stream)
-            .await
-            .unwrap();
+        let dhcp_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_dhcp_stream)
+                .await
+                .unwrap();
         assert_eq!(dhcp_start_msg, POLICY_ID);
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_dhcp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dhcp_time, recv_timestamp);
         assert_eq!(dhcp_data, recv_data);
 
-        //direct dhcp network event for crusher
+        // direct dhcp network event for the Time Series Generator
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_CRUSHER_THREE, "dhcp");
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
         send_direct_stream(
             &key,
             &dhcp_data,
             send_dhcp_time,
-            SENSOR_CRUSHER_THREE,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
             stream_direct_channels.clone(),
         )
         .await
         .unwrap();
 
-        let (recv_data, recv_timestamp) =
-            receive_crusher_data(&mut send_dhcp_stream).await.unwrap();
+        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dhcp_stream)
+            .await
+            .unwrap();
         assert_eq!(send_dhcp_time, recv_timestamp);
         assert_eq!(dhcp_data, recv_data);
     }

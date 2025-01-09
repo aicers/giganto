@@ -1,7 +1,9 @@
 use std::{net::IpAddr, vec};
 
 use anyhow::{anyhow, bail, Result};
-use giganto_client::publish::stream::{NodeType, RequestCrusherStream, RequestHogStream};
+use giganto_client::publish::stream::{
+    NodeType, RequestSemiSupervisedStream, RequestTimeSeriesGeneratorStream,
+};
 
 pub trait RequestStreamMessage {
     fn channel_key(&self, sensor: Option<String>, record_type: &str) -> Result<Vec<String>>;
@@ -11,17 +13,17 @@ pub trait RequestStreamMessage {
     fn id(&self) -> Option<String>;
 }
 
-impl RequestStreamMessage for RequestHogStream {
+impl RequestStreamMessage for RequestSemiSupervisedStream {
     fn channel_key(&self, sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
         let sensor = sensor.ok_or_else(|| {
-            anyhow!("Failed to generate semi-supervised channel key, sensor is required.")
+            anyhow!("Failed to generate the Semi-supervised channel key, sensor is required.")
         })?;
         if let Some(ref sensor_list) = self.sensor {
-            let hog_keys = sensor_list
+            let semi_supervised_keys = sensor_list
                 .iter()
                 .map(|target_sensor| {
                     let mut key = String::new();
-                    key.push_str(&NodeType::Hog.to_string());
+                    key.push_str(&NodeType::SemiSupervised.to_string());
                     key.push('\0');
                     key.push_str(&sensor);
                     key.push('\0');
@@ -31,9 +33,9 @@ impl RequestStreamMessage for RequestHogStream {
                     key
                 })
                 .collect::<Vec<String>>();
-            return Ok(hog_keys);
+            return Ok(semi_supervised_keys);
         }
-        bail!("Failed to generate hog channel key, sensor is required.");
+        bail!("Failed to generate the Semi-supervised Engine channel key, sensor is required.");
     }
 
     fn start_time(&self) -> i64 {
@@ -44,31 +46,31 @@ impl RequestStreamMessage for RequestHogStream {
         true
     }
 
-    // Hog don't use sensor function
+    // The Semi-supervised Engine does't use sensor function
     fn sensor(&self) -> Result<String> {
         unreachable!()
     }
 
-    // Hog don't use id function
+    // The Semi-supervised Engine does't use id function
     fn id(&self) -> Option<String> {
         unreachable!()
     }
 }
 
-impl RequestStreamMessage for RequestCrusherStream {
+impl RequestStreamMessage for RequestTimeSeriesGeneratorStream {
     fn channel_key(&self, _sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
         if let Some(ref target_sensor) = self.sensor {
-            let mut crusher_key = String::new();
-            crusher_key.push_str(&NodeType::Crusher.to_string());
-            crusher_key.push('\0');
-            crusher_key.push_str(&self.id);
-            crusher_key.push('\0');
-            crusher_key.push_str(target_sensor);
-            crusher_key.push('\0');
-            crusher_key.push_str(record_type);
-            return Ok(vec![crusher_key]);
+            let mut time_series_generator_key = String::new();
+            time_series_generator_key.push_str(&NodeType::TimeSeriesGenerator.to_string());
+            time_series_generator_key.push('\0');
+            time_series_generator_key.push_str(&self.id);
+            time_series_generator_key.push('\0');
+            time_series_generator_key.push_str(target_sensor);
+            time_series_generator_key.push('\0');
+            time_series_generator_key.push_str(record_type);
+            return Ok(vec![time_series_generator_key]);
         }
-        bail!("Failed to generate crusher channel key, sensor is required.");
+        bail!("Failed to generate the Time Series Generator channel key, sensor is required.");
     }
 
     fn start_time(&self) -> i64 {
@@ -103,7 +105,7 @@ impl RequestStreamMessage for RequestCrusherStream {
         if let Some(ref sensor) = self.sensor {
             return Ok(sensor.clone());
         }
-        bail!("Failed to generate crusher key, sensor is required.");
+        bail!("Failed to generate the Time Series Generator key, sensor is required.");
     }
 
     fn id(&self) -> Option<String> {
