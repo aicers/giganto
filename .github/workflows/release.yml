@@ -1,0 +1,51 @@
+name: Release with Assets Triggered by a Tag
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'tag name'
+        required: true
+        default: '0.0.0'
+
+env:
+  TITLE: Giganto
+  BINARY: giganto
+  TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
+
+jobs:
+  build-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Update to the Latest Version of Rust
+        run: rustup update
+      - name: Build Binary
+        run: |
+          cargo build --release
+      - name: Create a Release and Upload Assets
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"tag_name": "${{ env.TAG }}", "name": "${{ env.TITLE }} ${{ env.TAG }}", "draft": false, "prerelease": false}' \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -o release.json
+          if [ "$(jq -r .id release.json)" == "null" ]; then
+            echo "Failed to create release" >&2
+            exit 1
+          fi
+          RELEASE_ID=$(jq -r .id release.json)
+          FILE="target/release/${{ env.BINARY }}"
+          UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=${{ env.BINARY }}"
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"$FILE" \
+            "${UPLOAD_URL}"
