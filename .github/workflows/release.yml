@@ -1,0 +1,40 @@
+name: Release with Assets Triggered by a Tag
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'tag name'
+        required: true
+        default: '0.0.0'
+
+env:
+  TITLE: Giganto
+  BINARY: giganto
+  TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
+
+jobs:
+  build-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build Binary
+        run: |
+          cargo build --release
+      - name: Create a Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TITLE }} ${{ env.TAG }}
+          draft: false
+          prerelease: false
+          files: |
+            ./target/release/${{ env.BINARY }}
