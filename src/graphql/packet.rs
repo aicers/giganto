@@ -8,7 +8,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    collect_records, get_timestamp_from_key, handle_paged_events, write_run_tcpdump, Direction,
+    collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump, Direction,
     FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
 };
 use crate::{
@@ -97,8 +97,8 @@ impl Pcap {
 impl FromKeyValue<pk> for Packet {
     fn from_key_value(key: &[u8], pk: pk) -> Result<Self> {
         Ok(Packet {
-            request_time: get_timestamp_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
-            packet_time: get_timestamp_from_key(key)?,
+            request_time: get_time_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
+            packet_time: get_time_from_key(key)?,
             packet: BASE64.encode(&pk.packet),
         })
     }

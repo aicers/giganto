@@ -16,7 +16,7 @@ use graphql_client::GraphQLQuery;
 use super::{
     base64_engine,
     client::derives::{log_raw_events, LogRawEvents},
-    get_timestamp_from_key, get_timestamp_from_key_prefix, handle_paged_events,
+    get_time_from_key, get_time_from_key_prefix, handle_paged_events,
     impl_from_giganto_time_range_struct_for_graphql_client,
     load_connection_by_prefix_timestamp_key, paged_events_in_cluster, Engine, FromKeyValue,
 };
@@ -150,14 +150,14 @@ impl RawEventFilter for OpLogFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [log_raw_events::LogRawEventsLogRawEventsEdgesNode, ])]
 struct LogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     log: String,
 }
 
 impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
-            timestamp: get_timestamp_from_key(key)?,
+            time: get_time_from_key(key)?,
             log: base64_engine.encode(l.log),
         })
     }
@@ -165,7 +165,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    timestamp: DateTime<Utc>,
+    time: DateTime<Utc>,
     level: String,
     contents: String,
     agent_name: String,
@@ -175,7 +175,7 @@ struct OpLogRawEvent {
 impl FromKeyValue<OpLog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            timestamp: get_timestamp_from_key_prefix(key)?,
+            time: get_time_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
             agent_name: l.agent_name,
