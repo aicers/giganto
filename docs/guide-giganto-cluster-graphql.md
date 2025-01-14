@@ -59,9 +59,9 @@ GraqhQl API가 `Connection`으로 paging을 지원하는 경우,
 // BEFORE : 변경 전에는 API endpoint 에 비지니스 코드를 작성하였습니다.
 #[Object]
 impl NetworkQuery {
-    async fn conn_raw_events<'ctx>(
+    async fn conn_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -88,8 +88,8 @@ impl NetworkQuery {
 // `handle_paged_conn_raw_events` 이 함수는 과거의 로직을 그대로 들고 있는 함수입니다.
 // 함수 body에서 호출되고 있는 `handle_result_of_connection_type` 는
 // `async_graphql::connection::query` 함수에 대한 단순 wrapper 입니다.
-async fn handle_paged_conn_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_conn_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -104,9 +104,9 @@ async fn handle_paged_conn_raw_events<'ctx>(
 
 #[Object]
 impl NetworkQuery {
-    async fn conn_raw_events<'ctx>(
+    async fn conn_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -235,9 +235,9 @@ TestSchema::new_with_graphql_peer(port)
 #[Object]
 impl StatisticsQuery {
     #[allow(clippy::unused_async)]
-    async fn statistics<'ctx>(
+    async fn statistics(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         sensors: Vec<String>,
         time: Option<TimeRange>,
         protocols: Option<Vec<String>>,
@@ -293,9 +293,9 @@ pub struct NetflowFilter {
 
 impl NetflowQuery {
     #[allow(clippy::too_many_arguments)]
-    async fn netflow5_raw_events<'ctx>(
+    async fn netflow5_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetflowFilter,
         after: Option<String>,
         before: Option<String>,

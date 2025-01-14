@@ -9,7 +9,7 @@ pub(super) struct SensorQuery;
 
 #[Object]
 impl SensorQuery {
-    async fn sensors<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Vec<String>> {
+    async fn sensors(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         let mut total_sensor_list = HashSet::new();
         // Add current giganto's sensors
         let ingest_sensors = ctx.data_opt::<IngestSensors>();

@@ -526,8 +526,8 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     }
 }
 
-async fn handle_process_create_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_process_create_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -540,8 +540,8 @@ async fn handle_process_create_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_file_create_time_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_file_create_time_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -554,8 +554,8 @@ async fn handle_file_create_time_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_network_connect_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_network_connect_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -568,8 +568,8 @@ async fn handle_network_connect_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_process_terminate_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_process_terminate_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -582,8 +582,8 @@ async fn handle_process_terminate_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_image_load_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_image_load_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -596,8 +596,8 @@ async fn handle_image_load_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_file_create_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_file_create_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -610,8 +610,8 @@ async fn handle_file_create_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_registry_value_set_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_registry_value_set_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -624,8 +624,8 @@ async fn handle_registry_value_set_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_registry_key_rename_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_registry_key_rename_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -638,8 +638,8 @@ async fn handle_registry_key_rename_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_file_create_stream_hash_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_file_create_stream_hash_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -652,8 +652,8 @@ async fn handle_file_create_stream_hash_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_pipe_event_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_pipe_event_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -666,8 +666,8 @@ async fn handle_pipe_event_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_dns_query_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_dns_query_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -680,8 +680,8 @@ async fn handle_dns_query_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_file_delete_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_file_delete_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -694,8 +694,8 @@ async fn handle_file_delete_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_process_tamper_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_process_tamper_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -708,8 +708,8 @@ async fn handle_process_tamper_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_file_delete_detected_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_file_delete_detected_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -724,9 +724,9 @@ async fn handle_file_delete_detected_events<'ctx>(
 
 #[Object]
 impl SysmonQuery {
-    async fn process_create_events<'ctx>(
+    async fn process_create_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -751,9 +751,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn file_create_time_events<'ctx>(
+    async fn file_create_time_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -778,9 +778,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn network_connect_events<'ctx>(
+    async fn network_connect_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -805,9 +805,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn process_terminate_events<'ctx>(
+    async fn process_terminate_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -832,9 +832,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn image_load_events<'ctx>(
+    async fn image_load_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -859,9 +859,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn file_create_events<'ctx>(
+    async fn file_create_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -886,9 +886,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn registry_value_set_events<'ctx>(
+    async fn registry_value_set_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -913,9 +913,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn registry_key_rename_events<'ctx>(
+    async fn registry_key_rename_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -940,9 +940,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn file_create_stream_hash_events<'ctx>(
+    async fn file_create_stream_hash_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -967,9 +967,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn pipe_event_events<'ctx>(
+    async fn pipe_event_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -994,9 +994,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn dns_query_events<'ctx>(
+    async fn dns_query_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1020,9 +1020,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn file_delete_events<'ctx>(
+    async fn file_delete_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1046,9 +1046,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn process_tamper_events<'ctx>(
+    async fn process_tamper_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1072,9 +1072,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn file_delete_detected_events<'ctx>(
+    async fn file_delete_detected_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1098,12 +1098,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_process_create_events<'ctx>(
+    async fn search_process_create_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_create_store()?;
             let exist_data = store
@@ -1127,12 +1127,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_file_create_time_events<'ctx>(
+    async fn search_file_create_time_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_time_store()?;
             let exist_data = store
@@ -1157,12 +1157,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_network_connect_events<'ctx>(
+    async fn search_network_connect_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.network_connect_store()?;
             let exist_data = store
@@ -1186,12 +1186,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_process_terminate_events<'ctx>(
+    async fn search_process_terminate_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_terminate_store()?;
             let exist_data = store
@@ -1215,12 +1215,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_image_load_events<'ctx>(
+    async fn search_image_load_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.image_load_store()?;
             let exist_data = store
@@ -1241,12 +1241,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_file_create_events<'ctx>(
+    async fn search_file_create_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_store()?;
             let exist_data = store
@@ -1268,12 +1268,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_registry_value_set_events<'ctx>(
+    async fn search_registry_value_set_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_value_set_store()?;
             let exist_data = store
@@ -1297,12 +1297,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_registry_key_rename_events<'ctx>(
+    async fn search_registry_key_rename_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_key_rename_store()?;
             let exist_data = store
@@ -1326,12 +1326,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_file_create_stream_hash_events<'ctx>(
+    async fn search_file_create_stream_hash_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_stream_hash_store()?;
             let exist_data = store
@@ -1356,12 +1356,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_pipe_event_events<'ctx>(
+    async fn search_pipe_event_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.pipe_event_store()?;
             let exist_data = store
@@ -1382,12 +1382,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_dns_query_events<'ctx>(
+    async fn search_dns_query_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dns_query_store()?;
             let exist_data = store
@@ -1408,12 +1408,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_file_delete_events<'ctx>(
+    async fn search_file_delete_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_store()?;
             let exist_data = store
@@ -1435,12 +1435,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_process_tamper_events<'ctx>(
+    async fn search_process_tamper_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_tamper_store()?;
             let exist_data = store
@@ -1464,12 +1464,12 @@ impl SysmonQuery {
         )
     }
 
-    async fn search_file_delete_detected_events<'ctx>(
+    async fn search_file_delete_detected_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_detected_store()?;
             let exist_data = store
@@ -1493,9 +1493,9 @@ impl SysmonQuery {
         )
     }
 
-    async fn sysmon_events<'ctx>(
+    async fn sysmon_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1522,8 +1522,8 @@ impl SysmonQuery {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn handle_sysmon_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_sysmon_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,

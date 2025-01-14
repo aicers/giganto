@@ -124,7 +124,7 @@ fn init_client() -> Endpoint {
 
     let pv_key = if Path::new(NODE1_KEY_PATH)
         .extension()
-        .map_or(false, |x| x == "der")
+        .is_some_and(|x| x == "der")
     {
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
     } else {
@@ -135,7 +135,7 @@ fn init_client() -> Endpoint {
 
     let cert_chain = if Path::new(NODE1_CERT_PATH)
         .extension()
-        .map_or(false, |x| x == "der")
+        .is_some_and(|x| x == "der")
     {
         vec![CertificateDer::from(cert)]
     } else {

@@ -207,8 +207,8 @@ pub(crate) fn tcp_flags(b: u8) -> String {
     res
 }
 
-async fn handle_netflow5_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_netflow5_raw_events(
+    ctx: &Context<'_>,
     filter: NetflowFilter,
     after: Option<String>,
     before: Option<String>,
@@ -221,8 +221,8 @@ async fn handle_netflow5_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_netflow9_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_netflow9_raw_events(
+    ctx: &Context<'_>,
     filter: NetflowFilter,
     after: Option<String>,
     before: Option<String>,
@@ -238,9 +238,9 @@ async fn handle_netflow9_raw_events<'ctx>(
 #[Object]
 impl NetflowQuery {
     #[allow(clippy::too_many_arguments)]
-    async fn netflow5_raw_events<'ctx>(
+    async fn netflow5_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetflowFilter,
         after: Option<String>,
         before: Option<String>,
@@ -266,9 +266,9 @@ impl NetflowQuery {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn netflow9_raw_events<'ctx>(
+    async fn netflow9_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetflowFilter,
         after: Option<String>,
         before: Option<String>,

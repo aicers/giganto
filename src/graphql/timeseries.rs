@@ -78,9 +78,9 @@ impl FromKeyValue<PeriodicTimeSeries> for TimeSeries {
 
 #[Object]
 impl TimeSeriesQuery {
-    async fn periodic_time_series<'ctx>(
+    async fn periodic_time_series(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: TimeSeriesFilter,
         after: Option<String>,
         before: Option<String>,

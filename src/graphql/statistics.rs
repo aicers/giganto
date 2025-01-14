@@ -114,9 +114,9 @@ async fn handle_statistics(
 
 #[Object]
 impl StatisticsQuery {
-    async fn statistics<'ctx>(
+    async fn statistics(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         sensors: Vec<String>,
         time: Option<TimeRange>,
         protocols: Option<Vec<String>>,

@@ -184,7 +184,7 @@ impl FromKeyValue<OpLog> for OpLogRawEvent {
     }
 }
 
-async fn handle_log_raw_events<'ctx>(
+async fn handle_log_raw_events(
     ctx: &Context<'_>,
     filter: LogFilter,
     after: Option<String>,
@@ -200,9 +200,9 @@ async fn handle_log_raw_events<'ctx>(
 
 #[Object]
 impl LogQuery {
-    async fn log_raw_events<'ctx>(
+    async fn log_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: LogFilter,
         after: Option<String>,
         before: Option<String>,
@@ -231,9 +231,9 @@ impl LogQuery {
         )
     }
 
-    async fn op_log_raw_events<'ctx>(
+    async fn op_log_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: OpLogFilter,
         after: Option<String>,
         before: Option<String>,

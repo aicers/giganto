@@ -935,8 +935,8 @@ from_key_value!(
 
 from_key_value!(NfsRawEvent, Nfs, read_files, write_files; last_time);
 
-async fn handle_paged_conn_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_conn_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -949,8 +949,8 @@ async fn handle_paged_conn_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_dns_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_dns_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -963,8 +963,8 @@ async fn handle_paged_dns_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_http_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_http_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -977,8 +977,8 @@ async fn handle_paged_http_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_rdp_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_rdp_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -991,8 +991,8 @@ async fn handle_paged_rdp_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_smtp_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_smtp_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1005,8 +1005,8 @@ async fn handle_paged_smtp_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_ntlm_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_ntlm_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1019,8 +1019,8 @@ async fn handle_paged_ntlm_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_kerberos_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_kerberos_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1033,8 +1033,8 @@ async fn handle_paged_kerberos_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_ssh_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_ssh_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1047,8 +1047,8 @@ async fn handle_paged_ssh_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_dce_rpc_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_dce_rpc_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1060,8 +1060,8 @@ async fn handle_paged_dce_rpc_raw_events<'ctx>(
 
     handle_paged_events(store, filter, after, before, first, last).await
 }
-async fn handle_paged_ftp_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_ftp_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1074,8 +1074,8 @@ async fn handle_paged_ftp_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_mqtt_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_mqtt_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1088,8 +1088,8 @@ async fn handle_paged_mqtt_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_ldap_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_ldap_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>, // TODO: fix this
@@ -1102,8 +1102,8 @@ async fn handle_paged_ldap_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_tls_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_tls_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1115,8 +1115,8 @@ async fn handle_paged_tls_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_smb_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_smb_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1129,8 +1129,8 @@ async fn handle_paged_smb_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_nfs_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_nfs_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1143,8 +1143,8 @@ async fn handle_paged_nfs_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_bootp_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_bootp_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1157,8 +1157,8 @@ async fn handle_paged_bootp_raw_events<'ctx>(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-async fn handle_paged_dhcp_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_paged_dhcp_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1172,8 +1172,8 @@ async fn handle_paged_dhcp_raw_events<'ctx>(
 }
 
 #[allow(clippy::too_many_lines)]
-async fn handle_network_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_network_raw_events(
+    ctx: &Context<'_>,
     filter: NetworkFilter,
     after: Option<String>,
     before: Option<String>,
@@ -1373,9 +1373,9 @@ async fn handle_network_raw_events<'ctx>(
 
 #[Object]
 impl NetworkQuery {
-    async fn conn_raw_events<'ctx>(
+    async fn conn_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1400,9 +1400,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn dns_raw_events<'ctx>(
+    async fn dns_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1427,9 +1427,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn http_raw_events<'ctx>(
+    async fn http_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1454,9 +1454,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn rdp_raw_events<'ctx>(
+    async fn rdp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1481,9 +1481,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn smtp_raw_events<'ctx>(
+    async fn smtp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1508,9 +1508,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn ntlm_raw_events<'ctx>(
+    async fn ntlm_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1535,9 +1535,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn kerberos_raw_events<'ctx>(
+    async fn kerberos_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1562,9 +1562,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn ssh_raw_events<'ctx>(
+    async fn ssh_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1589,9 +1589,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn dce_rpc_raw_events<'ctx>(
+    async fn dce_rpc_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1616,9 +1616,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn ftp_raw_events<'ctx>(
+    async fn ftp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1643,9 +1643,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn mqtt_raw_events<'ctx>(
+    async fn mqtt_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1670,9 +1670,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn ldap_raw_events<'ctx>(
+    async fn ldap_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1697,9 +1697,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn tls_raw_events<'ctx>(
+    async fn tls_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1724,9 +1724,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn smb_raw_events<'ctx>(
+    async fn smb_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1751,9 +1751,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn nfs_raw_events<'ctx>(
+    async fn nfs_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1777,9 +1777,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn bootp_raw_events<'ctx>(
+    async fn bootp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1803,9 +1803,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn dhcp_raw_events<'ctx>(
+    async fn dhcp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1829,9 +1829,9 @@ impl NetworkQuery {
         )
     }
 
-    async fn network_raw_events<'ctx>(
+    async fn network_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: NetworkFilter,
         after: Option<String>,
         before: Option<String>,
@@ -1856,12 +1856,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_conn_raw_events<'ctx>(
+    async fn search_conn_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.conn_store()?;
             let exist_data = store
@@ -1883,12 +1883,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_dns_raw_events<'ctx>(
+    async fn search_dns_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dns_store()?;
             let exist_data = store
@@ -1910,12 +1910,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_http_raw_events<'ctx>(
+    async fn search_http_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.http_store()?;
             let exist_data = store
@@ -1936,12 +1936,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_rdp_raw_events<'ctx>(
+    async fn search_rdp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.rdp_store()?;
             let exist_data = store
@@ -1963,12 +1963,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_smtp_raw_events<'ctx>(
+    async fn search_smtp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.smtp_store()?;
             let exist_data = store
@@ -1990,12 +1990,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_ntlm_raw_events<'ctx>(
+    async fn search_ntlm_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ntlm_store()?;
             let exist_data = store
@@ -2017,12 +2017,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_kerberos_raw_events<'ctx>(
+    async fn search_kerberos_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.kerberos_store()?;
             let exist_data = store
@@ -2044,12 +2044,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_ssh_raw_events<'ctx>(
+    async fn search_ssh_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ssh_store()?;
             let exist_data = store
@@ -2072,12 +2072,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_dce_rpc_raw_events<'ctx>(
+    async fn search_dce_rpc_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dce_rpc_store()?;
             let exist_data = store
@@ -2100,12 +2100,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_ftp_raw_events<'ctx>(
+    async fn search_ftp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ftp_store()?;
             let exist_data = store
@@ -2128,12 +2128,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_mqtt_raw_events<'ctx>(
+    async fn search_mqtt_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.mqtt_store()?;
             let exist_data = store
@@ -2156,12 +2156,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_ldap_raw_events<'ctx>(
+    async fn search_ldap_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ldap_store()?;
             let exist_data = store
@@ -2184,12 +2184,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_tls_raw_events<'ctx>(
+    async fn search_tls_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.tls_store()?;
             let exist_data = store
@@ -2212,12 +2212,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_smb_raw_events<'ctx>(
+    async fn search_smb_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
 
             let store = db.smb_store()?;
@@ -2241,12 +2241,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_nfs_raw_events<'ctx>(
+    async fn search_nfs_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.nfs_store()?;
             let exist_data = store
@@ -2269,12 +2269,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_bootp_raw_events<'ctx>(
+    async fn search_bootp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.bootp_store()?;
             let exist_data = store
@@ -2297,12 +2297,12 @@ impl NetworkQuery {
         )
     }
 
-    async fn search_dhcp_raw_events<'ctx>(
+    async fn search_dhcp_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let handler = |ctx: &Context<'ctx>, filter: &SearchFilter| {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dhcp_store()?;
             let exist_data = store

@@ -104,8 +104,8 @@ impl FromKeyValue<pk> for Packet {
     }
 }
 
-async fn handle_packets<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_packets(
+    ctx: &Context<'_>,
     filter: PacketFilter,
     after: Option<String>,
     before: Option<String>,
@@ -149,9 +149,9 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
 
 #[Object]
 impl PacketQuery {
-    async fn packets<'ctx>(
+    async fn packets(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: PacketFilter,
         after: Option<String>,
         before: Option<String>,
@@ -176,7 +176,7 @@ impl PacketQuery {
         )
     }
 
-    async fn pcap<'ctx>(&self, ctx: &Context<'ctx>, filter: PacketFilter) -> Result<Pcap> {
+    async fn pcap(&self, ctx: &Context<'_>, filter: PacketFilter) -> Result<Pcap> {
         let handler = handle_pcap;
 
         events_in_cluster!(
