@@ -1552,9 +1552,9 @@ async fn handle_request(
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
-async fn process_range_data<'c, T, I>(
+async fn process_range_data<T, I>(
     send: &mut SendStream,
-    store: RawEventStore<'c, T>,
+    store: RawEventStore<'_, T>,
     request_range: RequestRange,
     ingest_sensors: IngestSensors,
     peers: Peers,
@@ -1607,9 +1607,9 @@ async fn peer_in_charge_publish_addr(peers: Peers, sensor: &str) -> Option<Socke
     })
 }
 
-async fn process_range_data_in_current_giganto<'c, T>(
+async fn process_range_data_in_current_giganto<T>(
     send: &mut SendStream,
-    store: RawEventStore<'c, T>,
+    store: RawEventStore<'_, T>,
     request_range: RequestRange,
     availed_kind: bool,
 ) -> Result<()>
@@ -1693,9 +1693,9 @@ where
     Ok((send, recv))
 }
 
-async fn process_raw_events<'c, T, I>(
+async fn process_raw_events<T, I>(
     send: &mut SendStream,
-    store: RawEventStore<'c, T>,
+    store: RawEventStore<'_, T>,
     req: RequestRawData,
     ingest_sensors: IngestSensors,
     peers: Peers,
@@ -1747,9 +1747,9 @@ async fn req_inputs_by_gigantos_in_charge(
     (handle_by_current_giganto, handle_by_peer_gigantos)
 }
 
-async fn process_raw_event_in_current_giganto<'c, T>(
+async fn process_raw_event_in_current_giganto<T>(
     send: &mut SendStream,
-    store: RawEventStore<'c, T>,
+    store: RawEventStore<'_, T>,
     handle_by_current_giganto: Vec<(String, Vec<i64>)>,
 ) -> Result<()>
 where

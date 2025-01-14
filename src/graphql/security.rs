@@ -107,8 +107,8 @@ impl FromKeyValue<SecuLog> for SecuLogRawEvent {
     }
 }
 
-async fn handle_secu_log_raw_events<'ctx>(
-    ctx: &Context<'ctx>,
+async fn handle_secu_log_raw_events(
+    ctx: &Context<'_>,
     filter: SecuLogFilter,
     after: Option<String>,
     before: Option<String>,
@@ -124,9 +124,9 @@ async fn handle_secu_log_raw_events<'ctx>(
 #[Object]
 impl SecurityLogQuery {
     #[allow(clippy::too_many_arguments)]
-    async fn secu_log_raw_events<'ctx>(
+    async fn secu_log_raw_events(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         filter: SecuLogFilter,
         after: Option<String>,
         before: Option<String>,

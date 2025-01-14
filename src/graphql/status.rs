@@ -142,11 +142,7 @@ impl StatusQuery {
 
     #[allow(clippy::unused_async)]
     #[cfg(debug_assertions)]
-    async fn properties_cf<'ctx>(
-        &self,
-        ctx: &Context<'ctx>,
-        filter: PropertyFilter,
-    ) -> Result<Properties> {
+    async fn properties_cf(&self, ctx: &Context<'_>, filter: PropertyFilter) -> Result<Properties> {
         let cfname = filter.record_type;
         let db = ctx.data::<Database>()?;
 
@@ -160,7 +156,7 @@ impl StatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn config<'ctx>(&self, ctx: &Context<'ctx>) -> Result<Config> {
+    async fn config(&self, ctx: &Context<'_>) -> Result<Config> {
         let is_local = ctx.data::<bool>()?;
 
         if *is_local {
@@ -183,7 +179,7 @@ impl StatusQuery {
 #[Object]
 impl ConfigMutation {
     #[allow(clippy::unused_async)]
-    async fn set_config<'ctx>(&self, ctx: &Context<'ctx>, draft: String) -> Result<bool> {
+    async fn set_config(&self, ctx: &Context<'_>, draft: String) -> Result<bool> {
         let is_local = ctx.data::<bool>()?;
 
         if *is_local {
@@ -219,7 +215,7 @@ impl ConfigMutation {
     }
 
     #[allow(clippy::unused_async)]
-    async fn stop<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+    async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
         let terminate_notify = ctx.data::<TerminateNotify>()?;
         terminate_notify.0.notify_one();
 
@@ -227,7 +223,7 @@ impl ConfigMutation {
     }
 
     #[allow(clippy::unused_async)]
-    async fn reboot<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+    async fn reboot(&self, ctx: &Context<'_>) -> Result<bool> {
         let reboot_notify = ctx.data::<RebootNotify>()?;
         reboot_notify.0.notify_one();
 
@@ -235,7 +231,7 @@ impl ConfigMutation {
     }
 
     #[allow(clippy::unused_async)]
-    async fn shutdown<'ctx>(&self, ctx: &Context<'ctx>) -> Result<bool> {
+    async fn shutdown(&self, ctx: &Context<'_>) -> Result<bool> {
         let power_off_notify = ctx.data::<PowerOffNotify>()?;
         power_off_notify.0.notify_one();
 
@@ -365,11 +361,11 @@ mod tests {
 
         // set_config
         let query = format!(
-            r#"
-                mutation {{
-                    setConfig(draft: {toml_content:?})
-                }}
-                "#
+            r"
+            mutation {{
+                setConfig(draft: {toml_content:?})
+            }}
+            "
         );
 
         let res = schema.execute(&query).await;
@@ -420,11 +416,11 @@ mod tests {
 
         // set_config
         let query = format!(
-            r#"
+            r"
             mutation {{
                 setConfig(draft: {toml_content:?})
             }}
-            "#
+            "
         );
 
         let res = schema.execute(&query).await;

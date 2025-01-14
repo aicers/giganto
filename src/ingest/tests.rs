@@ -104,10 +104,7 @@ fn init_client() -> Endpoint {
         panic!("failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
     };
 
-    let pv_key = if Path::new(KEY_PATH)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
+    let pv_key = if Path::new(KEY_PATH).extension().is_some_and(|x| x == "der") {
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
     } else {
         rustls_pemfile::private_key(&mut &*key)
@@ -115,10 +112,7 @@ fn init_client() -> Endpoint {
             .expect("no private keys found")
     };
 
-    let cert_chain = if Path::new(CERT_PATH)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
+    let cert_chain = if Path::new(CERT_PATH).extension().is_some_and(|x| x == "der") {
         vec![CertificateDer::from(cert)]
     } else {
         rustls_pemfile::certs(&mut &*cert)

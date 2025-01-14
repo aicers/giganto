@@ -846,7 +846,7 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
 
 fn check_contents(filter_str: Option<&str>, target_str: Option<String>) -> bool {
     filter_str.as_ref().map_or(true, |filter_str| {
-        target_str.map_or(false, |contents| contents.contains(*filter_str))
+        target_str.is_some_and(|contents| contents.contains(*filter_str))
     })
 }
 
@@ -858,7 +858,7 @@ fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     filter_str.as_ref().map_or(true, |filter_id| {
         target_str
             .as_ref()
-            .map_or(false, |agent_id| agent_id == filter_id)
+            .is_some_and(|agent_id| agent_id == filter_id)
     })
 }
 
@@ -1432,7 +1432,7 @@ where
     edges
 }
 
-async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, sensor_filter: &str) -> bool {
+async fn is_current_giganto_in_charge(ctx: &Context<'_>, sensor_filter: &str) -> bool {
     let ingest_sensors = ctx.data_opt::<IngestSensors>();
     match ingest_sensors {
         Some(ingest_sensors) => ingest_sensors.read().await.contains(sensor_filter),
@@ -1440,10 +1440,7 @@ async fn is_current_giganto_in_charge<'ctx>(ctx: &Context<'ctx>, sensor_filter: 
     }
 }
 
-async fn peer_in_charge_graphql_addr<'ctx>(
-    ctx: &Context<'ctx>,
-    sensor_filter: &str,
-) -> Option<SocketAddr> {
+async fn peer_in_charge_graphql_addr(ctx: &Context<'_>, sensor_filter: &str) -> Option<SocketAddr> {
     let peers = ctx.data_opt::<Peers>();
     match peers {
         Some(peers) => {
@@ -1521,8 +1518,8 @@ async fn find_who_are_in_charge(
     )
 }
 
-pub async fn request_peer<'ctx, QueryBodyType, ResponseDataType, ResultDataType, F>(
-    ctx: &Context<'ctx>,
+pub async fn request_peer<QueryBodyType, ResponseDataType, ResultDataType, F>(
+    ctx: &Context<'_>,
     peer_graphql_addr: SocketAddr,
     req_body: graphql_client::QueryBody<QueryBodyType>,
     response_to_result_converter: F,
