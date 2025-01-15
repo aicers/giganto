@@ -1652,6 +1652,10 @@ type Query {
   propertiesCf(filter: PropertyFilter!): Properties!
   config: Config!
   ping: Boolean!
+
+  # Checks if the server is in idle mode. In this mode, Giganto is not fully operational and
+  # serves only a limited subset of GraphQL APIs.
+  idleMode: Boolean!
   sensors: [String!]!
   statistics(
     sensors: [String!]!

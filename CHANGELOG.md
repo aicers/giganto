@@ -16,6 +16,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   it as an optional parameter. Additionally, the API response now includes logs
   from all agents displayed in chronological order, rather than being limited to
   the logs of a single agent.
+- Added the `idleMode` GraphQL API to check if Giganto is in idle mode.
 
 ### Changed
 
@@ -26,15 +27,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
   - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
     performs a migration to change the key and value of `Oplog`.
-- Added minimal mode to improve behavior in remote configuration mode.
-  - If local configuration is not used when running Giganto, it will run in
-    minimal mode, with only the GraphQL server running. Retain task, peer server
-    task, ingest task, publish task, and DB migration are not executed.
-  - In minimal mode, the APIs provided by the GraphQL server are limited. In
-    this mode, only the APIs provided by `graphql::status` are available.
-  - If the configuration is received successfully via the `setConfig` GraphQL
-    API, it will switch to normal mode, where all task and DB migrations run
-    as normal, just like when running Giganto with local settings.
+- Added idle mode to improve the process of setting configuration via the
+  GraphQL API `setConfig`.
+  - If Giganto starts without a local configuration, it enters idle mode, where
+    it only responds to the GraphQL APIs provided by `graphql::status`,
+    including `setConfig`, while excluding all other operations such as
+    retaining, peer server communication, and DB migration.
+  - If Giganto in idle mode successfully receives a configuration via
+    `setConfig`, it exits idle mode and functions normally as if it had started
+    with a local configuration.
 - The term `timestamp` and `timestamps` are replaced with `time` and `times` in
   event structs where the type is `DateTime<Utc>`. This change impacts GraphQL
   APIs that return event data or accept filter parameters that used timestamp.
