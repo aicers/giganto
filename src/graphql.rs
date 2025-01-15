@@ -152,6 +152,7 @@ pub struct NodeName(pub String);
 pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
+pub(crate) struct MinimalMode(bool);
 
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
@@ -184,6 +185,7 @@ pub fn schema(
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
         .data(is_local_config)
+        .data(MinimalMode(false))
         .data(settings)
         .finish()
 }
@@ -193,7 +195,6 @@ pub fn minimal_schema(
     notify_reboot: Arc<Notify>,
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
-    is_local_config: bool,
     settings: Option<Settings>,
 ) -> MinimalSchema {
     MinimalSchema::build(
@@ -205,13 +206,16 @@ pub fn minimal_schema(
     .data(TerminateNotify(notify_terminate))
     .data(RebootNotify(notify_reboot))
     .data(PowerOffNotify(notify_power_off))
-    .data(is_local_config)
+    // This bool value represents if Giganto is using local config. Since this `minimal_schema`
+    // function is never used when local config is used, this is always false.
+    .data(false)
+    .data(MinimalMode(true))
     .data(settings)
     .finish()
 }
 
-/// The default page size for connections when neither `first` nor `last` is
-/// provided. Maximum size: 100.
+/// The default page size for connections when neither `first` nor `last` is provided. Maximum size:
+/// 100.
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
@@ -1773,7 +1777,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use tokio::sync::{Notify, RwLock};
 
-    use super::{schema, sort_and_trunk_edges, NodeName};
+    use super::{minimal_schema, schema, sort_and_trunk_edges, MinimalQuery, NodeName};
     use crate::graphql::{ClusterSortKey, Mutation, Query};
     use crate::peer::{PeerInfo, Peers};
     use crate::settings::Settings;
@@ -1877,6 +1881,28 @@ mod tests {
         pub async fn execute(&self, query: &str) -> async_graphql::Response {
             let request: async_graphql::Request = query.into();
             self.schema.execute(request).await
+        }
+    }
+
+    type MinimalSchema = async_graphql::Schema<MinimalQuery, Mutation, EmptySubscription>;
+    pub struct TestMinimalSchema(pub MinimalSchema);
+
+    impl TestMinimalSchema {
+        pub fn new() -> Self {
+            let (reload_tx, _) = tokio::sync::mpsc::channel::<String>(1);
+            let notify_reboot = Arc::new(Notify::new());
+            let notify_power_off = Arc::new(Notify::new());
+            let notify_terminate = Arc::new(Notify::new());
+
+            let schema = minimal_schema(
+                reload_tx,
+                notify_reboot,
+                notify_power_off,
+                notify_terminate,
+                None,
+            );
+
+            Self(schema)
         }
     }
 
