@@ -16,6 +16,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   it as an optional parameter. Additionally, the API response now includes logs
   from all agents displayed in chronological order, rather than being limited to
   the logs of a single agent.
+- Added the `minimalMode` GraphQL API to check if Giganto is running in minimal
+  mode.
 
 ### Changed
 

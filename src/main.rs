@@ -250,7 +250,6 @@ async fn main() -> Result<()> {
                 notify_reboot.clone(),
                 notify_power_off.clone(),
                 notify_terminate.clone(),
-                is_local_config,
                 settings.clone(),
             );
 
