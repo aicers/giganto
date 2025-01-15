@@ -165,11 +165,10 @@ extern crate proc_macro;
 /// ```
 #[proc_macro_derive(ConvertGraphQLEdgesNode, attributes(graphql_client_type))]
 pub fn derive_from_graphql_client_autogen(input: TokenStream) -> TokenStream {
-    derive_from_graphql_client_autogen_2(input.clone().into())
-        .unwrap_or_else(|e| {
-            panic!("ConvertGraphQLEdgesNode macro is not correctly used for {input:?}: {e}")
-        })
-        .into()
+    match derive_from_graphql_client_autogen_2(input.clone().into()) {
+        Ok(result) => result.into(),
+        Err(e) => panic!("ConvertGraphQLEdgesNode macro is not correctly used for {input:?}: {e}"),
+    }
 }
 
 #[derive(deluxe::ExtractAttributes)]
@@ -202,13 +201,21 @@ fn derive_from_graphql_client_autogen_2(
         let implementations = names.into_iter().map(|name| {
             let field_conversions = match fields {
                 Fields::Named(named_fields) => named_fields.named.iter().map(|field| {
-                    let GraphQlAutogenFieldAttrs { from_name, recursive_into, skip } = deluxe::parse_attributes(field).unwrap_or_else(|_| panic!("inappropriate use of field attributes on {}. Allowed field attributes are `from_name: String`, `recursive_into: bool`, `skip: bool`. Found {:?}", field.to_token_stream().to_string(), field.attrs.iter().map(|attr| attr.into_token_stream().to_string()).collect::<Vec<_>>()));
+                    let Ok(GraphQlAutogenFieldAttrs { from_name, recursive_into, skip }) = deluxe::parse_attributes(field) else {
+                        panic!(
+                            "inappropriate use of field attributes on {}. Allowed field attributes are `from_name: String`, `recursive_into: bool`, `skip: bool`. Found {:?}",
+                            field.to_token_stream().to_string(),
+                            field.attrs.iter().map(|attr| attr.into_token_stream().to_string()).collect::<Vec<_>>()
+                        );
+                    };
 
                     if skip {
                         return quote! {};
                     }
 
-                    let to_field_name = &field.ident.clone().unwrap_or_else(|| panic!("inappropriate field {}. Please make sure the field is named", field.to_token_stream().to_string()));
+                    let Some(to_field_name) = &field.ident.clone() else {
+                        panic!("inappropriate field {}. Please make sure the field is named", field.to_token_stream().to_string());
+                    };
                     let from_field_name = resolve_from_field_name(&from_name, to_field_name);
                     let field_type = &field.ty;
 
@@ -295,7 +302,12 @@ fn resolve_from_field_name(from_name: &str, field_name: &Ident) -> Ident {
     if from_name.is_empty() {
         field_name.clone()
     } else {
-        parse_str::<Ident>(from_name).unwrap_or_else(|_| panic!(r#"inappropriate use of `from_name`. Please check if the value of `from_name = "{from_name}"` exists in the specified source structs in `names` attribute"#))
+        let Ok(parsed_ident) = parse_str::<Ident>(from_name) else {
+            panic!(
+                r#"inappropriate use of `from_name`. Please check if the value of `from_name = "{from_name}"` exists in the specified source structs in `names` attribute"#
+            );
+        };
+        parsed_ident
     }
 }
 

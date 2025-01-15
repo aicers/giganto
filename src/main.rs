@@ -184,7 +184,7 @@ async fn main() -> Result<()> {
             let notify_shutdown_copy = notify_shutdown.clone();
             let running_flag = retain_flag.clone();
             std::thread::spawn(move || {
-                runtime::Builder::new_current_thread()
+                if let Err(e) = runtime::Builder::new_current_thread()
                     .enable_io()
                     .enable_time()
                     .build()
@@ -196,9 +196,9 @@ async fn main() -> Result<()> {
                         notify_shutdown_copy,
                         running_flag,
                     ))
-                    .unwrap_or_else(|e| {
-                        error!("retain_periodically task terminated unexpectedly: {e}");
-                    });
+                {
+                    error!("retain_periodically task terminated unexpectedly: {e}");
+                }
             });
 
             if let Some(addr_to_peers) = settings.config.addr_to_peers {
