@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use super::{
     client::derives::{StringNumberU32, StringNumberU64},
-    PowerOffNotify, RebootNotify, TerminateNotify,
+    IdleMode, PowerOffNotify, RebootNotify, TerminateNotify,
 };
 use crate::settings::Config;
 #[cfg(debug_assertions)]
@@ -174,6 +174,13 @@ impl StatusQuery {
     async fn ping(&self) -> Result<bool> {
         Ok(true)
     }
+
+    /// Checks if the server is in idel mode. In this mode, Giganto is not fully operational and
+    /// serves only a limited subset of GraphQL APIs.
+    #[allow(clippy::unused_async)]
+    async fn idle_mode(&self, ctx: &Context<'_>) -> Result<bool> {
+        ctx.data::<IdleMode>().map(|idle_mode| idle_mode.0)
+    }
 }
 
 #[Object]
@@ -287,7 +294,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::tests::TestSchema;
+    use crate::graphql::tests::{TestIdleModeSchema, TestSchema};
 
     #[tokio::test]
     async fn test_ping() {
@@ -446,5 +453,35 @@ mod tests {
             peers = [{ addr = "127.0.0.1:60193", hostname = "node3" }]
             "#
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_idle_mode_in_idle_schema() {
+        let schema = TestIdleModeSchema::new();
+
+        let query = r"
+        {
+            idleMode
+        }
+        ";
+
+        let res = schema.0.execute(query).await;
+
+        assert_eq!(res.data.to_string(), "{idleMode: true}");
+    }
+
+    #[tokio::test]
+    async fn test_idle_mode_in_normal_schema() {
+        let schema = TestSchema::new();
+
+        let query = r"
+        {
+            idleMode
+        }
+        ";
+
+        let res = schema.execute(query).await;
+
+        assert_eq!(res.data.to_string(), "{idleMode: false}");
     }
 }

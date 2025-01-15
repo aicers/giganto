@@ -123,8 +123,8 @@ async fn main() -> Result<()> {
         .expect("Failed to build request client pool");
 
     loop {
-        // The flag indicates whether the current giganto is in minimal mode or not.
-        let is_minimal_mode = settings.is_none();
+        // The flag indicates whether the current giganto is in idle mode or not.
+        let is_idle_mode = settings.is_none();
         let (reload_tx, mut reload_rx) = mpsc::channel::<String>(1);
         let notify_shutdown = Arc::new(Notify::new());
         let notify_reboot = Arc::new(Notify::new());
@@ -244,13 +244,12 @@ async fn main() -> Result<()> {
             Some(database)
         } else {
             // wait for remote configuration
-            info!("Running in minimal mode.");
-            let schema = graphql::minimal_schema(
+            println!("Running in idle mode.");
+            let schema = graphql::idle_mode_schema(
                 reload_tx,
                 notify_reboot.clone(),
                 notify_power_off.clone(),
                 notify_terminate.clone(),
-                is_local_config,
                 settings.clone(),
             );
 
@@ -276,7 +275,7 @@ async fn main() -> Result<()> {
                                if write_toml_file(&doc, DEFAULT_TOML).is_ok(){
                                     new_settings.cfg_path.clone_from(&Some(DEFAULT_TOML.to_string()));
                                     settings = Some(new_settings);
-                                    notify_and_wait_shutdown(is_minimal_mode, notify_shutdown.clone()).await; // Wait for the shutdown to complete
+                                    notify_and_wait_shutdown(is_idle_mode, notify_shutdown.clone()).await; // Wait for the shutdown to complete
                                     is_reload_config = true;
                                     break;
                                }
@@ -294,19 +293,19 @@ async fn main() -> Result<()> {
                 },
                 () = notify_terminate.notified() => {
                     info!("Termination signal: giganto daemon exit");
-                    notify_and_wait_shutdown(is_minimal_mode, notify_shutdown).await;
+                    notify_and_wait_shutdown(is_idle_mode, notify_shutdown).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
                 () = notify_reboot.notified() => {
                     info!("Restarting the system...");
-                    notify_and_wait_shutdown(is_minimal_mode, notify_shutdown).await;
+                    notify_and_wait_shutdown(is_idle_mode, notify_shutdown).await;
                     is_reboot = true;
                     break;
                 }
                 () = notify_power_off.notified() => {
                     info!("Power off the system...");
-                    notify_and_wait_shutdown(is_minimal_mode, notify_shutdown).await;
+                    notify_and_wait_shutdown(is_idle_mode, notify_shutdown).await;
                     is_power_off = true;
                     break;
                 }
@@ -469,9 +468,9 @@ fn init_tracing(log_dir: Option<&Path>) -> WorkerGuard {
 }
 
 /// Notifies all waiters of `notify_shutdown` and waits for ingest closed notification.
-pub async fn notify_and_wait_shutdown(is_minimal_mode: bool, notify_shutdown: Arc<Notify>) {
+pub async fn notify_and_wait_shutdown(is_idle_mode: bool, notify_shutdown: Arc<Notify>) {
     notify_shutdown.notify_waiters();
-    if !is_minimal_mode {
+    if !is_idle_mode {
         notify_shutdown.notified().await;
     }
 }
