@@ -351,7 +351,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Change `MessageCode::RawData` request processing code to send raw events
-  to REconverge in the same format as `MessageCode::RangeData`.
+  to the Unsupervised Engine in the same format as `MessageCode::RangeData`.
 
 ## [0.15.1] - 2023-11-08
 
@@ -372,7 +372,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added `--repair` option to only fix the database problem then terminated.
 - Support `NetflowV5`, `NetflowV9` events. These events does not streamed
-  to Hog or Crusher.
+  to the Semi-supervised Engine or the Time Series Generator.
 - Support `Seculog` events.
   - The `secuLogRawEvents` GraphQL API requires its kind.
     `wapples`, `mf2`, `sniper`, `aiwaf`, `tg`, `vforce`, `srx`, `sonicwall`
@@ -397,7 +397,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     source to allow searching for `multiple sources`.
   - Provides statistics data by `source`/`time`/`protocol`.
   - If the statistics data type is `statistics`, provide `bps`/`pps`.
-  - If it's of type `network` (network-sourced events collected by `piglet`),
+  - If it's of type `network` (network-sourced events collected by the Sensor),
     provide `eps`.
   - If there is no value for the protocol field in the filter, statistics are
     provided for `all protocol`.
@@ -486,7 +486,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Supports the expanded HTTP protocol.
 - Modify `proto` field of `Ftp`, `Mqtt`, `Ldap` to u8 from u16.
-- Modify the processing part of REconverge's data request.
+- Modify the processing part of the Unsupervised Engine's data request.
   - Modify to handle network, log, and time series data requests with `ReqRange`
     and `RequestRange`.
   - Add to handle `Timeseries` requests in `MessageCode::RawData`.
@@ -526,7 +526,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add GIGANTO DB version compatibility check.
 - Add a publish API to return the source, raw_events
-  from the source, timestamps for REconverge.
+  from the source, timestamps for the Unsupervised Engine.
 - Supports the FTP protocol.
 - Add a GraphQL API for `searchHttpRawEvents`.
 
@@ -538,7 +538,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Change the format of data sent to REconverge from the publish module. ([ref](https://github.com/aicers/giganto-client/issues/9))
+- Change the format of data sent to the Unsupervised Engine from the publish
+  module. ([ref](https://github.com/aicers/giganto-client/issues/9))
 
 ## [0.8.0] - 2023-03-30
 
@@ -557,7 +558,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Change field name `duration` to `last_time`. (Except Conn struct)
 - Modify to receive and process `multiple sources` of stream request messages
-  from `HOG`.
+  from the Semi-supervised Engine.
 - Modify module name `ingestion` to `ingest`.
 - Create giganto's communication part as a separate crate. (giganto-client)
 - Move init tracing to giganto-client crate for oplog logging.
@@ -570,7 +571,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add export file to GraphQL API. (`csv`, `json` format support)
-- Add `Statistics` column family. Receive and save traffic statistics from Piglet.
+- Add `Statistics` column family. Receive and save traffic statistics from the
+  Sensor.
 - Save Giganto's `syslog` to a path written to `log_dir` in configuration file.
 - Add `Oplog`. (Operation log)
 
@@ -585,7 +587,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Publish support protocol record data request/response through QUIC.
 - Add periodic time series to GraphQL API.
-- Add send `all` source network stream to hog.
+- Add send `all` source network stream to the Semi-supervised Engine.
 - Add more network data types. (`Ntlm`, `Kerberos`, `Ssh`, `DceRpc`)
 
 ### Changed
@@ -595,7 +597,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- Remove send network stream to hog from database.
+- Remove send network stream to the Semi-supervied Engine from database.
 
 ### Fixed
 
