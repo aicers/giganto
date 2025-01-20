@@ -9,7 +9,7 @@ on:
       tag_name:
         description: 'tag name'
         required: true
-        default: '0.0.0'
+        default: '0.1.0'
 
 env:
   TITLE: Giganto
@@ -26,6 +26,9 @@ jobs:
           ref: ${{ env.TAG }}
       - name: Update to the Latest Version of Rust
         run: rustup update
+      - name: Install the Tools
+        run: |
+          sudo apt install libpcap-dev
       - name: Build Binary
         run: |
           cargo build --release
