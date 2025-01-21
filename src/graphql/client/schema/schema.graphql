@@ -389,25 +389,67 @@ type DnsEventEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the DNS protocol.
 type DnsRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Query
   query: String!
+
+  # Answer
   answer: [String!]!
+
+  # Transaction ID
   transId: Int!
+
+  # Round-Trip Time
   rtt: StringNumberI64!
+
+  # Query Class
   qclass: Int!
+
+  # Query Type
   qtype: Int!
+
+  # Response Code
   rcode: Int!
+
+  # Authoritative Answer Flag
   aaFlag: Boolean!
+
+  # Truncated Flag
   tcFlag: Boolean!
+
+  # Recursion Desired Flag
   rdFlag: Boolean!
+
+  # Recursion Available Flag
   raFlag: Boolean!
+
+  # Time to Live
   ttl: [Int!]!
 }
 
