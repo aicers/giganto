@@ -180,28 +180,89 @@ struct ConnRawEvent {
     resp_l2_bytes: StringNumberU64,
 }
 
+/// Represents an event extracted from the DNS protocol.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
 struct DnsRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds. `time` + `rtt` (Default).
     last_time: StringNumberI64,
+    /// Query.
     query: String,
+    /// Answer.
     answer: Vec<String>,
+    /// Transaction ID.
     trans_id: u16,
+    /// Round-trip time in nanoseconds.
     rtt: StringNumberI64,
+    /// Query class. Range: 1-4.
+    ///
+    /// For more information, refer to [Domain Name System Parameters.](https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-4)
     qclass: u16,
+    /// Query type.
+    ///
+    /// - 1: Internet class
+    /// - 2: CSNET class
+    /// - 3: CHAOS class
+    /// - 4: Hesiod class
     qtype: u16,
+    /// Response code. Range: 0-11, 16-23.
+    ///
+    /// |RCODE|Name|Description|
+    /// |-|-|-|
+    /// |0|NoError|No Error|
+    /// |1|FormErr|Format Error|
+    /// |2|ServFail|Server Failure|
+    /// |3|NXDomain|Non-Existent Domain|
+    /// |4|NotImp|Not Implemented|
+    /// |5|Refused|Query Refused|
+    /// |6|YXDomain|Name Exists when it should not|
+    /// |7|YXRRSet|RR Set Exists when it should not|
+    /// |8|NXRRSet|RR Set that should exist does not|
+    /// |9|NotAuth|Server Not Authoritative for zone|
+    /// |9|NotAuth|Not Authorized|
+    /// |10|NotZone|Name not contained in zone|
+    /// |11|DSOTYPENI|DSO-TYPE Not Implemented|
+    /// |12-15|Unassigned||
+    /// |16|BADVERS|Bad OPT Version|
+    /// |16|BADSIG|TSIG Signature Failure|
+    /// |17|BADKEY|Key not recognized|
+    /// |18|BADTIME|Signature out of time window|
+    /// |19|BADMODE|Bad TKEY Mode|
+    /// |20|BADNAME|Duplicate key name|
+    /// |21|BADALG|Algorithm not supported|
+    /// |22|BADTRUNC|Bad Truncation|
+    /// |23|BADCOOKIE|Bad/missing Server Cookie|
     rcode: u16,
+    /// Authoritative answer flag.
+    ///
+    /// Only from DNS response message.
     aa_flag: bool,
+    /// Truncated flag.
+    ///
+    /// Truncated flag of DNS query and response message.
     tc_flag: bool,
+    /// Recursion desired flag.
+    ///
+    /// Recursion desired flag of DNS query and response message.
     rd_flag: bool,
+    /// Recursion available flag.
+    ///
+    /// Only from DNS response message.
     ra_flag: bool,
+    /// Time to live in seconds.
     ttl: Vec<i32>,
 }
 
