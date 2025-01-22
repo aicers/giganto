@@ -487,25 +487,63 @@ type FileDeleteEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the FTP protocol.
 type FtpRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Username.
   user: String!
+
+  # Password.
   password: String!
+
+  # Command.
   command: String!
+
+  # Reply code.
   replyCode: String!
+
+  # Reply message.
   replyMsg: String!
+
+  # Passive mode flag.
   dataPassive: Boolean!
+
+  # Data channel source IP address.
   dataOrigAddr: String!
+
+  # Data channel destination IP address.
   dataRespAddr: String!
+
+  # Data channel destination port number.
   dataRespPort: Int!
+
+  # File name.
   file: String!
+
+  # File size.
   fileSize: StringNumberU64!
+
+  # File ID.
   fileId: String!
 }
 
