@@ -350,27 +350,61 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
+/// Represents an event extracted from the FTP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
 struct FtpRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// User name.
     user: String,
+    /// Password.
     password: String,
+    /// Command.
+    ///
+    /// For more information, refer to [List of FTP commands.](https://en.wikipedia.org/wiki/List_of_FTP_commands)
     command: String,
+    /// Reply code.
+    ///
+    /// It stores the reply code for the three commands: LIST, PETR, STOR. Reply codes for other
+    /// commands are ignored.
     reply_code: String,
+    /// Reply message.
+    ///
+    /// It stores the reply message for the three commands: LIST, PETR and STOR. Reply messages for
+    /// other commands are ignored.
     reply_msg: String,
+    /// Passive mode flag.
     data_passive: bool,
+    /// Data channel source IP address.
     data_orig_addr: String,
+    /// Data channel destination IP address.
     data_resp_addr: String,
+    /// Data channel destination port number.
     data_resp_port: u16,
+    /// File name.
     file: String,
+    /// File size.
     file_size: StringNumberU64,
+    /// File ID.
+    ///
+    /// An identifier for the extracted file transferred via FTP.
+    ///
+    /// - ID format: `{time}_{filename}`.
+    /// - `time`: `i64` value representing the time field in the FTP event.
+    /// - `filename`: The name of the transferred file.
     file_id: String,
 }
 
