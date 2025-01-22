@@ -43,6 +43,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Documentation of the following GraphQL APIs is updated:
   - `connRawEvents`
   - `networkRawEvents`
+  - `dnsRawEvents`
 
 ### Removed
 
