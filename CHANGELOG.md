@@ -43,6 +43,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Documentation of the following GraphQL APIs is updated:
   - `connRawEvents`
   - `networkRawEvents`
+- Changed `config` GraphQL API to respond `retention` field in "{days}d" format
+  to align with the format of the configuration field in the API request.
 
 ### Removed
 
