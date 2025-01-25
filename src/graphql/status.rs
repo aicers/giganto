@@ -61,7 +61,14 @@ impl Config {
     }
 
     async fn retention(&self) -> String {
-        humantime::format_duration(self.retention).to_string()
+        let retention_secs = self.retention.as_secs();
+        let days = retention_secs / 86400;
+        let days = if retention_secs % 86400 > 0 {
+            days + 1
+        } else {
+            days
+        };
+        format!("{days}d")
     }
 
     async fn data_dir(&self) -> String {
