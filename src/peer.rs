@@ -118,7 +118,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(local_address: SocketAddr, certs: &Arc<Certs>) -> Result<Self> {
+    pub fn new(local_address: SocketAddr, certs: &Certs) -> Result<Self> {
         let (_, local_host_name) = subject_from_cert(certs.certs.as_slice())?;
 
         let server_config =

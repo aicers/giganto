@@ -74,7 +74,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr, certs: &Arc<Certs>) -> Self {
+    pub fn new(addr: SocketAddr, certs: &Certs) -> Self {
         let server_config =
             config_server(certs).expect("server configuration error with cert, key or root");
         Server {

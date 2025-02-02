@@ -35,7 +35,7 @@ impl Clone for Certs {
 }
 
 #[allow(clippy::module_name_repetitions)]
-pub fn config_server(certs: &Arc<Certs>) -> Result<ServerConfig> {
+pub fn config_server(certs: &Certs) -> Result<ServerConfig> {
     let client_auth =
         rustls::server::WebPkiClientVerifier::builder(Arc::new(certs.root.clone())).build()?;
 
@@ -102,7 +102,7 @@ pub fn subject_from_cert_opt(
     }
 }
 
-pub fn config_client(certs: &Arc<Certs>) -> Result<ClientConfig> {
+pub fn config_client(certs: &Certs) -> Result<ClientConfig> {
     let tls_config = rustls::ClientConfig::builder()
         .with_root_certificates(certs.root.clone())
         .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())?;
