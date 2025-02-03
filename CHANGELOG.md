@@ -54,6 +54,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed `config` GraphQL API to respond `retention` field in "{days}d" format
   to align with the format of the configuration field in the API request.
 - `log_dir` is not a required configuration item.
+- Adjust logging behavior by revised logging policy.
+  - If `log_dir` is not present in the local/remote config, logs are written
+    to stdout/stderr.
+  - If `log_dir` in the local/remote config is writable, logs are written to
+    the specified `log_dir`.
+  - If `log_dir` in the local config is not writable, the program terminates.
+  - If `log_dir` in the remote config is not writable, the program enters idle
+    mode.
+  - Logging in idle mode: logs are written to stdout/stderr until the remote
+    config is retrieved.
 
 ### Removed
 

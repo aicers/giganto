@@ -4,15 +4,15 @@ use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
-use tracing::{error, info, warn};
+use tracing::{info, warn, Level};
 
 use super::{
     client::derives::{StringNumberU32, StringNumberU64},
     PowerOffNotify, RebootNotify, TerminateNotify,
 };
-use crate::settings::Config;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
+use crate::{graphql::TracingEnabled, log, settings::Config};
 use crate::{peer::PeerIdentity, settings::Settings};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
@@ -190,6 +190,8 @@ impl ConfigMutation {
     #[allow(clippy::unused_async)]
     async fn set_config(&self, ctx: &Context<'_>, draft: String) -> Result<bool> {
         let is_local = ctx.data::<bool>()?;
+        let TracingEnabled(tracing_enabled) = ctx.data::<TracingEnabled>()?;
+        let tracing_enabled = *tracing_enabled;
 
         if *is_local {
             warn!("The request to the GraphQL API to change the configuration was ignored because this is running with a local configuration.");
@@ -214,11 +216,15 @@ impl ConfigMutation {
             // Used to complete the response of a graphql Mutation.
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
             tx_clone.send(draft).await.map_err(|e| {
-                error!("Failed to send config: {:?}", e);
+                log(
+                    tracing_enabled,
+                    Level::ERROR,
+                    &format!("Failed to send config: {e:?}"),
+                );
                 "Failed to send config".to_string()
             })
         });
-        info!("Draft applied.");
+        log(tracing_enabled, Level::INFO, "Draft applied.");
 
         Ok(true)
     }

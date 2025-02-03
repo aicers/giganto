@@ -1117,12 +1117,12 @@ pub fn repair_db(
     );
     let start = Instant::now();
     let (db_opts, _) = rocksdb_options(&db_options);
-    info!("repair db start.");
+    println!("repair db start.");
     match DB::repair(&db_opts, db_path) {
-        Ok(()) => info!("repair ok"),
-        Err(e) => error!("repair error: {e}"),
+        Ok(()) => println!("repair ok"),
+        Err(e) => eprintln!("repair error: {e}"),
     }
     let dur = start.elapsed();
-    info!("{}", to_hms(dur));
+    println!("{}", to_hms(dur));
     exit(0);
 }

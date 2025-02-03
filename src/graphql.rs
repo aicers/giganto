@@ -152,6 +152,7 @@ pub struct NodeName(pub String);
 pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
+pub struct TracingEnabled(bool);
 
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
@@ -169,6 +170,7 @@ pub fn schema(
     ack_transmission_cnt: AckTransmissionCount,
     is_local_config: bool,
     settings: Option<Settings>,
+    tracing_enabled: bool,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -185,6 +187,7 @@ pub fn schema(
         .data(PowerOffNotify(notify_power_off))
         .data(is_local_config)
         .data(settings)
+        .data(TracingEnabled(tracing_enabled))
         .finish()
 }
 
@@ -195,6 +198,7 @@ pub fn minimal_schema(
     notify_terminate: Arc<Notify>,
     is_local_config: bool,
     settings: Option<Settings>,
+    tracing_enabled: bool,
 ) -> MinimalSchema {
     MinimalSchema::build(
         MinimalQuery::default(),
@@ -207,6 +211,7 @@ pub fn minimal_schema(
     .data(PowerOffNotify(notify_power_off))
     .data(is_local_config)
     .data(settings)
+    .data(TracingEnabled(tracing_enabled))
     .finish()
 }
 
@@ -1818,6 +1823,7 @@ mod tests {
                 Arc::new(RwLock::new(1024)),
                 is_local_config,
                 Some(settings),
+                true,
             );
 
             Self {
