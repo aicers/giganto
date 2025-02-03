@@ -71,7 +71,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr, certs: &Arc<Certs>) -> Self {
+    pub fn new(addr: SocketAddr, certs: &Certs) -> Self {
         let server_config =
             config_server(certs).expect("server configuration error with cert, key or root");
         Server {
@@ -371,7 +371,7 @@ async fn process_pcap_extract(
                 if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
                     peer_addr,
                     peer_name.as_str(),
-                    certs.clone(),
+                    &certs,
                     MessageCode::Pcap,
                     filter,
                 )
@@ -668,7 +668,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -681,7 +681,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -694,7 +694,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -707,7 +707,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -720,7 +720,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -733,7 +733,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         true,
                     )
                     .await?;
@@ -746,7 +746,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -760,7 +760,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -773,7 +773,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -786,7 +786,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -799,7 +799,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -812,7 +812,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -826,7 +826,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -839,7 +839,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -852,7 +852,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -865,7 +865,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -878,7 +878,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -891,7 +891,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -904,7 +904,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -918,7 +918,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -932,7 +932,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -946,7 +946,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -960,7 +960,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -974,7 +974,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -988,7 +988,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1002,7 +1002,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1016,7 +1016,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1030,7 +1030,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1044,7 +1044,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1058,7 +1058,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1072,7 +1072,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1086,7 +1086,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1100,7 +1100,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1114,7 +1114,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1128,7 +1128,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                         false,
                     )
                     .await?;
@@ -1162,7 +1162,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1174,7 +1174,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1186,7 +1186,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1198,7 +1198,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1210,7 +1210,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1222,7 +1222,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1234,7 +1234,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1246,7 +1246,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1258,7 +1258,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1270,7 +1270,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1282,7 +1282,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1294,7 +1294,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1306,7 +1306,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1318,7 +1318,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1330,7 +1330,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1342,7 +1342,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1354,7 +1354,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1367,7 +1367,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1379,7 +1379,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1391,7 +1391,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1403,7 +1403,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1415,7 +1415,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1427,7 +1427,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1439,7 +1439,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1451,7 +1451,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1463,7 +1463,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1475,7 +1475,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1487,7 +1487,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1499,7 +1499,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1511,7 +1511,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1523,7 +1523,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1535,7 +1535,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1547,7 +1547,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1559,7 +1559,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1571,7 +1571,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        certs.clone(),
+                        &certs,
                     )
                     .await?;
                 }
@@ -1592,7 +1592,7 @@ async fn process_range_data<T, I>(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    certs: &Certs,
     availed_kind: bool,
 ) -> Result<()>
 where
@@ -1603,14 +1603,8 @@ where
         process_range_data_in_current_giganto(send, store, request_range, availed_kind).await?;
     } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
-        process_range_data_in_peer_giganto::<I>(
-            send,
-            peer_idents,
-            peer_addr,
-            certs.clone(),
-            request_range,
-        )
-        .await?;
+        process_range_data_in_peer_giganto::<I>(send, peer_idents, peer_addr, certs, request_range)
+            .await?;
     } else {
         bail!(
             "Neither current nor peer gigantos are in charge of requested sensor {}",
@@ -1679,7 +1673,7 @@ async fn process_range_data_in_peer_giganto<I>(
     send: &mut SendStream,
     peer_idents: PeerIdents,
     peer_addr: SocketAddr,
-    certs: Arc<Certs>,
+    certs: &Certs,
     request_range: RequestRange,
 ) -> Result<()>
 where
@@ -1689,7 +1683,7 @@ where
     let (_peer_send, mut peer_recv) = request_range_data_to_peer(
         peer_addr,
         peer_name.as_str(),
-        certs.clone(),
+        certs,
         MessageCode::ReqRange,
         request_range,
     )
@@ -1711,7 +1705,7 @@ where
 async fn request_range_data_to_peer<T>(
     peer_addr: SocketAddr,
     peer_name: &str,
-    certs: Arc<Certs>,
+    certs: &Certs,
     message_code: MessageCode,
     request_data: T,
 ) -> Result<(SendStream, RecvStream)>
@@ -1733,7 +1727,7 @@ async fn process_raw_events<T, I>(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    certs: &Certs,
 ) -> Result<()>
 where
     T: DeserializeOwned + ResponseRangeData,
@@ -1804,7 +1798,7 @@ where
 async fn process_raw_event_in_peer_gigantos<I>(
     send: &mut SendStream,
     kind: String,
-    certs: Arc<Certs>,
+    certs: &Certs,
     peers: Peers,
     peer_idents: PeerIdents,
     handle_by_peer_gigantos: Vec<(String, Vec<i64>)>,
@@ -1825,7 +1819,7 @@ where
         if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &sensor).await {
             let peer_name = peer_name(peer_idents.clone(), &peer_addr).await?;
 
-            let connection = connect(peer_addr, peer_name.as_str(), certs.clone()).await?;
+            let connection = connect(peer_addr, peer_name.as_str(), certs).await?;
             let (mut peer_send, mut peer_recv) = connection.open_bi().await?;
 
             send_range_data_request(
@@ -1851,11 +1845,7 @@ where
     Ok(())
 }
 
-async fn connect(
-    server_addr: SocketAddr,
-    server_name: &str,
-    certs: Arc<Certs>,
-) -> Result<Connection> {
+async fn connect(server_addr: SocketAddr, server_name: &str, certs: &Certs) -> Result<Connection> {
     let client_addr = if server_addr.is_ipv6() {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
@@ -1863,7 +1853,7 @@ async fn connect(
     };
 
     let mut endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
-    endpoint.set_default_client_config(config_client(&certs)?);
+    endpoint.set_default_client_config(config_client(certs)?);
 
     let conn = connect_repeatedly(&endpoint, server_addr, server_name).await;
 
