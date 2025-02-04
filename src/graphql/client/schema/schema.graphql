@@ -2218,34 +2218,90 @@ input TimeSeriesFilter {
   id: String!
 }
 
+# Represents an event extracted from the TLS protocol.
 type TlsRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Server name.
   serverName: String!
+
+  # ALPN protocol.
   alpnProtocol: String!
+
+  # JA3 fingerprint.
   ja3: String!
+
+  # TLS version.
   version: String!
+
+  # Client cipher suites.
   clientCipherSuites: [Int!]!
+
+  # Client extensions.
   clientExtensions: [Int!]!
+
+  # Cipher.
   cipher: Int!
+
+  # Extensions.
   extensions: [Int!]!
+
+  # JA3S fingerprint.
   ja3S: String!
+
+  # Certificate serial number.
   serial: String!
+
+  # Certificate subject country name.
   subjectCountry: String!
+
+  # Certificate subject organization name.
   subjectOrgName: String!
+
+  # Certificate common name.
   subjectCommonName: String!
+
+  # Certificate validity start.
   validityNotBefore: StringNumberI64!
+
+  # Certificate validity end.
   validityNotAfter: StringNumberI64!
+
+  # Certificate subject alternative name.
   subjectAltName: String!
+
+  # Certificate issuer country.
   issuerCountry: String!
+
+  # Certificate issuer organization name.
   issuerOrgName: String!
+
+  # Certificate issuer organization unit name.
   issuerOrgUnitName: String!
+
+  # Certificate issuer common name.
   issuerCommonName: String!
+
+  # Last alert message.
   lastAlert: Int!
 }
 

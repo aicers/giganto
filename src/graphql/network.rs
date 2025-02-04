@@ -507,37 +507,66 @@ struct LdapRawEvent {
     argument: Vec<String>,
 }
 
+/// Represents an event extracted from the TLS protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
 struct TlsRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// Server name.
     server_name: String,
+    /// ALPN protocol.
     alpn_protocol: String,
+    /// JA3 fingerprint.
     ja3: String,
+    /// TLS version.
     version: String,
+    /// Client cipher suites.
     client_cipher_suites: Vec<u16>,
+    /// Client extensions.
     client_extensions: Vec<u16>,
+    /// Cipher.
     cipher: u16,
+    /// Extensions.
     extensions: Vec<u16>,
+    /// JA3S fingerprint.
     #[graphql_client_type(from_name = "ja3_s")]
     ja3s: String,
+    /// Certificate serial number.
     serial: String,
+    /// Certificate subject country name.
     subject_country: String,
+    /// Certificate subject organization name.
     subject_org_name: String,
+    /// Certificate common name.
     subject_common_name: String,
+    /// Certificate validity start.
     validity_not_before: StringNumberI64,
+    /// Certificate validity end.
     validity_not_after: StringNumberI64,
+    /// Certificate subject alternative name.
     subject_alt_name: String,
+    /// Certificate issuer country.
     issuer_country: String,
+    /// Certificate issuer organization name.
     issuer_org_name: String,
+    /// Certificate issuer organization unit name.
     issuer_org_unit_name: String,
+    /// Certificate issuer common name.
     issuer_common_name: String,
+    /// Last alert message.
     last_alert: u8,
 }
 
