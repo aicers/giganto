@@ -205,37 +205,67 @@ struct DnsRawEvent {
     ttl: Vec<i32>,
 }
 
+/// Represents an event extracted from the HTTP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
 struct HttpRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// HTTP method.
     method: String,
+    /// Host.
     host: String,
+    /// URI.
     uri: String,
+    /// Referrer.
     referrer: String,
+    /// HTTP version.
     version: String,
+    /// User agent.
     user_agent: String,
+    /// Request length.
     request_len: StringNumberUsize,
+    /// Response length.
     response_len: StringNumberUsize,
+    /// Status code.
     status_code: u16,
+    /// Status message.
     status_msg: String,
+    /// Username.
     username: String,
+    /// Password.
     password: String,
+    /// Cookie.
     cookie: String,
+    /// Content encoding.
     content_encoding: String,
+    /// Content type.
     content_type: String,
+    /// Cache control.
     cache_control: String,
+    /// Request file names.
     orig_filenames: Vec<String>,
+    /// Request MIME types.
     orig_mime_types: Vec<String>,
+    /// Response file names.
     resp_filenames: Vec<String>,
+    /// Response MIME types.
     resp_mime_types: Vec<String>,
+    /// POST body.
     post_body: Vec<u8>,
+    /// Last state.
     state: String,
 }
 
