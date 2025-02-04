@@ -38,7 +38,7 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 ### Arguments
 
 - `<CONFIG_PATH>`: Path to the TOML configuration file (optional when running in
-    remote mode).
+  remote mode).
 - `<CERT_PATH>`: Path to the certificate file (required).
 - `<KEY_PATH>`: Path to the private key file (required).
 - `<CA_CERTS_PATH>`: Path to the CA certificates file (required).
@@ -65,22 +65,22 @@ In the config file, you can specify the following options:
 
 <!-- markdownlint-disable -->
 
-| Field                  | Description                          | Required | Default                |
-| ---------------------- | ------------------------------------ | -------- | ---------------------- |
-| `ingest_srv_addr`      | Address to listen for ingest QUIC    | No       | [::]:38370             |
-| `publish_srv_addr`     | Address to listen for publish QUIC   | No       | [::]:38371             |
-| `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8442              |
-| `data_dir`             | Path to directory to store data      | Yes      | -                      |
-| `retention`            | Retention period for data            | No       | 100d                   |
-| `log_dir`              | Path to Giganto's syslog file        | Yes      | -                      |
-| `export_dir`           | Path to Giganto's export file        | Yes      | -                      |
-| `max_open_files`       | Max open files for database          | No       | 8000                   |
-| `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                    |
-| `num_of_thread`        | Number of background threads for DB  | No       | 8                      |
-| `max_sub_compactions`  | Number of sub-compactions allowed    | No       | 2                      |
-| `ack_transmission`     | Ack count for ingestion data         | No       | 1024                   |
-| `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383  |
-| `peers`                | List of peer addresses and hostnames | No       | -                      |
+| Field                  | Description                          | Required | Default               |
+| ---------------------- | ------------------------------------ | -------- | --------------------- |
+| `ingest_srv_addr`      | Address to listen for ingest QUIC    | No       | [::]:38370            |
+| `publish_srv_addr`     | Address to listen for publish QUIC   | No       | [::]:38371            |
+| `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8442             |
+| `data_dir`             | Path to directory to store data      | Yes      | -                     |
+| `retention`            | Retention period for data            | No       | 100d                  |
+| `log_dir`              | Path to Giganto's syslog file        | No       | -                     |
+| `export_dir`           | Path to Giganto's export file        | Yes      | -                     |
+| `max_open_files`       | Max open files for database          | No       | 8000                  |
+| `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                   |
+| `num_of_thread`        | Number of background threads for DB  | No       | 8                     |
+| `max_sub_compactions`  | Number of sub-compactions allowed    | No       | 2                     |
+| `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
+| `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
+| `peers`                | List of peer addresses and hostnames | No       | -                     |
 
 <!-- markdownlint-enable -->
 
@@ -115,6 +115,9 @@ So if it's less than `512`MB, it's recommended to set default value of `512`MB.
 
 If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
+
+If there is no `log_dir` option in the configuration file, logs will be written
+to stdout instead of to a specific path's log file.
 
 ## Test
 
