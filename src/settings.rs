@@ -61,7 +61,7 @@ pub struct Config {
     pub retention: Duration, // Data retention period
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
-    pub log_dir: PathBuf,  // giganto's syslog path
+    pub log_dir: Option<PathBuf>, // giganto's syslog path
     pub export_dir: PathBuf, // giganto's export file path
 
     // db options

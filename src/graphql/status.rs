@@ -75,8 +75,10 @@ impl Config {
         self.data_dir.to_string_lossy().to_string()
     }
 
-    async fn log_dir(&self) -> String {
-        self.log_dir.to_string_lossy().to_string()
+    async fn log_dir(&self) -> Option<String> {
+        self.log_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     }
 
     async fn export_dir(&self) -> String {

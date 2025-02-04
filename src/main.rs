@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
 
     // A fix for log handling by local/remote mode will be addressed in the
     // https://github.com/aicers/giganto/issues/878 issue.
-    let _guard = init_tracing(settings.as_ref().map(|s| &*s.config.log_dir));
+    let _guard = init_tracing(settings.as_ref().and_then(|s| s.config.log_dir.as_deref()));
 
     if args.repair {
         if let Some(ref settings) = settings {
@@ -442,7 +442,11 @@ fn init_tracing(log_dir: Option<&Path>) -> WorkerGuard {
             fmt::Layer::default()
                 .with_ansi(true)
                 .with_writer(stdout_writer)
-                .with_filter(EnvFilter::from_default_env()),
+                .with_filter(
+                    EnvFilter::builder()
+                        .with_default_directive(LevelFilter::INFO.into())
+                        .from_env_lossy(),
+                ),
             stdout_guard,
         )
     } else {
