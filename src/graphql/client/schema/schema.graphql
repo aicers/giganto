@@ -567,35 +567,93 @@ type FtpRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the HTTP protocol.
 type HttpRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # HTTP method.
   method: String!
+
+  # Host.
   host: String!
+
+  # URI.
   uri: String!
+
+  # Referrer.
   referrer: String!
+
+  # HTTP version.
   version: String!
+
+  # User agent.
   userAgent: String!
+
+  # Request length.
   requestLen: StringNumberUsize!
+
+  # Response length.
   responseLen: StringNumberUsize!
+
+  # Status code.
   statusCode: Int!
+
+  # Status message.
   statusMsg: String!
+
+  # Username.
   username: String!
+
+  # Password.
   password: String!
+
+  # Cookie.
   cookie: String!
+
+  # Content encoding.
   contentEncoding: String!
+
+  # Content type.
   contentType: String!
+
+  # Cache control.
   cacheControl: String!
+
+  # Request file names.
   origFilenames: [String!]!
+
+  # Request MIME types.
   origMimeTypes: [String!]!
+
+  # Response file names.
   respFilenames: [String!]!
+
+  # Response MIME types.
   respMimeTypes: [String!]!
+
+  # POST body.
   postBody: [Int!]!
+
+  # Last state.
   state: String!
 }
 
