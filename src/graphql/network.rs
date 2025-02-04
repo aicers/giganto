@@ -318,24 +318,41 @@ struct NtlmRawEvent {
     protocol: String,
 }
 
+/// Represents an event extracted from the Kerberos protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
 struct KerberosRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// Client time in nanoseconds.
     client_time: StringNumberI64,
+    /// Server time in nanoseconds.
     server_time: StringNumberI64,
+    /// Error code.
     error_code: StringNumberU32,
+    /// Client realm.
     client_realm: String,
+    /// Client name type.
     cname_type: u8,
+    /// Client name.
     client_name: Vec<String>,
+    /// Realm.
     realm: String,
+    /// Service name type.
     sname_type: u8,
+    /// Service name.
     service_name: Vec<String>,
 }
 
