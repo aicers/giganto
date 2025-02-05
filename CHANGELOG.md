@@ -46,6 +46,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `ftpRawEvents`
   - `httpRawEvents`
   - `kerberosRawEvents`
+  - `ldapRawEvents`
   - `mqttRawEvents`
   - `nfsRawEvents`
 - Changed `config` GraphQL API to respond `retention` field in "{days}d" format
