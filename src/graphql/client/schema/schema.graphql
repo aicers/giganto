@@ -793,20 +793,48 @@ type KerberosRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the LDAP protocol.
 type LdapRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Message ID.
   messageId: StringNumberU32!
+
+  # Version.
   version: Int!
+
+  # Operation code.
   opcode: [String!]!
+
+  # Result code.
   result: [String!]!
+
+  # Diagnostic message.
   diagnosticMessage: [String!]!
+
+  # Object.
   object: [String!]!
+
+  # Argument.
   argument: [String!]!
 }
 

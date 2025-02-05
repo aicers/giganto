@@ -473,22 +473,37 @@ struct MqttRawEvent {
     suback_reason: Vec<u8>,
 }
 
+/// Represents an event extracted from the LDAP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
 struct LdapRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// Message ID.
     message_id: StringNumberU32,
+    /// Version.
     version: u8,
+    /// Operation code.
     opcode: Vec<String>,
+    /// Result code.
     result: Vec<String>,
+    /// Diagnostic message.
     diagnostic_message: Vec<String>,
+    /// Object.
     object: Vec<String>,
+    /// Argument.
     argument: Vec<String>,
 }
 
