@@ -42,7 +42,7 @@ giganto cluster 의 동작의 근간이므로,
 - `events_in_cluster` (또는 단순화된 `events_vec_in_cluster`)
 
 위의 macro들 중 하나의 macro는 GraphQL API endpoint에서 호출되어야 합니다.
-GraqhQl API가 `Connection`으로 paging을 지원하는 경우,
+GraphQL API가 `Connection`으로 paging을 지원하는 경우,
 `paged_events_in_cluster`의 사용을, 그렇지 않은 경우 `events_[vec_]in_cluster`의
 사용을 우선 고려해주세요.
 
