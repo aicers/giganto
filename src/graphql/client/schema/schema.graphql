@@ -1113,15 +1113,33 @@ type NetworkRawEventsEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the NFS protocol.
 type NfsRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Read files.
   readFiles: [String!]!
+
+  # Write files.
   writeFiles: [String!]!
 }
 

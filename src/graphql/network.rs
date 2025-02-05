@@ -549,17 +549,27 @@ struct SmbRawEvent {
     change_time: StringNumberI64,
 }
 
+/// Represents an event extracted from the NFS protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
 struct NfsRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// Read files.
     read_files: Vec<String>,
+    /// Write files.
     write_files: Vec<String>,
 }
 
