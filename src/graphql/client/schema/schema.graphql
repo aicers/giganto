@@ -861,19 +861,45 @@ type LogRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the MQTT protocol.
 type MqttRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # MQTT protocol.
   protocol: String!
+
+  # Version.
   version: Int!
+
+  # Client ID.
   clientId: String!
+
+  # Connection acknowledgement response.
   connackReason: Int!
+
+  # Subscription request.
   subscribe: [String!]!
+
+  # Subscription acknowledgement response.
   subackReason: [Int!]!
 }
 

@@ -441,21 +441,35 @@ struct FtpRawEvent {
     file_id: String,
 }
 
+/// Represents an event extracted from the MQTT protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
 struct MqttRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// MQTT protocol.
     protocol: String,
+    /// Version.
     version: u8,
+    /// Client ID.
     client_id: String,
+    /// Connection acknowledgement response.
     connack_reason: u8,
+    /// Subscription request.
     subscribe: Vec<String>,
+    /// Subscription acknowledgement response.
     suback_reason: Vec<u8>,
 }
 
