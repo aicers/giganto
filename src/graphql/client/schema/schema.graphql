@@ -537,7 +537,7 @@ type FtpRawEvent {
   # Data channel destination port number.
   dataRespPort: Int!
 
-  # File name.
+  # Filename.
   file: String!
 
   # File size.
@@ -745,10 +745,10 @@ type KerberosRawEvent {
   # End time in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Client time in nanoseconds.
+  # Client time.
   clientTime: StringNumberI64!
 
-  # Server time in nanoseconds.
+  # Server time.
   serverTime: StringNumberI64!
 
   # Error code.
@@ -1955,24 +1955,60 @@ type SecuLogRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the SMB protocol.
 type SmbRawEvent {
+  # Start time.
   time: DateTime!
+
+  # Source IP address.
   origAddr: String!
+
+  # Source port number.
   origPort: Int!
+
+  # Destination IP address.
   respAddr: String!
+
+  # Destination port number.
   respPort: Int!
+
+  # Protocol number. TCP is 6, UDP is 17.
   proto: Int!
+
+  # End time in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Command.
   command: Int!
+
+  # Path.
   path: String!
+
+  # Service.
   service: String!
+
+  # Filename.
   fileName: String!
+
+  # File size
   fileSize: StringNumberU64!
+
+  # Resource type.
   resourceType: Int!
+
+  # File ID.
   fid: Int!
+
+  # Create time.
   createTime: StringNumberI64!
+
+  # Access time.
   accessTime: StringNumberI64!
+
+  # Write time.
   writeTime: StringNumberI64!
+
+  # Change time.
   changeTime: StringNumberI64!
 }
 
