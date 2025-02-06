@@ -45,6 +45,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `networkRawEvents`
   - `ftpRawEvents`
   - `httpRawEvents`
+  - `tlsRawEvents`
   - `kerberosRawEvents`
   - `ldapRawEvents`
   - `mqttRawEvents`
