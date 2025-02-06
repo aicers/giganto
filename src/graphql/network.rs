@@ -336,9 +336,9 @@ struct KerberosRawEvent {
     proto: u8,
     /// End time in nanoseconds.
     last_time: StringNumberI64,
-    /// Client time in nanoseconds.
+    /// Client time.
     client_time: StringNumberI64,
-    /// Server time in nanoseconds.
+    /// Server time.
     server_time: StringNumberI64,
     /// Error code.
     error_code: StringNumberU32,
@@ -433,7 +433,7 @@ struct FtpRawEvent {
     data_resp_addr: String,
     /// Data channel destination port number.
     data_resp_port: u16,
-    /// File name.
+    /// Filename.
     file: String,
     /// File size.
     file_size: StringNumberU64,
@@ -541,26 +541,45 @@ struct TlsRawEvent {
     last_alert: u8,
 }
 
+/// Represents an event extracted from the SMB protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
 struct SmbRawEvent {
+    /// Start time.
     time: DateTime<Utc>,
+    /// Source IP address.
     orig_addr: String,
+    /// Source port number.
     orig_port: u16,
+    /// Destination IP address.
     resp_addr: String,
+    /// Destination port number.
     resp_port: u16,
+    /// Protocol number. TCP is 6, UDP is 17.
     proto: u8,
+    /// End time in nanoseconds.
     last_time: StringNumberI64,
+    /// Command.
     command: u8,
+    /// Path.
     path: String,
+    /// Service.
     service: String,
+    /// Filename.
     file_name: String,
+    /// File size
     file_size: StringNumberU64,
+    /// Resource type.
     resource_type: u16,
+    /// File ID.
     fid: u16,
+    /// Create time.
     create_time: StringNumberI64,
+    /// Access time.
     access_time: StringNumberI64,
+    /// Write time.
     write_time: StringNumberI64,
+    /// Change time.
     change_time: StringNumberI64,
 }
 
