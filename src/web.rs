@@ -5,8 +5,10 @@ use async_graphql::{
     Executor,
 };
 use tokio::{sync::Notify, task};
-use tracing::info;
+use tracing::Level;
 use warp::{http::Response as HttpResponse, Filter};
+
+use crate::log;
 
 /// Runs the GraphQL server.
 ///
@@ -19,6 +21,7 @@ pub async fn serve<S: Executor>(
     cert: Vec<u8>,
     key: Vec<u8>,
     notify_shutdown: Arc<Notify>,
+    tracing_enabled: bool,
 ) {
     let filter = async_graphql_warp::graphql(schema).and_then(
         |(schema, request): (S, async_graphql::Request)| async move {
@@ -45,6 +48,10 @@ pub async fn serve<S: Executor>(
         .bind_with_graceful_shutdown(addr, async move { notify_shutdown.notified().await });
 
     // start Graphql Server
-    info!("listening on https://{addr:?}");
+    log(
+        tracing_enabled,
+        Level::INFO,
+        &format!("listening on https://{addr:?}"),
+    );
     task::spawn(server);
 }
