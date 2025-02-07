@@ -197,17 +197,43 @@ type ConnRawEventEdge {
 # The input/output is a string in RFC3339 format.
 scalar DateTime
 
+# Represents an event extracted from the DCE-RPC protocol.
 type DceRpcRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP Address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Round-Trip Time
   rtt: StringNumberI64!
+
+  # Named Pipe
   namedPipe: String!
+
+  # Endpoint
   endpoint: String!
+
+  # Operation
   operation: String!
 }
 
