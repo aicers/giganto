@@ -130,19 +130,23 @@ impl RawEventFilter for SearchFilter {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
 struct ConnRawEvent {
-    /// Start Time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// Connection state. This is only used in TCP connections.
+    /// Connection State
+    ///
+    /// This is only used in TCP connections.
     ///
     /// The connection state is a string of letters that represent the state of the connection. The
     /// letters are as follows:
@@ -162,21 +166,23 @@ struct ConnRawEvent {
     ///
     /// For example, `ShDdAaFf` indicates a session without packet loss.
     conn_state: String,
-    /// Duration. It is in nanoseconds.
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
     duration: StringNumberI64,
-    /// Service name.
+    /// Service Name
     service: String,
-    /// Bytes sent by source.
+    /// Bytes Sent by Source
     orig_bytes: StringNumberU64,
-    /// Bytes received by destination.
+    /// Bytes Received by Destination
     resp_bytes: StringNumberU64,
-    /// Packets sent by source.
+    /// Packets Sent by Source
     orig_pkts: StringNumberU64,
-    /// Packets received by destination.
+    /// Packets Received by Destination
     resp_pkts: StringNumberU64,
-    /// Layer 2 bytes sent by source.
+    /// Layer 2 Bytes Sent by Source
     orig_l2_bytes: StringNumberU64,
-    /// Layer 2 bytes received by destination.
+    /// Layer 2 Bytes Received by Destination
     resp_l2_bytes: StringNumberU64,
 }
 
@@ -209,63 +215,67 @@ struct DnsRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
 struct HttpRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// HTTP method.
+    /// HTTP Method
     method: String,
-    /// Host.
+    /// Host
     host: String,
-    /// URI.
+    /// URI
     uri: String,
-    /// Referrer.
+    /// Referrer
     referrer: String,
-    /// HTTP version.
+    /// HTTP Version
     version: String,
-    /// User agent.
+    /// User Agent
     user_agent: String,
-    /// Request length.
+    /// Request Length
     request_len: StringNumberUsize,
-    /// Response length.
+    /// Response Length
     response_len: StringNumberUsize,
-    /// Status code.
+    /// Status Code
     status_code: u16,
-    /// Status message.
+    /// Status Message
     status_msg: String,
-    /// Username.
+    /// Username
     username: String,
-    /// Password.
+    /// Password
     password: String,
-    /// Cookie.
+    /// Cookie
     cookie: String,
-    /// Content encoding.
+    /// Content Encoding
     content_encoding: String,
-    /// Content type.
+    /// Content Type
     content_type: String,
-    /// Cache control.
+    /// Cache Control
     cache_control: String,
-    /// Request file names.
+    /// Request Filenames
     orig_filenames: Vec<String>,
-    /// Request MIME types.
+    /// Request MIME Types
     orig_mime_types: Vec<String>,
-    /// Response file names.
+    /// Response Filenames
     resp_filenames: Vec<String>,
-    /// Response MIME types.
+    /// Response MIME Types
     resp_mime_types: Vec<String>,
-    /// POST body.
+    /// POST Body
     post_body: Vec<u8>,
-    /// Last state.
+    /// Last State
     state: String,
 }
 
@@ -322,37 +332,41 @@ struct NtlmRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
 struct KerberosRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Client time.
+    /// Client Time
     client_time: StringNumberI64,
-    /// Server time.
+    /// Server Time
     server_time: StringNumberI64,
-    /// Error code.
+    /// Error Code
     error_code: StringNumberU32,
-    /// Client realm.
+    /// Client Realm
     client_realm: String,
-    /// Client name type.
+    /// Client Name Type
     cname_type: u8,
-    /// Client name.
+    /// Client Name
     client_name: Vec<String>,
-    /// Realm.
+    /// Realm
     realm: String,
-    /// Service name type.
+    /// Service Name Type
     sname_type: u8,
-    /// Service name.
+    /// Service Name
     service_name: Vec<String>,
 }
 
@@ -401,43 +415,47 @@ struct DceRpcRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
 struct FtpRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Username.
+    /// Username
     user: String,
-    /// Password.
+    /// Password
     password: String,
-    /// Command.
+    /// Command
     command: String,
-    /// Reply code.
+    /// Reply Code
     reply_code: String,
-    /// Reply message.
+    /// Reply Message
     reply_msg: String,
-    /// Passive mode flag.
+    /// Passive Mode Flag
     data_passive: bool,
-    /// Data channel source IP address.
+    /// Data Channel Source IP Address
     data_orig_addr: String,
-    /// Data channel destination IP address.
+    /// Data Channel Destination IP Address
     data_resp_addr: String,
-    /// Data channel destination port number.
+    /// Data Channel Destination Port Number
     data_resp_port: u16,
-    /// Filename.
+    /// Filename
     file: String,
-    /// File size.
+    /// File Size
     file_size: StringNumberU64,
-    /// File ID.
+    /// File ID
     file_id: String,
 }
 
@@ -445,31 +463,35 @@ struct FtpRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
 struct MqttRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// MQTT protocol.
+    /// MQTT Protocol
     protocol: String,
-    /// Version.
+    /// Version
     version: u8,
-    /// Client ID.
+    /// Client ID
     client_id: String,
-    /// Connection acknowledgement response.
+    /// Connection Acknowledgement Response
     connack_reason: u8,
-    /// Subscription request.
+    /// Subscription Request
     subscribe: Vec<String>,
-    /// Subscription acknowledgement response.
+    /// Subscription Acknowledgement Response
     suback_reason: Vec<u8>,
 }
 
@@ -477,33 +499,37 @@ struct MqttRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
 struct LdapRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Message ID.
+    /// Message ID
     message_id: StringNumberU32,
-    /// Version.
+    /// Version
     version: u8,
-    /// Operation code.
+    /// Operation Code
     opcode: Vec<String>,
-    /// Result code.
+    /// Result Code
     result: Vec<String>,
-    /// Diagnostic message.
+    /// Diagnostic Message
     diagnostic_message: Vec<String>,
-    /// Object.
+    /// Object
     object: Vec<String>,
-    /// Argument.
+    /// Argument
     argument: Vec<String>,
 }
 
@@ -511,62 +537,66 @@ struct LdapRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
 struct TlsRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Server name.
+    /// Server Name
     server_name: String,
-    /// ALPN protocol.
+    /// ALPN Protocol
     alpn_protocol: String,
-    /// JA3 fingerprint.
+    /// JA3 Fingerprint
     ja3: String,
-    /// TLS version.
+    /// TLS Version
     version: String,
-    /// Client cipher suites.
+    /// Client Cipher Suites
     client_cipher_suites: Vec<u16>,
-    /// Client extensions.
+    /// Client Extensions
     client_extensions: Vec<u16>,
-    /// Cipher.
+    /// Cipher
     cipher: u16,
-    /// Extensions.
+    /// Extensions
     extensions: Vec<u16>,
-    /// JA3S fingerprint.
+    /// JA3S Fingerprint
     #[graphql_client_type(from_name = "ja3_s")]
     ja3s: String,
-    /// Certificate serial number.
+    /// Certificate Serial Number
     serial: String,
-    /// Certificate subject country name.
+    /// Certificate Subject Country Name
     subject_country: String,
-    /// Certificate subject organization name.
+    /// Certificate Subject Organization Name
     subject_org_name: String,
-    /// Certificate common name.
+    /// Certificate Common Name
     subject_common_name: String,
-    /// Certificate validity start.
+    /// Certificate Validity Start
     validity_not_before: StringNumberI64,
-    /// Certificate validity end.
+    /// Certificate Validity End
     validity_not_after: StringNumberI64,
-    /// Certificate subject alternative name.
+    /// Certificate Subject Alternative Name
     subject_alt_name: String,
-    /// Certificate issuer country.
+    /// Certificate Issuer Country
     issuer_country: String,
-    /// Certificate issuer organization name.
+    /// Certificate Issuer Organization Name
     issuer_org_name: String,
-    /// Certificate issuer organization unit name.
+    /// Certificate Issuer Organization Unit Name
     issuer_org_unit_name: String,
-    /// Certificate issuer common name.
+    /// Certificate Issuer Common Name
     issuer_common_name: String,
-    /// Last alert message.
+    /// Last Alert Message
     last_alert: u8,
 }
 
@@ -574,41 +604,45 @@ struct TlsRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
 struct SmbRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Command.
+    /// Command
     command: u8,
-    /// Path.
+    /// Path
     path: String,
-    /// Service.
+    /// Service
     service: String,
-    /// Filename.
+    /// Filename
     file_name: String,
-    /// File size
+    /// File Size
     file_size: StringNumberU64,
-    /// Resource type.
+    /// Resource Type
     resource_type: u16,
-    /// File ID.
+    /// File ID
     fid: u16,
-    /// Create time.
+    /// Create Time
     create_time: StringNumberI64,
-    /// Access time.
+    /// Access Time
     access_time: StringNumberI64,
-    /// Write time.
+    /// Write Time
     write_time: StringNumberI64,
-    /// Change time.
+    /// Change Time
     change_time: StringNumberI64,
 }
 
@@ -616,23 +650,27 @@ struct SmbRawEvent {
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
 struct NfsRawEvent {
-    /// Start time.
+    /// Start Time
     time: DateTime<Utc>,
-    /// Source IP address.
+    /// Source IP Address
     orig_addr: String,
-    /// Source port number.
+    /// Source Port Number
     orig_port: u16,
-    /// Destination IP address.
+    /// Destination IP Address
     resp_addr: String,
-    /// Destination port number.
+    /// Destination Port Number
     resp_port: u16,
-    /// Protocol number. TCP is 6, UDP is 17.
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
-    /// End time in nanoseconds.
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
-    /// Read files.
+    /// Read Files
     read_files: Vec<String>,
-    /// Write files.
+    /// Write Files
     write_files: Vec<String>,
 }
 
