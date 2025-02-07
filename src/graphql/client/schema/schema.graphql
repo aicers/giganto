@@ -62,25 +62,29 @@ type Config {
 
 # Represents an event extracted from a session.
 type ConnRawEvent {
-  # Start Time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # Connection state. This is only used in TCP connections.
+  # Connection State
+  #
+  # This is only used in TCP connections.
   #
   # The connection state is a string of letters that represent the state of the connection. The
   # letters are as follows:
@@ -101,28 +105,30 @@ type ConnRawEvent {
   # For example, `ShDdAaFf` indicates a session without packet loss.
   connState: String!
 
-  # Duration. It is in nanoseconds.
+  # Duration
+  #
+  # It is measured in nanoseconds.
   duration: StringNumberI64!
 
-  # Service name.
+  # Service Name
   service: String!
 
-  # Bytes sent by source.
+  # Bytes Sent by Source
   origBytes: StringNumberU64!
 
-  # Bytes received by destination.
+  # Bytes Received by Destination
   respBytes: StringNumberU64!
 
-  # Packets sent by source.
+  # Packets Sent by Source
   origPkts: StringNumberU64!
 
-  # Packets received by destination.
+  # Packets Received by Destination
   respPkts: StringNumberU64!
 
-  # Layer 2 bytes sent by source.
+  # Layer 2 Bytes Sent by Source
   origL2Bytes: StringNumberU64!
 
-  # Layer 2 bytes received by destination.
+  # Layer 2 Bytes Received by Destination
   respL2Bytes: StringNumberU64!
 }
 
@@ -489,61 +495,65 @@ type FileDeleteEventEdge {
 
 # Represents an event extracted from the FTP protocol.
 type FtpRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Username.
+  # Username
   user: String!
 
-  # Password.
+  # Password
   password: String!
 
-  # Command.
+  # Command
   command: String!
 
-  # Reply code.
+  # Reply Code
   replyCode: String!
 
-  # Reply message.
+  # Reply Message
   replyMsg: String!
 
-  # Passive mode flag.
+  # Passive Mode Flag
   dataPassive: Boolean!
 
-  # Data channel source IP address.
+  # Data Channel Source IP Address
   dataOrigAddr: String!
 
-  # Data channel destination IP address.
+  # Data Channel Destination IP Address
   dataRespAddr: String!
 
-  # Data channel destination port number.
+  # Data Channel Destination Port Number
   dataRespPort: Int!
 
-  # Filename.
+  # Filename
   file: String!
 
-  # File size.
+  # File Size
   fileSize: StringNumberU64!
 
-  # File ID.
+  # File ID
   fileId: String!
 }
 
@@ -569,91 +579,95 @@ type FtpRawEventEdge {
 
 # Represents an event extracted from the HTTP protocol.
 type HttpRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # HTTP method.
+  # HTTP Method
   method: String!
 
-  # Host.
+  # Host
   host: String!
 
-  # URI.
+  # URI
   uri: String!
 
-  # Referrer.
+  # Referrer
   referrer: String!
 
-  # HTTP version.
+  # HTTP Version
   version: String!
 
-  # User agent.
+  # User Agent
   userAgent: String!
 
-  # Request length.
+  # Request Length
   requestLen: StringNumberUsize!
 
-  # Response length.
+  # Response Length
   responseLen: StringNumberUsize!
 
-  # Status code.
+  # Status Code
   statusCode: Int!
 
-  # Status message.
+  # Status Message
   statusMsg: String!
 
-  # Username.
+  # Username
   username: String!
 
-  # Password.
+  # Password
   password: String!
 
-  # Cookie.
+  # Cookie
   cookie: String!
 
-  # Content encoding.
+  # Content Encoding
   contentEncoding: String!
 
-  # Content type.
+  # Content Type
   contentType: String!
 
-  # Cache control.
+  # Cache Control
   cacheControl: String!
 
-  # Request file names.
+  # Request Filenames
   origFilenames: [String!]!
 
-  # Request MIME types.
+  # Request MIME Types
   origMimeTypes: [String!]!
 
-  # Response file names.
+  # Response Filenames
   respFilenames: [String!]!
 
-  # Response MIME types.
+  # Response MIME Types
   respMimeTypes: [String!]!
 
-  # POST body.
+  # POST Body
   postBody: [Int!]!
 
-  # Last state.
+  # Last State
   state: String!
 }
 
@@ -724,52 +738,56 @@ input IpRange {
 
 # Represents an event extracted from the Kerberos protocol.
 type KerberosRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Client time.
+  # Client Time
   clientTime: StringNumberI64!
 
-  # Server time.
+  # Server Time
   serverTime: StringNumberI64!
 
-  # Error code.
+  # Error Code
   errorCode: StringNumberU32!
 
-  # Client realm.
+  # Client Realm
   clientRealm: String!
 
-  # Client name type.
+  # Client Name Type
   cnameType: Int!
 
-  # Client name.
+  # Client Name
   clientName: [String!]!
 
-  # Realm.
+  # Realm
   realm: String!
 
-  # Service name type.
+  # Service Name Type
   snameType: Int!
 
-  # Service name.
+  # Service Name
   serviceName: [String!]!
 }
 
@@ -795,46 +813,50 @@ type KerberosRawEventEdge {
 
 # Represents an event extracted from the LDAP protocol.
 type LdapRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Message ID.
+  # Message ID
   messageId: StringNumberU32!
 
-  # Version.
+  # Version
   version: Int!
 
-  # Operation code.
+  # Operation Code
   opcode: [String!]!
 
-  # Result code.
+  # Result Code
   result: [String!]!
 
-  # Diagnostic message.
+  # Diagnostic Message
   diagnosticMessage: [String!]!
 
-  # Object.
+  # Object
   object: [String!]!
 
-  # Argument.
+  # Argument
   argument: [String!]!
 }
 
@@ -891,43 +913,47 @@ type LogRawEventEdge {
 
 # Represents an event extracted from the MQTT protocol.
 type MqttRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # MQTT protocol.
+  # MQTT Protocol
   protocol: String!
 
-  # Version.
+  # Version
   version: Int!
 
-  # Client ID.
+  # Client ID
   clientId: String!
 
-  # Connection acknowledgement response.
+  # Connection Acknowledgement Response
   connackReason: Int!
 
-  # Subscription request.
+  # Subscription Request
   subscribe: [String!]!
 
-  # Subscription acknowledgement response.
+  # Subscription Acknowledgement Response
   subackReason: [Int!]!
 }
 
@@ -1143,31 +1169,35 @@ type NetworkRawEventsEdge {
 
 # Represents an event extracted from the NFS protocol.
 type NfsRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Read files.
+  # Read Files
   readFiles: [String!]!
 
-  # Write files.
+  # Write Files
   writeFiles: [String!]!
 }
 
@@ -1957,58 +1987,62 @@ type SecuLogRawEventEdge {
 
 # Represents an event extracted from the SMB protocol.
 type SmbRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Command.
+  # Command
   command: Int!
 
-  # Path.
+  # Path
   path: String!
 
-  # Service.
+  # Service
   service: String!
 
-  # Filename.
+  # Filename
   fileName: String!
 
-  # File size
+  # File Size
   fileSize: StringNumberU64!
 
-  # Resource type.
+  # Resource Type
   resourceType: Int!
 
-  # File ID.
+  # File ID
   fid: Int!
 
-  # Create time.
+  # Create Time
   createTime: StringNumberI64!
 
-  # Access time.
+  # Access Time
   accessTime: StringNumberI64!
 
-  # Write time.
+  # Write Time
   writeTime: StringNumberI64!
 
-  # Change time.
+  # Change Time
   changeTime: StringNumberI64!
 }
 
@@ -2220,88 +2254,92 @@ input TimeSeriesFilter {
 
 # Represents an event extracted from the TLS protocol.
 type TlsRawEvent {
-  # Start time.
+  # Start Time
   time: DateTime!
 
-  # Source IP address.
+  # Source IP Address
   origAddr: String!
 
-  # Source port number.
+  # Source Port Number
   origPort: Int!
 
-  # Destination IP address.
+  # Destination IP Address
   respAddr: String!
 
-  # Destination port number.
+  # Destination Port Number
   respPort: Int!
 
-  # Protocol number. TCP is 6, UDP is 17.
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
 
-  # End time in nanoseconds.
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
 
-  # Server name.
+  # Server Name
   serverName: String!
 
-  # ALPN protocol.
+  # ALPN Protocol
   alpnProtocol: String!
 
-  # JA3 fingerprint.
+  # JA3 Fingerprint
   ja3: String!
 
-  # TLS version.
+  # TLS Version
   version: String!
 
-  # Client cipher suites.
+  # Client Cipher Suites
   clientCipherSuites: [Int!]!
 
-  # Client extensions.
+  # Client Extensions
   clientExtensions: [Int!]!
 
-  # Cipher.
+  # Cipher
   cipher: Int!
 
-  # Extensions.
+  # Extensions
   extensions: [Int!]!
 
-  # JA3S fingerprint.
+  # JA3S Fingerprint
   ja3S: String!
 
-  # Certificate serial number.
+  # Certificate Serial Number
   serial: String!
 
-  # Certificate subject country name.
+  # Certificate Subject Country Name
   subjectCountry: String!
 
-  # Certificate subject organization name.
+  # Certificate Subject Organization Name
   subjectOrgName: String!
 
-  # Certificate common name.
+  # Certificate Common Name
   subjectCommonName: String!
 
-  # Certificate validity start.
+  # Certificate Validity Start
   validityNotBefore: StringNumberI64!
 
-  # Certificate validity end.
+  # Certificate Validity End
   validityNotAfter: StringNumberI64!
 
-  # Certificate subject alternative name.
+  # Certificate Subject Alternative Name
   subjectAltName: String!
 
-  # Certificate issuer country.
+  # Certificate Issuer Country
   issuerCountry: String!
 
-  # Certificate issuer organization name.
+  # Certificate Issuer Organization Name
   issuerOrgName: String!
 
-  # Certificate issuer organization unit name.
+  # Certificate Issuer Organization Unit Name
   issuerOrgUnitName: String!
 
-  # Certificate issuer common name.
+  # Certificate Issuer Common Name
   issuerCommonName: String!
 
-  # Last alert message.
+  # Last Alert Message
   lastAlert: Int!
 }
 
