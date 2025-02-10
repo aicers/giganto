@@ -370,28 +370,53 @@ struct KerberosRawEvent {
     service_name: Vec<String>,
 }
 
+/// Represents an event extracted from the SSH protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
 struct SshRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Client
     client: String,
+    /// Server
     server: String,
+    /// Cipher Algorithm
     cipher_alg: String,
+    /// MAC Algorithms
     mac_alg: String,
+    /// Compression Algorithm
     compression_alg: String,
+    /// Key Exchange Algorithm
     kex_alg: String,
+    /// Host Key Algorithm
     host_key_alg: String,
+    /// HASSH Algorithms
     hassh_algorithms: String,
+    /// HASSH
     hassh: String,
+    /// HASSH Server Algorithm
     hassh_server_algorithms: String,
+    /// HASSH Server
     hassh_server: String,
+    /// Client Signed Host Key Algorithm
     client_shka: String,
+    /// Server Signed Host Key Algorithm
     server_shka: String,
 }
 

@@ -2103,26 +2103,70 @@ type SmtpRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the SSH protocol.
 type SshRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP Address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Client
   client: String!
+
+  # Server
   server: String!
+
+  # Cipher Algorithm
   cipherAlg: String!
+
+  # MAC Algorithms
   macAlg: String!
+
+  # Compression Algorithm
   compressionAlg: String!
+
+  # Key Exchange Algorithm
   kexAlg: String!
+
+  # Host Key Algorithm
   hostKeyAlg: String!
+
+  # HASSH Algorithms
   hasshAlgorithms: String!
+
+  # HASSH
   hassh: String!
+
+  # HASSH Server Algorithm
   hasshServerAlgorithms: String!
+
+  # HASSH Server
   hasshServer: String!
+
+  # Client Signed Host Key Algorithm
   clientShka: String!
+
+  # Server Signed Host Key Algorithm
   serverShka: String!
 }
 
