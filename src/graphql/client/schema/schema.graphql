@@ -2066,20 +2066,52 @@ type SmbRawEventEdge {
   cursor: String!
 }
 
+# Represents an event extracted from the SMTP protocol.
 type SmtpRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP Address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Mail From
   mailfrom: String!
+
+  # Date
   date: String!
+
+  # From
   from: String!
+
+  # To
   to: String!
+
+  # Subject
   subject: String!
+
+  # Agent
   agent: String!
+
+  # State
   state: String!
 }
 
