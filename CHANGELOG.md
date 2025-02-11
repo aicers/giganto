@@ -51,6 +51,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `mqttRawEvents`
   - `nfsRawEvents`
   - `smbRawEvents`
+  - `sshRawEvents`
 - Changed `config` GraphQL API to respond `retention` field in "{days}d" format
   to align with the format of the configuration field in the API request.
 - `log_dir` is not a required configuration item.
