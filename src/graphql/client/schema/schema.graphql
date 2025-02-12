@@ -2,24 +2,64 @@
 #                         exactly one of its field be provided)
 directive @oneOf on INPUT_OBJECT
 
+# Represents an event extracted from the BOOTP protocol.
 type BootpRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP Address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Operation Code
   op: Int!
+
+  # Hardware Type
   htype: Int!
+
+  # Hop Count
   hops: Int!
+
+  # Transaction ID
   xid: StringNumberU32!
+
+  # Client IP Address
   ciaddr: String!
+
+  # Your IP Address
   yiaddr: String!
+
+  # Server IP Address
   siaddr: String!
+
+  # Gateway IP Address
   giaddr: String!
+
+  # Client Hardware IP Address
   chaddr: [Int!]!
+
+  # Server Hostname
   sname: String!
+
+  # Boot Filename
   file: String!
 }
 
