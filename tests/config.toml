@@ -1,10 +1,10 @@
 ingest_srv_addr = "0.0.0.0:38370"
 publish_srv_addr = "0.0.0.0:38371"
 graphql_srv_addr = "127.0.0.1:8442"
-data_dir = "tests/data"
+data_dir = "tests"
 retention = "100d"
 log_dir = "/data/logs/apps"
-export_dir = "tests/export"
+export_dir = "tests"
 ack_transmission = 1024
 max_open_files = 8000
 max_mb_of_level_base = 512

@@ -279,7 +279,7 @@ struct HttpRawEvent {
     state: String,
 }
 
-/// Represents and event extracted from the RDP protocol.
+/// Represents an event extracted from the RDP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
 struct RdpRawEvent {
@@ -452,7 +452,7 @@ struct SshRawEvent {
     server_shka: String,
 }
 
-/// Represents and event extracted from the DCE-RPC protocol.
+/// Represents an event extracted from the DCE-RPC protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
 struct DceRpcRawEvent {

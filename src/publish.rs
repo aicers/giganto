@@ -43,12 +43,11 @@ use giganto_client::{
     },
     RawEventKind,
 };
-use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
+use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::{
     select,
     sync::{mpsc::unbounded_channel, Notify},
-    time::sleep,
 };
 use tracing::{debug, error, info, warn};
 
@@ -58,7 +57,6 @@ use crate::ingest::{implement::EventFilter, NetworkKey};
 use crate::peer::{PeerIdents, Peers};
 use crate::server::{
     config_client, config_server, extract_cert_from_conn, subject_from_cert_verbose, Certs,
-    SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::{IngestSensors, PcapSensors, StreamDirectChannels};
@@ -98,6 +96,7 @@ impl Server {
             endpoint.local_addr().expect("for local addr display")
         );
 
+        let mut conn_hdl: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             select! {
                 Some(conn) = endpoint.accept()  => {
@@ -109,7 +108,7 @@ impl Server {
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
                     let certs = certs.clone();
-                    tokio::spawn(async move {
+                    conn_hdl = Some(tokio::spawn(async move {
                         let remote = conn.remote_address();
                         if let Err(e) = handle_connection(
                             conn,
@@ -126,11 +125,14 @@ impl Server {
                         {
                             error!("connection failed: {}. {}", e, remote);
                         }
-                    });
+                    }));
                 },
                 () = notify_shutdown.notified() => {
-                    sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for channels,connection to be ready for shutdown.
                     endpoint.close(0_u32.into(), &[]);
+                    if let Some(handle) = conn_hdl {
+                        info!("Shutting down connections");
+                        let _ = tokio::join!(handle);
+                    }
                     info!("Shutting down publish");
                     break;
                 },
@@ -166,21 +168,23 @@ async fn handle_connection(
     };
     let (_, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
 
-    tokio::spawn({
-        let certs = certs.clone();
-        request_stream(
-            connection.clone(),
-            db.clone(),
-            send,
-            recv,
-            sensor,
-            pcap_sensors.clone(),
-            stream_direct_channels.clone(),
-            peers.clone(),
-            peer_idents.clone(),
-            certs,
-        )
-    });
+    let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
+        tokio::spawn({
+            let certs = certs.clone();
+            request_stream(
+                connection.clone(),
+                db.clone(),
+                send,
+                recv,
+                sensor,
+                pcap_sensors.clone(),
+                stream_direct_channels.clone(),
+                peers.clone(),
+                peer_idents.clone(),
+                certs,
+                notify_shutdown.clone(),
+            )
+        });
 
     loop {
         select! {
@@ -208,9 +212,8 @@ async fn handle_connection(
                 });
             },
             () = notify_shutdown.notified() => {
-                // Wait time for channels to be ready for shutdown.
-                sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
+                req_stream_hdl.await??;
                 return Ok(())
             },
         }
@@ -229,6 +232,7 @@ async fn request_stream(
     peers: Peers,
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     loop {
         match receive_stream_request(&mut recv).await {
@@ -248,6 +252,7 @@ async fn request_stream(
                     )
                     .await?;
                 } else {
+                    let notify_shutdown = notify_shutdown.clone();
                     tokio::spawn(async move {
                         match node_type {
                             NodeType::SemiSupervised => {
@@ -263,6 +268,7 @@ async fn request_stream(
                                             record_type,
                                             msg,
                                             stream_direct_channels,
+                                            notify_shutdown,
                                         )
                                         .await
                                         {
@@ -290,6 +296,7 @@ async fn request_stream(
                                             record_type,
                                             msg,
                                             stream_direct_channels,
+                                            notify_shutdown,
                                         )
                                         .await
                                         {
@@ -308,7 +315,8 @@ async fn request_stream(
                 }
             }
             Err(e) => {
-                error!("{}", e);
+                error!("publish error {}", e);
+                let _ = recv.stop(VarInt::from_u32(0));
                 break;
             }
         }
@@ -416,6 +424,7 @@ async fn process_stream<T>(
     record_type: RequestStreamRecord,
     request_msg: T,
     stream_direct_channels: StreamDirectChannels,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()>
 where
     T: RequestStreamMessage,
@@ -433,6 +442,7 @@ where
                         kind,
                         node_type,
                         stream_direct_channels,
+                        notify_shutdown,
                     )
                     .await
                     {
@@ -510,6 +520,7 @@ async fn send_stream<T, N>(
     kind: Option<String>,
     node_type: NodeType,
     stream_direct_channels: StreamDirectChannels,
+    notify_shutdown: Arc<Notify>,
 ) -> Result<()>
 where
     T: EventFilter + Serialize + DeserializeOwned + Display,
@@ -604,7 +615,9 @@ where
                         break;
                     }
                 }
-                else => break,
+                () = notify_shutdown.notified() => {
+                    break;
+                }
             }
         }
     });

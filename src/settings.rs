@@ -1,12 +1,19 @@
 //! Configurations for the application.
-use std::{collections::HashSet, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::PathBuf,
+    time::Duration,
+};
 
-use clap::{ArgAction, Parser};
+use anyhow::bail;
+use clap::Parser;
 use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer, Serialize};
-use toml::ser::Error as TomlError;
+use toml_edit::DocumentMut;
 
-use crate::peer::PeerIdentity;
+use crate::{graphql::status::write_toml_file, peer::PeerIdentity};
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
@@ -24,7 +31,7 @@ const DEFAULT_MAX_SUB_COMPACTIONS: u32 = 2;
 pub struct Args {
     /// Path to the local configuration TOML file.
     #[arg(short, value_name = "CONFIG_PATH")]
-    pub config: Option<String>,
+    pub config: String,
 
     /// Path to the certificate file.
     #[arg(long, value_name = "CERT_PATH")]
@@ -35,48 +42,21 @@ pub struct Args {
     pub key: String,
 
     /// Paths to the CA certificate files.
-    #[arg(long, value_name = "CA_CERTS_PATHS", action = ArgAction::Append, required = true)]
+    #[arg(
+        long,
+        value_name = "CA_CERTS_PATHS",
+        required = true,
+        value_delimiter = ','
+    )]
     pub ca_certs: Vec<String>,
+
+    /// Path to the log directory.
+    #[arg(long, value_name = "LOG_DIR")]
+    pub log_dir: Option<PathBuf>,
 
     /// Enable the repair mode.
     #[arg(long)]
     pub repair: bool,
-}
-
-impl Args {
-    pub fn is_local(&self) -> bool {
-        self.config.is_some()
-    }
-}
-
-/// The application settings.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Config {
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub publish_srv_addr: SocketAddr, // IP address & port to publish data
-    pub data_dir: PathBuf, // DB storage path
-    #[serde(with = "humantime_serde")]
-    pub retention: Duration, // Data retention period
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
-    pub log_dir: Option<PathBuf>, // giganto's syslog path
-    pub export_dir: PathBuf, // giganto's export file path
-
-    // db options
-    pub max_open_files: i32,
-    pub max_mb_of_level_base: u64,
-    pub num_of_thread: i32,
-    pub max_sub_compactions: u32,
-
-    // peers
-    #[serde(default, deserialize_with = "deserialize_peer_addr")]
-    pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
-    pub peers: Option<HashSet<PeerIdentity>>,
-
-    // ack transmission interval
-    pub ack_transmission: u16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,7 +64,40 @@ pub struct Settings {
     pub config: Config,
 
     // config file path
-    pub cfg_path: Option<String>,
+    pub cfg_path: String,
+}
+/// The application settings.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Config {
+    #[serde(default, deserialize_with = "deserialize_peer_addr")]
+    pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
+    pub peers: Option<HashSet<PeerIdentity>>,
+
+    #[serde(flatten)]
+    pub visible: ConfigVisible,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigVisible {
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub graphql_srv_addr: SocketAddr, // IP address & port to graphql
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub publish_srv_addr: SocketAddr, // IP address & port to publish data
+    #[serde(with = "humantime_serde")]
+    pub retention: Duration, // Data retention period
+    pub export_dir: PathBuf, // giganto's export file path
+
+    // DB and DB options
+    pub data_dir: PathBuf, // DB storage path
+    pub max_open_files: i32,
+    pub max_mb_of_level_base: u64,
+    pub num_of_thread: i32,
+    pub max_sub_compactions: u32,
+
+    // ack transmission interval
+    pub ack_transmission: u16,
 }
 
 impl Settings {
@@ -98,26 +111,67 @@ impl Settings {
 
         Ok(Self {
             config,
-            cfg_path: Some(cfg_path.to_string()),
+            cfg_path: cfg_path.to_string(),
         })
     }
 
-    pub fn from_server(toml_str: &str) -> Result<Self, ConfigError> {
-        let s = default_config_builder()
-            .add_source(File::from_str(toml_str, config::FileFormat::Toml))
-            .build()?;
+    pub fn update_config_file(&mut self, new_config: &ConfigVisible) -> anyhow::Result<()> {
+        self.config.visible = new_config.clone();
 
-        let config: Config = s.try_deserialize()?;
+        let toml_str = toml::to_string(&self.config)?;
+        let doc = toml_str.parse::<DocumentMut>()?;
+        write_toml_file(&doc, &self.cfg_path)?;
 
-        Ok(Self {
-            config,
-            cfg_path: None,
-        })
+        Ok(())
     }
+}
 
-    pub fn to_toml_string(&self) -> Result<String, TomlError> {
-        toml::to_string(&self.config)
+impl Config {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.visible.validate()?;
+        Ok(())
     }
+}
+
+impl ConfigVisible {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.max_open_files < 0 {
+            bail!("max open files must be greater than or equal to 0");
+        }
+
+        if self.num_of_thread < 0 {
+            bail!("num of thread must be greater than or equal to 0");
+        }
+
+        if !self.data_dir.exists() || !self.data_dir.is_dir() {
+            bail!("data directory is invalid");
+        }
+
+        if !self.export_dir.exists() || !self.export_dir.is_dir() {
+            bail!("export directory is invalid");
+        }
+        if !is_writable(&self.export_dir) {
+            bail!("no write permission to the export directory");
+        }
+
+        Ok(())
+    }
+}
+
+fn is_writable(path: &PathBuf) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+
+    let permissions = metadata.permissions();
+    let mode = permissions.mode();
+
+    let uid = nix::unistd::Uid::current().as_raw();
+    let gid = nix::unistd::Gid::current().as_raw();
+
+    metadata.uid() == uid && mode & 0o200 != 0
+        || metadata.gid() == gid && mode & 0o020 != 0
+        || mode & 0o002 != 0
 }
 
 /// Creates a new `ConfigBuilder` instance with the default configuration.

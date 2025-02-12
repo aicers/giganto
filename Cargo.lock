@@ -1045,6 +1045,7 @@ dependencies = [
  "humantime-serde",
  "libc",
  "mockito",
+ "nix",
  "num-traits",
  "num_enum",
  "pcap",

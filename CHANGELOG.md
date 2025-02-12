@@ -26,15 +26,22 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
   - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
     performs a migration to change the key and value of `Oplog`.
-- Added minimal mode to improve behavior in remote configuration mode.
-  - If local configuration is not used when running Giganto, it will run in
-    minimal mode, with only the GraphQL server running. Retain task, peer server
-    task, ingest task, publish task, and DB migration are not executed.
-  - In minimal mode, the APIs provided by the GraphQL server are limited. In
-    this mode, only the APIs provided by `graphql::status` are available.
-  - If the configuration is received successfully via the `setConfig` GraphQL
-    API, it will switch to normal mode, where all task and DB migrations run
-    as normal, just like when running Giganto with local settings.
+- Several changes are made to configuration management via the GraphQL API:
+  - The `setConfig` GraphQL API has been renamed to `updateConfig` to better
+    reflect its functionality. This API not only accepts a new configuration but
+    also applies it by reloading the system. Upon success, the API returns the
+    new config. The fields that can be updated via `updateConfig` are the same
+    as those retrievable via the `config` GraphQL API.
+  - The `updateConfig` GraphQL API returns an error if the provided `new` config
+    is an empty string. It also returns an error if the `new` is the same as the
+    current configuration, which can be retrieved via the `config` GraphQL API.
+    Additionally, an error is returned if the `new` config content is invalid.
+    If an error occurs, the update request is not applied.
+  - The `config` GraphQL API no longer returns the `logDir`, `addrToPeers`, and
+    `peers` fields.
+  - The `retention` field in the `config` GraphQL API response now follows the
+    "{days}d" format to align with the request format used in `setConfig`
+    GraphQL API.
 - The term `timestamp` and `timestamps` are replaced with `time` and `times` in
   event structs where the type is `DateTime<Utc>`. This change impacts GraphQL
   APIs that return event data or accept filter parameters that used timestamp.
@@ -57,19 +64,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `bootpRawEvents`
   - `dceRpcRawEvents`
   - `rdpRawEvents`
-- Changed `config` GraphQL API to respond `retention` field in "{days}d" format
-  to align with the format of the configuration field in the API request.
-- `log_dir` is not a required configuration item.
-- Adjust logging behavior by revised logging policy.
-  - If `log_dir` is not present in the local/remote config, logs are written
-    to stdout/stderr.
-  - If `log_dir` in the local/remote config is writable, logs are written to
-    the specified `log_dir`.
-  - If `log_dir` in the local config is not writable, the program terminates.
-  - If `log_dir` in the remote config is not writable, the program enters idle
-    mode.
-  - Logging in idle mode: logs are written to stdout/stderr until the remote
-    config is retrieved.
+- `log_dir` is no longer a configuration item. To specify the log directory, it
+  is required to use an optional command-line argument `log-dir`.
+- Logging behavior related to command line arguemtn `log-dir` is as follows:
+  - If `log-dir` is not provided, logs are written to stdout using the tracing
+    library.
+  - If `log-dir` is provided and writable, logs are written to the specified
+    directory using the tracing library.
+  - If `log-dir` is provided but not writable, Giganto will terminate.
+  - Any logs generated before the tracing functionality is initialized will be
+    written directly to stdout or stderr using `println`, `eprintln`, or
+    similar.
 
 ### Removed
 

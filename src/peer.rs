@@ -29,14 +29,13 @@ use tracing::{error, info, warn};
 
 use crate::{
     graphql::status::{
-        insert_toml_peers, parse_toml_element_to_string, settings_to_doc, write_toml_file,
+        insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file,
         TomlPeers, CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR,
     },
     server::{
         config_client, config_server, extract_cert_from_conn, subject_from_cert,
         subject_from_cert_verbose, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
     },
-    settings::Settings,
     IngestSensors,
 };
 
@@ -107,7 +106,7 @@ pub struct PeerConns {
     local_address: SocketAddr,
     notify_sensor: Arc<Notify>,
     config_doc: DocumentMut,
-    config_path: Option<String>,
+    config_path: String,
 }
 
 pub struct Peer {
@@ -142,7 +141,7 @@ impl Peer {
         peer_idents: PeerIdents,
         notify_sensor: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
-        settings: Settings,
+        config_path: String,
     ) -> Result<()> {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
@@ -162,7 +161,7 @@ impl Peer {
 
         let (sender, mut receiver): (Sender<PeerIdentity>, Receiver<PeerIdentity>) = channel(100);
 
-        let Ok(config_doc) = settings_to_doc(&settings) else {
+        let Ok(config_doc) = read_toml_file(&config_path) else {
             bail!("Failed to open/read config's toml file");
         };
 
@@ -176,7 +175,7 @@ impl Peer {
             local_address: self.local_address,
             notify_sensor,
             config_doc,
-            config_path: settings.cfg_path,
+            config_path,
         };
 
         tokio::spawn(client_run(
@@ -341,7 +340,7 @@ async fn client_connection(
                     peer_conn_info.peer_identities.clone(),
                     peer_conn_info.peer_sender.clone(),
                     peer_conn_info.config_doc.clone(),
-                    peer_conn_info.config_path.clone(),
+                    &peer_conn_info.config_path,
                 )
                 .await?;
 
@@ -384,7 +383,7 @@ async fn client_connection(
                             let doc = peer_conn_info.config_doc.clone();
                             let path= peer_conn_info.config_path.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
+                                if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
                                     error!("failed: {e}");
                                 }
                             });
@@ -500,7 +499,7 @@ async fn server_connection(
         peer_conn_info.peer_identities.clone(),
         peer_conn_info.peer_sender.clone(),
         peer_conn_info.config_doc.clone(),
-        peer_conn_info.config_path.clone(),
+        &peer_conn_info.config_path,
     )
     .await?;
 
@@ -543,7 +542,7 @@ async fn server_connection(
                 let doc = peer_conn_info.config_doc.clone();
                 let path = peer_conn_info.config_path.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, path).await {
+                    if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
                         error!("failed: {}", e);
                     }
                 });
@@ -581,7 +580,7 @@ async fn handle_request(
     peers: Peers,
     sender: Sender<PeerIdentity>,
     doc: DocumentMut,
-    path: Option<String>,
+    path: &str,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
     match msg_type {
@@ -693,7 +692,7 @@ async fn update_to_new_peer_list(
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     sender: Sender<PeerIdentity>,
     mut doc: DocumentMut,
-    path: Option<String>,
+    path: &str,
 ) -> Result<()> {
     let mut is_change = false;
     for recv_peer_info in recv_peer_list {
@@ -717,12 +716,8 @@ async fn update_to_new_peer_list(
         if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
             error!("{e:?}");
         }
-        if let Some(path) = path {
-            if let Err(e) = write_toml_file(&doc, &path) {
-                error!("{e:?}");
-            }
-        } else {
-            error!("Configuration path is None, unable to write to the TOML file.");
+        if let Err(e) = write_toml_file(&doc, path) {
+            error!("{e:?}");
         }
     }
 
@@ -757,7 +752,6 @@ pub mod tests {
     use crate::{
         peer::{receive_peer_data, request_init_info, PeerCode, PeerIdentity},
         server::Certs,
-        settings::Settings,
         to_cert_chain, to_private_key, to_root_cert, PeerInfo,
     };
 
@@ -890,9 +884,6 @@ pub mod tests {
         let file_path = tmp_dir.path().join("config.toml");
         File::create(&file_path).unwrap();
 
-        let mut settings = Settings::from_file("tests/config.toml").unwrap();
-        settings.cfg_path = Some(file_path.to_str().unwrap().to_string());
-
         // run peer
         tokio::spawn(peer_init().run(
             ingest_sensors.clone(),
@@ -900,7 +891,7 @@ pub mod tests {
             peer_idents,
             notify_sensor.clone(),
             Arc::new(Notify::new()),
-            settings,
+            file_path.to_string_lossy().to_string(),
         ));
 
         // run peer client
