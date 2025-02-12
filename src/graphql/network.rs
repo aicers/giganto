@@ -788,33 +788,63 @@ impl From<usize> for StringNumberUsize {
     }
 }
 
+/// Represents an event extracted from the DHCP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEvent])]
 struct DhcpRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Message Type
     msg_type: u8,
+    /// Client IP Address
     ciaddr: String,
+    /// Your IP Address
     yiaddr: String,
+    /// Server IP Address
     siaddr: String,
+    /// Gateway IP Address
     giaddr: String,
+    /// Subnet Mask
     subnet_mask: String,
+    /// Routers
     router: Vec<String>,
+    /// Domain Name Servers
     domain_name_server: Vec<String>,
+    /// Request IP Address
     req_ip_addr: String,
+    /// Lease Time
     lease_time: StringNumberU32,
+    /// Server ID
     server_id: String,
+    /// Parameter Request List
     param_req_list: Vec<u8>,
+    /// Message
     message: String,
+    /// Renewal Time
     renewal_time: StringNumberU32,
+    /// Rebinding Time
     rebinding_time: StringNumberU32,
+    /// Class ID List
     class_id: Vec<u8>,
+    /// Client ID Type
     client_id_type: u8,
+    /// Client ID List
     client_id: Vec<u8>,
 }
 
