@@ -718,26 +718,49 @@ struct NfsRawEvent {
     write_files: Vec<String>,
 }
 
+/// Represents an event extracted from the BOOTP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [bootp_raw_events::BootpRawEventsBootpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnBootpRawEvent])]
 struct BootpRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Operation Code
     op: u8,
+    /// Hardware Type
     htype: u8,
+    /// Hop Count
     hops: u8,
+    /// Transaction ID
     xid: StringNumberU32,
+    /// Client IP Address
     ciaddr: String,
+    /// Your IP Address
     yiaddr: String,
+    /// Server IP Address
     siaddr: String,
+    /// Gateway IP Address
     giaddr: String,
+    /// Client Hardware IP Address
     chaddr: Vec<u8>,
+    /// Server Hostname
     sname: String,
+    /// Boot Filename
     file: String,
 }
 
