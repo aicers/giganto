@@ -292,22 +292,41 @@ struct RdpRawEvent {
     cookie: String,
 }
 
+/// Represents an event extracted from the SMTP protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
 struct SmtpRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Mail From
     mailfrom: String,
+    /// Date
     date: String,
+    /// From
     from: String,
+    /// To
     to: String,
+    /// Subject
     subject: String,
+    /// Agent
     agent: String,
+    /// State
     state: String,
 }
 
