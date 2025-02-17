@@ -53,6 +53,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `smbRawEvents`
   - `smtpRawEvents`
   - `sshRawEvents`
+  - `dhcpRawEvents`
   - `bootpRawEvents`
 - Changed `config` GraphQL API to respond `retention` field in "{days}d" format
   to align with the format of the configuration field in the API request.
