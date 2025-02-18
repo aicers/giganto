@@ -439,19 +439,35 @@ struct SshRawEvent {
     server_shka: String,
 }
 
+/// Represents and event extracted from the DCE-RPC protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
 struct DceRpcRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Round-Trip Time
     rtt: StringNumberI64,
+    /// Named Pipe
     named_pipe: String,
+    /// Endpoint
     endpoint: String,
+    /// Operation
     operation: String,
 }
 
