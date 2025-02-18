@@ -1951,14 +1951,34 @@ type Query {
   ): Netflow9RawEventConnection!
 }
 
+# Represents an event extracted from the RDP protocol.
 type RdpRawEvent {
+  # Start Time
   time: DateTime!
+
+  # Source IP Address
   origAddr: String!
+
+  # Source Port Number
   origPort: Int!
+
+  # Destination IP Address
   respAddr: String!
+
+  # Destination Port Number
   respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
   proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
   lastTime: StringNumberI64!
+
+  # Cookie
   cookie: String!
 }
 
