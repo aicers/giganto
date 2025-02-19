@@ -42,11 +42,11 @@ use tracing::error;
 use crate::{
     ingest::implement::EventFilter,
     peer::Peers,
-    settings::Settings,
+    settings::{ConfigVisible, Settings},
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
     },
-    AckTransmissionCount, IngestSensors, PcapSensors,
+    IngestSensors, PcapSensors,
 };
 
 pub const TIMESTAMP_SIZE: usize = 8;
@@ -65,9 +65,6 @@ pub struct Query(
     security::SecurityLogQuery,
     netflow::NetflowQuery,
 );
-
-#[derive(Default, MergedObject)]
-pub struct MinimalQuery(status::StatusQuery);
 
 #[derive(Default, MergedObject)]
 pub struct Mutation(status::ConfigMutation);
@@ -145,14 +142,12 @@ pub trait ClusterSortKey {
 }
 
 type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
-type MinimalSchema = async_graphql::Schema<MinimalQuery, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub struct NodeName(pub String);
 pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
-pub struct TracingEnabled(bool);
 
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
@@ -163,14 +158,11 @@ pub fn schema(
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
-    reload_tx: Sender<String>,
+    reload_tx: Sender<ConfigVisible>,
     notify_reboot: Arc<Notify>,
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
-    ack_transmission_cnt: AckTransmissionCount,
-    is_local_config: bool,
-    settings: Option<Settings>,
-    tracing_enabled: bool,
+    settings: Settings,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -181,38 +173,11 @@ pub fn schema(
         .data(request_client_pool)
         .data(export_path)
         .data(reload_tx)
-        .data(ack_transmission_cnt)
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
-        .data(is_local_config)
         .data(settings)
-        .data(TracingEnabled(tracing_enabled))
         .finish()
-}
-
-pub fn minimal_schema(
-    reload_tx: Sender<String>,
-    notify_reboot: Arc<Notify>,
-    notify_power_off: Arc<Notify>,
-    notify_terminate: Arc<Notify>,
-    is_local_config: bool,
-    settings: Option<Settings>,
-    tracing_enabled: bool,
-) -> MinimalSchema {
-    MinimalSchema::build(
-        MinimalQuery::default(),
-        Mutation::default(),
-        EmptySubscription,
-    )
-    .data(reload_tx)
-    .data(TerminateNotify(notify_terminate))
-    .data(RebootNotify(notify_reboot))
-    .data(PowerOffNotify(notify_power_off))
-    .data(is_local_config)
-    .data(settings)
-    .data(TracingEnabled(tracing_enabled))
-    .finish()
 }
 
 /// The default page size for connections when neither `first` nor `last` is
@@ -1776,12 +1741,12 @@ mod tests {
         EmptySubscription, SimpleObject,
     };
     use chrono::{DateTime, Utc};
-    use tokio::sync::{Notify, RwLock};
+    use tokio::sync::Notify;
 
     use super::{schema, sort_and_trunk_edges, NodeName};
     use crate::graphql::{ClusterSortKey, Mutation, Query};
     use crate::peer::{PeerInfo, Peers};
-    use crate::settings::Settings;
+    use crate::settings::{ConfigVisible, Settings};
     use crate::storage::{Database, DbOptions};
     use crate::{new_pcap_sensors, IngestSensors};
 
@@ -1797,13 +1762,13 @@ mod tests {
     }
 
     impl TestSchema {
-        fn setup(ingest_sensors: IngestSensors, peers: Peers, is_local_config: bool) -> Self {
+        fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
-            let (reload_tx, _) = tokio::sync::mpsc::channel::<String>(1);
+            let (reload_tx, _) = tokio::sync::mpsc::channel::<ConfigVisible>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
@@ -1820,10 +1785,7 @@ mod tests {
                 notify_reboot,
                 notify_power_off,
                 notify_terminate,
-                Arc::new(RwLock::new(1024)),
-                is_local_config,
-                Some(settings),
-                true,
+                settings,
             );
 
             Self {
@@ -1842,7 +1804,7 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sensors, peers, true)
+            Self::setup(ingest_sensors, peers)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
@@ -1865,19 +1827,7 @@ mod tests {
                 },
             )])));
 
-            Self::setup(ingest_sensors, peers, true)
-        }
-
-        pub fn new_with_remote_config() -> Self {
-            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-                CURRENT_GIGANTO_INGEST_SENSORS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<String>>(),
-            ));
-
-            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sensors, peers, false)
+            Self::setup(ingest_sensors, peers)
         }
 
         pub async fn execute(&self, query: &str) -> async_graphql::Response {

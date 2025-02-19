@@ -1,18 +1,18 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as AnyhowContext};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
-use tracing::{info, warn, Level};
+use tracing::{error, info};
 
 use super::{
     client::derives::{StringNumberU32, StringNumberU64},
     PowerOffNotify, RebootNotify, TerminateNotify,
 };
+use crate::settings::ConfigVisible;
 #[cfg(debug_assertions)]
 use crate::storage::Database;
-use crate::{graphql::TracingEnabled, log, settings::Config};
 use crate::{peer::PeerIdentity, settings::Settings};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
@@ -46,8 +46,8 @@ struct Properties {
     stats: String,
 }
 
-#[Object]
-impl Config {
+#[Object(name = "Config")]
+impl ConfigVisible {
     async fn ingest_srv_addr(&self) -> String {
         self.ingest_srv_addr.to_string()
     }
@@ -75,12 +75,6 @@ impl Config {
         self.data_dir.to_string_lossy().to_string()
     }
 
-    async fn log_dir(&self) -> Option<String> {
-        self.log_dir
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-    }
-
     async fn export_dir(&self) -> String {
         self.export_dir.to_string_lossy().to_string()
     }
@@ -99,16 +93,6 @@ impl Config {
 
     async fn max_sub_compactions(&self) -> StringNumberU32 {
         self.max_sub_compactions.into()
-    }
-
-    async fn addr_to_peers(&self) -> Option<String> {
-        self.addr_to_peers.map(|addr| addr.to_string())
-    }
-
-    async fn peers(&self) -> Option<Vec<PeerIdentity>> {
-        self.peers
-            .as_ref()
-            .map(|peers| peers.iter().cloned().collect())
     }
 
     async fn ack_transmission(&self) -> u16 {
@@ -165,18 +149,9 @@ impl StatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    async fn config(&self, ctx: &Context<'_>) -> Result<Config> {
-        let is_local = ctx.data::<bool>()?;
-
-        if *is_local {
-            Err(anyhow!("Config is local").into())
-        } else {
-            let s = ctx.data::<Option<Settings>>()?;
-            if let Some(settings) = s {
-                return Ok(settings.config.clone());
-            }
-            Err(anyhow!("The config doesn't exist and needs to be set up remotely.").into())
-        }
+    async fn config(&self, ctx: &Context<'_>) -> Result<ConfigVisible> {
+        let s = ctx.data::<Settings>()?;
+        Ok(s.config.visible.clone())
     }
 
     #[allow(clippy::unused_async)]
@@ -187,46 +162,69 @@ impl StatusQuery {
 
 #[Object]
 impl ConfigMutation {
+    /// Updates the config with the given `new` config. It involves realoding the module with the new
+    /// config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
+    /// invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
+    /// `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
+    /// It also returns an error if the `export_dir` is not writable. If the `new` is the same as
+    /// the current config, it returns an error.
     #[allow(clippy::unused_async)]
-    async fn set_config(&self, ctx: &Context<'_>, draft: String) -> Result<bool> {
-        let is_local = ctx.data::<bool>()?;
-        let TracingEnabled(tracing_enabled) = ctx.data::<TracingEnabled>()?;
-        let tracing_enabled = *tracing_enabled;
-
-        if *is_local {
-            warn!("The request to the GraphQL API to change the configuration was ignored because this is running with a local configuration.");
-            return Err("Config is local".to_string().into());
+    async fn update_config(
+        &self,
+        ctx: &Context<'_>,
+        old: String,
+        new: String,
+    ) -> Result<ConfigVisible> {
+        if new.is_empty() {
+            return Err("Cannot update datalake config with an empty new config"
+                .to_string()
+                .into());
         }
 
-        let config_draft: Config = toml::from_str(&draft)?;
-
-        let s = ctx.data::<Option<Settings>>()?;
-
-        if let Some(settings) = s {
-            if settings.config == config_draft {
-                info!("No changes.");
-                return Err("No changes".to_string().into());
-            }
+        if old == new {
+            return Err(
+                "Cannot update datalake config with the same old and new configs"
+                    .to_string()
+                    .into(),
+            );
         }
 
-        let reload_tx = ctx.data::<Sender<String>>()?;
+        let s = ctx.data::<Settings>()?;
+        let old_config: ConfigVisible = toml::from_str(&old)?;
+        if s.config.visible != old_config {
+            info!("Old config does not match the current config.");
+            return Err("Old config does not match the current config."
+                .to_string()
+                .into());
+        }
+
+        let new_config: ConfigVisible = toml::from_str(&new)?;
+        new_config.validate()?;
+
+        if s.config.visible == new_config {
+            info!("No changes.");
+            return Err("No changes".to_string().into());
+        }
+
+        let reload_tx = ctx.data::<Sender<ConfigVisible>>()?;
         let tx_clone = reload_tx.clone();
 
+        let new_config_clone = new_config.clone();
         tokio::spawn(async move {
-            // Used to complete the response of a graphql Mutation.
+            // Used to complete the response of a GraphQL Mutation.
             tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
-            tx_clone.send(draft).await.map_err(|e| {
-                log(
-                    tracing_enabled,
-                    Level::ERROR,
-                    &format!("Failed to send config: {e:?}"),
-                );
+            tx_clone.send(new_config_clone).await.map_err(|e| {
+                error!("Failed to send config: {e:?}");
                 "Failed to send config".to_string()
             })
         });
-        log(tracing_enabled, Level::INFO, "Draft applied.");
+        info!("New config is applied.");
 
-        Ok(true)
+        Ok(new_config)
     }
 
     #[allow(clippy::unused_async)]
@@ -254,13 +252,13 @@ impl ConfigMutation {
     }
 }
 
-pub fn settings_to_doc(settings: &Settings) -> Result<DocumentMut> {
-    let toml = settings.to_toml_string()?;
+pub fn read_toml_file(path: &str) -> anyhow::Result<DocumentMut> {
+    let toml = std::fs::read_to_string(path).context("toml not found")?;
     let doc = toml.parse::<DocumentMut>()?;
     Ok(doc)
 }
 
-pub fn write_toml_file(doc: &DocumentMut, path: &str) -> Result<()> {
+pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
     let output = doc.to_string();
     let mut config_file = OpenOptions::new()
         .write(true)
@@ -337,9 +335,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_local_config() {
-        let toml_content = test_toml_content();
+    async fn test_update_config_with_empty_string() {
+        let schema = TestSchema::new();
 
+        let old_config = old_config();
+
+        // set_config
+        let query = format!(
+            r#"
+            mutation {{
+                updateConfig(old: {old_config:?} new: "")
+            }}
+            "#
+        );
+
+        let res = schema.execute(&query).await;
+
+        assert!(!res.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_config() {
         let schema = TestSchema::new();
 
         // config
@@ -351,71 +367,12 @@ mod tests {
                     graphqlSrvAddr
                     dataDir
                     retention
-                    logDir
                     exportDir
                     ackTransmission
                     maxOpenFiles
                     maxMbOfLevelBase
                     numOfThread
                     maxSubCompactions
-                    addrToPeers
-                    peers {
-                        addr
-                        hostname
-                    }
-                }
-            }
-        ";
-
-        let res = schema.execute(query).await;
-
-        assert_eq!(
-            res.errors.first().unwrap().message,
-            "Config is local".to_string()
-        );
-
-        // set_config
-        let query = format!(
-            r"
-            mutation {{
-                setConfig(draft: {toml_content:?})
-            }}
-            "
-        );
-
-        let res = schema.execute(&query).await;
-
-        assert_eq!(
-            res.errors.first().unwrap().message,
-            "Config is local".to_string()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_remote_config() {
-        let schema = TestSchema::new_with_remote_config();
-
-        // config
-        let query = r"
-            {
-                config {
-                    ingestSrvAddr
-                    publishSrvAddr
-                    graphqlSrvAddr
-                    dataDir
-                    retention
-                    logDir
-                    exportDir
-                    ackTransmission
-                    maxOpenFiles
-                    maxMbOfLevelBase
-                    numOfThread
-                    maxSubCompactions
-                    addrToPeers
-                    peers {
-                        addr
-                        hostname
-                    }
                 }
             }
         ";
@@ -427,39 +384,62 @@ mod tests {
             data.contains("ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\"")
         );
 
-        let toml_content = test_toml_content();
+        let old_config = old_config();
+        let new_config = toml::toml!(
+            ingest_srv_addr = "0.0.0.0:48370"
+            publish_srv_addr = "0.0.0.0:48371"
+            graphql_srv_addr = "127.0.0.1:8442"
+            data_dir = "tests"
+            retention = "100d"
+            export_dir = "tests"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 10
+            max_sub_compactions = 2
+        )
+        .to_string();
 
         // set_config
         let query = format!(
             r"
             mutation {{
-                setConfig(draft: {toml_content:?})
+                updateConfig(old: {old_config:?} new: {new_config:?}) {{
+                    ingestSrvAddr
+                    publishSrvAddr
+                    graphqlSrvAddr
+                    dataDir
+                    retention
+                    exportDir
+                    ackTransmission
+                    maxOpenFiles
+                    maxMbOfLevelBase
+                    numOfThread
+                    maxSubCompactions
+                }}
             }}
             "
         );
 
         let res = schema.execute(&query).await;
-
-        assert_eq!(res.data.to_string(), "{setConfig: true}");
+        assert_eq!(res.data.to_string(), "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}");
     }
 
-    fn test_toml_content() -> String {
-        r#"
+    fn old_config() -> String {
+        toml::toml!(
             ingest_srv_addr = "0.0.0.0:38370"
             publish_srv_addr = "0.0.0.0:38371"
             graphql_srv_addr = "127.0.0.1:8442"
-            data_dir = "tests/data"
+            data_dir = "tests"
             retention = "100d"
             log_dir = "/data/logs/apps"
-            export_dir = "tests/export"
+            export_dir = "tests"
             ack_transmission = 1024
             max_open_files = 8000
             max_mb_of_level_base = 512
             num_of_thread = 8
             max_sub_compactions = 2
-            addr_to_peers = "127.0.0.1:48382"
-            peers = [{ addr = "127.0.0.1:60193", hostname = "node3" }]
-            "#
+        )
         .to_string()
     }
 }

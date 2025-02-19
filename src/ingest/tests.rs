@@ -28,7 +28,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
 use tempfile::TempDir;
 use tokio::{
-    sync::{Mutex, Notify, RwLock},
+    sync::{Mutex, Notify},
     task::JoinHandle,
 };
 
@@ -1194,7 +1194,7 @@ fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
         stream_direct_channels,
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),
-        Arc::new(RwLock::new(1024)),
+        1024_u16,
     ))
 }
 

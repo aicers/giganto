@@ -48,9 +48,7 @@ use crate::server::{
     SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
-use crate::{
-    AckTransmissionCount, IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
-};
+use crate::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -93,7 +91,7 @@ impl Server {
         stream_direct_channels: StreamDirectChannels,
         notify_shutdown: Arc<Notify>,
         notify_sensor: Option<Arc<Notify>>,
-        ack_transmission_cnt: AckTransmissionCount,
+        ack_transmission_cnt: u16,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -124,11 +122,10 @@ impl Server {
                     let stream_direct_channels = stream_direct_channels.clone();
                     let notify_shutdown = notify_shutdown.clone();
                     let shutdown_sig = shutdown_signal.clone();
-                    let ack_trans_cnt= ack_transmission_cnt.clone();
                     tokio::spawn(async move {
                         let remote = conn.remote_address();
                         if let Err(e) =
-                            handle_connection(conn, db, pcap_sensors, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_trans_cnt).await
+                            handle_connection(conn, db, pcap_sensors, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_transmission_cnt).await
                         {
                             error!("connection failed: {e}. {remote}");
                         }
@@ -156,7 +153,7 @@ async fn handle_connection(
     stream_direct_channels: StreamDirectChannels,
     notify_shutdown: Arc<Notify>,
     shutdown_signal: Arc<AtomicBool>,
-    ack_trans_cnt: AckTransmissionCount,
+    ack_trans_cnt: u16,
 ) -> Result<()> {
     let connection = conn.await?;
     match server_handshake(&connection, INGEST_VERSION_REQ).await {
@@ -214,7 +211,6 @@ async fn handle_connection(
                 let db = db.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
                 let shutdown_signal = shutdown_signal.clone();
-                let ack_trans_cnt = ack_trans_cnt.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(sensor, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
                         error!("failed: {e}");
@@ -238,7 +234,7 @@ async fn handle_request(
     db: Database,
     stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
-    ack_trans_cnt: AckTransmissionCount,
+    ack_trans_cnt: u16,
 ) -> Result<()> {
     let mut buf = [0; 4];
     receive_record_header(&mut recv, &mut buf)
@@ -808,7 +804,7 @@ async fn handle_data<T>(
     store: RawEventStore<'_, T>,
     stream_direct_channels: StreamDirectChannels,
     shutdown_signal: Arc<AtomicBool>,
-    ack_trans_cnt: AckTransmissionCount,
+    ack_trans_cnt: u16,
 ) -> Result<()> {
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
@@ -1004,7 +1000,7 @@ async fn handle_data<T>(
 
                 ack_cnt_rotation.fetch_add(recv_events_cnt, Ordering::SeqCst);
                 ack_time_rotation.store(last_timestamp, Ordering::SeqCst);
-                if *ack_trans_cnt.read().await <= ack_cnt_rotation.load(Ordering::SeqCst) {
+                if ack_trans_cnt <= ack_cnt_rotation.load(Ordering::SeqCst) {
                     send_ack_timestamp(&mut (*sender_rotation.lock().await), last_timestamp)
                         .await?;
                     ack_cnt_rotation.store(0, Ordering::SeqCst);

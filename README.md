@@ -24,39 +24,45 @@ processing and real-time analytics.
 You can run Giganto by invoking the following command:
 
 ```sh
-giganto --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_CERT_PATH> \
---ca-certs <CA_CERT_PATH>
-```
-
-If you want to run Giganto with local configuration file,
-
-```sh
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH> --ca-certs <CA_CERT_PATH>
+<CA_CERT_PATH>[,<CA_CERT_PATH>...] [--log-dir <LOG_DIR>]
 ```
 
 ### Arguments
 
-- `<CONFIG_PATH>`: Path to the TOML configuration file (optional when running in
-  remote mode).
-- `<CERT_PATH>`: Path to the certificate file (required).
-- `<KEY_PATH>`: Path to the private key file (required).
-- `<CA_CERTS_PATH>`: Path to the CA certificates file (required).
+<!-- markdownlint-disable -->
+
+| Name             | Description                                               | Required |
+| ---------------- | --------------------------------------------------------- | -------- |
+| `<CONFIG_PATH>`  | Path to the TOML configuration file.                      | Yes      |
+| `<CERT_PATH>`    | Path to the certificate file.                             | Yes      |
+| `<KEY_PATH>`     | Path to the private key file.                             | Yes      |
+| `<CA_CERT_PATH>` | Path to the CA certificates file.                         | Yes      |
+| `<LOG_DIR>`      | Path to the directory where the log files will be stored. | No       |
+
+<!-- markdownlint-enable -->
+
+#### Notes on Arguments
+
+- The `--ca-certs` argument accepts multiple values, separated by commas. You
+  can also repeat the argument to specify multiple CA certificates.
+- Logging behavior based on the `--log-dir` argument is as follows:
+  - If `<LOG_DIR>` is not provided, logs are written to stdout using the tracing
+    library.
+  - If `<LOG_DIR>` is provided and writable, logs are written to the specified
+    directory using the tracing library.
+  - If `<LOG_DIR>` is provided but not writable, Giganto will terminate.
+  - Any logs generated before the tracing functionality is initialized will be
+    written directly to stdout or stderr using `println`, `eprintln`, or
+    similar.
 
 ### Example
-
-- Run Giganto with remote server configuration.
-
-```sh
-giganto --cert /path/to/cert.pem --key /path/to/key.pem \
---ca-certs /path/to/ca_cert.pem
-```
 
 - Run Giganto with local configuration file and multiple CA certificates.
 
 ```sh
 giganto -c path/to/config.toml --cert /path/to/cert.pem --key /path/to/key.pem \
---ca-certs /path/to/ca_cert1.pem --ca-certs /path/to/ca_cert2.pem
+--ca-certs /path/to/ca_cert1.pem,/path/to/ca_cert2.pem
 ```
 
 ## Configuration
@@ -72,7 +78,6 @@ In the config file, you can specify the following options:
 | `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8442             |
 | `data_dir`             | Path to directory to store data      | Yes      | -                     |
 | `retention`            | Retention period for data            | No       | 100d                  |
-| `log_dir`              | Path to Giganto's syslog file        | No       | -                     |
 | `export_dir`           | Path to Giganto's export file        | Yes      | -                     |
 | `max_open_files`       | Max open files for database          | No       | 8000                  |
 | `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                   |
@@ -92,7 +97,6 @@ publish_srv_addr = "0.0.0.0:38371"
 graphql_srv_addr = "127.0.0.1:8442"
 data_dir = "tests/data"
 retention = "100d"
-log_dir = "/opt/clumit/log"
 export_dir = "/opt/clumit/var/giganto/export"
 max_open_files = 8000
 max_mb_of_level_base = 512
@@ -106,18 +110,15 @@ peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
 For the `max_mb_of_level_base`, the last level has 100,000 times capacity,
 and it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
 appropriate.
-For example, `90`MB or less for 10TB Database, `900`MB or less for 100TB would
+For example, 90 MB or less for 10 TB Database, 900 MB or less for 100 TB would
 be appropriate.
 
 These values assume you've used all the way up to level 6, so the actual values may
 change if you want to grow your data further at the level base.
-So if it's less than `512`MB, it's recommended to set default value of `512`MB.
+So if it's less than 512 MB, it's recommended to set default value of 512 MB.
 
 If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
-
-If there is no `log_dir` option in the configuration file, logs will be written
-to stdout instead of to a specific path's log file.
 
 ## Test
 
