@@ -343,20 +343,37 @@ struct SmtpRawEvent {
     state: String,
 }
 
+/// Represents an event extracted from the NTLM protocol.
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
 struct NtlmRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP Address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Username
     username: String,
+    /// Hostname
     hostname: String,
+    /// Domain Name
     domainname: String,
+    /// Authentication Success
     success: String,
+    /// Transport Protocol
     protocol: String,
 }
 

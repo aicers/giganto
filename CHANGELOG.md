@@ -64,6 +64,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - `bootpRawEvents`
   - `dceRpcRawEvents`
   - `rdpRawEvents`
+  - `ntlmRawEvents`
 - `log_dir` is no longer a configuration item. To specify the log directory, it
   is required to use an optional command-line argument `log-dir`.
 - Logging behavior related to command line arguemtn `log-dir` is as follows:
