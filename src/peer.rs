@@ -46,7 +46,7 @@ use crate::{
 //   within the cluster.
 // - Updates of event protocol structures: Any changes to giganto-client's event protocols require
 //   all Gigantos in the cluster to use the same protocol version for compatibility.
-const PEER_VERSION_REQ: &str = ">=0.24.0-alpha.1,<0.25.0";
+const PEER_VERSION_REQ: &str = ">=0.24.0,<0.25.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
@@ -766,7 +766,7 @@ pub mod tests {
     const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.24.0-alpha.1";
+    const PROTOCOL_VERSION: &str = "0.24.0";
 
     pub struct TestClient {
         send: SendStream,

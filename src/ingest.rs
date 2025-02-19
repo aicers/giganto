@@ -55,7 +55,7 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.23.0,<=0.24.0-alpha.1";
+const INGEST_VERSION_REQ: &str = ">=0.23.0,<0.25.0";
 
 type SensorInfo = (String, DateTime<Utc>, ConnState, bool);
 
