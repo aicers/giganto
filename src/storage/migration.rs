@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.24.0-alpha.1,<0.25.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.24.0,<0.25.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///

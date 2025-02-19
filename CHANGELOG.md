@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] - 2025-02-19
 
 ### Added
 
@@ -19,11 +19,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Updated `PEER_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0" to ensure
-  compatibility between Giganto instances in the cluster. This change reflects
-  updates of GraphQL API.
+- Updated `PEER_VERSION_REQ` to ">=0.24.0<0.25.0" to ensure compatibility
+  between Giganto instances in the cluster. This change reflects updates of
+  GraphQL API.
+- Updated the giganto-client library dependency to 0.22.0. Since this update
+  does not break backward compatibility for modules communicating with Giganto
+  via the QUIC protocol, the related version requirements have been adjusted as
+  follows:
+  - Updated `INGEST_VERSION_REQ` to ">=0.23.0,<0.25.0".
+  - Updated `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.25.0".
 - Modify the code related to migration.
-  - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0-alpha.1,<0.25.0".
+  - Changed `COMPATIBLE_VERSION_REQ` to ">=0.24.0,<0.25.0".
   - Added migration function `migrate_0_23_0_to_0_24_0_op_log`. This function
     performs a migration to change the key and value of `Oplog`.
 - Several changes are made to configuration management via the GraphQL API:
@@ -701,7 +707,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.23.0...main
+[0.24.0]: https://github.com/aicers/giganto/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/giganto/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/giganto/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/giganto/compare/0.21.0...0.22.0
