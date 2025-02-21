@@ -186,28 +186,52 @@ struct ConnRawEvent {
     resp_l2_bytes: StringNumberU64,
 }
 
+/// Represents an event extracted from the DNS protocol.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
 struct DnsRawEvent {
+    /// Start Time
     time: DateTime<Utc>,
+    /// Source IP address
     orig_addr: String,
+    /// Source Port Number
     orig_port: u16,
+    /// Destination IP Address
     resp_addr: String,
+    /// Destination Port Number
     resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// End Time
+    ///
+    /// It is measured in nanoseconds.
     last_time: StringNumberI64,
+    /// Query
     query: String,
+    /// Answer
     answer: Vec<String>,
+    /// Transaction ID
     trans_id: u16,
+    /// Round-Trip Time
     rtt: StringNumberI64,
+    /// Query Class
     qclass: u16,
+    /// Query Type
     qtype: u16,
+    /// Response Code
     rcode: u16,
+    /// Authoritative Answer Flag
     aa_flag: bool,
+    /// Truncated Flag
     tc_flag: bool,
+    /// Recursion Desired Flag
     rd_flag: bool,
+    /// Recursion Available Flag
     ra_flag: bool,
+    /// Time to Live
     ttl: Vec<i32>,
 }
 
