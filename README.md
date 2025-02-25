@@ -25,7 +25,7 @@ You can run Giganto by invoking the following command:
 
 ```sh
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH>[,<CA_CERT_PATH>...] [--log-dir <LOG_DIR>]
+<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-dir <LOG_DIR>]
 ```
 
 ### Arguments
