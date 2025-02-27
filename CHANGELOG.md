@@ -11,6 +11,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Documentation of the following GraphQL APIs is updated:
   - `dnsRawEvents`
+- Before overwriting the config file via `updateConfig` API, a backup file
+  (e.g., filename.bak) is now created.
+- If reading the configuration file fails, the system checks for an existing
+  backup and restores it if available.
 
 ## [0.24.0] - 2025-02-19
 
