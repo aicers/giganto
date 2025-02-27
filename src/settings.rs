@@ -13,7 +13,10 @@ use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigE
 use serde::{de::Error, Deserialize, Deserializer, Serialize};
 use toml_edit::DocumentMut;
 
-use crate::{graphql::status::write_toml_file, peer::PeerIdentity};
+use crate::{
+    graphql::status::{backup_toml_file, write_toml_file},
+    peer::PeerIdentity,
+};
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
@@ -120,6 +123,9 @@ impl Settings {
 
         let toml_str = toml::to_string(&self.config)?;
         let doc = toml_str.parse::<DocumentMut>()?;
+
+        backup_toml_file(&self.cfg_path)?;
+
         write_toml_file(&doc, &self.cfg_path)?;
 
         Ok(())
