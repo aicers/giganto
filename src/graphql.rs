@@ -850,9 +850,9 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
 }
 
 fn check_contents(filter_str: Option<&str>, target_str: Option<String>) -> bool {
-    filter_str.as_ref().map_or(true, |filter_str| {
-        target_str.is_some_and(|contents| contents.contains(*filter_str))
-    })
+    filter_str
+        .as_ref()
+        .is_none_or(|filter_str| target_str.is_some_and(|contents| contents.contains(*filter_str)))
 }
 
 fn check_agent_id(filter_agent_id: Option<&str>, target_agent_id: Option<&str>) -> bool {
@@ -860,7 +860,7 @@ fn check_agent_id(filter_agent_id: Option<&str>, target_agent_id: Option<&str>) 
 }
 
 fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
-    filter_str.as_ref().map_or(true, |filter_id| {
+    filter_str.as_ref().is_none_or(|filter_id| {
         target_str
             .as_ref()
             .is_some_and(|agent_id| agent_id == filter_id)
