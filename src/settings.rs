@@ -57,6 +57,10 @@ pub struct Args {
     /// Enable the repair mode.
     #[arg(long)]
     pub repair: bool,
+
+    /// Export GraphQL schema.
+    #[arg(long)]
+    pub export_graphql_schema: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
