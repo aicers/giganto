@@ -27,6 +27,7 @@ const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
 const DEFAULT_MAX_SUB_COMPACTIONS: u32 = 2;
 
+#[cfg(not(feature = "export-graphql-schema"))]
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Args {
@@ -59,6 +60,9 @@ pub struct Args {
     #[arg(long)]
     pub repair: bool,
 }
+
+#[cfg(feature = "export-graphql-schema")]
+pub struct Args {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {

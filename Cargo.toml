@@ -67,3 +67,4 @@ url = "2"
 [features]
 default = ["benchmark"]
 benchmark = []
+export-graphql-schema = []
