@@ -31,24 +31,36 @@ const DEFAULT_MAX_SUB_COMPACTIONS: u32 = 2;
 #[command(version)]
 pub struct Args {
     /// Path to the local configuration TOML file.
+    #[cfg_attr(
+        debug_assertions,
+        arg(required_unless_present_any(["export_graphql_schema"]))
+    )]
+    #[cfg_attr(not(debug_assertions), arg(required = true))]
     #[arg(short, value_name = "CONFIG_PATH")]
-    pub config: String,
+    pub config: Option<String>,
 
     /// Path to the certificate file.
-    #[arg(long, value_name = "CERT_PATH")]
-    pub cert: String,
+    #[cfg_attr(
+        debug_assertions,
+        arg(required_unless_present_any(["repair", "export_graphql_schema"]))
+    )]
+    #[arg(long, value_name = "CERT_PATH", required_unless_present_any(["repair"]))]
+    pub cert: Option<String>,
 
     /// Path to the key file.
-    #[arg(long, value_name = "KEY_PATH")]
-    pub key: String,
+    #[cfg_attr(
+        debug_assertions,
+        arg(required_unless_present_any(["repair", "export_graphql_schema"]))
+    )]
+    #[arg(long, value_name = "KEY_PATH", required_unless_present_any(["repair"]))]
+    pub key: Option<String>,
 
     /// Paths to the CA certificate files.
-    #[arg(
-        long,
-        value_name = "CA_CERTS_PATHS",
-        required = true,
-        value_delimiter = ','
+    #[cfg_attr(
+        debug_assertions,
+        arg(required_unless_present_any(["repair", "export_graphql_schema"]))
     )]
+    #[arg(long, value_name = "CA_CERTS_PATHS", value_delimiter = ',', required_unless_present_any(["repair"]))]
     pub ca_certs: Vec<String>,
 
     /// Path to the log directory.
@@ -58,6 +70,11 @@ pub struct Args {
     /// Enable the repair mode.
     #[arg(long)]
     pub repair: bool,
+
+    /// Export GraphQL schema.
+    #[cfg(debug_assertions)]
+    #[arg(long)]
+    pub export_graphql_schema: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
