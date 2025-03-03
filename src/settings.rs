@@ -17,7 +17,7 @@ use crate::{graphql::status::write_toml_file, peer::PeerIdentity};
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
-pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8442";
+pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8443";
 const DEFAULT_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";

@@ -75,7 +75,7 @@ In the config file, you can specify the following options:
 | ---------------------- | ------------------------------------ | -------- | --------------------- |
 | `ingest_srv_addr`      | Address to listen for ingest QUIC    | No       | [::]:38370            |
 | `publish_srv_addr`     | Address to listen for publish QUIC   | No       | [::]:38371            |
-| `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8442             |
+| `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8443             |
 | `data_dir`             | Path to directory to store data      | Yes      | -                     |
 | `retention`            | Retention period for data            | No       | 100d                  |
 | `export_dir`           | Path to Giganto's export file        | Yes      | -                     |
@@ -94,7 +94,7 @@ The following is an example of how to configure the config file:
 ```toml
 ingest_srv_addr = "0.0.0.0:38370"
 publish_srv_addr = "0.0.0.0:38371"
-graphql_srv_addr = "127.0.0.1:8442"
+graphql_srv_addr = "127.0.0.1:8443"
 data_dir = "tests/data"
 retention = "100d"
 export_dir = "/opt/clumit/var/giganto/export"

@@ -388,7 +388,7 @@ mod tests {
         let new_config = toml::toml!(
             ingest_srv_addr = "0.0.0.0:48370"
             publish_srv_addr = "0.0.0.0:48371"
-            graphql_srv_addr = "127.0.0.1:8442"
+            graphql_srv_addr = "127.0.0.1:8443"
             data_dir = "tests"
             retention = "100d"
             export_dir = "tests"
@@ -422,14 +422,14 @@ mod tests {
         );
 
         let res = schema.execute(&query).await;
-        assert_eq!(res.data.to_string(), "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8442\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}");
+        assert_eq!(res.data.to_string(), "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}");
     }
 
     fn old_config() -> String {
         toml::toml!(
             ingest_srv_addr = "0.0.0.0:38370"
             publish_srv_addr = "0.0.0.0:38371"
-            graphql_srv_addr = "127.0.0.1:8442"
+            graphql_srv_addr = "127.0.0.1:8443"
             data_dir = "tests"
             retention = "100d"
             log_dir = "/data/logs/apps"
