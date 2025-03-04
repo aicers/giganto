@@ -61,8 +61,39 @@ pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let mut settings = Settings::from_file(&args.config)
-        .with_context(|| format!("failed to read configuration file: {}", args.config))?;
+    let mut settings = Settings::from_file(&args.config).or_else(|e| {
+        eprintln!(
+            "failed to read configuration file: {}. Error: {e}",
+            args.config
+        );
+
+        let backup_path = Path::new(&args.config).with_extension("toml.bak");
+        if backup_path.exists() {
+            println!(
+                "attempting to restore backup configuration from: {}",
+                backup_path.display()
+            );
+
+            fs::copy(&backup_path, &args.config).with_context(|| {
+                format!(
+                    "failed to restore configuration from backup: {} to {}",
+                    backup_path.display(),
+                    &args.config
+                )
+            })?;
+
+            println!("configuration restored from backup.");
+
+            Settings::from_file(&args.config).with_context(|| {
+                format!(
+                    "failed to read restored configuration file: {}",
+                    backup_path.display()
+                )
+            })
+        } else {
+            Err(e).context("no valid configuration file available, and no backup found.")
+        }
+    })?;
 
     settings.config.validate()?;
 

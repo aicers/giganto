@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, time::Duration};
+use std::{fs::OpenOptions, io::Write, path::Path, time::Duration};
 
 use anyhow::{anyhow, Context as AnyhowContext};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
@@ -266,6 +266,27 @@ pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
         .create(true)
         .open(path)?;
     writeln!(config_file, "{output}")?;
+    Ok(())
+}
+
+pub fn backup_toml_file(path: &str) -> anyhow::Result<()> {
+    let origin_path = Path::new(path);
+    let backup_path = origin_path.with_extension("toml.bak");
+
+    if backup_path.exists() {
+        std::fs::remove_file(&backup_path).with_context(|| {
+            format!(
+                "Failed to remove existing backup: {}",
+                backup_path.display()
+            )
+        })?;
+    }
+
+    std::fs::copy(origin_path, &backup_path)
+        .with_context(|| format!("Failed to create backup: {}", backup_path.display()))?;
+
+    info!("Backup created at: {}", backup_path.display());
+
     Ok(())
 }
 
