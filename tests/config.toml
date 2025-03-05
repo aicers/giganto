@@ -1,6 +1,6 @@
 ingest_srv_addr = "0.0.0.0:38370"
 publish_srv_addr = "0.0.0.0:38371"
-graphql_srv_addr = "127.0.0.1:8442"
+graphql_srv_addr = "127.0.0.1:8443"
 data_dir = "tests"
 retention = "100d"
 log_dir = "/data/logs/apps"
