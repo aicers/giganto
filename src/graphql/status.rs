@@ -162,8 +162,8 @@ impl StatusQuery {
 
 #[Object]
 impl ConfigMutation {
-    /// Updates the config with the given `new` config. It involves realoding the module with the new
-    /// config.
+    /// Updates the config with the given `new` config. It involves reloading the module with the
+    /// new config.
     ///
     /// # Errors
     ///
@@ -180,14 +180,14 @@ impl ConfigMutation {
         new: String,
     ) -> Result<ConfigVisible> {
         if new.is_empty() {
-            return Err("Cannot update datalake config with an empty new config"
+            return Err("Cannot update data store's config with an empty new config"
                 .to_string()
                 .into());
         }
 
         if old == new {
             return Err(
-                "Cannot update datalake config with the same old and new configs"
+                "Cannot update data store's config with the same old and new configs"
                     .to_string()
                     .into(),
             );
