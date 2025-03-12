@@ -12,6 +12,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Documentation of the following GraphQL APIs is updated:
   - `dnsRawEvents`
 - Changed default GraphQL API port to 8443.
+- Renamed the log file from giganto.log to data_store.log.
 
 ## [0.24.0] - 2025-02-19
 

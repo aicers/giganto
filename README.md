@@ -50,7 +50,7 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
   - If `<LOG_DIR>` is not provided, logs are written to stdout using the tracing
     library.
   - If `<LOG_DIR>` is provided and writable, logs are written to the specified
-    directory using the tracing library.
+    directory using the tracing library, with the log file named data_store.log.
   - If `<LOG_DIR>` is provided but not writable, Giganto will terminate.
   - Any logs generated before the tracing functionality is initialized will be
     written directly to stdout or stderr using `println`, `eprintln`, or
