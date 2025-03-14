@@ -20,8 +20,10 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use async_graphql::{EmptySubscription, Schema};
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use graphql::{Mutation, Query};
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -51,6 +53,7 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
+const GRAPHQL_SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
@@ -61,6 +64,19 @@ pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.export_graphql_schema {
+        fs::write(
+            GRAPHQL_SCHEMA_PATH,
+            Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+                .finish()
+                .sdl(),
+        )
+        .context("Failed to write the GraphQL schema")?;
+        println!("Successfully exported GraphQL schema.");
+        exit(0);
+    }
+
     let mut settings = Settings::from_file(&args.config)
         .with_context(|| format!("failed to read configuration file: {}", args.config))?;
 
@@ -451,4 +467,26 @@ async fn wait_for_task_shutdown(
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
     let _ = retain_task_handle.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use async_graphql::{EmptySubscription, Schema};
+
+    use crate::{
+        graphql::{Mutation, Query},
+        GRAPHQL_SCHEMA_PATH,
+    };
+
+    #[test]
+    fn graphql_schema_should_be_up_to_date() {
+        let expected = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+            .finish()
+            .sdl();
+        let actual = std::fs::read_to_string(GRAPHQL_SCHEMA_PATH).unwrap();
+        assert!(
+            expected == actual,
+            r#"GraphQL schema is outdated. Please run `cargo run -- --export-schema-path -c "" --cert "" --key "" --ca-certs ""`"#
+        );
+    }
 }
