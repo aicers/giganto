@@ -755,7 +755,7 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     temp_file.read_to_end(&mut buf)?;
 
     let cmd = "tcpdump";
-    let args = ["-n", "-X", "-tttt", "-v", "-r", "-"];
+    let args = ["-n", "-X", "-tttt", "-v", "-c", "10", "-r", "-"];
 
     let mut child = Command::new(cmd)
         .env("PATH", "/usr/sbin:/usr/bin")
