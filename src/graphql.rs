@@ -13,11 +13,10 @@ mod timeseries;
 
 use std::{
     collections::{BTreeSet, HashSet},
-    io::{Read, Seek, SeekFrom, Write},
     net::IpAddr,
     net::SocketAddr,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Command,
     sync::Arc,
 };
 
@@ -725,10 +724,13 @@ where
 }
 
 fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
-    let mut temp_file = NamedTempFile::new()?;
+    let temp_file = NamedTempFile::new()?;
     let file_path = temp_file.path();
     let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
     let mut file = new_pcap.savefile(file_path)?;
+    let file_path_str = file_path
+        .to_str()
+        .ok_or_else(|| anyhow!("failed to convert file path to string: {file_path:?}"))?;
 
     for packet in packets {
         let len = u32::try_from(packet.packet.len()).unwrap_or_default();
@@ -749,30 +751,16 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
         };
         file.write(&p);
     }
-    let mut buf = Vec::new();
     file.flush()?;
-    temp_file.seek(SeekFrom::Start(0))?;
-    temp_file.read_to_end(&mut buf)?;
 
     let cmd = "tcpdump";
-    let args = ["-n", "-X", "-tttt", "-v", "-c", "10", "-r", "-"];
+    let args = ["-n", "-X", "-tttt", "-v", "-r", file_path_str];
 
-    let mut child = Command::new(cmd)
+    let output = Command::new(cmd)
         .env("PATH", "/usr/sbin:/usr/bin")
         .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+        .output()?;
 
-    if let Some(mut child_stdin) = child.stdin.take() {
-        #[cfg(target_os = "macos")]
-        child_stdin.write_all(&[0, 0, 0, 0])?;
-        child_stdin.write_all(&buf)?;
-    } else {
-        return Err(anyhow!("failed to execute tcpdump"));
-    }
-
-    let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(anyhow!("failed to run tcpdump"));
     }
