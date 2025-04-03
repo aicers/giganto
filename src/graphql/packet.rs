@@ -135,7 +135,7 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-    let (records, _) = collect_records(iter, 1000, filter);
+    let (records, _) = collect_records(iter, 10, filter);
 
     let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
 

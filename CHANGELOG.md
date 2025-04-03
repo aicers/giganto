@@ -9,10 +9,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Modified `pcap` GraphQL API to process only the first 10 packets instead of
-  the full pcap, reducing resource usage and improving performance when handling
-  large HTTP sessions, since 10 packets are generally enough for clients to
-  inspect the packet.
+- Adjusted the `pcap` GraphQL API with the following improvements:
+  - Reduced the number of processed packets from up to 1,000 to up to 10,
+    lowering resource usage and improving performance when handling large HTTP
+    sessions. Ten packets are generally sufficient for client-side inspection.
+  - Simplified PCAP generation by removing the intermediate step of reading a
+    temporary file into memory and piping it into `tcpdump` via stdin. Now,
+    `tcpdump` reads directly from the temporary file, reducing overhead and
+    improving efficiency.
 
 ## [0.24.1] - 2025-03-14
 
