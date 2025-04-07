@@ -478,7 +478,7 @@ where
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
         RequestStreamRecord::Pcap => {}
-    };
+    }
     Ok(())
 }
 

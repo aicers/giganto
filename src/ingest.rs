@@ -166,7 +166,7 @@ async fn handle_connection(
             connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
             bail!("{e}")
         }
-    };
+    }
 
     let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
     let rep = agent.contains("reproduce");
@@ -790,7 +790,7 @@ async fn handle_request(
         _ => {
             error!("The record type message could not be processed.");
         }
-    };
+    }
     Ok(())
 }
 

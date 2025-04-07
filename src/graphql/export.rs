@@ -1570,7 +1570,7 @@ impl KeyExtractor for ExportFilter {
         if let Some(kind) = &self.kind {
             mid_key.extend_from_slice(kind.as_bytes());
             return Some(mid_key);
-        };
+        }
         if let Some(agent_name) = &self.agent_name {
             mid_key.extend_from_slice(agent_name.as_bytes());
             if let Some(agent_id) = &self.agent_id {
@@ -1578,7 +1578,7 @@ impl KeyExtractor for ExportFilter {
                 mid_key.extend_from_slice(agent_id.as_bytes());
             }
             return Some(mid_key);
-        };
+        }
         None
     }
 
@@ -2714,7 +2714,7 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
             if let Some(t) = key.get(key.len() - 8..) {
                 let timestamp = i64::from_be_bytes(t.try_into()?);
                 return Ok((sensor, timestamp));
-            };
+            }
         }
     }
     Err(anyhow!("Invalid key"))

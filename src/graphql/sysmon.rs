@@ -1843,7 +1843,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     process_create_data = process_create_iter.next();
-                };
+                }
             }
             _ if selected == file_create_time_ts => {
                 if let Some((key, value)) = file_create_time_data {
@@ -1854,7 +1854,7 @@ fn sysmon_connection(
                         ),
                     ));
                     file_create_time_data = file_create_time_iter.next();
-                };
+                }
             }
             _ if selected == network_connect_ts => {
                 if let Some((key, value)) = network_connect_data {
@@ -1865,7 +1865,7 @@ fn sysmon_connection(
                         ),
                     ));
                     network_connect_data = network_connect_iter.next();
-                };
+                }
             }
             _ if selected == process_terminate_ts => {
                 if let Some((key, value)) = process_terminate_data {
@@ -1876,7 +1876,7 @@ fn sysmon_connection(
                         ),
                     ));
                     process_terminate_data = process_terminate_iter.next();
-                };
+                }
             }
             _ if selected == image_load_ts => {
                 if let Some((key, value)) = image_load_data {
@@ -1887,7 +1887,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     image_load_data = image_load_iter.next();
-                };
+                }
             }
             _ if selected == file_create_ts => {
                 if let Some((key, value)) = file_create_data {
@@ -1898,7 +1898,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     file_create_data = file_create_iter.next();
-                };
+                }
             }
             _ if selected == registry_value_set_ts => {
                 if let Some((key, value)) = registry_value_set_data {
@@ -1909,7 +1909,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     registry_value_set_data = registry_value_set_iter.next();
-                };
+                }
             }
             _ if selected == registry_key_rename_ts => {
                 if let Some((key, value)) = registry_key_rename_data {
@@ -1920,7 +1920,7 @@ fn sysmon_connection(
                         ),
                     ));
                     registry_key_rename_data = registry_key_rename_iter.next();
-                };
+                }
             }
             _ if selected == file_create_stream_hash_ts => {
                 if let Some((key, value)) = file_create_stream_hash_data {
@@ -1931,7 +1931,7 @@ fn sysmon_connection(
                         ),
                     ));
                     file_create_stream_hash_data = file_create_stream_hash_iter.next();
-                };
+                }
             }
             _ if selected == pipe_event_ts => {
                 if let Some((key, value)) = pipe_event_data {
@@ -1940,7 +1940,7 @@ fn sysmon_connection(
                         SysmonEvents::PipeEventEvent(PipeEventEvent::from_key_value(&key, value)?),
                     ));
                     pipe_event_data = pipe_event_iter.next();
-                };
+                }
             }
             _ if selected == dns_query_ts => {
                 if let Some((key, value)) = dns_query_data {
@@ -1949,7 +1949,7 @@ fn sysmon_connection(
                         SysmonEvents::DnsEventEvent(DnsEventEvent::from_key_value(&key, value)?),
                     ));
                     dns_query_data = dns_query_iter.next();
-                };
+                }
             }
             _ if selected == file_delete_ts => {
                 if let Some((key, value)) = file_delete_data {
@@ -1960,7 +1960,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     file_delete_data = file_delete_iter.next();
-                };
+                }
             }
             _ if selected == process_tamper_ts => {
                 if let Some((key, value)) = process_tamper_data {
@@ -1971,7 +1971,7 @@ fn sysmon_connection(
                         )?),
                     ));
                     process_tamper_data = process_tamper_iter.next();
-                };
+                }
             }
             _ if selected == file_delete_detected_ts => {
                 if let Some((key, value)) = file_delete_detected_data {
@@ -1982,7 +1982,7 @@ fn sysmon_connection(
                         ),
                     ));
                     file_delete_detected_data = file_delete_detected_iter.next();
-                };
+                }
             }
             _ => {}
         }
