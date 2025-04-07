@@ -423,7 +423,6 @@ async fn client_connection(
                                 peer_info.addr,
                             );
                             sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
-                            continue 'connection;
                         }
                         _ => {}
                     }

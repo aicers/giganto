@@ -2894,7 +2894,7 @@ fn network_connection(
                         NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
                     ));
                     conn_data = conn_iter.next();
-                };
+                }
             }
             _ if selected == dns_ts => {
                 if let Some((key, value)) = dns_data {
@@ -2903,7 +2903,7 @@ fn network_connection(
                         NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
                     ));
                     dns_data = dns_iter.next();
-                };
+                }
             }
             _ if selected == http_ts => {
                 if let Some((key, value)) = http_data {
@@ -2912,7 +2912,7 @@ fn network_connection(
                         NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
                     ));
                     http_data = http_iter.next();
-                };
+                }
             }
             _ if selected == rdp_ts => {
                 if let Some((key, value)) = rdp_data {
@@ -2921,7 +2921,7 @@ fn network_connection(
                         NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
                     ));
                     rdp_data = rdp_iter.next();
-                };
+                }
             }
             _ if selected == ntlm_ts => {
                 if let Some((key, value)) = ntlm_data {
@@ -2930,7 +2930,7 @@ fn network_connection(
                         NetworkRawEvents::NtlmRawEvent(NtlmRawEvent::from_key_value(&key, value)?),
                     ));
                     ntlm_data = ntlm_iter.next();
-                };
+                }
             }
             _ if selected == kerberos_ts => {
                 if let Some((key, value)) = kerberos_data {
@@ -2941,7 +2941,7 @@ fn network_connection(
                         )?),
                     ));
                     kerberos_data = kerberos_iter.next();
-                };
+                }
             }
             _ if selected == ssh_ts => {
                 if let Some((key, value)) = ssh_data {
@@ -2950,7 +2950,7 @@ fn network_connection(
                         NetworkRawEvents::SshRawEvent(SshRawEvent::from_key_value(&key, value)?),
                     ));
                     ssh_data = ssh_iter.next();
-                };
+                }
             }
             _ if selected == dce_rpc_ts => {
                 if let Some((key, value)) = dce_rpc_data {
@@ -2961,7 +2961,7 @@ fn network_connection(
                         )?),
                     ));
                     dce_rpc_data = dce_rpc_iter.next();
-                };
+                }
             }
             _ if selected == ftp_ts => {
                 if let Some((key, value)) = ftp_data {
@@ -2970,7 +2970,7 @@ fn network_connection(
                         NetworkRawEvents::FtpRawEvent(FtpRawEvent::from_key_value(&key, value)?),
                     ));
                     ftp_data = ftp_iter.next();
-                };
+                }
             }
             _ if selected == mqtt_ts => {
                 if let Some((key, value)) = mqtt_data {
@@ -2979,7 +2979,7 @@ fn network_connection(
                         NetworkRawEvents::MqttRawEvent(MqttRawEvent::from_key_value(&key, value)?),
                     ));
                     mqtt_data = mqtt_iter.next();
-                };
+                }
             }
             _ if selected == ldap_ts => {
                 if let Some((key, value)) = ldap_data {
@@ -2988,7 +2988,7 @@ fn network_connection(
                         NetworkRawEvents::LdapRawEvent(LdapRawEvent::from_key_value(&key, value)?),
                     ));
                     ldap_data = ldap_iter.next();
-                };
+                }
             }
             _ if selected == tls_ts => {
                 if let Some((key, value)) = tls_data {
@@ -2997,7 +2997,7 @@ fn network_connection(
                         NetworkRawEvents::TlsRawEvent(TlsRawEvent::from_key_value(&key, value)?),
                     ));
                     tls_data = tls_iter.next();
-                };
+                }
             }
             _ if selected == smb_ts => {
                 if let Some((key, value)) = smb_data {
@@ -3006,7 +3006,7 @@ fn network_connection(
                         NetworkRawEvents::SmbRawEvent(SmbRawEvent::from_key_value(&key, value)?),
                     ));
                     smb_data = smb_iter.next();
-                };
+                }
             }
             _ if selected == nfs_ts => {
                 if let Some((key, value)) = nfs_data {
@@ -3015,7 +3015,7 @@ fn network_connection(
                         NetworkRawEvents::NfsRawEvent(NfsRawEvent::from_key_value(&key, value)?),
                     ));
                     nfs_data = nfs_iter.next();
-                };
+                }
             }
             _ if selected == smtp_ts => {
                 if let Some((key, value)) = smtp_data {
@@ -3024,7 +3024,7 @@ fn network_connection(
                         NetworkRawEvents::SmtpRawEvent(SmtpRawEvent::from_key_value(&key, value)?),
                     ));
                     smtp_data = smtp_iter.next();
-                };
+                }
             }
             _ if selected == bootp_ts => {
                 if let Some((key, value)) = bootp_data {
@@ -3035,7 +3035,7 @@ fn network_connection(
                         )?),
                     ));
                     bootp_data = bootp_iter.next();
-                };
+                }
             }
             _ if selected == dhcp_ts => {
                 if let Some((key, value)) = dhcp_data {
@@ -3044,7 +3044,7 @@ fn network_connection(
                         NetworkRawEvents::DhcpRawEvent(DhcpRawEvent::from_key_value(&key, value)?),
                     ));
                     dhcp_data = dhcp_iter.next();
-                };
+                }
             }
             _ => {}
         }

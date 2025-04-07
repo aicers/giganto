@@ -331,22 +331,16 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
             if segment.ident == "Vec" {
                 if let PathArguments::AngleBracketed(vec_element_type_arg) = &segment.arguments {
                     for arg in &vec_element_type_arg.args {
-                        match arg {
-                            GenericArgument::Type(el_type) => {
-                                return (SegmentType::Vec, cast_style(el_type, recursive_into));
-                            }
-                            _ => continue,
+                        if let GenericArgument::Type(el_type) = arg {
+                            return (SegmentType::Vec, cast_style(el_type, recursive_into));
                         }
                     }
                 }
             } else if segment.ident == "Option" {
                 if let PathArguments::AngleBracketed(option_element_type_arg) = &segment.arguments {
                     for arg in &option_element_type_arg.args {
-                        match arg {
-                            GenericArgument::Type(el_type) => {
-                                return (SegmentType::Option, cast_style(el_type, recursive_into));
-                            }
-                            _ => continue,
+                        if let GenericArgument::Type(el_type) = arg {
+                            return (SegmentType::Option, cast_style(el_type, recursive_into));
                         }
                     }
                 }

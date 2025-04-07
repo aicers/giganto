@@ -240,7 +240,6 @@ async fn main() -> Result<()> {
                         Err(e) => {
                             error!("Failed to update configuration: {e:#}");
                             warn!("Run giganto with the previous config");
-                            continue;
                         }
                     }
                 },
