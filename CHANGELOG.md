@@ -5,6 +5,16 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Replaced `log_dir` with `log_path` in configuration options. Now the log file
+  path can be specified directly rather than combining a directory and a fixed
+  filename.
+- Removed dependency on LOG_FILENAME environment variable by eliminating the
+  need for .cargo/config.toml.
+
 ## [0.24.2] - 2025-04-08
 
 ### Changed
@@ -729,6 +739,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.24.2...main
 [0.24.2]: https://github.com/aicers/giganto/compare/0.24.1...0.24.2
 [0.24.1]: https://github.com/aicers/giganto/compare/0.24.0...0.24.1
 [0.24.0]: https://github.com/aicers/giganto/compare/0.23.0...0.24.0
