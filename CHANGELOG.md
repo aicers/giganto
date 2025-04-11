@@ -12,6 +12,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Giganto now creates a backup before overwriting the config via the
   `updateConfig` GraphQL API. If reading the config fails, it automatically
   restores from the backup, both during `updateConfig` calls and at startup.
+- Replaced `--log-dir` with `--log-path` in command-line interface. Now the log
+  file path can be specified directly rather than combining a directory and a
+  fixed filename.
+- Removed dependency on LOG_FILENAME environment variable by eliminating the
+  .cargo/config.toml file.
 
 ## [0.24.2] - 2025-04-08
 

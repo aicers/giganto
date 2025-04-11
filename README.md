@@ -26,20 +26,20 @@ You can run Giganto by invoking the following command:
 
 ```sh
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-dir <LOG_DIR>]
+<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-path <LOG_PATH>]
 ```
 
 ### Arguments
 
 <!-- markdownlint-disable -->
 
-| Name             | Description                                               | Required |
-| ---------------- | --------------------------------------------------------- | -------- |
-| `<CONFIG_PATH>`  | Path to the TOML configuration file.                      | Yes      |
-| `<CERT_PATH>`    | Path to the certificate file.                             | Yes      |
-| `<KEY_PATH>`     | Path to the private key file.                             | Yes      |
-| `<CA_CERT_PATH>` | Path to the CA certificates file.                         | Yes      |
-| `<LOG_DIR>`      | Path to the directory where the log files will be stored. | No       |
+| Name             | Description                                     | Required |
+| ---------------- | ----------------------------------------------- | -------- |
+| `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
+| `<CERT_PATH>`    | Path to the certificate file.                   | Yes      |
+| `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
+| `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
+| `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
 
 <!-- markdownlint-enable -->
 
@@ -47,12 +47,12 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 
 - The `--ca-certs` argument accepts multiple values, separated by commas. You
   can also repeat the argument to specify multiple CA certificates.
-- Logging behavior based on the `--log-dir` argument is as follows:
-  - If `<LOG_DIR>` is not provided, logs are written to stdout using the tracing
+- Logging behavior based on the `--log-path` argument is as follows:
+  - If `<LOG_PATH>` is not provided, logs are written to stdout using the tracing
     library.
-  - If `<LOG_DIR>` is provided and writable, logs are written to the specified
-    directory using the tracing library, with the log file named data_store.log.
-  - If `<LOG_DIR>` is provided but not writable, Giganto will terminate.
+  - If `<LOG_PATH>` is provided and writable, logs are written to the specified
+    file using the tracing library.
+  - If `<LOG_PATH>` is provided but not writable, Giganto will terminate.
   - Any logs generated before the tracing functionality is initialized will be
     written directly to stdout or stderr using `println`, `eprintln`, or
     similar.

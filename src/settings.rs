@@ -51,9 +51,9 @@ pub struct Args {
     )]
     pub ca_certs: Vec<String>,
 
-    /// Path to the log directory.
-    #[arg(long, value_name = "LOG_DIR")]
-    pub log_dir: Option<PathBuf>,
+    /// Path to the log file.
+    #[arg(long, value_name = "LOG_PATH")]
+    pub log_path: Option<PathBuf>,
 
     /// Enable the repair mode.
     #[arg(long)]
