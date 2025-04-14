@@ -3,10 +3,11 @@
 Giganto is a high-performance raw-event storage system, specifically designed
 for AICE. It is optimized to receive and store raw events through QUIC channels
 and provides a flexible GraphQL API for querying the stored events. Giganto
-empowers AICE with the ability to efficiently handle large-scale data
-processing and real-time analytics.
+empowers AICE with the ability to efficiently handle large-scale data processing
+and real-time analytics.
 
-[![Coverage Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/giganto)
+[![Coverage
+Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/giganto)
 
 ## Features
 
@@ -107,15 +108,14 @@ addr_to_peers = "10.10.11.1:38383"
 peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
 ```
 
-For the `max_mb_of_level_base`, the last level has 100,000 times capacity,
-and it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
-appropriate.
-For example, 90 MB or less for 10 TB Database, 900 MB or less for 100 TB would
-be appropriate.
+For the `max_mb_of_level_base`, the last level has 100,000 times capacity, and
+it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
+appropriate. For example, 90 MB or less for 10 TB Database, 900 MB or less for
+100 TB would be appropriate.
 
-These values assume you've used all the way up to level 6, so the actual values may
-change if you want to grow your data further at the level base.
-So if it's less than 512 MB, it's recommended to set default value of 512 MB.
+These values assume you've used all the way up to level 6, so the actual values
+may change if you want to grow your data further at the level base. So if it's
+less than 512 MB, it's recommended to set default value of 512 MB.
 
 If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
