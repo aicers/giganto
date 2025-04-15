@@ -3,15 +3,16 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     os::unix::fs::{MetadataExt, PermissionsExt},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::Parser;
 use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigError, File};
 use serde::{de::Error, Deserialize, Deserializer, Serialize};
 use toml_edit::DocumentMut;
+use tracing::info;
 
 use crate::{graphql::status::write_toml_file, peer::PeerIdentity};
 
@@ -120,10 +121,27 @@ impl Settings {
 
         let toml_str = toml::to_string(&self.config)?;
         let doc = toml_str.parse::<DocumentMut>()?;
+
+        backup_toml_file(&self.cfg_path)?;
         write_toml_file(&doc, &self.cfg_path)?;
 
         Ok(())
     }
+}
+
+fn backup_toml_file(path: &str) -> anyhow::Result<()> {
+    let original_path = Path::new(path);
+    let backup_path = original_path.with_extension("toml.bak");
+
+    std::fs::copy(original_path, &backup_path)
+        .with_context(|| format!("Failed to create backup: {}", backup_path.display()))?;
+
+    info!(
+        "Settings backup files is created at: {}",
+        backup_path.display()
+    );
+
+    Ok(())
 }
 
 impl Config {
