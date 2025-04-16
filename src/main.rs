@@ -20,8 +20,12 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+#[cfg(debug_assertions)]
+use async_graphql::{EmptySubscription, Schema};
 use chrono::{DateTime, Utc};
 use clap::Parser;
+#[cfg(debug_assertions)]
+use graphql::{Mutation, Query};
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -51,6 +55,8 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
+#[cfg(debug_assertions)]
+const GRAPHQL_SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
@@ -61,30 +67,46 @@ pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let mut settings = Settings::from_file(&args.config).or_else(|e| {
-        eprintln!(
-            "failed to read configuration file: {}. Error: {e}",
-            args.config
-        );
 
-        let backup_path = Path::new(&args.config).with_extension("toml.bak");
+    #[cfg(debug_assertions)]
+    if args.export_graphql_schema {
+        fs::write(
+            GRAPHQL_SCHEMA_PATH,
+            Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+                .finish()
+                .sdl(),
+        )
+        .context("Failed to write the GraphQL schema")?;
+        println!("Successfully exported GraphQL schema.");
+        exit(0);
+    }
+
+    let arg_config = args
+        .config
+        .as_deref()
+        .expect("Verified by clap if `args.export_graphql_schema` is not present.");
+
+    let mut settings = Settings::from_file(arg_config).or_else(|e| {
+        eprintln!("failed to read configuration file: {arg_config}. Error: {e}");
+
+        let backup_path = Path::new(arg_config).with_extension("toml.bak");
         if backup_path.exists() {
             println!(
                 "attempting to restore backup configuration from: {}",
                 backup_path.display()
             );
 
-            fs::copy(&backup_path, &args.config).with_context(|| {
+            fs::copy(&backup_path, arg_config).with_context(|| {
                 format!(
                     "failed to restore configuration from backup: {} to {}",
                     backup_path.display(),
-                    &args.config
+                    arg_config,
                 )
             })?;
 
             println!("configuration restored from backup.");
 
-            Settings::from_file(&args.config).with_context(|| {
+            Settings::from_file(arg_config).with_context(|| {
                 format!(
                     "failed to read restored configuration file: {}",
                     backup_path.display()
@@ -112,12 +134,19 @@ async fn main() -> Result<()> {
         exit(0);
     }
 
-    let cert_pem = fs::read(&args.cert)
-        .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
+    let arg_cert = args.cert.as_deref().expect(
+        "Verified by clap if both `args.export_graphql_schema` and `args.repair` are not present.",
+    );
+    let arg_key = args.key.as_deref().expect(
+        "Verified by clap if both `args.export_graphql_schema` and `args.repair` are not present.",
+    );
+
+    let cert_pem = fs::read(arg_cert)
+        .with_context(|| format!("failed to read certificate file: {arg_cert}"))?;
     let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
     assert!(!cert.is_empty());
-    let key_pem = fs::read(&args.key)
-        .with_context(|| format!("failed to read private key file: {}", args.key))?;
+    let key_pem =
+        fs::read(arg_key).with_context(|| format!("failed to read private key file: {arg_key}"))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
     let root_cert = to_root_cert(&args.ca_certs)?;
     let certs = Arc::new(Certs {
@@ -481,4 +510,26 @@ async fn wait_for_task_shutdown(
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
     let _ = retain_task_handle.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use async_graphql::{EmptySubscription, Schema};
+
+    use crate::{
+        graphql::{Mutation, Query},
+        GRAPHQL_SCHEMA_PATH,
+    };
+
+    #[test]
+    fn graphql_schema_should_be_up_to_date() {
+        let expected = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+            .finish()
+            .sdl();
+        let actual = std::fs::read_to_string(GRAPHQL_SCHEMA_PATH).unwrap();
+        assert!(
+            expected == actual,
+            "GraphQL schema is outdated. Please run `cargo run -- --export-graphql-schema`"
+        );
+    }
 }
