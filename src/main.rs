@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
 
     let cfg_path = settings.cfg_path.clone();
 
-    let _guards = init_tracing(args.log_dir.as_deref())?;
+    let _guards = init_tracing(args.log_path.as_deref())?;
 
     if args.repair {
         repair_db(
@@ -409,19 +409,19 @@ fn new_peers_data(peers_list: Option<HashSet<PeerIdentity>>) -> (Peers, PeerIden
 
 /// Initializes the tracing subscriber and returns a vector of `WorkerGuard`.
 ///
-/// If `log_dir` is `None`, logs will be printed to stdout.
+/// If `log_path` is `None`, logs will be printed to stdout.
 /// If the runtime is in debug mode, logs will be printed to stdout in addition to the specified
-/// `log_dir`.
+/// `log_path`.
 ///
 /// # Errors
 ///
-/// Returns an error if the log file cannot be opened in the `log_dir` path in the
+/// Returns an error if the log file cannot be opened in the `log_path` path in the
 /// local configuration.
-fn init_tracing(log_dir: Option<&Path>) -> Result<Vec<WorkerGuard>> {
+fn init_tracing(log_path: Option<&Path>) -> Result<Vec<WorkerGuard>> {
     let mut guards = vec![];
 
-    let file_layer = if let Some(log_dir) = log_dir {
-        let file_path = log_dir.join(env!("LOG_FILENAME"));
+    let file_layer = if let Some(log_path) = log_path {
+        let file_path = log_path.to_path_buf();
         let file = OpenOptions::new()
             .create(true)
             .append(true)
