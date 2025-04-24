@@ -9,6 +9,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Logging behavior no longer considers the debug mode. Previously, logging
+  behavior depended on both `log_path` and the build type(debug/release). Now,
+  whether logs are written to stdout or to a file is determined solely by the
+  presence of `log_path`.
 - Giganto now creates a backup before overwriting the config via the
   `updateConfig` GraphQL API. If reading the config fails, it automatically
   restores from the backup, both during `updateConfig` calls and at startup.
