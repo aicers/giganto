@@ -48,8 +48,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 - The `--ca-certs` argument accepts multiple values, separated by commas. You
   can also repeat the argument to specify multiple CA certificates.
 - Logging behavior based on the `--log-path` argument is as follows:
-  - If `<LOG_PATH>` is not provided, logs are written to stdout using the tracing
-    library.
+  - If `<LOG_PATH>` is not provided, logs are written to stdout using the
+    tracing library.
   - If `<LOG_PATH>` is provided and writable, logs are written to the specified
     file using the tracing library.
   - If `<LOG_PATH>` is provided but not writable, Giganto will terminate.
