@@ -130,6 +130,18 @@ cargo run -- -c tests/config.toml --cert tests/certs/node1/cert.pem \
 --key tests/certs/node1/key.pem --ca-certs tests/certs/ca_cert.pem
 ```
 
+## Contributing
+
+To run Giganto, the `src/graphql/client/schema/schema.graphql` file is required.
+This file is used to enable GraphQL client functionality, which is necessary for
+clustering. The file is not manually maintained, but generated from the relevant
+GraphQL source code. Therefore, if the source code affecting the GraphQL API has
+been modified, you need to update the schema by running:
+
+```sh
+cargo run --features=export-graphql-schema
+```
+
 ## License
 
 Copyright 2022-2025 ClumL Inc.

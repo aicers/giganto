@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "export-graphql-schema", allow(unused))]
+
 mod graphql;
 mod ingest;
 mod peer;
@@ -52,11 +54,16 @@ use crate::{
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
 
+#[allow(dead_code)]
+#[cfg(any(debug_assertions, feature = "export-graphql-schema"))]
+const GRAPHQL_SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
+
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
 pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
+#[cfg(not(feature = "export-graphql-schema"))]
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -467,4 +474,46 @@ async fn wait_for_task_shutdown(
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
     let _ = retain_task_handle.join();
+}
+
+#[cfg(feature = "export-graphql-schema")]
+fn main() -> Result<()> {
+    use async_graphql::{EmptySubscription, Schema};
+
+    use crate::{
+        graphql::{Mutation, Query},
+        GRAPHQL_SCHEMA_PATH,
+    };
+
+    fs::write(
+        GRAPHQL_SCHEMA_PATH,
+        Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+            .finish()
+            .sdl(),
+    )
+    .context("Failed to write the GraphQL schema")?;
+    println!("Successfully exported GraphQL schema.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use async_graphql::{EmptySubscription, Schema};
+
+    use crate::{
+        graphql::{Mutation, Query},
+        GRAPHQL_SCHEMA_PATH,
+    };
+
+    #[test]
+    fn graphql_schema_should_be_up_to_date() {
+        let expected = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+            .finish()
+            .sdl();
+        let actual = std::fs::read_to_string(GRAPHQL_SCHEMA_PATH).unwrap();
+        assert!(
+            expected == actual,
+            "GraphQL schema is outdated. Please run `cargo run --features=export-graphql-schema`"
+        );
+    }
 }
