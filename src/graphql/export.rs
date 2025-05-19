@@ -2578,7 +2578,7 @@ where
         error!("failed to read database or invalid data #{invalid_data_cnt}");
     }
     fs::rename(progress_path, done_path)?;
-    Ok(format!("export file success: {done_path:?}"))
+    Ok(format!("export file success: {}", done_path.display()))
 }
 
 fn export_statistic_file(
@@ -2662,7 +2662,7 @@ fn export_statistic_file(
         error!("failed to read database or invalid data #{invalid_data_cnt}");
     }
     fs::rename(progress_path, done_path)?;
-    Ok(format!("export file success: {done_path:?}"))
+    Ok(format!("export file success: {}", done_path.display()))
 }
 
 fn write_filtered_data_to_file<T, N>(
