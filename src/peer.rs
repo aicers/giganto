@@ -113,12 +113,12 @@ pub struct Peer {
     client_config: ClientConfig,
     server_config: ServerConfig,
     local_address: SocketAddr,
-    local_host_name: String,
+    local_hostname: String,
 }
 
 impl Peer {
     pub fn new(local_address: SocketAddr, certs: &Certs) -> Result<Self> {
-        let (_, local_host_name) = subject_from_cert(certs.certs.as_slice())?;
+        let (_, local_hostname) = subject_from_cert(certs.certs.as_slice())?;
 
         let server_config =
             config_server(certs).expect("server configuration error with cert, key or root");
@@ -130,7 +130,7 @@ impl Peer {
             client_config,
             server_config,
             local_address,
-            local_host_name,
+            local_hostname,
         })
     }
 
@@ -181,7 +181,7 @@ impl Peer {
         tokio::spawn(client_run(
             client_endpoint.clone(),
             peer_conn_info.clone(),
-            self.local_host_name.clone(),
+            self.local_hostname.clone(),
             notify_shutdown.clone(),
         ));
 
@@ -208,7 +208,7 @@ impl Peer {
                         client_endpoint.clone(),
                         peer,
                         peer_conn_info.clone(),
-                        self.local_host_name.clone(),
+                        self.local_hostname.clone(),
                         notify_shutdown.clone(),
                     ));
                 },
@@ -227,7 +227,7 @@ impl Peer {
 async fn client_run(
     client_endpoint: Endpoint,
     peer_conn_info: PeerConns,
-    local_host_name: String,
+    local_hostname: String,
     notify_shutdown: Arc<Notify>,
 ) {
     for peer in &*peer_conn_info.peer_identities.read().await {
@@ -235,7 +235,7 @@ async fn client_run(
             client_endpoint.clone(),
             peer.clone(),
             peer_conn_info.clone(),
-            local_host_name.clone(),
+            local_hostname.clone(),
             notify_shutdown.clone(),
         ));
     }
@@ -275,7 +275,7 @@ async fn client_connection(
     client_endpoint: Endpoint,
     peer_info: PeerIdentity,
     peer_conn_info: PeerConns,
-    local_host_name: String,
+    local_hostname: String,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
@@ -283,7 +283,7 @@ async fn client_connection(
         match connect(&client_endpoint, &peer_info).await {
             Ok((connection, mut send, mut recv)) => {
                 // Remove duplicate connections.
-                let (remote_addr, remote_host_name) = match check_for_duplicate_connections(
+                let (remote_addr, remote_hostname) = match check_for_duplicate_connections(
                     &connection,
                     peer_conn_info.peer_conns.clone(),
                 )
@@ -305,7 +305,7 @@ async fn client_connection(
                 let mut send_peer_list = peer_conn_info.peer_identities.read().await.clone();
                 send_peer_list.insert(PeerIdentity {
                     addr: peer_conn_info.local_address,
-                    hostname: local_host_name.clone(),
+                    hostname: local_hostname.clone(),
                 });
 
                 // Exchange peer list/sensor list.
@@ -358,17 +358,17 @@ async fn client_connection(
                     .peer_conns
                     .write()
                     .await
-                    .insert(remote_host_name.clone(), connection.clone());
+                    .insert(remote_hostname.clone(), connection.clone());
 
                 loop {
                     select! {
                         stream = connection.accept_bi()  => {
                             let stream = match stream {
                                 Err(e) => {
-                                    peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
+                                    peer_conn_info.peer_conns.write().await.remove(&remote_hostname);
                                     peer_conn_info.peers.write().await.remove(&remote_addr);
                                     if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                                        info!("giganto peer({remote_host_name}/{remote_addr}) closed");
+                                        info!("giganto peer({remote_hostname}/{remote_addr}) closed");
                                         return Ok(());
                                     }
                                     continue 'connection;
@@ -451,7 +451,7 @@ async fn server_connection(
     };
 
     // Remove duplicate connections.
-    let (remote_addr, remote_host_name) =
+    let (remote_addr, remote_hostname) =
         match check_for_duplicate_connections(&connection, peer_conn_info.peer_conns.clone()).await
         {
             Ok((addr, name)) => {
@@ -516,17 +516,17 @@ async fn server_connection(
         .peer_conns
         .write()
         .await
-        .insert(remote_host_name.clone(), connection.clone());
+        .insert(remote_hostname.clone(), connection.clone());
 
     loop {
         select! {
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(e) => {
-                        peer_conn_info.peer_conns.write().await.remove(&remote_host_name);
+                        peer_conn_info.peer_conns.write().await.remove(&remote_hostname);
                         peer_conn_info.peers.write().await.remove(&remote_addr);
                         if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                            info!("giganto peer({remote_host_name}/{remote_addr}) closed");
+                            info!("giganto peer({remote_hostname}/{remote_addr}) closed");
                             return Ok(());
                         }
                         return Err(e.into());
@@ -674,15 +674,15 @@ async fn check_for_duplicate_connections(
     peer_conn: Arc<RwLock<HashMap<String, Connection>>>,
 ) -> Result<(String, String)> {
     let remote_addr = connection.remote_address().ip().to_string();
-    let (_, remote_host_name) = subject_from_cert_verbose(&extract_cert_from_conn(connection)?)?;
-    if peer_conn.read().await.contains_key(&remote_host_name) {
+    let (_, remote_hostname) = subject_from_cert_verbose(&extract_cert_from_conn(connection)?)?;
+    if peer_conn.read().await.contains_key(&remote_hostname) {
         connection.close(
             quinn::VarInt::from_u32(0),
             "exist connection close".as_bytes(),
         );
-        bail!("Duplicated connection close:{remote_host_name:?}");
+        bail!("Duplicated connection close:{remote_hostname:?}");
     }
-    Ok((remote_addr, remote_host_name))
+    Ok((remote_addr, remote_hostname))
 }
 
 async fn update_to_new_peer_list(
