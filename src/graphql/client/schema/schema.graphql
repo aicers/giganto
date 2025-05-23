@@ -1,2464 +1,2855 @@
-# Indicates that an Input Object is a OneOf Input Object (and thus requires
-#                         exactly one of its field be provided)
-directive @oneOf on INPUT_OBJECT
 
-# Represents an event extracted from the BOOTP protocol.
+"""
+Represents an event extracted from the BOOTP protocol.
+"""
 type BootpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Operation Code
-  op: Int!
-
-  # Hardware Type
-  htype: Int!
-
-  # Hop Count
-  hops: Int!
-
-  # Transaction ID
-  xid: StringNumberU32!
-
-  # Client IP Address
-  ciaddr: String!
-
-  # Your IP Address
-  yiaddr: String!
-
-  # Server IP Address
-  siaddr: String!
-
-  # Gateway IP Address
-  giaddr: String!
-
-  # Client Hardware IP Address
-  chaddr: [Int!]!
-
-  # Server Hostname
-  sname: String!
-
-  # Boot Filename
-  file: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Operation Code
+	"""
+	op: Int!
+	"""
+	Hardware Type
+	"""
+	htype: Int!
+	"""
+	Hop Count
+	"""
+	hops: Int!
+	"""
+	Transaction ID
+	"""
+	xid: StringNumberU32!
+	"""
+	Client IP Address
+	"""
+	ciaddr: String!
+	"""
+	Your IP Address
+	"""
+	yiaddr: String!
+	"""
+	Server IP Address
+	"""
+	siaddr: String!
+	"""
+	Gateway IP Address
+	"""
+	giaddr: String!
+	"""
+	Client Hardware IP Address
+	"""
+	chaddr: [Int!]!
+	"""
+	Server Hostname
+	"""
+	sname: String!
+	"""
+	Boot Filename
+	"""
+	file: String!
 }
 
 type BootpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [BootpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [BootpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [BootpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [BootpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type BootpRawEventEdge {
-  # The item at the end of the edge
-  node: BootpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: BootpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type Config {
-  ingestSrvAddr: String!
-  publishSrvAddr: String!
-  graphqlSrvAddr: String!
-  retention: String!
-  dataDir: String!
-  exportDir: String!
-  maxOpenFiles: Int!
-  maxMbOfLevelBase: StringNumberU64!
-  numOfThread: Int!
-  maxSubCompactions: StringNumberU32!
-  ackTransmission: Int!
+	ingestSrvAddr: String!
+	publishSrvAddr: String!
+	graphqlSrvAddr: String!
+	retention: String!
+	dataDir: String!
+	exportDir: String!
+	maxOpenFiles: Int!
+	maxMbOfLevelBase: StringNumberU64!
+	numOfThread: Int!
+	maxSubCompactions: StringNumberU32!
+	ackTransmission: Int!
 }
 
-# Represents an event extracted from a session.
+"""
+Represents an event extracted from a session.
+"""
 type ConnRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # Connection State
-  #
-  # This is only used in TCP connections.
-  #
-  # The connection state is a string of letters that represent the state of the connection. The
-  # letters are as follows:
-  #
-  # - S: The originator sent a SYN segment.
-  # - h: The responder sent a SYN ACK segment.
-  # - A: The originator sent an ACK segment.
-  # - D: The originator sent at least one segment with payload data. In this case, that was HTTP
-  # over TCP.
-  # - a: The responder replied with an ACK segment.
-  # - d: The responder replied with at least one segment with payload data.
-  # - F: The originator sent a FIN ACK segment.
-  # - f: The responder replied with a FIN ACK segment.
-  # - R: The originator sent a RST segment.
-  # - r: The responder sent a RST segment.
-  # - T: Timeout
-  #
-  # For example, `ShDdAaFf` indicates a session without packet loss.
-  connState: String!
-
-  # Duration
-  #
-  # It is measured in nanoseconds.
-  duration: StringNumberI64!
-
-  # Service Name
-  service: String!
-
-  # Bytes Sent by Source
-  origBytes: StringNumberU64!
-
-  # Bytes Received by Destination
-  respBytes: StringNumberU64!
-
-  # Packets Sent by Source
-  origPkts: StringNumberU64!
-
-  # Packets Received by Destination
-  respPkts: StringNumberU64!
-
-  # Layer 2 Bytes Sent by Source
-  origL2Bytes: StringNumberU64!
-
-  # Layer 2 Bytes Received by Destination
-  respL2Bytes: StringNumberU64!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	Connection State
+	
+	This is only used in TCP connections.
+	
+	The connection state is a string of letters that represent the state of the connection. The
+	letters are as follows:
+	
+	- S: The originator sent a SYN segment.
+	- h: The responder sent a SYN ACK segment.
+	- A: The originator sent an ACK segment.
+	- D: The originator sent at least one segment with payload data. In this case, that was HTTP
+	over TCP.
+	- a: The responder replied with an ACK segment.
+	- d: The responder replied with at least one segment with payload data.
+	- F: The originator sent a FIN ACK segment.
+	- f: The responder replied with a FIN ACK segment.
+	- R: The originator sent a RST segment.
+	- r: The responder sent a RST segment.
+	- T: Timeout
+	
+	For example, `ShDdAaFf` indicates a session without packet loss.
+	"""
+	connState: String!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Service Name
+	"""
+	service: String!
+	"""
+	Bytes Sent by Source
+	"""
+	origBytes: StringNumberU64!
+	"""
+	Bytes Received by Destination
+	"""
+	respBytes: StringNumberU64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 }
 
 type ConnRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [ConnRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [ConnRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ConnRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ConnRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type ConnRawEventEdge {
-  # The item at the end of the edge
-  node: ConnRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: ConnRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Implement the DateTime<Utc> scalar
-#
-# The input/output is a string in RFC3339 format.
+"""
+Implement the DateTime<Utc> scalar
+
+The input/output is a string in RFC3339 format.
+"""
 scalar DateTime
 
-# Represents an event extracted from the DCE-RPC protocol.
+"""
+Represents an event extracted from the DCE-RPC protocol.
+"""
 type DceRpcRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Round-Trip Time
-  rtt: StringNumberI64!
-
-  # Named Pipe
-  namedPipe: String!
-
-  # Endpoint
-  endpoint: String!
-
-  # Operation
-  operation: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Round-Trip Time
+	"""
+	rtt: StringNumberI64!
+	"""
+	Named Pipe
+	"""
+	namedPipe: String!
+	"""
+	Endpoint
+	"""
+	endpoint: String!
+	"""
+	Operation
+	"""
+	operation: String!
 }
 
 type DceRpcRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [DceRpcRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [DceRpcRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [DceRpcRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [DceRpcRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type DceRpcRawEventEdge {
-  # The item at the end of the edge
-  node: DceRpcRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: DceRpcRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the DHCP protocol.
+"""
+Represents an event extracted from the DHCP protocol.
+"""
 type DhcpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Message Type
-  msgType: Int!
-
-  # Client IP Address
-  ciaddr: String!
-
-  # Your IP Address
-  yiaddr: String!
-
-  # Server IP Address
-  siaddr: String!
-
-  # Gateway IP Address
-  giaddr: String!
-
-  # Subnet Mask
-  subnetMask: String!
-
-  # Routers
-  router: [String!]!
-
-  # Domain Name Servers
-  domainNameServer: [String!]!
-
-  # Request IP Address
-  reqIpAddr: String!
-
-  # Lease Time
-  leaseTime: StringNumberU32!
-
-  # Server ID
-  serverId: String!
-
-  # Parameter Request List
-  paramReqList: [Int!]!
-
-  # Message
-  message: String!
-
-  # Renewal Time
-  renewalTime: StringNumberU32!
-
-  # Rebinding Time
-  rebindingTime: StringNumberU32!
-
-  # Class ID List
-  classId: [Int!]!
-
-  # Client ID Type
-  clientIdType: Int!
-
-  # Client ID List
-  clientId: [Int!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Message Type
+	"""
+	msgType: Int!
+	"""
+	Client IP Address
+	"""
+	ciaddr: String!
+	"""
+	Your IP Address
+	"""
+	yiaddr: String!
+	"""
+	Server IP Address
+	"""
+	siaddr: String!
+	"""
+	Gateway IP Address
+	"""
+	giaddr: String!
+	"""
+	Subnet Mask
+	"""
+	subnetMask: String!
+	"""
+	Routers
+	"""
+	router: [String!]!
+	"""
+	Domain Name Servers
+	"""
+	domainNameServer: [String!]!
+	"""
+	Request IP Address
+	"""
+	reqIpAddr: String!
+	"""
+	Lease Time
+	"""
+	leaseTime: StringNumberU32!
+	"""
+	Server ID
+	"""
+	serverId: String!
+	"""
+	Parameter Request List
+	"""
+	paramReqList: [Int!]!
+	"""
+	Message
+	"""
+	message: String!
+	"""
+	Renewal Time
+	"""
+	renewalTime: StringNumberU32!
+	"""
+	Rebinding Time
+	"""
+	rebindingTime: StringNumberU32!
+	"""
+	Class ID List
+	"""
+	classId: [Int!]!
+	"""
+	Client ID Type
+	"""
+	clientIdType: Int!
+	"""
+	Client ID List
+	"""
+	clientId: [Int!]!
 }
 
 type DhcpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [DhcpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [DhcpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [DhcpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [DhcpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type DhcpRawEventEdge {
-  # The item at the end of the edge
-  node: DhcpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: DhcpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type DnsEventEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  queryName: String!
-  queryStatus: StringNumberU32!
-  queryResults: [String!]!
-  image: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	queryName: String!
+	queryStatus: StringNumberU32!
+	queryResults: [String!]!
+	image: String!
+	user: String!
 }
 
 type DnsEventEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [DnsEventEventEdge!]!
-
-  # A list of nodes.
-  nodes: [DnsEventEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [DnsEventEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [DnsEventEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type DnsEventEventEdge {
-  # The item at the end of the edge
-  node: DnsEventEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: DnsEventEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the DNS protocol.
+"""
+Represents an event extracted from the DNS protocol.
+"""
 type DnsRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Query
-  query: String!
-
-  # Answer
-  answer: [String!]!
-
-  # Transaction ID
-  transId: Int!
-
-  # Round-Trip Time
-  rtt: StringNumberI64!
-
-  # Query Class
-  qclass: Int!
-
-  # Query Type
-  qtype: Int!
-
-  # Response Code
-  rcode: Int!
-
-  # Authoritative Answer Flag
-  aaFlag: Boolean!
-
-  # Truncated Flag
-  tcFlag: Boolean!
-
-  # Recursion Desired Flag
-  rdFlag: Boolean!
-
-  # Recursion Available Flag
-  raFlag: Boolean!
-
-  # Time to Live
-  ttl: [Int!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Query
+	"""
+	query: String!
+	"""
+	Answer
+	"""
+	answer: [String!]!
+	"""
+	Transaction ID
+	"""
+	transId: Int!
+	"""
+	Round-Trip Time
+	"""
+	rtt: StringNumberI64!
+	"""
+	Query Class
+	"""
+	qclass: Int!
+	"""
+	Query Type
+	"""
+	qtype: Int!
+	"""
+	Response Code
+	"""
+	rcode: Int!
+	"""
+	Authoritative Answer Flag
+	"""
+	aaFlag: Boolean!
+	"""
+	Truncated Flag
+	"""
+	tcFlag: Boolean!
+	"""
+	Recursion Desired Flag
+	"""
+	rdFlag: Boolean!
+	"""
+	Recursion Available Flag
+	"""
+	raFlag: Boolean!
+	"""
+	Time to Live
+	"""
+	ttl: [Int!]!
 }
 
 type DnsRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [DnsRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [DnsRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [DnsRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [DnsRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type DnsRawEventEdge {
-  # The item at the end of the edge
-  node: DnsRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: DnsRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input ExportFilter {
-  protocol: String!
-  sensorId: String!
-  agentName: String
-  agentId: String
-  kind: String
-  time: TimeRange
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
+	protocol: String!
+	sensorId: String!
+	agentName: String
+	agentId: String
+	kind: String
+	time: TimeRange
+	origAddr: IpRange
+	respAddr: IpRange
+	origPort: PortRange
+	respPort: PortRange
 }
 
 type FileCreateEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  targetFilename: String!
-  creationUtcTime: StringNumberI64!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetFilename: String!
+	creationUtcTime: StringNumberI64!
+	user: String!
 }
 
 type FileCreateEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FileCreateEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FileCreateEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FileCreateEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FileCreateEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FileCreateEventEdge {
-  # The item at the end of the edge
-  node: FileCreateEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FileCreateEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type FileCreateStreamHashEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  targetFilename: String!
-  creationUtcTime: StringNumberI64!
-  hash: [String!]!
-  contents: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetFilename: String!
+	creationUtcTime: StringNumberI64!
+	hash: [String!]!
+	contents: String!
+	user: String!
 }
 
 type FileCreateStreamHashEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FileCreateStreamHashEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FileCreateStreamHashEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FileCreateStreamHashEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FileCreateStreamHashEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FileCreateStreamHashEventEdge {
-  # The item at the end of the edge
-  node: FileCreateStreamHashEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FileCreateStreamHashEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type FileCreationTimeChangedEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  targetFilename: String!
-  creationUtcTime: StringNumberI64!
-  previousCreationUtcTime: StringNumberI64!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetFilename: String!
+	creationUtcTime: StringNumberI64!
+	previousCreationUtcTime: StringNumberI64!
+	user: String!
 }
 
 type FileCreationTimeChangedEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FileCreationTimeChangedEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FileCreationTimeChangedEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FileCreationTimeChangedEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FileCreationTimeChangedEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FileCreationTimeChangedEventEdge {
-  # The item at the end of the edge
-  node: FileCreationTimeChangedEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FileCreationTimeChangedEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type FileDeleteDetectedEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  user: String!
-  image: String!
-  targetFilename: String!
-  hashes: [String!]!
-  isExecutable: Boolean!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	user: String!
+	image: String!
+	targetFilename: String!
+	hashes: [String!]!
+	isExecutable: Boolean!
 }
 
 type FileDeleteDetectedEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FileDeleteDetectedEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FileDeleteDetectedEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FileDeleteDetectedEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FileDeleteDetectedEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FileDeleteDetectedEventEdge {
-  # The item at the end of the edge
-  node: FileDeleteDetectedEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FileDeleteDetectedEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type FileDeleteEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  user: String!
-  image: String!
-  targetFilename: String!
-  hashes: [String!]!
-  isExecutable: Boolean!
-  archived: Boolean!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	user: String!
+	image: String!
+	targetFilename: String!
+	hashes: [String!]!
+	isExecutable: Boolean!
+	archived: Boolean!
 }
 
 type FileDeleteEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FileDeleteEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FileDeleteEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FileDeleteEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FileDeleteEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FileDeleteEventEdge {
-  # The item at the end of the edge
-  node: FileDeleteEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FileDeleteEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the FTP protocol.
+
+"""
+Represents an event extracted from the FTP protocol.
+"""
 type FtpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Username
-  user: String!
-
-  # Password
-  password: String!
-
-  # Command
-  command: String!
-
-  # Reply Code
-  replyCode: String!
-
-  # Reply Message
-  replyMsg: String!
-
-  # Passive Mode Flag
-  dataPassive: Boolean!
-
-  # Data Channel Source IP Address
-  dataOrigAddr: String!
-
-  # Data Channel Destination IP Address
-  dataRespAddr: String!
-
-  # Data Channel Destination Port Number
-  dataRespPort: Int!
-
-  # Filename
-  file: String!
-
-  # File Size
-  fileSize: StringNumberU64!
-
-  # File ID
-  fileId: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Username
+	"""
+	user: String!
+	"""
+	Password
+	"""
+	password: String!
+	"""
+	Command
+	"""
+	command: String!
+	"""
+	Reply Code
+	"""
+	replyCode: String!
+	"""
+	Reply Message
+	"""
+	replyMsg: String!
+	"""
+	Passive Mode Flag
+	"""
+	dataPassive: Boolean!
+	"""
+	Data Channel Source IP Address
+	"""
+	dataOrigAddr: String!
+	"""
+	Data Channel Destination IP Address
+	"""
+	dataRespAddr: String!
+	"""
+	Data Channel Destination Port Number
+	"""
+	dataRespPort: Int!
+	"""
+	Filename
+	"""
+	file: String!
+	"""
+	File Size
+	"""
+	fileSize: StringNumberU64!
+	"""
+	File ID
+	"""
+	fileId: String!
 }
 
 type FtpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [FtpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [FtpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [FtpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [FtpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type FtpRawEventEdge {
-  # The item at the end of the edge
-  node: FtpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: FtpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the HTTP protocol.
+"""
+Represents an event extracted from the HTTP protocol.
+"""
 type HttpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # HTTP Method
-  method: String!
-
-  # Host
-  host: String!
-
-  # URI
-  uri: String!
-
-  # Referrer
-  referrer: String!
-
-  # HTTP Version
-  version: String!
-
-  # User Agent
-  userAgent: String!
-
-  # Request Length
-  requestLen: StringNumberUsize!
-
-  # Response Length
-  responseLen: StringNumberUsize!
-
-  # Status Code
-  statusCode: Int!
-
-  # Status Message
-  statusMsg: String!
-
-  # Username
-  username: String!
-
-  # Password
-  password: String!
-
-  # Cookie
-  cookie: String!
-
-  # Content Encoding
-  contentEncoding: String!
-
-  # Content Type
-  contentType: String!
-
-  # Cache Control
-  cacheControl: String!
-
-  # Request Filenames
-  origFilenames: [String!]!
-
-  # Request MIME Types
-  origMimeTypes: [String!]!
-
-  # Response Filenames
-  respFilenames: [String!]!
-
-  # Response MIME Types
-  respMimeTypes: [String!]!
-
-  # POST Body
-  postBody: [Int!]!
-
-  # Last State
-  state: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	HTTP Method
+	"""
+	method: String!
+	"""
+	Host
+	"""
+	host: String!
+	"""
+	URI
+	"""
+	uri: String!
+	"""
+	Referrer
+	"""
+	referrer: String!
+	"""
+	HTTP Version
+	"""
+	version: String!
+	"""
+	User Agent
+	"""
+	userAgent: String!
+	"""
+	Request Length
+	"""
+	requestLen: StringNumberUsize!
+	"""
+	Response Length
+	"""
+	responseLen: StringNumberUsize!
+	"""
+	Status Code
+	"""
+	statusCode: Int!
+	"""
+	Status Message
+	"""
+	statusMsg: String!
+	"""
+	Username
+	"""
+	username: String!
+	"""
+	Password
+	"""
+	password: String!
+	"""
+	Cookie
+	"""
+	cookie: String!
+	"""
+	Content Encoding
+	"""
+	contentEncoding: String!
+	"""
+	Content Type
+	"""
+	contentType: String!
+	"""
+	Cache Control
+	"""
+	cacheControl: String!
+	"""
+	Request Filenames
+	"""
+	origFilenames: [String!]!
+	"""
+	Request MIME Types
+	"""
+	origMimeTypes: [String!]!
+	"""
+	Response Filenames
+	"""
+	respFilenames: [String!]!
+	"""
+	Response MIME Types
+	"""
+	respMimeTypes: [String!]!
+	"""
+	POST Body
+	"""
+	postBody: [Int!]!
+	"""
+	Last State
+	"""
+	state: String!
 }
 
 type HttpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [HttpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [HttpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [HttpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [HttpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type HttpRawEventEdge {
-  # The item at the end of the edge
-  node: HttpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: HttpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
+
 
 type ImageLoadedEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  imageLoaded: String!
-  fileVersion: String!
-  description: String!
-  product: String!
-  company: String!
-  originalFileName: String!
-  hashes: [String!]!
-  signed: Boolean!
-  signature: String!
-  signatureStatus: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	imageLoaded: String!
+	fileVersion: String!
+	description: String!
+	product: String!
+	company: String!
+	originalFileName: String!
+	hashes: [String!]!
+	signed: Boolean!
+	signature: String!
+	signatureStatus: String!
+	user: String!
 }
 
 type ImageLoadedEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [ImageLoadedEventEdge!]!
-
-  # A list of nodes.
-  nodes: [ImageLoadedEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ImageLoadedEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ImageLoadedEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type ImageLoadedEventEdge {
-  # The item at the end of the edge
-  node: ImageLoadedEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: ImageLoadedEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
+
 
 input IpRange {
-  start: String
-  end: String
+	start: String
+	end: String
 }
 
-# Represents an event extracted from the Kerberos protocol.
+"""
+Represents an event extracted from the Kerberos protocol.
+"""
 type KerberosRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Client Time
-  clientTime: StringNumberI64!
-
-  # Server Time
-  serverTime: StringNumberI64!
-
-  # Error Code
-  errorCode: StringNumberU32!
-
-  # Client Realm
-  clientRealm: String!
-
-  # Client Name Type
-  cnameType: Int!
-
-  # Client Name
-  clientName: [String!]!
-
-  # Realm
-  realm: String!
-
-  # Service Name Type
-  snameType: Int!
-
-  # Service Name
-  serviceName: [String!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Client Time
+	"""
+	clientTime: StringNumberI64!
+	"""
+	Server Time
+	"""
+	serverTime: StringNumberI64!
+	"""
+	Error Code
+	"""
+	errorCode: StringNumberU32!
+	"""
+	Client Realm
+	"""
+	clientRealm: String!
+	"""
+	Client Name Type
+	"""
+	cnameType: Int!
+	"""
+	Client Name
+	"""
+	clientName: [String!]!
+	"""
+	Realm
+	"""
+	realm: String!
+	"""
+	Service Name Type
+	"""
+	snameType: Int!
+	"""
+	Service Name
+	"""
+	serviceName: [String!]!
 }
 
 type KerberosRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [KerberosRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [KerberosRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [KerberosRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [KerberosRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type KerberosRawEventEdge {
-  # The item at the end of the edge
-  node: KerberosRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: KerberosRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the LDAP protocol.
+"""
+Represents an event extracted from the LDAP protocol.
+"""
 type LdapRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Message ID
-  messageId: StringNumberU32!
-
-  # Version
-  version: Int!
-
-  # Operation Code
-  opcode: [String!]!
-
-  # Result Code
-  result: [String!]!
-
-  # Diagnostic Message
-  diagnosticMessage: [String!]!
-
-  # Object
-  object: [String!]!
-
-  # Argument
-  argument: [String!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Message ID
+	"""
+	messageId: StringNumberU32!
+	"""
+	Version
+	"""
+	version: Int!
+	"""
+	Operation Code
+	"""
+	opcode: [String!]!
+	"""
+	Result Code
+	"""
+	result: [String!]!
+	"""
+	Diagnostic Message
+	"""
+	diagnosticMessage: [String!]!
+	"""
+	Object
+	"""
+	object: [String!]!
+	"""
+	Argument
+	"""
+	argument: [String!]!
 }
 
 type LdapRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [LdapRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [LdapRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [LdapRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [LdapRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type LdapRawEventEdge {
-  # The item at the end of the edge
-  node: LdapRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: LdapRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input LogFilter {
-  time: TimeRange
-  sensor: String!
-  kind: String
+	time: TimeRange
+	sensor: String!
+	kind: String
 }
 
 type LogRawEvent {
-  time: DateTime!
-  log: String!
+	time: DateTime!
+	log: String!
 }
 
 type LogRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [LogRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [LogRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [LogRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [LogRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type LogRawEventEdge {
-  # The item at the end of the edge
-  node: LogRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: LogRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the MQTT protocol.
+"""
+Represents an event extracted from the MQTT protocol.
+"""
 type MqttRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # MQTT Protocol
-  protocol: String!
-
-  # Version
-  version: Int!
-
-  # Client ID
-  clientId: String!
-
-  # Connection Acknowledgement Response
-  connackReason: Int!
-
-  # Subscription Request
-  subscribe: [String!]!
-
-  # Subscription Acknowledgement Response
-  subackReason: [Int!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	MQTT Protocol
+	"""
+	protocol: String!
+	"""
+	Version
+	"""
+	version: Int!
+	"""
+	Client ID
+	"""
+	clientId: String!
+	"""
+	Connection Acknowledgement Response
+	"""
+	connackReason: Int!
+	"""
+	Subscription Request
+	"""
+	subscribe: [String!]!
+	"""
+	Subscription Acknowledgement Response
+	"""
+	subackReason: [Int!]!
 }
 
 type MqttRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [MqttRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [MqttRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [MqttRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [MqttRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type MqttRawEventEdge {
-  # The item at the end of the edge
-  node: MqttRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: MqttRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type Mutation {
-  # Updates the config with the given `new` config. It involves realoding the module with the new
-  # config.
-  #
-  # # Errors
-  #
-  # Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
-  # invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
-  # `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
-  # It also returns an error if the `export_dir` is not writable. If the `new` is the same as
-  # the current config, it returns an error.
-  updateConfig(old: String!, new: String!): Config!
-  stop: Boolean!
-  reboot: Boolean!
-  shutdown: Boolean!
+	"""
+	Updates the config with the given `new` config. It involves reloading the module with the
+	new config.
+	
+	# Errors
+	
+	Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
+	invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
+	`num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
+	It also returns an error if the `export_dir` is not writable. If the `new` is the same as
+	the current config, it returns an error.
+	"""
+	updateConfig(old: String!, new: String!): Config!
+	stop: Boolean!
+	reboot: Boolean!
+	shutdown: Boolean!
 }
 
 type Netflow5RawEvent {
-  time: DateTime!
-  srcAddr: String!
-  dstAddr: String!
-  nextHop: String!
-  input: Int!
-  output: Int!
-  dPkts: StringNumberU32!
-  dOctets: StringNumberU32!
-  first: String!
-  last: String!
-  srcPort: Int!
-  dstPort: Int!
-  tcpFlags: String!
-  prot: Int!
-  tos: String!
-  srcAs: Int!
-  dstAs: Int!
-  srcMask: Int!
-  dstMask: Int!
-  sequence: StringNumberU32!
-  engineType: Int!
-  engineId: Int!
-  samplingMode: String!
-  samplingRate: Int!
+	time: DateTime!
+	srcAddr: String!
+	dstAddr: String!
+	nextHop: String!
+	input: Int!
+	output: Int!
+	dPkts: StringNumberU32!
+	dOctets: StringNumberU32!
+	first: String!
+	last: String!
+	srcPort: Int!
+	dstPort: Int!
+	tcpFlags: String!
+	prot: Int!
+	tos: String!
+	srcAs: Int!
+	dstAs: Int!
+	srcMask: Int!
+	dstMask: Int!
+	sequence: StringNumberU32!
+	engineType: Int!
+	engineId: Int!
+	samplingMode: String!
+	samplingRate: Int!
 }
 
 type Netflow5RawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [Netflow5RawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [Netflow5RawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [Netflow5RawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [Netflow5RawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type Netflow5RawEventEdge {
-  # The item at the end of the edge
-  node: Netflow5RawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: Netflow5RawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type Netflow9RawEvent {
-  time: DateTime!
-  sequence: StringNumberU32!
-  sourceId: StringNumberU32!
-  templateId: Int!
-  origAddr: String!
-  origPort: Int!
-  respAddr: String!
-  respPort: Int!
-  proto: Int!
-  contents: String!
+	time: DateTime!
+	sequence: StringNumberU32!
+	sourceId: StringNumberU32!
+	templateId: Int!
+	origAddr: String!
+	origPort: Int!
+	respAddr: String!
+	respPort: Int!
+	proto: Int!
+	contents: String!
 }
 
 type Netflow9RawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [Netflow9RawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [Netflow9RawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [Netflow9RawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [Netflow9RawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type Netflow9RawEventEdge {
-  # The item at the end of the edge
-  node: Netflow9RawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: Netflow9RawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input NetflowFilter {
-  time: TimeRange
-  sensor: String!
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
-  contents: String
+	time: TimeRange
+	sensor: String!
+	origAddr: IpRange
+	respAddr: IpRange
+	origPort: PortRange
+	respPort: PortRange
+	contents: String
 }
 
 type NetworkConnectionEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  user: String!
-  protocol: String!
-  initiated: Boolean!
-  sourceIsIpv6: Boolean!
-  sourceIp: String!
-  sourceHostname: String!
-  sourcePort: Int!
-  sourcePortName: String!
-  destinationIsIpv6: Boolean!
-  destinationIp: String!
-  destinationHostname: String!
-  destinationPort: Int!
-  destinationPortName: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	user: String!
+	protocol: String!
+	initiated: Boolean!
+	sourceIsIpv6: Boolean!
+	sourceIp: String!
+	sourceHostname: String!
+	sourcePort: Int!
+	sourcePortName: String!
+	destinationIsIpv6: Boolean!
+	destinationIp: String!
+	destinationHostname: String!
+	destinationPort: Int!
+	destinationPortName: String!
 }
 
 type NetworkConnectionEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [NetworkConnectionEventEdge!]!
-
-  # A list of nodes.
-  nodes: [NetworkConnectionEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [NetworkConnectionEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [NetworkConnectionEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type NetworkConnectionEventEdge {
-  # The item at the end of the edge
-  node: NetworkConnectionEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: NetworkConnectionEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input NetworkFilter {
-  time: TimeRange
-  sensor: String!
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
-  logLevel: String
-  logContents: String
-  agentId: String
+	time: TimeRange
+	sensor: String!
+	origAddr: IpRange
+	respAddr: IpRange
+	origPort: PortRange
+	respPort: PortRange
+	logLevel: String
+	logContents: String
+	agentId: String
 }
 
-union NetworkRawEvents =
-    ConnRawEvent
-  | DnsRawEvent
-  | HttpRawEvent
-  | RdpRawEvent
-  | NtlmRawEvent
-  | KerberosRawEvent
-  | SshRawEvent
-  | DceRpcRawEvent
-  | FtpRawEvent
-  | MqttRawEvent
-  | LdapRawEvent
-  | TlsRawEvent
-  | SmbRawEvent
-  | NfsRawEvent
-  | SmtpRawEvent
-  | BootpRawEvent
-  | DhcpRawEvent
+union NetworkRawEvents = ConnRawEvent | DnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent
 
 type NetworkRawEventsConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [NetworkRawEventsEdge!]!
-
-  # A list of nodes.
-  nodes: [NetworkRawEvents!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [NetworkRawEventsEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [NetworkRawEvents!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type NetworkRawEventsEdge {
-  # The item at the end of the edge
-  node: NetworkRawEvents!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: NetworkRawEvents!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the NFS protocol.
+"""
+Represents an event extracted from the NFS protocol.
+"""
 type NfsRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Read Files
-  readFiles: [String!]!
-
-  # Write Files
-  writeFiles: [String!]!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Read Files
+	"""
+	readFiles: [String!]!
+	"""
+	Write Files
+	"""
+	writeFiles: [String!]!
 }
 
 type NfsRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [NfsRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [NfsRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [NfsRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [NfsRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type NfsRawEventEdge {
-  # The item at the end of the edge
-  node: NfsRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: NfsRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the NTLM protocol.
+"""
+Represents an event extracted from the NTLM protocol.
+"""
 type NtlmRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Username
-  username: String!
-
-  # Hostname
-  hostname: String!
-
-  # Domain Name
-  domainname: String!
-
-  # Authentication Success
-  success: String!
-
-  # Transport Protocol
-  protocol: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Username
+	"""
+	username: String!
+	"""
+	Hostname
+	"""
+	hostname: String!
+	"""
+	Domain Name
+	"""
+	domainname: String!
+	"""
+	Authentication Success
+	"""
+	success: String!
+	"""
+	Transport Protocol
+	"""
+	protocol: String!
 }
 
 type NtlmRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [NtlmRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [NtlmRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [NtlmRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [NtlmRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type NtlmRawEventEdge {
-  # The item at the end of the edge
-  node: NtlmRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: NtlmRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input OpLogFilter {
-  time: TimeRange
-  sensor: String
-  agentId: String
-  logLevel: String
-  contents: String
+	time: TimeRange
+	sensor: String
+	agentId: String
+	logLevel: String
+	contents: String
 }
 
 type OpLogRawEvent {
-  time: DateTime!
-  level: String!
-  contents: String!
-  agentName: String!
-  sensor: String!
+	time: DateTime!
+	level: String!
+	contents: String!
+	agentName: String!
+	sensor: String!
 }
 
 type OpLogRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [OpLogRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [OpLogRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [OpLogRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [OpLogRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type OpLogRawEventEdge {
-  # The item at the end of the edge
-  node: OpLogRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: OpLogRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type Packet {
-  requestTime: DateTime!
-  packetTime: DateTime!
-  packet: String!
+	requestTime: DateTime!
+	packetTime: DateTime!
+	packet: String!
 }
 
 type PacketConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [PacketEdge!]!
-
-  # A list of nodes.
-  nodes: [Packet!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [PacketEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [Packet!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type PacketEdge {
-  # The item at the end of the edge
-  node: Packet!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: Packet!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input PacketFilter {
-  sensor: String!
-  requestTime: DateTime!
-  packetTime: TimeRange
+	sensor: String!
+	requestTime: DateTime!
+	packetTime: TimeRange
 }
 
-# Information about pagination in a connection
+"""
+Information about pagination in a connection
+"""
 type PageInfo {
-  # When paginating backwards, are there more items?
-  hasPreviousPage: Boolean!
-
-  # When paginating forwards, are there more items?
-  hasNextPage: Boolean!
-
-  # When paginating backwards, the cursor to continue.
-  startCursor: String
-
-  # When paginating forwards, the cursor to continue.
-  endCursor: String
+	"""
+	When paginating backwards, are there more items?
+	"""
+	hasPreviousPage: Boolean!
+	"""
+	When paginating forwards, are there more items?
+	"""
+	hasNextPage: Boolean!
+	"""
+	When paginating backwards, the cursor to continue.
+	"""
+	startCursor: String
+	"""
+	When paginating forwards, the cursor to continue.
+	"""
+	endCursor: String
 }
 
 type Pcap {
-  requestTime: DateTime!
-  parsedPcap: String!
+	requestTime: DateTime!
+	parsedPcap: String!
 }
 
 type PipeEventEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  eventType: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  pipeName: String!
-  image: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	eventType: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	pipeName: String!
+	image: String!
+	user: String!
 }
 
 type PipeEventEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [PipeEventEventEdge!]!
-
-  # A list of nodes.
-  nodes: [PipeEventEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [PipeEventEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [PipeEventEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type PipeEventEventEdge {
-  # The item at the end of the edge
-  node: PipeEventEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: PipeEventEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input PortRange {
-  start: Int
-  end: Int
+	start: Int
+	end: Int
 }
 
 type ProcessCreateEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  fileVersion: String!
-  description: String!
-  product: String!
-  company: String!
-  originalFileName: String!
-  commandLine: String!
-  currentDirectory: String!
-  user: String!
-  logonGuid: String!
-  logonId: StringNumberU32!
-  terminalSessionId: StringNumberU32!
-  integrityLevel: String!
-  hashes: [String!]!
-  parentProcessGuid: String!
-  parentProcessId: StringNumberU32!
-  parentImage: String!
-  parentCommandLine: String!
-  parentUser: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	fileVersion: String!
+	description: String!
+	product: String!
+	company: String!
+	originalFileName: String!
+	commandLine: String!
+	currentDirectory: String!
+	user: String!
+	logonGuid: String!
+	logonId: StringNumberU32!
+	terminalSessionId: StringNumberU32!
+	integrityLevel: String!
+	hashes: [String!]!
+	parentProcessGuid: String!
+	parentProcessId: StringNumberU32!
+	parentImage: String!
+	parentCommandLine: String!
+	parentUser: String!
 }
 
 type ProcessCreateEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [ProcessCreateEventEdge!]!
-
-  # A list of nodes.
-  nodes: [ProcessCreateEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ProcessCreateEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ProcessCreateEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type ProcessCreateEventEdge {
-  # The item at the end of the edge
-  node: ProcessCreateEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: ProcessCreateEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type ProcessTamperingEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  tamperType: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	tamperType: String!
+	user: String!
 }
 
 type ProcessTamperingEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [ProcessTamperingEventEdge!]!
-
-  # A list of nodes.
-  nodes: [ProcessTamperingEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ProcessTamperingEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ProcessTamperingEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type ProcessTamperingEventEdge {
-  # The item at the end of the edge
-  node: ProcessTamperingEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: ProcessTamperingEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type ProcessTerminatedEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	user: String!
 }
 
 type ProcessTerminatedEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [ProcessTerminatedEventEdge!]!
-
-  # A list of nodes.
-  nodes: [ProcessTerminatedEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ProcessTerminatedEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ProcessTerminatedEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type ProcessTerminatedEventEdge {
-  # The item at the end of the edge
-  node: ProcessTerminatedEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: ProcessTerminatedEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type Properties {
-  estimateLiveDataSize: Int!
-  estimateNumKeys: Int!
-  stats: String!
+	estimateLiveDataSize: Int!
+	estimateNumKeys: Int!
+	stats: String!
 }
 
 input PropertyFilter {
-  recordType: String!
+	recordType: String!
 }
 
 type Query {
-  logRawEvents(
-    filter: LogFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): LogRawEventConnection!
-  opLogRawEvents(
-    filter: OpLogFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): OpLogRawEventConnection!
-  connRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): ConnRawEventConnection!
-  dnsRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): DnsRawEventConnection!
-  httpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): HttpRawEventConnection!
-  rdpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): RdpRawEventConnection!
-  smtpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): SmtpRawEventConnection!
-  ntlmRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): NtlmRawEventConnection!
-  kerberosRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): KerberosRawEventConnection!
-  sshRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): SshRawEventConnection!
-  dceRpcRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): DceRpcRawEventConnection!
-  ftpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FtpRawEventConnection!
-  mqttRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): MqttRawEventConnection!
-  ldapRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): LdapRawEventConnection!
-  tlsRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): TlsRawEventConnection!
-  smbRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): SmbRawEventConnection!
-  nfsRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): NfsRawEventConnection!
-  bootpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): BootpRawEventConnection!
-  dhcpRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): DhcpRawEventConnection!
-  networkRawEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): NetworkRawEventsConnection!
-  searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchHttpRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchRdpRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchSmtpRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchNtlmRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchKerberosRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchSshRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchDceRpcRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchFtpRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchMqttRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchLdapRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchTlsRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchSmbRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
-  searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
-  export(exportType: String!, filter: ExportFilter!): String!
-  packets(
-    filter: PacketFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): PacketConnection!
-  pcap(filter: PacketFilter!): Pcap!
-  periodicTimeSeries(
-    filter: TimeSeriesFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): TimeSeriesConnection!
-  status: Status!
-  propertiesCf(filter: PropertyFilter!): Properties!
-  config: Config!
-  ping: Boolean!
-  sensors: [String!]!
-  statistics(
-    sensors: [String!]!
-    time: TimeRange
-    protocols: [String!]
-    requestFromPeer: Boolean
-  ): [StatisticsRawEvent!]!
-  processCreateEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): ProcessCreateEventConnection!
-  fileCreateTimeEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FileCreationTimeChangedEventConnection!
-  networkConnectEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): NetworkConnectionEventConnection!
-  processTerminateEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): ProcessTerminatedEventConnection!
-  imageLoadEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): ImageLoadedEventConnection!
-  fileCreateEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FileCreateEventConnection!
-  registryValueSetEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): RegistryValueSetEventConnection!
-  registryKeyRenameEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): RegistryKeyValueRenameEventConnection!
-  fileCreateStreamHashEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FileCreateStreamHashEventConnection!
-  pipeEventEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): PipeEventEventConnection!
-  dnsQueryEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): DnsEventEventConnection!
-  fileDeleteEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FileDeleteEventConnection!
-  processTamperEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): ProcessTamperingEventConnection!
-  fileDeleteDetectedEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): FileDeleteDetectedEventConnection!
-  searchProcessCreateEvents(filter: SearchFilter!): [DateTime!]!
-  searchFileCreateTimeEvents(filter: SearchFilter!): [DateTime!]!
-  searchNetworkConnectEvents(filter: SearchFilter!): [DateTime!]!
-  searchProcessTerminateEvents(filter: SearchFilter!): [DateTime!]!
-  searchImageLoadEvents(filter: SearchFilter!): [DateTime!]!
-  searchFileCreateEvents(filter: SearchFilter!): [DateTime!]!
-  searchRegistryValueSetEvents(filter: SearchFilter!): [DateTime!]!
-  searchRegistryKeyRenameEvents(filter: SearchFilter!): [DateTime!]!
-  searchFileCreateStreamHashEvents(filter: SearchFilter!): [DateTime!]!
-  searchPipeEventEvents(filter: SearchFilter!): [DateTime!]!
-  searchDnsQueryEvents(filter: SearchFilter!): [DateTime!]!
-  searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
-  searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
-  searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
-  sysmonEvents(
-    filter: NetworkFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): SysmonEventsConnection!
-  secuLogRawEvents(
-    filter: SecuLogFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): SecuLogRawEventConnection!
-  netflow5RawEvents(
-    filter: NetflowFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): Netflow5RawEventConnection!
-  netflow9RawEvents(
-    filter: NetflowFilter!
-    after: String
-    before: String
-    first: Int
-    last: Int
-  ): Netflow9RawEventConnection!
+	logRawEvents(filter: LogFilter!, after: String, before: String, first: Int, last: Int): LogRawEventConnection!
+	opLogRawEvents(filter: OpLogFilter!, after: String, before: String, first: Int, last: Int): OpLogRawEventConnection!
+	connRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ConnRawEventConnection!
+	dnsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DnsRawEventConnection!
+	httpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): HttpRawEventConnection!
+	rdpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RdpRawEventConnection!
+	smtpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SmtpRawEventConnection!
+	ntlmRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NtlmRawEventConnection!
+	kerberosRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): KerberosRawEventConnection!
+	sshRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SshRawEventConnection!
+	dceRpcRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DceRpcRawEventConnection!
+	ftpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FtpRawEventConnection!
+	mqttRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): MqttRawEventConnection!
+	ldapRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): LdapRawEventConnection!
+	tlsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): TlsRawEventConnection!
+	smbRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SmbRawEventConnection!
+	nfsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NfsRawEventConnection!
+	bootpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): BootpRawEventConnection!
+	dhcpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DhcpRawEventConnection!
+	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
+	searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchHttpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchRdpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchSmtpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchNtlmRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchKerberosRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchSshRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchDceRpcRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchFtpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchMqttRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchLdapRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchTlsRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchSmbRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
+	export(exportType: String!, filter: ExportFilter!): String!
+	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
+	pcap(filter: PacketFilter!): Pcap!
+	periodicTimeSeries(filter: TimeSeriesFilter!, after: String, before: String, first: Int, last: Int): TimeSeriesConnection!
+	status: Status!
+	propertiesCf(filter: PropertyFilter!): Properties!
+	config: Config!
+	ping: Boolean!
+	sensors: [String!]!
+	statistics(sensors: [String!]!, time: TimeRange, protocols: [String!], requestFromPeer: Boolean): [StatisticsRawEvent!]!
+	processCreateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessCreateEventConnection!
+	fileCreateTimeEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreationTimeChangedEventConnection!
+	networkConnectEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkConnectionEventConnection!
+	processTerminateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessTerminatedEventConnection!
+	imageLoadEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ImageLoadedEventConnection!
+	fileCreateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreateEventConnection!
+	registryValueSetEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RegistryValueSetEventConnection!
+	registryKeyRenameEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RegistryKeyValueRenameEventConnection!
+	fileCreateStreamHashEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreateStreamHashEventConnection!
+	pipeEventEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): PipeEventEventConnection!
+	dnsQueryEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DnsEventEventConnection!
+	fileDeleteEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteEventConnection!
+	processTamperEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessTamperingEventConnection!
+	fileDeleteDetectedEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteDetectedEventConnection!
+	searchProcessCreateEvents(filter: SearchFilter!): [DateTime!]!
+	searchFileCreateTimeEvents(filter: SearchFilter!): [DateTime!]!
+	searchNetworkConnectEvents(filter: SearchFilter!): [DateTime!]!
+	searchProcessTerminateEvents(filter: SearchFilter!): [DateTime!]!
+	searchImageLoadEvents(filter: SearchFilter!): [DateTime!]!
+	searchFileCreateEvents(filter: SearchFilter!): [DateTime!]!
+	searchRegistryValueSetEvents(filter: SearchFilter!): [DateTime!]!
+	searchRegistryKeyRenameEvents(filter: SearchFilter!): [DateTime!]!
+	searchFileCreateStreamHashEvents(filter: SearchFilter!): [DateTime!]!
+	searchPipeEventEvents(filter: SearchFilter!): [DateTime!]!
+	searchDnsQueryEvents(filter: SearchFilter!): [DateTime!]!
+	searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
+	searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
+	searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
+	sysmonEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SysmonEventsConnection!
+	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
+	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
+	netflow9RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow9RawEventConnection!
 }
 
-# Represents an event extracted from the RDP protocol.
+"""
+Represents an event extracted from the RDP protocol.
+"""
 type RdpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Cookie
-  cookie: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Cookie
+	"""
+	cookie: String!
 }
 
 type RdpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [RdpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [RdpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RdpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RdpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type RdpRawEventEdge {
-  # The item at the end of the edge
-  node: RdpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: RdpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type RegistryKeyValueRenameEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  eventType: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  targetObject: String!
-  newName: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	eventType: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetObject: String!
+	newName: String!
+	user: String!
 }
 
 type RegistryKeyValueRenameEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [RegistryKeyValueRenameEventEdge!]!
-
-  # A list of nodes.
-  nodes: [RegistryKeyValueRenameEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RegistryKeyValueRenameEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RegistryKeyValueRenameEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type RegistryKeyValueRenameEventEdge {
-  # The item at the end of the edge
-  node: RegistryKeyValueRenameEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: RegistryKeyValueRenameEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type RegistryValueSetEvent {
-  time: DateTime!
-  agentName: String!
-  agentId: String!
-  eventType: String!
-  processGuid: String!
-  processId: StringNumberU32!
-  image: String!
-  targetObject: String!
-  details: String!
-  user: String!
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	eventType: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetObject: String!
+	details: String!
+	user: String!
 }
 
 type RegistryValueSetEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [RegistryValueSetEventEdge!]!
-
-  # A list of nodes.
-  nodes: [RegistryValueSetEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RegistryValueSetEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RegistryValueSetEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type RegistryValueSetEventEdge {
-  # The item at the end of the edge
-  node: RegistryValueSetEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: RegistryValueSetEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input SearchFilter {
-  time: TimeRange
-  sensor: String!
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
-  logLevel: String
-  logContents: String
-  times: [DateTime!]!
-  keyword: String
-  agentId: String
+	time: TimeRange
+	sensor: String!
+	origAddr: IpRange
+	respAddr: IpRange
+	origPort: PortRange
+	respPort: PortRange
+	logLevel: String
+	logContents: String
+	times: [DateTime!]!
+	keyword: String
+	agentId: String
 }
 
 input SecuLogFilter {
-  time: TimeRange
-  sensor: String!
-  kind: String!
-  origAddr: IpRange
-  respAddr: IpRange
-  origPort: PortRange
-  respPort: PortRange
-  log: String
+	time: TimeRange
+	sensor: String!
+	kind: String!
+	origAddr: IpRange
+	respAddr: IpRange
+	origPort: PortRange
+	respPort: PortRange
+	log: String
 }
 
 type SecuLogRawEvent {
-  time: DateTime!
-  logType: String!
-  version: String!
-  origAddr: String
-  origPort: Int
-  respAddr: String
-  respPort: Int
-  proto: Int
-  contents: String!
+	time: DateTime!
+	logType: String!
+	version: String!
+	origAddr: String
+	origPort: Int
+	respAddr: String
+	respPort: Int
+	proto: Int
+	contents: String!
 }
 
 type SecuLogRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [SecuLogRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [SecuLogRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [SecuLogRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [SecuLogRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type SecuLogRawEventEdge {
-  # The item at the end of the edge
-  node: SecuLogRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: SecuLogRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the SMB protocol.
+"""
+Represents an event extracted from the SMB protocol.
+"""
 type SmbRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Command
-  command: Int!
-
-  # Path
-  path: String!
-
-  # Service
-  service: String!
-
-  # Filename
-  fileName: String!
-
-  # File Size
-  fileSize: StringNumberU64!
-
-  # Resource Type
-  resourceType: Int!
-
-  # File ID
-  fid: Int!
-
-  # Create Time
-  createTime: StringNumberI64!
-
-  # Access Time
-  accessTime: StringNumberI64!
-
-  # Write Time
-  writeTime: StringNumberI64!
-
-  # Change Time
-  changeTime: StringNumberI64!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Command
+	"""
+	command: Int!
+	"""
+	Path
+	"""
+	path: String!
+	"""
+	Service
+	"""
+	service: String!
+	"""
+	Filename
+	"""
+	fileName: String!
+	"""
+	File Size
+	"""
+	fileSize: StringNumberU64!
+	"""
+	Resource Type
+	"""
+	resourceType: Int!
+	"""
+	File ID
+	"""
+	fid: Int!
+	"""
+	Create Time
+	"""
+	createTime: StringNumberI64!
+	"""
+	Access Time
+	"""
+	accessTime: StringNumberI64!
+	"""
+	Write Time
+	"""
+	writeTime: StringNumberI64!
+	"""
+	Change Time
+	"""
+	changeTime: StringNumberI64!
 }
 
 type SmbRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [SmbRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [SmbRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [SmbRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [SmbRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type SmbRawEventEdge {
-  # The item at the end of the edge
-  node: SmbRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: SmbRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the SMTP protocol.
+"""
+Represents an event extracted from the SMTP protocol.
+"""
 type SmtpRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Mail From
-  mailfrom: String!
-
-  # Date
-  date: String!
-
-  # From
-  from: String!
-
-  # To
-  to: String!
-
-  # Subject
-  subject: String!
-
-  # Agent
-  agent: String!
-
-  # State
-  state: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Mail From
+	"""
+	mailfrom: String!
+	"""
+	Date
+	"""
+	date: String!
+	"""
+	From
+	"""
+	from: String!
+	"""
+	To
+	"""
+	to: String!
+	"""
+	Subject
+	"""
+	subject: String!
+	"""
+	Agent
+	"""
+	agent: String!
+	"""
+	State
+	"""
+	state: String!
 }
 
 type SmtpRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [SmtpRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [SmtpRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [SmtpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [SmtpRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type SmtpRawEventEdge {
-  # The item at the end of the edge
-  node: SmtpRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: SmtpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
-# Represents an event extracted from the SSH protocol.
+"""
+Represents an event extracted from the SSH protocol.
+"""
 type SshRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Client
-  client: String!
-
-  # Server
-  server: String!
-
-  # Cipher Algorithm
-  cipherAlg: String!
-
-  # MAC Algorithms
-  macAlg: String!
-
-  # Compression Algorithm
-  compressionAlg: String!
-
-  # Key Exchange Algorithm
-  kexAlg: String!
-
-  # Host Key Algorithm
-  hostKeyAlg: String!
-
-  # HASSH Algorithms
-  hasshAlgorithms: String!
-
-  # HASSH
-  hassh: String!
-
-  # HASSH Server Algorithm
-  hasshServerAlgorithms: String!
-
-  # HASSH Server
-  hasshServer: String!
-
-  # Client Signed Host Key Algorithm
-  clientShka: String!
-
-  # Server Signed Host Key Algorithm
-  serverShka: String!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Client
+	"""
+	client: String!
+	"""
+	Server
+	"""
+	server: String!
+	"""
+	Cipher Algorithm
+	"""
+	cipherAlg: String!
+	"""
+	MAC Algorithms
+	"""
+	macAlg: String!
+	"""
+	Compression Algorithm
+	"""
+	compressionAlg: String!
+	"""
+	Key Exchange Algorithm
+	"""
+	kexAlg: String!
+	"""
+	Host Key Algorithm
+	"""
+	hostKeyAlg: String!
+	"""
+	HASSH Algorithms
+	"""
+	hasshAlgorithms: String!
+	"""
+	HASSH
+	"""
+	hassh: String!
+	"""
+	HASSH Server Algorithm
+	"""
+	hasshServerAlgorithms: String!
+	"""
+	HASSH Server
+	"""
+	hasshServer: String!
+	"""
+	Client Signed Host Key Algorithm
+	"""
+	clientShka: String!
+	"""
+	Server Signed Host Key Algorithm
+	"""
+	serverShka: String!
 }
 
 type SshRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [SshRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [SshRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [SshRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [SshRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type SshRawEventEdge {
-  # The item at the end of the edge
-  node: SshRawEvent!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: SshRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 type StatisticsDetail {
-  protocol: String!
-  bps: Float
-  pps: Float
-  eps: Float
+	protocol: String!
+	bps: Float
+	pps: Float
+	eps: Float
 }
 
 type StatisticsInfo {
-  timestamp: StringNumberI64!
-  detail: [StatisticsDetail!]!
+	timestamp: StringNumberI64!
+	detail: [StatisticsDetail!]!
 }
 
 type StatisticsRawEvent {
-  sensor: String!
-  stats: [StatisticsInfo!]!
+	sensor: String!
+	stats: [StatisticsInfo!]!
 }
 
 type Status {
-  name: String!
-  cpuUsage: Float!
-  totalMemory: Int!
-  usedMemory: Int!
-  totalDiskSpace: Int!
-  usedDiskSpace: Int!
+	name: String!
+	cpuUsage: Float!
+	totalMemory: Int!
+	usedMemory: Int!
+	totalDiskSpace: Int!
+	usedDiskSpace: Int!
 }
+
 
 scalar StringNumberI64
 
@@ -2468,185 +2859,237 @@ scalar StringNumberU64
 
 scalar StringNumberUsize
 
-union SysmonEvents =
-    ProcessCreateEvent
-  | FileCreationTimeChangedEvent
-  | NetworkConnectionEvent
-  | ProcessTerminatedEvent
-  | ImageLoadedEvent
-  | FileCreateEvent
-  | RegistryValueSetEvent
-  | RegistryKeyValueRenameEvent
-  | FileCreateStreamHashEvent
-  | PipeEventEvent
-  | DnsEventEvent
-  | FileDeleteEvent
-  | ProcessTamperingEvent
-  | FileDeleteDetectedEvent
+union SysmonEvents = ProcessCreateEvent | FileCreationTimeChangedEvent | NetworkConnectionEvent | ProcessTerminatedEvent | ImageLoadedEvent | FileCreateEvent | RegistryValueSetEvent | RegistryKeyValueRenameEvent | FileCreateStreamHashEvent | PipeEventEvent | DnsEventEvent | FileDeleteEvent | ProcessTamperingEvent | FileDeleteDetectedEvent
 
 type SysmonEventsConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [SysmonEventsEdge!]!
-
-  # A list of nodes.
-  nodes: [SysmonEvents!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [SysmonEventsEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [SysmonEvents!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type SysmonEventsEdge {
-  # The item at the end of the edge
-  node: SysmonEvents!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: SysmonEvents!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input TimeRange {
-  start: DateTime
-  end: DateTime
+	start: DateTime
+	end: DateTime
 }
 
 type TimeSeries {
-  start: DateTime!
-  id: String!
-  data: [Float!]!
+	start: DateTime!
+	id: String!
+	data: [Float!]!
 }
 
 type TimeSeriesConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [TimeSeriesEdge!]!
-
-  # A list of nodes.
-  nodes: [TimeSeries!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [TimeSeriesEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [TimeSeries!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type TimeSeriesEdge {
-  # The item at the end of the edge
-  node: TimeSeries!
-
-  # A cursor for use in pagination
-  cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: TimeSeries!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 input TimeSeriesFilter {
-  time: TimeRange
-  id: String!
+	time: TimeRange
+	id: String!
 }
 
-# Represents an event extracted from the TLS protocol.
+"""
+Represents an event extracted from the TLS protocol.
+"""
 type TlsRawEvent {
-  # Start Time
-  time: DateTime!
-
-  # Source IP Address
-  origAddr: String!
-
-  # Source Port Number
-  origPort: Int!
-
-  # Destination IP Address
-  respAddr: String!
-
-  # Destination Port Number
-  respPort: Int!
-
-  # Protocol Number
-  #
-  # TCP is 6, and UDP is 17.
-  proto: Int!
-
-  # End Time
-  #
-  # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
-
-  # Server Name
-  serverName: String!
-
-  # ALPN Protocol
-  alpnProtocol: String!
-
-  # JA3 Fingerprint
-  ja3: String!
-
-  # TLS Version
-  version: String!
-
-  # Client Cipher Suites
-  clientCipherSuites: [Int!]!
-
-  # Client Extensions
-  clientExtensions: [Int!]!
-
-  # Cipher
-  cipher: Int!
-
-  # Extensions
-  extensions: [Int!]!
-
-  # JA3S Fingerprint
-  ja3S: String!
-
-  # Certificate Serial Number
-  serial: String!
-
-  # Certificate Subject Country Name
-  subjectCountry: String!
-
-  # Certificate Subject Organization Name
-  subjectOrgName: String!
-
-  # Certificate Common Name
-  subjectCommonName: String!
-
-  # Certificate Validity Start
-  validityNotBefore: StringNumberI64!
-
-  # Certificate Validity End
-  validityNotAfter: StringNumberI64!
-
-  # Certificate Subject Alternative Name
-  subjectAltName: String!
-
-  # Certificate Issuer Country
-  issuerCountry: String!
-
-  # Certificate Issuer Organization Name
-  issuerOrgName: String!
-
-  # Certificate Issuer Organization Unit Name
-  issuerOrgUnitName: String!
-
-  # Certificate Issuer Common Name
-  issuerCommonName: String!
-
-  # Last Alert Message
-  lastAlert: Int!
+	"""
+	Start Time
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	lastTime: StringNumberI64!
+	"""
+	Server Name
+	"""
+	serverName: String!
+	"""
+	ALPN Protocol
+	"""
+	alpnProtocol: String!
+	"""
+	JA3 Fingerprint
+	"""
+	ja3: String!
+	"""
+	TLS Version
+	"""
+	version: String!
+	"""
+	Client Cipher Suites
+	"""
+	clientCipherSuites: [Int!]!
+	"""
+	Client Extensions
+	"""
+	clientExtensions: [Int!]!
+	"""
+	Cipher
+	"""
+	cipher: Int!
+	"""
+	Extensions
+	"""
+	extensions: [Int!]!
+	"""
+	JA3S Fingerprint
+	"""
+	ja3S: String!
+	"""
+	Certificate Serial Number
+	"""
+	serial: String!
+	"""
+	Certificate Subject Country Name
+	"""
+	subjectCountry: String!
+	"""
+	Certificate Subject Organization Name
+	"""
+	subjectOrgName: String!
+	"""
+	Certificate Common Name
+	"""
+	subjectCommonName: String!
+	"""
+	Certificate Validity Start
+	"""
+	validityNotBefore: StringNumberI64!
+	"""
+	Certificate Validity End
+	"""
+	validityNotAfter: StringNumberI64!
+	"""
+	Certificate Subject Alternative Name
+	"""
+	subjectAltName: String!
+	"""
+	Certificate Issuer Country
+	"""
+	issuerCountry: String!
+	"""
+	Certificate Issuer Organization Name
+	"""
+	issuerOrgName: String!
+	"""
+	Certificate Issuer Organization Unit Name
+	"""
+	issuerOrgUnitName: String!
+	"""
+	Certificate Issuer Common Name
+	"""
+	issuerCommonName: String!
+	"""
+	Last Alert Message
+	"""
+	lastAlert: Int!
 }
 
 type TlsRawEventConnection {
-  # Information to aid in pagination.
-  pageInfo: PageInfo!
-
-  # A list of edges.
-  edges: [TlsRawEventEdge!]!
-
-  # A list of nodes.
-  nodes: [TlsRawEvent!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [TlsRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [TlsRawEvent!]!
 }
 
-# An edge in a connection.
+"""
+An edge in a connection.
+"""
 type TlsRawEventEdge {
-  # The item at the end of the edge
-  node: TlsRawEvent!
+	"""
+	The item at the end of the edge
+	"""
+	node: TlsRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
 
-  # A cursor for use in pagination
-  cursor: String!
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @specifiedBy(url: String!) on SCALAR
+schema {
+	query: Query
+	mutation: Mutation
 }
