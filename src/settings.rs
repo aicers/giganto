@@ -7,10 +7,10 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Parser;
-use config::{builder::DefaultState, Config as ConfConfig, ConfigBuilder, ConfigError, File};
-use serde::{de::Error, Deserialize, Deserializer, Serialize};
+use config::{Config as ConfConfig, ConfigBuilder, ConfigError, File, builder::DefaultState};
+use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use toml_edit::DocumentMut;
 use tracing::info;
 

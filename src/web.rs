@@ -1,12 +1,12 @@
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 
 use async_graphql::{
-    http::{playground_source, GraphQLPlaygroundConfig},
     Executor,
+    http::{GraphQLPlaygroundConfig, playground_source},
 };
 use tokio::{sync::Notify, task};
 use tracing::info;
-use warp::{http::Response as HttpResponse, Filter};
+use warp::{Filter, http::Response as HttpResponse};
 
 /// Runs the GraphQL server.
 ///

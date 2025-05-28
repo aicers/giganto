@@ -5,8 +5,8 @@ use std::{fmt::Debug, net::IpAddr};
 
 use anyhow::anyhow;
 use async_graphql::{
-    connection::{query, Connection},
     Context, InputObject, Object, Result, SimpleObject,
+    connection::{Connection, query},
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{Log, OpLog};
@@ -14,11 +14,11 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    base64_engine,
-    client::derives::{log_raw_events, LogRawEvents},
+    Engine, FromKeyValue, base64_engine,
+    client::derives::{LogRawEvents, log_raw_events},
     get_time_from_key, get_time_from_key_prefix, handle_paged_events,
     impl_from_giganto_time_range_struct_for_graphql_client,
-    load_connection_by_prefix_timestamp_key, paged_events_in_cluster, Engine, FromKeyValue,
+    load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},

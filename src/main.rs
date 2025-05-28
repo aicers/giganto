@@ -13,25 +13,25 @@ use std::{
     path::Path,
     process::exit,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use settings::{ConfigVisible, Settings};
-use storage::{db_path_and_option, repair_db, Database};
+use storage::{Database, db_path_and_option, repair_db};
 use tokio::{
     runtime, select,
     sync::{
-        mpsc::{self, UnboundedSender},
         Notify, RwLock,
+        mpsc::{self, UnboundedSender},
     },
     task::{self, JoinHandle},
     time::sleep,
@@ -39,12 +39,12 @@ use tokio::{
 use tracing::{error, info, metadata::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
-    fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+    EnvFilter, Layer, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt,
 };
 
 use crate::{
     graphql::NodeName,
-    server::{subject_from_cert, Certs, SERVER_REBOOT_DELAY},
+    server::{Certs, SERVER_REBOOT_DELAY, subject_from_cert},
     settings::Args,
     storage::migrate_data_dir,
 };
