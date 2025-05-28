@@ -351,15 +351,16 @@ async fn process_pcap_extract(
     let certs = certs.clone();
     tokio::spawn(async move {
         for filter in filters {
-            match get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
+            if let Some(sensor_conn) =
+                get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
                     .await
-            { Some(sensor_conn) => {
+            {
                 // send/receive extract request from the Sensor
                 match pcap_extract_request(&sensor_conn, &filter).await {
                     Ok(()) => (),
                     Err(e) => debug!("failed to relay pcap request, {e}"),
                 }
-            } _ => if let Some(peer_addr) =
+            } else if let Some(peer_addr) =
                 peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
             {
                 let peer_name: String = {
@@ -371,11 +372,14 @@ async fn process_pcap_extract(
                     if let Some(peer_ident) = peer_ident {
                         peer_ident.hostname.clone()
                     } else {
-                        error!("Peer giganto's server name cannot be identitified. addr: {peer_addr}, sensor: {}", filter.sensor);
+                        error!(
+                            "Peer giganto's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
+                            filter.sensor
+                        );
                         continue;
                     }
                 };
-                match request_range_data_to_peer(
+                if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
                     peer_addr,
                     peer_name.as_str(),
                     &certs,
@@ -383,19 +387,23 @@ async fn process_pcap_extract(
                     filter,
                 )
                 .await
-                { Ok((mut _peer_send, mut peer_recv)) => {
+                {
                     if let Err(e) = recv_ack_response(&mut peer_recv).await {
-                        error!("Failed to receive ack response from peer giganto. addr: {peer_addr} name: {peer_name} {e}");
+                        error!(
+                            "Failed to receive ack response from peer giganto. addr: {peer_addr} name: {peer_name} {e}"
+                        );
                     }
-                } _ => {
-                    error!("Failed to connect to peer giganto's publish module. addr: {peer_addr} name: {peer_name}");
-                }}
+                } else {
+                    error!(
+                        "Failed to connect to peer giganto's publish module. addr: {peer_addr} name: {peer_name}"
+                    );
+                }
             } else {
                 error!(
                     "Neither current nor peer gigantos are in charge of requested pcap sensor {}",
                     filter.sensor
                 );
-            }}
+            }
         }
     });
 
@@ -429,7 +437,7 @@ where
     T: RequestStreamMessage,
 {
     macro_rules! handle_store {
-        ($store_fn:ident, $store_name:expr_2021) => {
+        ($store_fn:ident, $store_name:expr) => {
             match db.$store_fn() {
                 Ok(store) => {
                     if let Err(e) = send_stream(
