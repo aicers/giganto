@@ -1,7 +1,7 @@
 [package]
 name = "giganto"
 version = "0.24.3"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "giganto_proc_macro"

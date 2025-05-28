@@ -192,7 +192,7 @@ where
     T: EventFilter + DeserializeOwned,
 {
     let (start, end) = time_range(filter.time.as_ref());
-    let search_time = target_data
+    target_data
         .iter()
         .filter_map(|(time, value)| {
             bincode::deserialize::<T>(value).ok().and_then(|raw_event| {
@@ -215,8 +215,7 @@ where
                 }
             })
         })
-        .collect::<Vec<_>>();
-    search_time
+        .collect::<Vec<_>>()
 }
 
 fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
