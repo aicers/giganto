@@ -2,8 +2,7 @@
 
 This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
-this project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.24.3] - 2025-05-23
 
@@ -49,8 +48,7 @@ this project adheres to
 ### Added
 
 - Added the `load_connection_by_prefix_timestamp_key` function and
-  `TimestampKeyExtractor` trait to enable querying of keys prefixed with
-  `timestamp`.
+  `TimestampKeyExtractor` trait to enable querying of keys prefixed with `timestamp`.
 - The `opLogRawEvents` GraphQL API no longer requires `agentId` and now accepts
   it as an optional parameter. Additionally, the API response now includes logs
   from all agents displayed in chronological order, rather than being limited to
@@ -63,8 +61,7 @@ this project adheres to
   GraphQL API.
 - Updated the giganto-client library dependency to 0.22.0. Since this update
   does not break backward compatibility for modules communicating with Giganto
-  via the QUIC protocol, the related version requirements have been adjusted as
-  follows:
+  via the QUIC protocol, the related version requirements have been adjusted as follows:
   - Updated `INGEST_VERSION_REQ` to ">=0.23.0,<0.25.0".
   - Updated `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.25.0".
 - Modify the code related to migration.
@@ -113,14 +110,12 @@ this project adheres to
 - `log_dir` is no longer a configuration item. To specify the log directory, it
   is required to use an optional command-line argument `log-dir`.
 - Logging behavior related to command line arguemtn `log-dir` is as follows:
-  - If `log-dir` is not provided, logs are written to stdout using the tracing
-    library.
+  - If `log-dir` is not provided, logs are written to stdout using the tracing library.
   - If `log-dir` is provided and writable, logs are written to the specified
     directory using the tracing library.
   - If `log-dir` is provided but not writable, Giganto will terminate.
   - Any logs generated before the tracing functionality is initialized will be
-    written directly to stdout or stderr using `println`, `eprintln`, or
-    similar.
+    written directly to stdout or stderr using `println`, `eprintln`, or similar.
 
 ### Removed
 
@@ -221,8 +216,7 @@ this project adheres to
 - Modified to append the kind value to the filename when extracting a file for a
   protocol for which a kind value exists.
 - Applied code import ordering by `StdExternalCrate`. From now on, all code is
-  expected to be formatted using
-  `cargo fmt -- --config group_imports=StdExternalCrate`.
+  expected to be formatted using `cargo fmt -- --config group_imports=StdExternalCrate`.
 - Changed cluster related configuration field names.
   - `peer_address` to `addr_to_peers`
   - `address` in `peers` to `addr` and `host_name` in `peers` to `hostname`
@@ -305,9 +299,8 @@ this project adheres to
 - Modify the `sources` GraphQL API to return results that also include sources
   from its peers.
 - Changed the prefix of the `Netflow5`/`Netflow9`/`SecuLog` db key to source.
-- Modify the related GraphQL APIs as the db keys for
-  `Netflow5`/`Netflow9`/`SecuLog` have been changed to `Netflow5RawEvent`,
-  `Netflow9RawEvent`, and `SecuLogRawEvent`
+- Modify the related GraphQL APIs as the db keys for `Netflow5`/`Netflow9`/`SecuLog`
+  have been changed to `Netflow5RawEvent`, `Netflow9RawEvent`, and `SecuLogRawEvent`
 - Changed `PEER_VERSION_REQ` to ">=0.19.0,<0.20.0".
 - Changed `PUBLISH_VERSION_REQ` to ">=0.17.0,<0.20.0".
 
@@ -327,8 +320,7 @@ this project adheres to
 
 - Added the ability to filter via `agent_id` in the filter of a GraphQL query
   requesting a sysmon events.
-- Added `SmtpRawEvent` to the return value union of `networkRawEvents` GraphQL
-  API.
+- Added `SmtpRawEvent` to the return value union of `networkRawEvents` GraphQL API.
 - Added `RunTimeIngestSources` type that checks for information from source that
   is connected to ingest in real time. This type is not currently used, but may
   be used in the future to provide real-time connection information.
@@ -364,8 +356,7 @@ this project adheres to
   - Added `setAckTransmissionCount` GraphQL API to set the ack transmission
     count. This query changes the `AckTransmissionCount` used in ingest and
     `ack_transmission` in the config file to the input `count` value.
-- Added documentation for implementing cluster-supported GraphQL APIs in
-  `docs/guide-giganto-cluster-graphql.md`.
+- Added documentation for implementing cluster-supported GraphQL APIs in `docs/guide-giganto-cluster-graphql.md`.
 - Added `ConvertGraphQLEdgesNode` derive macro that implements `From` trait from
   GraphQL client structs to project structs.
 - Supported `log-broker` to send/receive operation log with redis server.
@@ -381,8 +372,7 @@ this project adheres to
   respective types.
 - Modify the `gigantoConfig` query in the GraphQL API so that config files that
   work in standalone mode can also be read correctly.
-- Changed `export` GraphQL API's response value format from `{export_path}` to
-  `{export_path}@{giganto_node_name}`.
+- Changed `export` GraphQL API's response value format from `{export_path}` to `{export_path}@{giganto_node_name}`.
 - Changed logging from `tracing` to `log-broker`.
 - Changed `PEER_VERSION_REQ` to ">=0.16.0,<0.17.0".
 - Changed `PUBLISH_VERSION_REQ` to ">=0.16.0,<0.17.0".
@@ -402,8 +392,7 @@ this project adheres to
 
 ### Changed
 
-- Change to use the `batched_multi_get_cf` provided by rocksdb for multi get
-  search.
+- Change to use the `batched_multi_get_cf` provided by rocksdb for multi get search.
   - Since `batched_multi_get_cf` is used, add the prefix `batched` to the
     `multi_get_from_ts`/`multi_get_with_source` functions respectively.
 - Changed manual boundary check to boundary checking via `iterator_cf_opt`.
@@ -499,12 +488,10 @@ this project adheres to
   - `StorageKeyBuilder`: This is a builder structure for dynamically generating
     keys. Depending on whether you have 2 or 3 keys, call the
     `start`/`mid`/`end` function to set the keys.
-  - `StorageKey`: A structure that stores lookup keys generated by
-    `StorageKeyBuilder`.
+  - `StorageKey`: A structure that stores lookup keys generated by `StorageKeyBuilder`.
   - `KeyExtractor`: A trait for calling the value to be set by the key.
 - Supports 14 sysmon events.
-- Added `search[sysmon type]Events` GraphQL APIs for sysmon event supported by
-  giganto.
+- Added `search[sysmon type]Events` GraphQL APIs for sysmon event supported by giganto.
 
 ### Changed
 
@@ -552,8 +539,8 @@ this project adheres to
 
 - Supports the TLS protocol.
 - Added migration functionality in `0.12.0`. This feature adds values for new
-  fields (`orig_filenames`, `orig_mime_types`, `resp_filenames`,
-  `resp_mime_types`) to `Http` in versions 0.12.0 and earlier.
+  fields (`orig_filenames`, `orig_mime_types`, `resp_filenames`, `resp_mime_types`)
+  to `Http` in versions 0.12.0 and earlier.
 
 ## [0.12.0] - 2023-06-20
 
@@ -572,8 +559,7 @@ this project adheres to
   - Modify to handle network, log, and time series data requests with `ReqRange`
     and `RequestRange`.
   - Add to handle `Timeseries` requests in `MessageCode::RawData`.
-  - Modify `multi_get_with_source` to return in the form of
-    `Vec<(i64, String, Vec<u8>)>`.
+  - Modify `multi_get_with_source` to return in the form of `Vec<(i64, String, Vec<u8>)>`.
 
 ## [0.11.0] - 2023-05-16
 
@@ -646,16 +632,14 @@ this project adheres to
 - Move init tracing to giganto-client crate for oplog logging.
 - Fix packet logic in ingest.
 - Rocksdb compression type has changed to Lz4, zstd from snappy.
-- Move giganto-client to separate repo
-  [giganto-client](https://github.com/aicers/giganto-client).
+- Move giganto-client to separate repo [giganto-client](https://github.com/aicers/giganto-client).
 
 ## [0.7.0] - 2023-01-04
 
 ### Added
 
 - Add export file to GraphQL API. (`csv`, `json` format support)
-- Add `Statistics` column family. Receive and save traffic statistics from the
-  Sensor.
+- Add `Statistics` column family. Receive and save traffic statistics from the Sensor.
 - Save Giganto's `syslog` to a path written to `log_dir` in configuration file.
 - Add `Oplog`. (Operation log)
 
@@ -717,8 +701,7 @@ this project adheres to
 - GraphQL API supports filtering with source name, kind name of log, time range,
   IP address range, port range.
 - Publish check protocol compatibility with connected Programs.
-- Publish support log/period time series record data request/response through
-  QUIC.
+- Publish support log/period time series record data request/response through QUIC.
 - Add Packets Request GraphQL API.
 - Send acknowledgment of channel done messages sent by reproduce.
 
