@@ -3,13 +3,13 @@ mod migration_structures;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    fs::{create_dir_all, File},
+    fs::{File, create_dir_all},
     io::{Read, Write},
     path::Path,
 };
 
-use anyhow::{anyhow, Context, Result};
-use rocksdb::{ColumnFamilyDescriptor, WriteBatch, DB};
+use anyhow::{Context, Result, anyhow};
+use rocksdb::{ColumnFamilyDescriptor, DB, WriteBatch};
 use semver::{Version, VersionReq};
 use serde::de::DeserializeOwned;
 use tracing::info;
@@ -18,16 +18,16 @@ use self::migration_structures::{
     ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21,
     SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
-use super::{data_dir_to_db_path, Database, RAW_DATA_COLUMN_FAMILY_NAMES};
+use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
     graphql::TIMESTAMP_SIZE,
     ingest::implement::EventFilter,
     storage::{
-        rocksdb_options, Conn as ConnFromV21, DbOptions, Http as HttpFromV21,
-        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21,
-        OpLog as OpLogFromV24, RawEventStore, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21,
-        Ssh as SshFromV21, StorageKey, Tls as TlsFromV21,
+        Conn as ConnFromV21, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,
+        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
+        Tls as TlsFromV21, rocksdb_options,
     },
 };
 
@@ -440,22 +440,21 @@ mod tests {
 
     use chrono::Utc;
     use giganto_client::ingest::log::OpLogLevel;
-    use rocksdb::{Options, WriteBatch, DB};
+    use rocksdb::{DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::migration::migration_structures::OpLogBeforeV24;
     use crate::storage::{
-        data_dir_to_db_path, migrate_data_dir,
+        Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
+        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
+        Tls as TlsFromV21, data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
             ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23,
             NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
         },
-        Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
-        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
-        Tls as TlsFromV21,
     };
 
     fn mock_version_file(dir: &TempDir, version_content: &str) -> PathBuf {

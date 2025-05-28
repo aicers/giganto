@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 
 use giganto_client::ingest::{
+    Packet,
     log::{Log, OpLog, OpLogLevel, SecuLog},
     netflow::{Netflow5, Netflow9},
     network::{
@@ -14,7 +15,6 @@ use giganto_client::ingest::{
         ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
-    Packet,
 };
 
 pub trait EventFilter {

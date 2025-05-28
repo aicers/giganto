@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, Error, Object, Result, SimpleObject};
-use giganto_client::{ingest::statistics::Statistics, RawEventKind};
+use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
@@ -16,11 +16,12 @@ use rocksdb::Direction;
 use serde::de::DeserializeOwned;
 use tracing::error;
 
-use super::{client::derives::StringNumberI64, TIMESTAMP_SIZE};
+use super::{TIMESTAMP_SIZE, client::derives::StringNumberI64};
 use crate::{
     graphql::{
-        client::derives::{statistics as stats, Statistics as Stats},
-        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client, TimeRange,
+        TimeRange,
+        client::derives::{Statistics as Stats, statistics as stats},
+        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
     },
     storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
@@ -293,7 +294,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use chrono::Utc;
-    use giganto_client::{ingest::statistics::Statistics, RawEventKind};
+    use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 

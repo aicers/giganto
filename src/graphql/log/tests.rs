@@ -3,11 +3,11 @@ use std::sync::{Arc, OnceLock};
 use chrono::DateTime;
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
-use super::{base64_engine, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent};
+use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
 use crate::graphql::load_connection;
 use crate::ingest::generation::SequenceGenerator;
 use crate::{
-    graphql::{tests::TestSchema, TimeRange},
+    graphql::{TimeRange, tests::TestSchema},
     storage::RawEventStore,
 };
 
@@ -431,9 +431,12 @@ async fn log_with_data() {
         }"#;
     let res = schema.execute(query).await;
     assert_eq!(
-            res.data.to_string(),
-            format!("{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}], pageInfo: {{hasPreviousPage: false}}}}}}", base64_engine.encode("log 1"))
-        );
+        res.data.to_string(),
+        format!(
+            "{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}], pageInfo: {{hasPreviousPage: false}}}}}}",
+            base64_engine.encode("log 1")
+        )
+    );
 }
 
 #[tokio::test]

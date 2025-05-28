@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use giganto_client::{
     connection::client_handshake,
@@ -123,7 +123,9 @@ fn init_client() -> Endpoint {
     }) {
         x
     } else {
-        panic!("failed to read (cert, key) file, {NODE1_CERT_PATH}, {NODE1_KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
+        panic!(
+            "failed to read (cert, key) file, {NODE1_CERT_PATH}, {NODE1_KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
+        );
     };
 
     let pv_key = if Path::new(NODE1_KEY_PATH)
