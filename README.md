@@ -6,8 +6,7 @@ and provides a flexible GraphQL API for querying the stored events. Giganto
 empowers AICE with the ability to efficiently handle large-scale data processing
 and real-time analytics.
 
-[![Coverage
-Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/giganto)
+[![Coverage Status](https://codecov.io/gh/aicers/giganto/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/giganto)
 
 ## Features
 
@@ -50,8 +49,7 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
     file using the tracing library.
   - If `<LOG_PATH>` is provided but not writable, Giganto will terminate.
   - Any logs generated before the tracing functionality is initialized will be
-    written directly to stdout or stderr using `println`, `eprintln`, or
-    similar.
+    written directly to stdout or stderr using `println`, `eprintln`, or similar.
 
 ### Example
 
@@ -141,8 +139,7 @@ the specific language governing permissions and limitations under the License.
 ## Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the [Apache-2.0
-license][apache-license], shall be licensed as above, without any additional
-terms or conditions.
+for inclusion in the work by you, as defined in the [Apache-2.0 license][apache-license],
+shall be licensed as above, without any additional terms or conditions.
 
 [apache-license]: http://www.apache.org/licenses/LICENSE-2.0
