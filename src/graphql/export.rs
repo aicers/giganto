@@ -1715,7 +1715,7 @@ fn export_by_protocol(
     let filter = filter.clone();
     match filter.protocol.as_str() {
         "conn" => tokio::spawn(async move {
-            match db.conn_store() { Ok(store) => {
+            if let Ok(store) = db.conn_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1730,12 +1730,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "dns" => tokio::spawn(async move {
-            match db.dns_store() { Ok(store) => {
+            if let Ok(store) = db.dns_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1750,12 +1750,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "http" => tokio::spawn(async move {
-            match db.http_store() { Ok(store) => {
+            if let Ok(store) = db.http_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1770,12 +1770,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "log" => tokio::spawn(async move {
-            match db.log_store() { Ok(store) => {
+            if let Ok(store) = db.log_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1790,12 +1790,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "rdp" => tokio::spawn(async move {
-            match db.rdp_store() { Ok(store) => {
+            if let Ok(store) = db.rdp_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1810,12 +1810,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "smtp" => tokio::spawn(async move {
-            match db.smtp_store() { Ok(store) => {
+            if let Ok(store) = db.smtp_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1830,12 +1830,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "periodic time series" => tokio::spawn(async move {
-            match db.periodic_time_series_store() { Ok(store) => {
+            if let Ok(store) = db.periodic_time_series_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1850,12 +1850,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "ntlm" => tokio::spawn(async move {
-            match db.ntlm_store() { Ok(store) => {
+            if let Ok(store) = db.ntlm_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1870,12 +1870,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "kerberos" => tokio::spawn(async move {
-            match db.kerberos_store() { Ok(store) => {
+            if let Ok(store) = db.kerberos_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1890,12 +1890,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "ssh" => tokio::spawn(async move {
-            match db.ssh_store() { Ok(store) => {
+            if let Ok(store) = db.ssh_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1910,12 +1910,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "dce rpc" => tokio::spawn(async move {
-            match db.dce_rpc_store() { Ok(store) => {
+            if let Ok(store) = db.dce_rpc_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1930,12 +1930,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "op_log" => tokio::spawn(async move {
-            match db.op_log_store() { Ok(store) => {
+            if let Ok(store) = db.op_log_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1950,12 +1950,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "ftp" => tokio::spawn(async move {
-            match db.ftp_store() { Ok(store) => {
+            if let Ok(store) = db.ftp_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1970,12 +1970,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "mqtt" => tokio::spawn(async move {
-            match db.mqtt_store() { Ok(store) => {
+            if let Ok(store) = db.mqtt_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -1990,12 +1990,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "ldap" => tokio::spawn(async move {
-            match db.ldap_store() { Ok(store) => {
+            if let Ok(store) = db.ldap_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2010,12 +2010,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "tls" => tokio::spawn(async move {
-            match db.tls_store() { Ok(store) => {
+            if let Ok(store) = db.tls_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2030,12 +2030,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "smb" => tokio::spawn(async move {
-            match db.smb_store() { Ok(store) => {
+            if let Ok(store) = db.smb_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2050,12 +2050,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "nfs" => tokio::spawn(async move {
-            match db.nfs_store() { Ok(store) => {
+            if let Ok(store) = db.nfs_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2070,12 +2070,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "bootp" => tokio::spawn(async move {
-            match db.bootp_store() { Ok(store) => {
+            if let Ok(store) = db.bootp_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2090,12 +2090,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "dhcp" => tokio::spawn(async move {
-            match db.dhcp_store() { Ok(store) => {
+            if let Ok(store) = db.dhcp_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2110,12 +2110,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "statistics" => tokio::spawn(async move {
-            match db.statistics_store() { Ok(store) => {
+            if let Ok(store) = db.statistics_store() {
                 match process_statistics_export(
                     &store,
                     &filter,
@@ -2130,12 +2130,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "process create" => tokio::spawn(async move {
-            match db.process_create_store() { Ok(store) => {
+            if let Ok(store) = db.process_create_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2150,12 +2150,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "file create time" => tokio::spawn(async move {
-            match db.file_create_time_store() { Ok(store) => {
+            if let Ok(store) = db.file_create_time_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2170,12 +2170,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "network_connect" => tokio::spawn(async move {
-            match db.network_connect_store() { Ok(store) => {
+            if let Ok(store) = db.network_connect_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2190,12 +2190,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "process terminate" => tokio::spawn(async move {
-            match db.process_terminate_store() { Ok(store) => {
+            if let Ok(store) = db.process_terminate_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2210,12 +2210,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "image load" => tokio::spawn(async move {
-            match db.image_load_store() { Ok(store) => {
+            if let Ok(store) = db.image_load_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2230,12 +2230,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "file create" => tokio::spawn(async move {
-            match db.file_create_store() { Ok(store) => {
+            if let Ok(store) = db.file_create_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2250,12 +2250,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "registry value set" => tokio::spawn(async move {
-            match db.registry_value_set_store() { Ok(store) => {
+            if let Ok(store) = db.registry_value_set_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2270,12 +2270,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "registry key rename" => tokio::spawn(async move {
-            match db.registry_key_rename_store() { Ok(store) => {
+            if let Ok(store) = db.registry_key_rename_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2290,12 +2290,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "file create stream hash" => tokio::spawn(async move {
-            match db.file_create_stream_hash_store() { Ok(store) => {
+            if let Ok(store) = db.file_create_stream_hash_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2310,12 +2310,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "pipe event" => tokio::spawn(async move {
-            match db.pipe_event_store() { Ok(store) => {
+            if let Ok(store) = db.pipe_event_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2330,12 +2330,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "dns query" => tokio::spawn(async move {
-            match db.dns_query_store() { Ok(store) => {
+            if let Ok(store) = db.dns_query_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2350,12 +2350,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "file delete" => tokio::spawn(async move {
-            match db.file_delete_store() { Ok(store) => {
+            if let Ok(store) = db.file_delete_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2370,12 +2370,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "process tamper" => tokio::spawn(async move {
-            match db.process_tamper_store() { Ok(store) => {
+            if let Ok(store) = db.process_tamper_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2390,12 +2390,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "file delete detected" => tokio::spawn(async move {
-            match db.file_delete_detected_store() { Ok(store) => {
+            if let Ok(store) = db.file_delete_detected_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2410,12 +2410,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "netflow5" => tokio::spawn(async move {
-            match db.netflow5_store() { Ok(store) => {
+            if let Ok(store) = db.netflow5_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2430,12 +2430,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "netflow9" => tokio::spawn(async move {
-            match db.netflow9_store() { Ok(store) => {
+            if let Ok(store) = db.netflow9_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2450,12 +2450,12 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         "secu log" => tokio::spawn(async move {
-            match db.secu_log_store() { Ok(store) => {
+            if let Ok(store) = db.secu_log_store() {
                 match process_export(
                     &store,
                     &filter,
@@ -2470,9 +2470,9 @@ fn export_by_protocol(
                         error!("Failed to export file: {:?}", e);
                     }
                 }
-            } _ => {
+            } else {
                 error!("Failed to open db store");
-            }}
+            }
         }),
         none => {
             return Err(anyhow!("{}: Unknown protocol", none).into());
