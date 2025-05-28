@@ -64,7 +64,7 @@ giganto -c path/to/config.toml --cert /path/to/cert.pem --key /path/to/key.pem \
 
 In the config file, you can specify the following options:
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field                  | Description                          | Required | Default               |
 | ---------------------- | ------------------------------------ | -------- | --------------------- |
