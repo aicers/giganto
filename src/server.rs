@@ -1,13 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use quinn::{
-    crypto::rustls::{QuicClientConfig, QuicServerConfig},
     ClientConfig, Connection, ServerConfig, TransportConfig,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
 };
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer},
     RootCertStore,
+    pki_types::{CertificateDer, PrivateKeyDer},
 };
 use tracing::info;
 use x509_parser::nom::Parser;

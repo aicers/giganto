@@ -5,12 +5,14 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{Duration, Utc};
 use giganto_client::{
+    RawEventKind,
     connection::client_handshake,
     frame::{recv_bytes, send_raw},
     ingest::{
+        Packet,
         log::{Log, OpLog, OpLogLevel},
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
@@ -19,9 +21,7 @@ use giganto_client::{
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
-        Packet,
     },
-    RawEventKind,
 };
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -34,9 +34,10 @@ use tokio::{
 
 use super::Server;
 use crate::{
-    new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
+    Certs, new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
+    new_stream_direct_channels,
     storage::{Database, DbOptions},
-    to_cert_chain, to_private_key, to_root_cert, Certs,
+    to_cert_chain, to_private_key, to_root_cert,
 };
 
 fn get_token() -> &'static Mutex<u32> {
@@ -101,7 +102,9 @@ fn init_client() -> Endpoint {
     {
         x
     } else {
-        panic!("failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
+        panic!(
+            "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
+        );
     };
 
     let pv_key = if Path::new(KEY_PATH).extension().is_some_and(|x| x == "der") {

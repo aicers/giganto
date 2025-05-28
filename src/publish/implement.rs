@@ -1,6 +1,6 @@
 use std::{net::IpAddr, vec};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use giganto_client::publish::stream::{
     NodeType, RequestSemiSupervisedStream, RequestTimeSeriesGeneratorStream,
 };
