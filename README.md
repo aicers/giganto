@@ -82,7 +82,7 @@ In the config file, you can specify the following options:
 | `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-enable MD013 -->
 
 The following is an example of how to configure the config file:
 
