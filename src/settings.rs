@@ -2,7 +2,6 @@
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -153,43 +152,11 @@ impl Config {
 
 impl ConfigVisible {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.max_open_files < 0 {
-            bail!("max open files must be greater than or equal to 0");
-        }
-
-        if self.num_of_thread < 0 {
-            bail!("num of thread must be greater than or equal to 0");
-        }
-
         if !self.data_dir.exists() || !self.data_dir.is_dir() {
             bail!("data directory is invalid");
         }
-
-        if !self.export_dir.exists() || !self.export_dir.is_dir() {
-            bail!("export directory is invalid");
-        }
-        if !is_writable(&self.export_dir) {
-            bail!("no write permission to the export directory");
-        }
-
         Ok(())
     }
-}
-
-fn is_writable(path: &PathBuf) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-
-    let permissions = metadata.permissions();
-    let mode = permissions.mode();
-
-    let uid = nix::unistd::Uid::current().as_raw();
-    let gid = nix::unistd::Gid::current().as_raw();
-
-    metadata.uid() == uid && mode & 0o200 != 0
-        || metadata.gid() == gid && mode & 0o020 != 0
-        || mode & 0o002 != 0
 }
 
 /// Creates a new `ConfigBuilder` instance with the default configuration.
