@@ -1,20 +1,20 @@
 use std::{fmt::Debug, net::IpAddr};
 
-use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    check_address, check_contents, check_port, get_time_from_key, handle_paged_events,
-    impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster, FromKeyValue,
-    IpRange, PortRange,
+    FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
+    handle_paged_events, impl_from_giganto_range_structs_for_graphql_client,
+    paged_events_in_cluster,
 };
 use crate::{
     graphql::{
-        client::derives::{secu_log_raw_events, SecuLogRawEvents},
         RawEventFilter, TimeRange,
+        client::derives::{SecuLogRawEvents, secu_log_raw_events},
     },
     storage::{Database, KeyExtractor},
 };

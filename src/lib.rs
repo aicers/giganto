@@ -3,10 +3,10 @@
 use core::panic;
 
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{
-    parse2, parse_str, Data, DataStruct, DeriveInput, Fields, GenericArgument, Ident,
-    PathArguments, Type,
+    Data, DataStruct, DeriveInput, Fields, GenericArgument, Ident, PathArguments, Type, parse_str,
+    parse2,
 };
 
 extern crate proc_macro;
@@ -354,7 +354,11 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
 
 fn cast_style(field_type: &Type, recursive_into: bool) -> CastStyle {
     if is_target_of_safe_to_i64_cast(field_type) {
-        assert!(!recursive_into, "inappropriate use of `recursive_into`. Please remove `recursive_into` attribute on a field with `{}`", field_type.to_token_stream());
+        assert!(
+            !recursive_into,
+            "inappropriate use of `recursive_into`. Please remove `recursive_into` attribute on a field with `{}`",
+            field_type.to_token_stream()
+        );
         CastStyle::As
     } else if recursive_into {
         CastStyle::Into
