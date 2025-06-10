@@ -769,37 +769,35 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
 }
 
 fn check_address(filter_addr: Option<&IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
-    if let Some(ip_range) = filter_addr {
-        if let Some(addr) = target_addr {
-            if let Some(start) = ip_range.start.as_deref() {
-                if let Some(end) = ip_range.end.as_deref() {
-                    if addr >= start.parse::<IpAddr>()? && addr < end.parse::<IpAddr>()? {
-                        return Ok(true);
-                    }
-                    return Ok(false);
-                }
-                if addr == start.parse::<IpAddr>()? {
-                    return Ok(true);
-                }
-                return Ok(false);
-            }
+    match (filter_addr, target_addr) {
+        (Some(ip_range), Some(addr)) => {
+            let starts_after_or_at = if let Some(start) = ip_range.start.as_deref() {
+                addr >= start.parse::<IpAddr>()?
+            } else {
+                true
+            };
+
+            let ends_before = if let Some(end) = ip_range.end.as_deref() {
+                addr < end.parse::<IpAddr>()?
+            } else {
+                true
+            };
+
+            Ok(starts_after_or_at && ends_before)
         }
+        _ => Ok(true),
     }
-    Ok(true)
 }
 
 fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool {
-    if let Some(port_range) = filter_port {
-        if let Some(port) = target_port {
-            if let Some(start) = port_range.start {
-                if let Some(end) = port_range.end {
-                    return port >= start && port < end;
-                }
-                return port == start;
-            }
+    match (filter_port, target_port) {
+        (Some(port_range), Some(port)) => {
+            let starts_after_or_at = port_range.start.is_none_or(|start| port >= start);
+            let ends_before = port_range.end.is_none_or(|end| port < end);
+            starts_after_or_at && ends_before
         }
+        _ => true,
     }
-    true
 }
 
 fn check_contents(filter_str: Option<&str>, target_str: Option<String>) -> bool {

@@ -4,6 +4,19 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Modified search range boundary handling for consistency. Currently, the
+  handling of range search with a single input is inconsistent between time and
+  address/port. To address this inconsistency, the `check_address` and
+  `check_port` functions have been modified to follow the same behavior as time
+  range handling.
+  - only the start value is provided: Retrieves all results greater than or
+    equal to the start value.
+  - only the end value is provided: Retrieves all results less than the end value.
+
 ## [0.24.3] - 2025-05-23
 
 ### Changed
@@ -735,6 +748,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.24.3...main
 [0.24.3]: https://github.com/aicers/giganto/compare/0.24.2...0.24.3
 [0.24.2]: https://github.com/aicers/giganto/compare/0.24.1...0.24.2
 [0.24.1]: https://github.com/aicers/giganto/compare/0.24.0...0.24.1

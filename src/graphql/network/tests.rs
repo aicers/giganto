@@ -155,12 +155,23 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let conn_body = create_conn_body(None, None, None, None);
+    let ser_conn_body = bincode::serialize(&conn_body).unwrap();
+    store.append(&key, &ser_conn_body).unwrap();
+}
+
+fn create_conn_body(
+    orig_addr: Option<IpAddr>,
+    orig_port: Option<u16>,
+    resp_addr: Option<IpAddr>,
+    resp_port: Option<u16>,
+) -> Conn {
     let tmp_dur = Duration::nanoseconds(12345);
-    let conn_body = Conn {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_port: 80,
+    Conn {
+        orig_addr: orig_addr.unwrap_or("192.168.4.76".parse::<IpAddr>().unwrap()),
+        orig_port: orig_port.unwrap_or(46378),
+        resp_addr: resp_addr.unwrap_or("192.168.4.76".parse::<IpAddr>().unwrap()),
+        resp_port: resp_port.unwrap_or(80),
         proto: 6,
         conn_state: "sf".to_string(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
@@ -171,10 +182,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
         resp_pkts: 511,
         orig_l2_bytes: 21515,
         resp_l2_bytes: 27889,
-    };
-    let ser_conn_body = bincode::serialize(&conn_body).unwrap();
-
-    store.append(&key, &ser_conn_body).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -2956,29 +2964,292 @@ async fn dhcp_with_data_giganto_cluster() {
 }
 
 #[tokio::test]
-async fn conn_with_start_or_end() {
+#[allow(clippy::too_many_lines)]
+async fn test_search_boundary_for_addr_port() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event_with_addr_port(
+        &store,
+        "src 1",
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        "192.168.4.70".parse::<IpAddr>().ok(),
+        Some(100),
+        "192.168.4.80".parse::<IpAddr>().ok(),
+        Some(200),
+    );
+    insert_conn_raw_event_with_addr_port(
+        &store,
+        "src 1",
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        "192.168.4.71".parse::<IpAddr>().ok(),
+        Some(101),
+        "192.168.4.81".parse::<IpAddr>().ok(),
+        Some(201),
+    );
+    insert_conn_raw_event_with_addr_port(
+        &store,
+        "src 1",
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        "192.168.4.72".parse::<IpAddr>().ok(),
+        Some(102),
+        "192.168.4.82".parse::<IpAddr>().ok(),
+        Some(202),
+    );
 
+    // Only the start value of origAddr is provided (Retrieves all events where origAddr is greater
+    // than or equal to the given start value)
     let query = r#"
     {
         connRawEvents(
             filter: {
                 time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
                 sensor: "src 1"
-                origAddr: { start: "192.168.4.76" }
-                origPort: { end: 46380 }
+                origAddr: { start: "192.168.4.70" }
             }
-            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.70\"}}, {node: {origAddr: \"192.168.4.71\"}}, {node: {origAddr: \"192.168.4.72\"}}]}}"
+    );
+
+    // Only the end value of origAddr is provided (Retrieves all events where origAddr is less
+    // than the given end value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                origAddr: { end: "192.168.4.72" }
+            }
         ) {
             edges {
                 node {
                     origAddr,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.70\"}}, {node: {origAddr: \"192.168.4.71\"}}]}}"
+    );
+
+    // Both start and end origAddr are provided (Retrieves all events where origAddr is within the
+    // range from the given start origAddr (inclusive) to end origAddr (exclusive)).
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.70", end: "192.168.4.72"}
+            }
+        ) {
+            edges {
+                node {
+                    origAddr,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.70\"}}, {node: {origAddr: \"192.168.4.71\"}}]}}"
+    );
+
+    // Only the start value of respAddr is provided (Retrieves all events where respAddr is greater
+    // than or equal to the given start value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respAddr: { start: "192.168.4.80" }
+            }
+        ) {
+            edges {
+                node {
+                    respAddr
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {respAddr: \"192.168.4.80\"}}, {node: {respAddr: \"192.168.4.81\"}}, {node: {respAddr: \"192.168.4.82\"}}]}}"
+    );
+
+    // Only the end value of respAddr is provided (Retrieves all events where respAddr is less
+    // than the given end value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respAddr: { end: "192.168.4.82" }
+            }
+        ) {
+            edges {
+                node {
                     respAddr,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {respAddr: \"192.168.4.80\"}}, {node: {respAddr: \"192.168.4.81\"}}]}}"
+    );
+
+    // Both start and end respAddr are provided (Retrieves all events where respAddr is within the
+    // range from the given start respAddr (inclusive) to end respAddr (exclusive)).
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respAddr: { start: "192.168.4.80", end: "192.168.4.82"}
+            }
+        ) {
+            edges {
+                node {
+                    respAddr,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {respAddr: \"192.168.4.80\"}}, {node: {respAddr: \"192.168.4.81\"}}]}}"
+    );
+
+    // Only the start value of origPort is provided (Retrieves all events where origPort is greater
+    // than or equal to the given start value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                origPort: { start: 100 }
+            }
+        ) {
+            edges {
+                node {
+                    origPort
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origPort: 100}}, {node: {origPort: 101}}, {node: {origPort: 102}}]}}"
+    );
+
+    // Only the end value of origPort is provided (Retrieves all events where origPort is less
+    // than the given end value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                origPort: { end: 102 }
+            }
+        ) {
+            edges {
+                node {
                     origPort,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origPort: 100}}, {node: {origPort: 101}}]}}"
+    );
+
+    // Both start and end origPort are provided (Retrieves all events where origPort is within the
+    // range from the given start origPort (inclusive) to end origPort (exclusive)).
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                origPort: { start: 100, end: 102}
+            }
+        ) {
+            edges {
+                node {
+                    origPort,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {origPort: 100}}, {node: {origPort: 101}}]}}"
+    );
+
+    // Only the start value of respPort is provided (Retrieves all events where respPort is greater
+    // than or equal to the given start value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respPort: { start: 200 }
+            }
+        ) {
+            edges {
+                node {
+                    respPort
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {respPort: 200}}, {node: {respPort: 201}}, {node: {respPort: 202}}]}}"
+    );
+
+    // Only the end value of respPort is provided (Retrieves all events where respPort is less
+    // than the given end value)
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respPort: { end: 202 }
+            }
+        ) {
+            edges {
+                node {
                     respPort,
                 }
             }
@@ -2987,8 +3258,51 @@ async fn conn_with_start_or_end() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80}}]}}"
+        "{connRawEvents: {edges: [{node: {respPort: 200}}, {node: {respPort: 201}}]}}"
     );
+
+    // Both start and end respPort are provided (Retrieves all events where respPort is within the
+    // range from the given start respPort (inclusive) to end respPort (exclusive)).
+    let query = r#"
+    {
+        connRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2050-09-22T00:00:00Z" }
+                sensor: "src 1"
+                respPort: { start: 200, end: 202}
+            }
+        ) {
+            edges {
+                node {
+                    respPort,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{connRawEvents: {edges: [{node: {respPort: 200}}, {node: {respPort: 201}}]}}"
+    );
+}
+
+fn insert_conn_raw_event_with_addr_port(
+    store: &RawEventStore<Conn>,
+    sensor: &str,
+    timestamp: i64,
+    orig_addr: Option<IpAddr>,
+    orig_port: Option<u16>,
+    resp_addr: Option<IpAddr>,
+    resp_port: Option<u16>,
+) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let conn_body = create_conn_body(orig_addr, orig_port, resp_addr, resp_port);
+    let ser_conn_body = bincode::serialize(&conn_body).unwrap();
+    store.append(&key, &ser_conn_body).unwrap();
 }
 
 #[tokio::test]
