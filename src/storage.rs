@@ -956,7 +956,7 @@ pub async fn retain_periodically(
     loop {
         select! {
             _ = itv.tick() => {
-                info!("Begin to cleanup the database.");
+                info!("Begin to cleanup the database based on retention period.");
                 running_flag.store(true, Ordering::Relaxed);
 
                 let now = Utc::now();
@@ -967,7 +967,10 @@ pub async fn retain_periodically(
                 let mut usage_flag = false;
 
                 if check_db_usage().await.0 {
-                    info!("Disk usage is over {USAGE_THRESHOLD}%.");
+                    info!(
+                        "Disk usage is over {USAGE_THRESHOLD}%. \
+                        Retention period is temporarily reduced."
+                    );
                     retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                     usage_flag = true;
                 }
