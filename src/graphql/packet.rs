@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use async_graphql::{connection::Connection, Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
 use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
@@ -8,12 +8,12 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump, Direction,
-    FromKeyValue, RawEventFilter, TimeRange, TIMESTAMP_SIZE,
+    Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
+    get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
 use crate::{
     graphql::{
-        client::derives::{packets, pcap as pcaps, Packets, Pcap as Pcaps},
+        client::derives::{Packets, Pcap as Pcaps, packets, pcap as pcaps},
         events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
         paged_events_in_cluster,
     },
@@ -286,7 +286,10 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}");
+        assert_eq!(
+            res.data.to_string(),
+            "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}"
+        );
 
         let query = r#"
         {
@@ -305,7 +308,10 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
+        assert_eq!(
+            res.data.to_string(),
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}"
+        );
 
         let query = r#"
         {
@@ -324,7 +330,10 @@ mod tests {
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}");
+        assert_eq!(
+            res.data.to_string(),
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}"
+        );
     }
 
     #[tokio::test]

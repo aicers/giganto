@@ -1,14 +1,14 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info};
 
 use super::{
-    client::derives::{StringNumberU32, StringNumberU64},
     PowerOffNotify, RebootNotify, TerminateNotify,
+    client::derives::{StringNumberU32, StringNumberU64},
 };
 use crate::settings::ConfigVisible;
 #[cfg(debug_assertions)]
@@ -422,7 +422,10 @@ mod tests {
         );
 
         let res = schema.execute(&query).await;
-        assert_eq!(res.data.to_string(), "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}");
+        assert_eq!(
+            res.data.to_string(),
+            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}"
+        );
     }
 
     fn old_config() -> String {

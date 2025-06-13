@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use giganto_client::{
     connection::{client_handshake, server_handshake},
     frame::{self, recv_bytes, recv_raw, send_bytes},
@@ -15,12 +15,12 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
     select,
     sync::{
-        mpsc::{channel, Receiver, Sender},
         Notify, RwLock,
+        mpsc::{Receiver, Sender, channel},
     },
     time::sleep,
 };
@@ -28,15 +28,15 @@ use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 use crate::{
+    IngestSensors,
     graphql::status::{
-        insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file,
-        TomlPeers, CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR,
+        CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR, TomlPeers, insert_toml_peers,
+        parse_toml_element_to_string, read_toml_file, write_toml_file,
     },
     server::{
-        config_client, config_server, extract_cert_from_conn, subject_from_cert,
-        subject_from_cert_verbose, Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+        Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_client, config_server,
+        extract_cert_from_conn, subject_from_cert, subject_from_cert_verbose,
     },
-    IngestSensors,
 };
 
 // The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
@@ -749,9 +749,10 @@ pub mod tests {
 
     use super::Peer;
     use crate::{
-        peer::{receive_peer_data, request_init_info, PeerCode, PeerIdentity},
+        PeerInfo,
+        peer::{PeerCode, PeerIdentity, receive_peer_data, request_init_info},
         server::Certs,
-        to_cert_chain, to_private_key, to_root_cert, PeerInfo,
+        to_cert_chain, to_private_key, to_root_cert,
     };
 
     fn get_token() -> &'static Mutex<u32> {
@@ -797,7 +798,9 @@ pub mod tests {
         {
             x
         } else {
-            panic!("failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder");
+            panic!(
+                "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
+            );
         };
 
         let pv_key = if Path::new(KEY_PATH).extension().is_some_and(|x| x == "der") {

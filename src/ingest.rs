@@ -7,33 +7,33 @@ use std::sync::OnceLock;
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU16, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicI64, AtomicU16, Ordering},
     },
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use giganto_client::frame::recv_raw;
 use giganto_client::{
+    RawEventKind,
     connection::server_handshake,
     frame::{self, RecvError, SendError},
     ingest::{
+        Packet,
         log::{Log, OpLog, SecuLog},
         receive_record_header,
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
-        Packet,
     },
-    RawEventKind,
 };
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use tokio::{
     select,
     sync::{
-        mpsc::{channel, Receiver, Sender},
         Mutex, Notify,
+        mpsc::{Receiver, Sender, channel},
     },
     task, time,
     time::sleep,
@@ -44,8 +44,8 @@ use x509_parser::nom::AsBytes;
 use crate::ingest::generation::SequenceGenerator;
 use crate::publish::send_direct_stream;
 use crate::server::{
-    config_server, extract_cert_from_conn, subject_from_cert_verbose, Certs,
-    SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY,
+    Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
+    subject_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 use crate::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
