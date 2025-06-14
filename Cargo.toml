@@ -15,7 +15,7 @@ anyhow = "1"
 async-graphql = { version = "7", features = ["chrono", "string_number"] }
 async-graphql-warp = "7"
 base64 = "0.22"
-bincode = "1"
+bincode = "2"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
