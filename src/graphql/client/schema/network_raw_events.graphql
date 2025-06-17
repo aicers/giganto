@@ -59,7 +59,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     method
                     host
                     uri
-                    referrer
+                    referer
                     version
                     userAgent
                     requestLen

@@ -1117,7 +1117,7 @@ dependencies = [
 [[package]]
 name = "giganto-client"
 version = "0.22.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.22.0#c1fb90e15d966a95ffdc9c3607401a79d3acadf7"
+source = "git+https://github.com/aicers/giganto-client.git?rev=2962b68#2962b6851411e6373e7cbc51701547dc1a2b747c"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1130,9 +1130,6 @@ dependencies = [
  "strum_macros",
  "thiserror 2.0.12",
  "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]

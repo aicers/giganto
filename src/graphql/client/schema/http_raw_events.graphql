@@ -19,7 +19,7 @@ query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 method
                 host
                 uri
-                referrer
+                referer
                 version
                 userAgent
                 requestLen

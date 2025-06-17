@@ -263,8 +263,8 @@ struct HttpRawEvent {
     host: String,
     /// URI
     uri: String,
-    /// Referrer
-    referrer: String,
+    /// Referer
+    referer: String,
     /// HTTP Version
     version: String,
     /// User Agent
@@ -1037,7 +1037,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
             method: val.method,
             host: val.host,
             uri: val.uri,
-            referrer: val.referrer,
+            referer: val.referer,
             version: val.version,
             user_agent: val.user_agent,
             status_code: val.status_code,
