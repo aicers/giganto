@@ -60,7 +60,7 @@ use crate::server::{
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::{IngestSensors, PcapSensors, StreamDirectChannels};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.23.0,<0.25.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.23.0,<0.26.0";
 
 pub struct Server {
     server_config: ServerConfig,

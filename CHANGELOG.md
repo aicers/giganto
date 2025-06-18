@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.25.0] - 2025-06-18
 
 ### Changed
 
@@ -20,6 +20,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - only the start value is provided: Retrieves all results greater than or
     equal to the start value.
   - only the end value is provided: Retrieves all results less than the end value.
+- Updated compatibility versions for QUIC communication and database migration
+  - Updated `INGEST_VERSION_REQ` to ">=0.23.0,<0.26.0".
+  - Updated `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.26.0".
+  - Updated `COMPATIBLE_VERSION_REQ` to ">=0.24.0,<0.26.0".
+- Updated `PEER_VERSION_REQ` to ">=0.25.0,<0.26.0" to ensure compatibility
+  between Giganto instances in the cluster. This change was made to reflect the
+  GraphQL API updates, specifically the change of the `referrer` field name to
+  the standard spelling `referer`.
 
 ## [0.24.3] - 2025-05-23
 
@@ -752,7 +760,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.24.3...main
+[0.25.0]: https://github.com/aicers/giganto/compare/0.24.3...0.25.0
 [0.24.3]: https://github.com/aicers/giganto/compare/0.24.2...0.24.3
 [0.24.2]: https://github.com/aicers/giganto/compare/0.24.1...0.24.2
 [0.24.1]: https://github.com/aicers/giganto/compare/0.24.0...0.24.1
