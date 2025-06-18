@@ -8,6 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Updated HTTP header field name from `referrer` to `referer` in GraphQL APIs
+  and data structures to maintain accuracy and direct correspondence with the
+  HTTP `Referer` header standard. This affects HTTP-related GraphQL queries and
+  responses where the field was previously named `referrer`.
 - Modified search range boundary handling for consistency. Currently, the
   handling of range search with a single input is inconsistent between time and
   address/port. To address this inconsistency, the `check_address` and

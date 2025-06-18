@@ -772,8 +772,8 @@ type HttpRawEvent {
   # URI
   uri: String!
 
-  # Referrer
-  referrer: String!
+  # Referer
+  referer: String!
 
   # HTTP Version
   version: String!

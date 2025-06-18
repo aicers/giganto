@@ -251,7 +251,7 @@ fn gen_http_raw_event() -> Vec<u8> {
         method: "POST".to_string(),
         host: "cluml".to_string(),
         uri: "/cluml.gif".to_string(),
-        referrer: "cluml.com".to_string(),
+        referer: "cluml.com".to_string(),
         version: String::new(),
         user_agent: "giganto".to_string(),
         request_len: 0,
