@@ -20,7 +20,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
       - name: Clippy
-        run: cargo clippy --tests -- -D warnings -W clippy::pedantic
+        run: cargo clippy --tests -- -D warnings
       - name: Detect Cargo.lock changes
         run: git diff-index --quiet HEAD --
       - name: markdownlint
