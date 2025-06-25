@@ -66,3 +66,6 @@ url = "2"
 [features]
 default = ["benchmark"]
 benchmark = []
+
+[lints.clippy]
+pedantic = "warn"
