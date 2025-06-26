@@ -15,7 +15,7 @@ query NfsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 readFiles
                 writeFiles
             }

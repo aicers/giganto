@@ -30,6 +30,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Migrated web server from `warp` to `poem` framework for better maintainability
   and future OpenAPI support. The GraphQL endpoint and playground functionality
   remain unchanged.
+- Changed `last_time` field to `end_time` for raw events (Http, Smtp, Ntlm, Ssh,
+  Tls, DceRpc, Ftp, Mqtt, Ldap, Smb, Nfs, Bootp, Dhcp) in GraphQL APIs and data
+  structures to improve clarity and consistency. The field represents the end time
+  of network events and sessions.
+- Changed `duration` field to `end_time` for Conn raw events in GraphQL APIs and
+  data structures to align with other network event structures and provide clearer
+  semantics. This field represents the end time of connection sessions.
 
 ## [0.25.1] - 2025-07-08
 
