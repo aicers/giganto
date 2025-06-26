@@ -15,7 +15,7 @@ query KerberosRawEvents($filter: NetworkFilter!, $after: String, $before: String
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 clientTime
                 serverTime
                 errorCode
