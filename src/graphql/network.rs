@@ -166,10 +166,10 @@ struct ConnRawEvent {
     ///
     /// For example, `ShDdAaFf` indicates a session without packet loss.
     conn_state: String,
-    /// Duration
+    /// End Time
     ///
     /// It is measured in nanoseconds.
-    duration: StringNumberI64,
+    end_time: StringNumberI64,
     /// Service Name
     service: String,
     /// Bytes Sent by Source
@@ -208,7 +208,7 @@ struct DnsRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Query
     query: String,
     /// Answer
@@ -256,7 +256,7 @@ struct HttpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// HTTP Method
     method: String,
     /// Host
@@ -324,7 +324,7 @@ struct RdpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Cookie
     cookie: String,
 }
@@ -350,7 +350,7 @@ struct SmtpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Mail From
     mailfrom: String,
     /// Date
@@ -388,7 +388,7 @@ struct NtlmRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Username
     username: String,
     /// Hostname
@@ -422,7 +422,7 @@ struct KerberosRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Client Time
     client_time: StringNumberI64,
     /// Server Time
@@ -464,7 +464,7 @@ struct SshRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Client
     client: String,
     /// Server
@@ -514,7 +514,7 @@ struct DceRpcRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Round-Trip Time
     rtt: StringNumberI64,
     /// Named Pipe
@@ -546,7 +546,7 @@ struct FtpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Username
     user: String,
     /// Password
@@ -594,7 +594,7 @@ struct MqttRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// MQTT Protocol
     protocol: String,
     /// Version
@@ -630,7 +630,7 @@ struct LdapRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Message ID
     message_id: StringNumberU32,
     /// Version
@@ -668,7 +668,7 @@ struct TlsRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Server Name
     server_name: String,
     /// ALPN Protocol
@@ -735,7 +735,7 @@ struct SmbRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Command
     command: u8,
     /// Path
@@ -781,7 +781,7 @@ struct NfsRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Read Files
     read_files: Vec<String>,
     /// Write Files
@@ -809,7 +809,7 @@ struct BootpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Operation Code
     op: u8,
     /// Hardware Type
@@ -879,7 +879,7 @@ struct DhcpRawEvent {
     /// End Time
     ///
     /// It is measured in nanoseconds.
-    last_time: StringNumberI64,
+    end_time: StringNumberI64,
     /// Message Type
     msg_type: u8,
     /// Client IP Address
@@ -1033,7 +1033,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time.into(),
+            end_time: val.end_time.into(),
             method: val.method,
             host: val.host,
             uri: val.uri,
@@ -1070,7 +1070,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            duration: val.duration.into(),
+            end_time: val.end_time.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
             resp_bytes: val.resp_bytes.into(),
@@ -1091,7 +1091,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time.into(),
+            end_time: val.end_time.into(),
             user: val.user,
             password: val.password,
             command: val.command,
@@ -1117,7 +1117,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time.into(),
+            end_time: val.end_time.into(),
             op: val.op,
             htype: val.htype,
             hops: val.hops,
@@ -1142,7 +1142,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            last_time: val.last_time.into(),
+            end_time: val.end_time.into(),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
@@ -1169,7 +1169,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
     }
 }
 
-from_key_value!(RdpRawEvent, Rdp, cookie; last_time);
+from_key_value!(RdpRawEvent, Rdp, cookie; end_time);
 
 from_key_value!(
     DnsRawEvent,
@@ -1185,7 +1185,7 @@ from_key_value!(
     rd_flag,
     ra_flag,
     ttl;
-    last_time,
+    end_time,
     rtt
 );
 
@@ -1199,7 +1199,7 @@ from_key_value!(
     subject,
     agent,
     state;
-    last_time
+    end_time
 );
 
 from_key_value!(
@@ -1210,7 +1210,7 @@ from_key_value!(
     domainname,
     success,
     protocol;
-    last_time
+    end_time
 );
 
 from_key_value!(
@@ -1222,7 +1222,7 @@ from_key_value!(
     realm,
     sname_type,
     service_name;
-    last_time,
+    end_time,
     client_time,
     server_time,
     error_code
@@ -1244,7 +1244,7 @@ from_key_value!(
     hassh_server,
     client_shka,
     server_shka;
-    last_time
+    end_time
 );
 
 from_key_value!(
@@ -1253,7 +1253,7 @@ from_key_value!(
     named_pipe,
     endpoint,
     operation;
-    last_time,
+    end_time,
     rtt
 );
 
@@ -1266,7 +1266,7 @@ from_key_value!(
     connack_reason,
     subscribe,
     suback_reason;
-    last_time
+    end_time
 );
 
 from_key_value!(
@@ -1278,7 +1278,7 @@ from_key_value!(
     diagnostic_message,
     object,
     argument;
-    last_time,
+    end_time,
     message_id
 );
 
@@ -1304,7 +1304,7 @@ from_key_value!(
     issuer_org_unit_name,
     issuer_common_name,
     last_alert;
-    last_time,
+    end_time,
     validity_not_before,
     validity_not_after
 );
@@ -1318,7 +1318,7 @@ from_key_value!(
     file_name,
     resource_type,
     fid;
-    last_time,
+    end_time,
     file_size,
     create_time,
     access_time,
@@ -1326,7 +1326,7 @@ from_key_value!(
     change_time
 );
 
-from_key_value!(NfsRawEvent, Nfs, read_files, write_files; last_time);
+from_key_value!(NfsRawEvent, Nfs, read_files, write_files; end_time);
 
 async fn handle_paged_conn_raw_events(
     ctx: &Context<'_>,

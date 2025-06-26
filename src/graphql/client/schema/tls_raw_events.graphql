@@ -15,7 +15,7 @@ query TlsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 serverName
                 alpnProtocol
                 ja3
