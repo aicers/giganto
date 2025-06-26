@@ -15,7 +15,7 @@ query RdpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 cookie
             }
         }

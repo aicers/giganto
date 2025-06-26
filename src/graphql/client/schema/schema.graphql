@@ -27,7 +27,7 @@ type BootpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Operation Code
   op: Int!
@@ -142,10 +142,10 @@ type ConnRawEvent {
   # For example, `ShDdAaFf` indicates a session without packet loss.
   connState: String!
 
-  # Duration
+  # End Time
   #
   # It is measured in nanoseconds.
-  duration: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Service Name
   service: String!
@@ -219,7 +219,7 @@ type DceRpcRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Round-Trip Time
   rtt: StringNumberI64!
@@ -279,7 +279,7 @@ type DhcpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Message Type
   msgType: Int!
@@ -414,7 +414,7 @@ type DnsRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Query
   query: String!
@@ -677,7 +677,7 @@ type FtpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Username
   user: String!
@@ -761,7 +761,7 @@ type HttpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # HTTP Method
   method: String!
@@ -920,7 +920,7 @@ type KerberosRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Client Time
   clientTime: StringNumberI64!
@@ -995,7 +995,7 @@ type LdapRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Message ID
   messageId: StringNumberU32!
@@ -1095,7 +1095,7 @@ type MqttRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # MQTT Protocol
   protocol: String!
@@ -1361,7 +1361,7 @@ type NfsRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Read Files
   readFiles: [String!]!
@@ -1415,7 +1415,7 @@ type NtlmRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Username
   username: String!
@@ -2048,7 +2048,7 @@ type RdpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Cookie
   cookie: String!
@@ -2222,7 +2222,7 @@ type SmbRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Command
   command: Int!
@@ -2303,7 +2303,7 @@ type SmtpRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Mail From
   mailfrom: String!
@@ -2372,7 +2372,7 @@ type SshRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Client
   client: String!
@@ -2565,7 +2565,7 @@ type TlsRawEvent {
   # End Time
   #
   # It is measured in nanoseconds.
-  lastTime: StringNumberI64!
+  endTime: StringNumberI64!
 
   # Server Name
   serverName: String!
