@@ -2869,21 +2869,41 @@ fn network_connection(
         };
 
         let selected = if is_forward {
-            time.min(dns_ts.min(conn_ts.min(http_ts.min(rdp_ts.min(ntlm_ts.min(
-                kerberos_ts.min(
-                    ssh_ts.min(dce_rpc_ts.min(ftp_ts.min(mqtt_ts.min(ldap_ts.min(
-                        tls_ts.min(smb_ts.min(nfs_ts.min(smtp_ts.min(bootp_ts.min(dhcp_ts))))),
-                    ))))),
-                ),
-            ))))))
+            time.min(dns_ts)
+                .min(conn_ts)
+                .min(http_ts)
+                .min(rdp_ts)
+                .min(ntlm_ts)
+                .min(kerberos_ts)
+                .min(ssh_ts)
+                .min(dce_rpc_ts)
+                .min(ftp_ts)
+                .min(mqtt_ts)
+                .min(ldap_ts)
+                .min(tls_ts)
+                .min(smb_ts)
+                .min(nfs_ts)
+                .min(smtp_ts)
+                .min(bootp_ts)
+                .min(dhcp_ts)
         } else {
-            time.max(dns_ts.max(conn_ts.max(http_ts.max(rdp_ts.max(ntlm_ts.max(
-                kerberos_ts.max(
-                    ssh_ts.max(dce_rpc_ts.max(ftp_ts.max(mqtt_ts.max(ldap_ts.max(
-                        tls_ts.max(smb_ts.max(nfs_ts.max(smtp_ts.max(bootp_ts.max(dhcp_ts))))),
-                    ))))),
-                ),
-            ))))))
+            time.max(dns_ts)
+                .max(conn_ts)
+                .max(http_ts)
+                .max(rdp_ts)
+                .max(ntlm_ts)
+                .max(kerberos_ts)
+                .max(ssh_ts)
+                .max(dce_rpc_ts)
+                .max(ftp_ts)
+                .max(mqtt_ts)
+                .max(ldap_ts)
+                .max(tls_ts)
+                .max(smb_ts)
+                .max(nfs_ts)
+                .max(smtp_ts)
+                .max(bootp_ts)
+                .max(dhcp_ts)
         };
 
         match selected {

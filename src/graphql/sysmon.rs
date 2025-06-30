@@ -1807,29 +1807,35 @@ fn sysmon_connection(
         };
 
         let selected = if is_forward {
-            time.min(
-                file_create_time_ts.min(process_create_ts.min(network_connect_ts.min(
-                    process_terminate_ts.min(image_load_ts.min(file_create_ts.min(
-                        registry_value_set_ts.min(registry_key_rename_ts.min(
-                            file_create_stream_hash_ts.min(pipe_event_ts.min(dns_query_ts.min(
-                                file_delete_ts.min(process_tamper_ts.min(file_delete_detected_ts)),
-                            ))),
-                        )),
-                    ))),
-                ))),
-            )
+            time.min(file_create_time_ts)
+                .min(process_create_ts)
+                .min(network_connect_ts)
+                .min(process_terminate_ts)
+                .min(image_load_ts)
+                .min(file_create_ts)
+                .min(registry_value_set_ts)
+                .min(registry_key_rename_ts)
+                .min(file_create_stream_hash_ts)
+                .min(pipe_event_ts)
+                .min(dns_query_ts)
+                .min(file_delete_ts)
+                .min(process_tamper_ts)
+                .min(file_delete_detected_ts)
         } else {
-            time.max(
-                file_create_time_ts.max(process_create_ts.max(network_connect_ts.max(
-                    process_terminate_ts.max(image_load_ts.max(file_create_ts.max(
-                        registry_value_set_ts.max(registry_key_rename_ts.max(
-                            file_create_stream_hash_ts.max(pipe_event_ts.max(dns_query_ts.max(
-                                file_delete_ts.max(process_tamper_ts.max(file_delete_detected_ts)),
-                            ))),
-                        )),
-                    ))),
-                ))),
-            )
+            time.max(file_create_time_ts)
+                .max(process_create_ts)
+                .max(network_connect_ts)
+                .max(process_terminate_ts)
+                .max(image_load_ts)
+                .max(file_create_ts)
+                .max(registry_value_set_ts)
+                .max(registry_key_rename_ts)
+                .max(file_create_stream_hash_ts)
+                .max(pipe_event_ts)
+                .max(dns_query_ts)
+                .max(file_delete_ts)
+                .max(process_tamper_ts)
+                .max(file_delete_detected_ts)
         };
 
         match selected {
