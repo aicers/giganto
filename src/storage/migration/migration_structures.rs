@@ -57,6 +57,24 @@ pub struct ConnBeforeV21 {
 }
 
 #[derive(Deserialize, Serialize)]
+pub struct ConnBeforeV26 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub conn_state: String,
+    pub duration: i64,
+    pub service: String,
+    pub orig_bytes: u64,
+    pub resp_bytes: u64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
+    pub orig_l2_bytes: u64,
+    pub resp_l2_bytes: u64,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct SmtpBeforeV21 {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
