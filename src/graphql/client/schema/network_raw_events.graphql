@@ -19,7 +19,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     proto
                     connState
                     service
-                    duration
+                    endTime
                     origBytes
                     respBytes
                     origPkts
@@ -33,7 +33,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     respAddr
                     origPort
                     respPort
-                    lastTime
+                    endTime
                     proto
                     query
                     answer
@@ -55,7 +55,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     method
                     host
                     uri
@@ -86,7 +86,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     cookie
                 }
                 ... on NtlmRawEvent {
@@ -96,7 +96,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     username
                     hostname
                     domainname
@@ -110,7 +110,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     clientTime
                     serverTime
                     errorCode
@@ -128,7 +128,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     client
                     server
                     cipherAlg
@@ -150,7 +150,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     rtt
                     namedPipe
                     endpoint
@@ -163,7 +163,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     user
                     password
                     command
@@ -184,7 +184,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     protocol
                     version
                     clientId
@@ -199,7 +199,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     messageId
                     version
                     opcode
@@ -215,7 +215,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     serverName
                     alpnProtocol
                     ja3
@@ -245,7 +245,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     command
                     path
                     service
@@ -265,7 +265,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     readFiles
                     writeFiles
                 }
@@ -276,7 +276,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     mailfrom
                     date
                     from
@@ -292,7 +292,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     op
                     htype
                     hops
@@ -312,7 +312,7 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     origPort
                     respPort
                     proto
-                    lastTime
+                    endTime
                     msgType
                     ciaddr
                     yiaddr

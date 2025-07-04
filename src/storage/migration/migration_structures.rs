@@ -57,6 +57,24 @@ pub struct ConnBeforeV21 {
 }
 
 #[derive(Deserialize, Serialize)]
+pub struct ConnBeforeV26 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub conn_state: String,
+    pub duration: i64,
+    pub service: String,
+    pub orig_bytes: u64,
+    pub resp_bytes: u64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
+    pub orig_l2_bytes: u64,
+    pub resp_l2_bytes: u64,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct SmtpBeforeV21 {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -148,7 +166,7 @@ impl From<ConnBeforeV21> for ConnFromV21 {
             resp_port: input.resp_port,
             proto: input.proto,
             conn_state: String::new(),
-            duration: input.duration,
+            end_time: input.duration,
             service: input.service,
             orig_bytes: input.orig_bytes,
             resp_bytes: input.resp_bytes,
@@ -168,7 +186,7 @@ impl From<HttpFromV12BeforeV21> for HttpFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             method: input.method,
             host: input.host,
             uri: input.uri,
@@ -202,7 +220,7 @@ impl From<SmtpBeforeV21> for SmtpFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             mailfrom: input.mailfrom,
             date: input.date,
             from: input.from,
@@ -221,7 +239,7 @@ impl From<NtlmBeforeV21> for NtlmFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             protocol: String::new(),
             username: input.username,
             hostname: input.hostname,
@@ -238,7 +256,7 @@ impl From<SshBeforeV21> for SshFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             client: input.client,
             server: input.server,
             cipher_alg: input.cipher_alg,
@@ -264,7 +282,7 @@ impl From<TlsBeforeV21> for TlsFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             server_name: input.server_name,
             alpn_protocol: input.alpn_protocol,
             ja3: input.ja3,

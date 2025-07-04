@@ -17,7 +17,7 @@ query ConnRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 proto
                 connState
                 service
-                duration
+                endTime
                 origBytes
                 respBytes
                 origPkts

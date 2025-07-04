@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Changed `last_time` field to `end_time` for raw events (Http, Smtp, Ntlm, Ssh,
+  Tls, DceRpc, Ftp, Mqtt, Ldap, Smb, Nfs, Bootp, Dhcp) in GraphQL APIs and data
+  structures to improve clarity and consistency. The field represents the end time
+  of network events and sessions.
+- Changed `duration` field to `end_time` for Conn raw events in GraphQL APIs and
+  data structures to align with other network event structures and provide clearer
+  semantics. This field represents the end time of connection sessions.
+
 ## [0.25.0] - 2025-06-18
 
 ### Changed
@@ -760,6 +772,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.25.0...main
 [0.25.0]: https://github.com/aicers/giganto/compare/0.24.3...0.25.0
 [0.24.3]: https://github.com/aicers/giganto/compare/0.24.2...0.24.3
 [0.24.2]: https://github.com/aicers/giganto/compare/0.24.1...0.24.2
