@@ -32,12 +32,50 @@ jobs:
       - name: Build Binary
         run: |
           cargo build --release
+      - name: Extract release notes from CHANGELOG.md
+        id: release_notes
+        run: |
+          # Find the section for this version in CHANGELOG.md
+          VERSION="${{ env.TAG }}"
+          # Look for the version heading (## [x.y.z] or ## x.y.z)
+          SECTION_START=$(grep -n "^## \[$VERSION\]\|^## $VERSION" CHANGELOG.md | head -1 | cut -d: -f1)
+
+          if [ -z "$SECTION_START" ]; then
+            echo "Could not find version $VERSION in CHANGELOG.md"
+            echo "release_notes=Release for version $VERSION" >> $GITHUB_OUTPUT
+          else
+            # Find the next version section or end of file
+            NEXT_SECTION=$(tail -n +$((SECTION_START + 1)) CHANGELOG.md | grep -n "^## " | head -1 | cut -d: -f1)
+
+            if [ -z "$NEXT_SECTION" ]; then
+              # No next section, read to end of file, but skip the first line (version header)
+              RELEASE_NOTES=$(tail -n +$((SECTION_START + 1)) CHANGELOG.md)
+            else
+              # Read until next section, but skip the first line (version header)
+              RELEASE_NOTES=$(tail -n +$((SECTION_START + 1)) CHANGELOG.md | head -n $((NEXT_SECTION - 2)))
+            fi
+
+            # Clean up the notes (remove empty lines at start/end)
+            RELEASE_NOTES=$(echo "$RELEASE_NOTES" | sed '/^$/d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+            echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+            echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
       - name: Create a Release and Upload Assets
         run: |
+          # Write release notes to a temporary file to handle special characters
+          cat > release_notes.txt << RELEASE_NOTES_EOF
+          ${{ steps.release_notes.outputs.release_notes }}
+          RELEASE_NOTES_EOF
+          NOTES=$(< ./release_notes.txt)
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"tag_name": "${{ env.TAG }}", "name": "${{ env.TITLE }} ${{ env.TAG }}", "draft": false, "prerelease": false}' \
+            -d "$(jq -n \
+                 --arg tag_name "${{ env.TAG }}" \
+                 --arg name "${{ env.TITLE }} ${{ env.TAG }}" \
+                 --arg body "$NOTES" \
+                '{ tag_name: $tag_name, name: $name, body: $body }')" \
             https://api.github.com/repos/${{ github.repository }}/releases \
             -o release.json
           if [ "$(jq -r .id release.json)" == "null" ]; then
