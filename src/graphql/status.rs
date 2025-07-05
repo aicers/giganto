@@ -6,10 +6,8 @@ use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info};
 
-use super::{
-    PowerOffNotify, RebootNotify, TerminateNotify,
-    client::derives::{StringNumberU32, StringNumberU64},
-};
+use super::{PowerOffNotify, RebootNotify, TerminateNotify};
+use crate::graphql::{StringNumberU32, StringNumberU64};
 use crate::settings::ConfigVisible;
 #[cfg(debug_assertions)]
 use crate::storage::Database;

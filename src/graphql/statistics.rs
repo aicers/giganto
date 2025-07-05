@@ -7,22 +7,25 @@ use std::{
 };
 
 use anyhow::anyhow;
-use async_graphql::{Context, Error, Object, Result, SimpleObject};
+use async_graphql::{Context, Object, Result, SimpleObject};
 use giganto_client::{RawEventKind, ingest::statistics::Statistics};
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
 use tracing::error;
 
-use super::{TIMESTAMP_SIZE, client::derives::StringNumberI64};
+use super::TIMESTAMP_SIZE;
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::impl_from_giganto_time_range_struct_for_graphql_client,
+    derives::{Statistics as Stats, statistics as stats},
+};
 use crate::{
-    graphql::{
-        TimeRange,
-        client::derives::{Statistics as Stats, statistics as stats},
-        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
-    },
+    graphql::{StringNumberI64, TimeRange, events_in_cluster},
     storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
 
@@ -49,24 +52,33 @@ const STATS_ALLOWED_KINDS: [RawEventKind; 18] = [
     RawEventKind::Statistics,
 ];
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [stats::StatisticsStatistics, ])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    stats::StatisticsStatistics
+]))]
 pub struct StatisticsRawEvent {
     pub sensor: String,
-    #[graphql_client_type(recursive_into = true)]
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
     pub stats: Vec<StatisticsInfo>,
 }
 
-#[derive(SimpleObject, Debug, Clone, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [stats::StatisticsStatisticsStats, ])]
+#[derive(SimpleObject, Debug, Clone)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    stats::StatisticsStatisticsStats
+]))]
 pub struct StatisticsInfo {
     pub timestamp: StringNumberI64,
-    #[graphql_client_type(recursive_into = true)]
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
     pub detail: Vec<StatisticsDetail>,
 }
 
-#[derive(SimpleObject, Debug, Default, Clone, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [stats::StatisticsStatisticsStatsDetail, ])]
+#[derive(SimpleObject, Debug, Default, Clone)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    stats::StatisticsStatisticsStatsDetail
+]))]
 pub struct StatisticsDetail {
     pub protocol: String,
     pub bps: Option<f64>,
@@ -121,7 +133,7 @@ impl StatisticsQuery {
         sensors: Vec<String>,
         time: Option<TimeRange>,
         protocols: Option<Vec<String>>,
-        request_from_peer: Option<bool>,
+        #[allow(unused_variables)] request_from_peer: Option<bool>,
     ) -> Result<Vec<StatisticsRawEvent>> {
         let handler = handle_statistics;
 
@@ -142,6 +154,7 @@ impl StatisticsQuery {
     }
 }
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 
 fn get_statistics_iter<'c, T>(

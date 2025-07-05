@@ -19,8 +19,10 @@ jobs:
       - uses: ./.github/cache-cargo
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
-      - name: Clippy
+      - name: Clippy (Cluster)
         run: cargo clippy --tests -- -D warnings
+      - name: Clippy (Server-only)
+        run: cargo clippy --no-default-features --features benchmark --tests -- -D warnings
       - name: Detect Cargo.lock changes
         run: git diff-index --quiet HEAD --
       - name: markdownlint

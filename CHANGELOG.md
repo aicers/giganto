@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Introduced a new feature flag, `cluster`, to enable or disable Giganto's
+  cluster functionality.
+  - When `cluster` is enabled (default), Giganto connects to other instances in
+    the cluster and shares data.
+  - When `cluster` is disabled, Giganto operates in standalone mode, without
+    connecting to other instances. It avoids using GraphQL client functionality,
+    allowing it to generate the `schema.graphql` file independently.
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed
@@ -767,6 +779,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.25.1...main
 [0.25.1]: https://github.com/aicers/giganto/compare/0.25.0...0.25.1
 [0.25.0]: https://github.com/aicers/giganto/compare/0.24.3...0.25.0
 [0.24.3]: https://github.com/aicers/giganto/compare/0.24.2...0.24.3
