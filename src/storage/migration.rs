@@ -21,8 +21,8 @@ use self::migration_structures::{
 use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
+    comm::ingest::implement::EventFilter,
     graphql::TIMESTAMP_SIZE,
-    ingest::implement::EventFilter,
     storage::{
         Conn as ConnFromV21, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,

@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use toml_edit::DocumentMut;
 use tracing::info;
 
-use crate::{graphql::status::write_toml_file, peer::PeerIdentity};
+use crate::{comm::peer::PeerIdentity, graphql::status::write_toml_file};
 
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
