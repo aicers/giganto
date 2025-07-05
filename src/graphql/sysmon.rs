@@ -10,45 +10,57 @@ use giganto_client::ingest::sysmon::{
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, NetworkFilter, SearchFilter, base64_engine,
-    client::derives::{StringNumberI64, StringNumberU32},
-    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
-    handle_paged_events, impl_from_giganto_network_filter_for_graphql_client,
-    impl_from_giganto_range_structs_for_graphql_client,
-    impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
+    Engine, FromKeyValue, NetworkFilter, SearchFilter, base64_engine, collect_exist_times,
+    events_vec_in_cluster, get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
+    paged_events_in_cluster,
 };
-use crate::graphql::client::derives::{
-    DnsQueryEvents, FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents,
-    FileDeleteDetectedEvents, FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents,
-    PipeEventEvents, ProcessCreateEvents, ProcessTamperEvents, ProcessTerminateEvents,
-    RegistryKeyRenameEvents, RegistryValueSetEvents, SearchDnsQueryEvents, SearchFileCreateEvents,
-    SearchFileCreateStreamHashEvents, SearchFileCreateTimeEvents, SearchFileDeleteDetectedEvents,
-    SearchFileDeleteEvents, SearchImageLoadEvents, SearchNetworkConnectEvents,
-    SearchPipeEventEvents, SearchProcessCreateEvents, SearchProcessTamperEvents,
-    SearchProcessTerminateEvents, SearchRegistryKeyRenameEvents, SearchRegistryValueSetEvents,
-    SysmonEvents as SysmonEventsDerive, dns_query_events, file_create_events,
-    file_create_stream_hash_events, file_create_time_events, file_delete_detected_events,
-    file_delete_events, image_load_events, network_connect_events, pipe_event_events,
-    process_create_events, process_tamper_events, process_terminate_events,
-    registry_key_rename_events, registry_value_set_events, search_dns_query_events,
-    search_file_create_events, search_file_create_stream_hash_events,
-    search_file_create_time_events, search_file_delete_detected_events, search_file_delete_events,
-    search_image_load_events, search_network_connect_events, search_pipe_event_events,
-    search_process_create_events, search_process_tamper_events, search_process_terminate_events,
-    search_registry_key_rename_events, search_registry_value_set_events,
-    sysmon_events as sysmon_events_module,
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::{
+        impl_from_giganto_network_filter_for_graphql_client,
+        impl_from_giganto_range_structs_for_graphql_client,
+        impl_from_giganto_search_filter_for_graphql_client,
+    },
+    derives::{
+        DnsQueryEvents, FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents,
+        FileDeleteDetectedEvents, FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents,
+        PipeEventEvents, ProcessCreateEvents, ProcessTamperEvents, ProcessTerminateEvents,
+        RegistryKeyRenameEvents, RegistryValueSetEvents, SearchDnsQueryEvents,
+        SearchFileCreateEvents, SearchFileCreateStreamHashEvents, SearchFileCreateTimeEvents,
+        SearchFileDeleteDetectedEvents, SearchFileDeleteEvents, SearchImageLoadEvents,
+        SearchNetworkConnectEvents, SearchPipeEventEvents, SearchProcessCreateEvents,
+        SearchProcessTamperEvents, SearchProcessTerminateEvents, SearchRegistryKeyRenameEvents,
+        SearchRegistryValueSetEvents, SysmonEvents as SysmonEventsDerive, dns_query_events,
+        file_create_events, file_create_stream_hash_events, file_create_time_events,
+        file_delete_detected_events, file_delete_events, image_load_events, network_connect_events,
+        pipe_event_events, process_create_events, process_tamper_events, process_terminate_events,
+        registry_key_rename_events, registry_value_set_events, search_dns_query_events,
+        search_file_create_events, search_file_create_stream_hash_events,
+        search_file_create_time_events, search_file_delete_detected_events,
+        search_file_delete_events, search_image_load_events, search_network_connect_events,
+        search_pipe_event_events, search_process_create_events, search_process_tamper_events,
+        search_process_terminate_events, search_registry_key_rename_events,
+        search_registry_value_set_events, sysmon_events as sysmon_events_module,
+    },
 };
+use crate::graphql::{StringNumberI64, StringNumberU32};
 use crate::storage::{Database, FilteredIter};
 
 #[derive(Default)]
 pub(super) struct SysmonQuery;
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    process_create_events::ProcessCreateEventsProcessCreateEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent
+]))]
 struct ProcessCreateEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -76,8 +88,12 @@ struct ProcessCreateEvent {
     parent_user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    file_create_time_events::FileCreateTimeEventsFileCreateTimeEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent
+]))]
 struct FileCreationTimeChangedEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -91,8 +107,12 @@ struct FileCreationTimeChangedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    network_connect_events::NetworkConnectEventsNetworkConnectEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent
+]))]
 struct NetworkConnectionEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -115,8 +135,12 @@ struct NetworkConnectionEvent {
     destination_port_name: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    process_terminate_events::ProcessTerminateEventsProcessTerminateEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent
+]))]
 struct ProcessTerminatedEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -127,8 +151,12 @@ struct ProcessTerminatedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [image_load_events::ImageLoadEventsImageLoadEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    image_load_events::ImageLoadEventsImageLoadEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent
+]))]
 struct ImageLoadedEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -149,8 +177,12 @@ struct ImageLoadedEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [file_create_events::FileCreateEventsFileCreateEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    file_create_events::FileCreateEventsFileCreateEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent
+]))]
 struct FileCreateEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -163,8 +195,12 @@ struct FileCreateEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    registry_value_set_events::RegistryValueSetEventsRegistryValueSetEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent
+]))]
 struct RegistryValueSetEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -178,8 +214,12 @@ struct RegistryValueSetEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    registry_key_rename_events::RegistryKeyRenameEventsRegistryKeyRenameEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent
+]))]
 struct RegistryKeyValueRenameEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -193,8 +233,12 @@ struct RegistryKeyValueRenameEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    file_create_stream_hash_events::FileCreateStreamHashEventsFileCreateStreamHashEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent
+]))]
 struct FileCreateStreamHashEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -209,8 +253,12 @@ struct FileCreateStreamHashEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    pipe_event_events::PipeEventEventsPipeEventEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent
+]))]
 struct PipeEventEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -223,8 +271,12 @@ struct PipeEventEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dns_query_events::DnsQueryEventsDnsQueryEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent
+]))]
 struct DnsEventEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -238,8 +290,12 @@ struct DnsEventEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    file_delete_events::FileDeleteEventsFileDeleteEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent
+]))]
 struct FileDeleteEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -254,8 +310,12 @@ struct FileDeleteEvent {
     archived: bool,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    process_tamper_events::ProcessTamperEventsProcessTamperEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent
+]))]
 struct ProcessTamperingEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -267,8 +327,12 @@ struct ProcessTamperingEvent {
     user: String,
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode, sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    file_delete_detected_events::FileDeleteDetectedEventsFileDeleteDetectedEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent
+]))]
 struct FileDeleteDetectedEvent {
     time: DateTime<Utc>,
     agent_name: String,
@@ -301,6 +365,7 @@ enum SysmonEvents {
     FileDeleteDetectedEvent(FileDeleteDetectedEvent),
 }
 
+#[cfg(feature = "cluster")]
 impl From<sysmon_events_module::SysmonEventsSysmonEventsEdgesNode> for SysmonEvents {
     fn from(node: sysmon_events_module::SysmonEventsSysmonEventsEdgesNode) -> Self {
         match node {
@@ -722,6 +787,7 @@ async fn handle_file_delete_detected_events(
 }
 
 #[Object]
+#[allow(clippy::unused_async)]
 impl SysmonQuery {
     async fn process_create_events(
         &self,
@@ -2040,6 +2106,7 @@ fn sysmon_connection(
     Ok(connection)
 }
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_range_structs_for_graphql_client!(
     sysmon_events_module,
     dns_query_events,
@@ -2072,6 +2139,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_registry_value_set_events
 );
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_network_filter_for_graphql_client!(
     sysmon_events_module,
     dns_query_events,
@@ -2090,6 +2158,7 @@ impl_from_giganto_network_filter_for_graphql_client!(
     registry_value_set_events
 );
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_search_filter_for_graphql_client!(
     search_dns_query_events,
     search_file_create_events,

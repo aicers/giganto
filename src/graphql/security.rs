@@ -3,19 +3,22 @@ use std::{fmt::Debug, net::IpAddr};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
     FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
-    handle_paged_events, impl_from_giganto_range_structs_for_graphql_client,
-    paged_events_in_cluster,
+    handle_paged_events, paged_events_in_cluster,
+};
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::impl_from_giganto_range_structs_for_graphql_client,
+    derives::{SecuLogRawEvents, secu_log_raw_events},
 };
 use crate::{
-    graphql::{
-        RawEventFilter, TimeRange,
-        client::derives::{SecuLogRawEvents, secu_log_raw_events},
-    },
+    graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
 };
 
@@ -77,8 +80,11 @@ impl RawEventFilter for SecuLogFilter {
     }
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
+]))]
 struct SecuLogRawEvent {
     time: DateTime<Utc>,
     log_type: String,
@@ -152,6 +158,7 @@ impl SecurityLogQuery {
     }
 }
 
+#[cfg(feature = "cluster")]
 macro_rules! impl_from_giganto_secu_log_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -172,7 +179,10 @@ macro_rules! impl_from_giganto_secu_log_filter_for_graphql_client {
         )*
     };
 }
+
+#[cfg(feature = "cluster")]
 impl_from_giganto_range_structs_for_graphql_client!(secu_log_raw_events);
+#[cfg(feature = "cluster")]
 impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 
 #[cfg(test)]

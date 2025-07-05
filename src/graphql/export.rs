@@ -32,6 +32,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info};
@@ -42,11 +43,13 @@ use super::{
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
 };
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::impl_from_giganto_range_structs_for_graphql_client,
+    derives::{Export as Exports, export as exports},
+};
 use crate::{
-    graphql::{
-        client::derives::{Export as Exports, export as exports},
-        events_in_cluster, impl_from_giganto_range_structs_for_graphql_client,
-    },
+    graphql::events_in_cluster,
     ingest::implement::EventFilter,
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
@@ -1651,6 +1654,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
 }
 
 #[Object]
+#[allow(clippy::unused_async)]
 impl ExportQuery {
     async fn export(
         &self,
@@ -2030,6 +2034,7 @@ where
     }
 }
 
+#[cfg(feature = "cluster")]
 macro_rules! impl_from_giganto_export_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -2053,5 +2058,7 @@ macro_rules! impl_from_giganto_export_filter_for_graphql_client {
     };
 }
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_range_structs_for_graphql_client!(exports);
+#[cfg(feature = "cluster")]
 impl_from_giganto_export_filter_for_graphql_client!(exports);

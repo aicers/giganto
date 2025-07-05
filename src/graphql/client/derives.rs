@@ -1,37 +1,11 @@
 #![allow(clippy::enum_variant_names)]
 
-use async_graphql::{InputValueError, InputValueResult, Scalar, ScalarType, Value};
 use chrono::{DateTime as ChronoDateTime, Utc};
 use graphql_client::GraphQLQuery;
 
 type DateTime = ChronoDateTime<Utc>;
 
-macro_rules! impl_string_number {
-    ($struct_name:ident, $type:ty) => {
-        #[derive(Debug, PartialEq, Default, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $struct_name(pub $type);
-
-        #[Scalar]
-        impl ScalarType for $struct_name {
-            fn parse(value: Value) -> InputValueResult<Self> {
-                if let Value::String(value) = &value {
-                    Ok(value.parse().map($struct_name)?)
-                } else {
-                    Err(InputValueError::expected_type(value))
-                }
-            }
-
-            fn to_value(&self) -> Value {
-                Value::String(self.0.to_string())
-            }
-        }
-    };
-}
-
-impl_string_number!(StringNumberUsize, usize);
-impl_string_number!(StringNumberU64, u64);
-impl_string_number!(StringNumberU32, u32);
-impl_string_number!(StringNumberI64, i64);
+use crate::graphql::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize};
 
 #[derive(GraphQLQuery)]
 #[graphql(

@@ -4,19 +4,22 @@ use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connecti
 use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
     Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
     get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::impl_from_giganto_time_range_struct_for_graphql_client,
+    derives::{Packets, Pcap as Pcaps, packets, pcap as pcaps},
+};
 use crate::{
-    graphql::{
-        client::derives::{Packets, Pcap as Pcaps, packets, pcap as pcaps},
-        events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
-        paged_events_in_cluster,
-    },
+    graphql::{events_in_cluster, paged_events_in_cluster},
     storage::{Database, KeyExtractor, StorageKey},
 };
 
@@ -71,9 +74,11 @@ impl RawEventFilter for PacketFilter {
     }
 }
 
-#[allow(clippy::struct_field_names)]
-#[derive(SimpleObject, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
+#[derive(SimpleObject)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    packets::PacketsPacketsEdgesNode
+]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
     request_time: DateTime<Utc>,
@@ -81,14 +86,18 @@ struct Packet {
     packet: String,
 }
 
-#[derive(SimpleObject, Debug, Default, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [pcaps::PcapPcap, ])]
+#[derive(SimpleObject, Debug, Default)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    pcaps::PcapPcap
+]))]
 struct Pcap {
     request_time: DateTime<Utc>,
     parsed_pcap: String,
 }
 
 impl Pcap {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self::default()
     }
@@ -148,6 +157,7 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
 }
 
 #[Object]
+#[allow(clippy::unused_async)]
 impl PacketQuery {
     async fn packets(
         &self,
@@ -193,6 +203,7 @@ impl PacketQuery {
     }
 }
 
+#[cfg(feature = "cluster")]
 macro_rules! impl_from_giganto_packet_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -209,7 +220,9 @@ macro_rules! impl_from_giganto_packet_filter_for_graphql_client {
     };
 }
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_time_range_struct_for_graphql_client!(packets, pcaps);
+#[cfg(feature = "cluster")]
 impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 
 #[cfg(test)]

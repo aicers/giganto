@@ -821,6 +821,7 @@ async fn handle_data<T>(
     let ack_time_notified = ack_time_notify.clone();
 
     let mut err_msg = None;
+    #[cfg(feature = "benchmark")]
     let stream_id = recv.id();
 
     #[cfg(feature = "benchmark")]
@@ -862,7 +863,7 @@ async fn handle_data<T>(
                     break;
                 };
                 let mut recv_events_cnt: u16 = 0;
-                let mut recv_events_len = 0;
+                let mut _recv_events_len = 0;
                 #[cfg(feature = "benchmark")]
                 let mut packet_size = 0_u64;
                 #[cfg(feature = "benchmark")]
@@ -976,7 +977,7 @@ async fn handle_data<T>(
                     };
 
                     recv_events_cnt += 1;
-                    recv_events_len += raw_event.len();
+                    _recv_events_len += raw_event.len();
                     store.append(&storage_key.key(), &raw_event)?;
                     if let Some(network_key) = network_key.as_ref() {
                         if let Err(e) = send_direct_stream(
@@ -1015,7 +1016,7 @@ async fn handle_data<T>(
                         size += usize::try_from(packet_size).unwrap_or_default();
                     } else {
                         count += usize::from(recv_events_cnt);
-                        size += recv_events_len;
+                        size += _recv_events_len;
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(
