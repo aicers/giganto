@@ -3,21 +3,22 @@ use std::{fmt::Debug, net::IpAddr};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
-    FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port,
-    client::derives::StringNumberU32, get_time_from_key, handle_paged_events,
-    impl_from_giganto_range_structs_for_graphql_client, paged_events_in_cluster,
+    FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
+    handle_paged_events, paged_events_in_cluster,
+};
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::impl_from_giganto_range_structs_for_graphql_client,
+    derives::{Netflow5RawEvents, Netflow9RawEvents, netflow5_raw_events, netflow9_raw_events},
 };
 use crate::{
-    graphql::{
-        RawEventFilter, TimeRange,
-        client::derives::{
-            Netflow5RawEvents, Netflow9RawEvents, netflow5_raw_events, netflow9_raw_events,
-        },
-    },
+    graphql::{RawEventFilter, StringNumberU32, TimeRange},
     storage::{Database, KeyExtractor},
 };
 
@@ -90,8 +91,11 @@ impl RawEventFilter for NetflowFilter {
     }
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [netflow5_raw_events::Netflow5RawEventsNetflow5RawEventsEdgesNode])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    netflow5_raw_events::Netflow5RawEventsNetflow5RawEventsEdgesNode
+]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
     time: DateTime<Utc>,
@@ -151,8 +155,11 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
     }
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [netflow9_raw_events::Netflow9RawEventsNetflow9RawEventsEdgesNode])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    netflow9_raw_events::Netflow9RawEventsNetflow9RawEventsEdgesNode
+]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
     time: DateTime<Utc>,
@@ -293,6 +300,7 @@ impl NetflowQuery {
     }
 }
 
+#[cfg(feature = "cluster")]
 macro_rules! impl_from_giganto_netflow_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -312,5 +320,7 @@ macro_rules! impl_from_giganto_netflow_filter_for_graphql_client {
         )*
     };
 }
+#[cfg(feature = "cluster")]
 impl_from_giganto_range_structs_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);
+#[cfg(feature = "cluster")]
 impl_from_giganto_netflow_filter_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);

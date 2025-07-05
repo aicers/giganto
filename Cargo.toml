@@ -64,8 +64,9 @@ tempfile = "3"
 url = "2"
 
 [features]
-default = ["benchmark"]
+default = ["benchmark", "cluster"]
 benchmark = []
+cluster = []
 
 [lints.clippy]
 pedantic = "warn"

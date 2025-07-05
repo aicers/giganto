@@ -10,15 +10,19 @@ use async_graphql::{
 };
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{Log, OpLog};
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, base64_engine,
-    client::derives::{LogRawEvents, log_raw_events},
-    get_time_from_key, get_time_from_key_prefix, handle_paged_events,
-    impl_from_giganto_time_range_struct_for_graphql_client,
-    load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
+    Engine, FromKeyValue, base64_engine, get_time_from_key, get_time_from_key_prefix,
+    handle_paged_events, load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
+};
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    derives::{LogRawEvents, log_raw_events},
+    cluster::impl_from_giganto_time_range_struct_for_graphql_client,
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},
@@ -147,8 +151,11 @@ impl RawEventFilter for OpLogFilter {
     }
 }
 
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [log_raw_events::LogRawEventsLogRawEventsEdgesNode, ])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    log_raw_events::LogRawEventsLogRawEventsEdgesNode
+]))]
 struct LogRawEvent {
     time: DateTime<Utc>,
     log: String,
@@ -255,6 +262,7 @@ impl LogQuery {
     }
 }
 
+#[cfg(feature = "cluster")]
 macro_rules! impl_from_giganto_log_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
         $(
@@ -270,5 +278,8 @@ macro_rules! impl_from_giganto_log_filter_for_graphql_client {
         )*
     };
 }
+
+#[cfg(feature = "cluster")]
 impl_from_giganto_time_range_struct_for_graphql_client!(log_raw_events);
+#[cfg(feature = "cluster")]
 impl_from_giganto_log_filter_for_graphql_client!(log_raw_events);
