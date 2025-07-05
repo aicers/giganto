@@ -37,11 +37,13 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use super::Server;
 use crate::{
-    new_pcap_sensors, new_peers_data, new_stream_direct_channels,
-    peer::{PeerIdentity, PeerInfo},
+    comm::{
+        new_pcap_sensors, new_peers_data, new_stream_direct_channels,
+        peer::{PeerIdentity, PeerInfo},
+        to_cert_chain, to_private_key, to_root_cert,
+    },
     server::Certs,
     storage::{Database, DbOptions, RawEventStore},
-    to_cert_chain, to_private_key, to_root_cert,
 };
 
 fn get_token() -> &'static Mutex<u32> {
@@ -2098,8 +2100,7 @@ async fn request_range_data_with_period_time_series() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_network_event_stream() {
-    use crate::ingest::NetworkKey;
-    use crate::publish::send_direct_stream;
+    use crate::comm::{ingest::NetworkKey, publish::send_direct_stream};
 
     const SEMI_SUPERVISED_TYPE: NodeType = NodeType::SemiSupervised;
     const TIME_SERIES_GENERATOR_TYPE: NodeType = NodeType::TimeSeriesGenerator;

@@ -42,9 +42,8 @@ use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    comm::ingest::implement::EventFilter,
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
-    ingest::implement::EventFilter,
-    to_hms,
 };
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
@@ -1101,6 +1100,15 @@ pub fn db_path_and_option(
         max_sub_compactions,
     );
     (db_path, db_options)
+}
+
+fn to_hms(dur: Duration) -> String {
+    let total_sec = dur.as_secs();
+    let hours = total_sec / 3600;
+    let minutes = (total_sec % 3600) / 60;
+    let seconds = total_sec % 60;
+
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 pub fn repair_db(

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use async_graphql::{Context, Object, Result};
 
-use crate::{IngestSensors, peer::Peers};
+use crate::comm::{IngestSensors, peer::Peers};
 
 #[derive(Default)]
 pub(super) struct SensorQuery;

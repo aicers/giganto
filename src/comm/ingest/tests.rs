@@ -34,10 +34,12 @@ use tokio::{
 
 use super::Server;
 use crate::{
-    Certs, new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
-    new_stream_direct_channels,
+    comm::{
+        new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
+        new_stream_direct_channels, to_cert_chain, to_private_key, to_root_cert,
+    },
+    server::Certs,
     storage::{Database, DbOptions},
-    to_cert_chain, to_private_key, to_root_cert,
 };
 
 fn get_token() -> &'static Mutex<u32> {

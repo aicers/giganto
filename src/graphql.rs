@@ -41,9 +41,7 @@ pub(crate) use crate::graphql::standalone::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
 };
 use crate::{
-    IngestSensors, PcapSensors,
-    ingest::implement::EventFilter,
-    peer::Peers,
+    comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
     settings::{ConfigVisible, Settings},
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
@@ -884,11 +882,13 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{NodeName, schema};
+    use crate::comm::{
+        IngestSensors, new_pcap_sensors,
+        peer::{PeerInfo, Peers},
+    };
     use crate::graphql::{Mutation, Query};
-    use crate::peer::{PeerInfo, Peers};
     use crate::settings::{ConfigVisible, Settings};
     use crate::storage::{Database, DbOptions};
-    use crate::{IngestSensors, new_pcap_sensors};
 
     type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 

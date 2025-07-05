@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
+use generation::SequenceGenerator;
 use giganto_client::frame::recv_raw;
 use giganto_client::{
     RawEventKind,
@@ -41,14 +42,13 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
-use crate::ingest::generation::SequenceGenerator;
-use crate::publish::send_direct_stream;
+use crate::comm::publish::send_direct_stream;
+use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
     subject_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
-use crate::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -863,7 +863,7 @@ async fn handle_data<T>(
                     break;
                 };
                 let mut recv_events_cnt: u16 = 0;
-                let mut _recv_events_len = 0;
+                let mut recv_events_len = 0;
                 #[cfg(feature = "benchmark")]
                 let mut packet_size = 0_u64;
                 #[cfg(feature = "benchmark")]
@@ -977,7 +977,7 @@ async fn handle_data<T>(
                     };
 
                     recv_events_cnt += 1;
-                    _recv_events_len += raw_event.len();
+                    recv_events_len += raw_event.len();
                     store.append(&storage_key.key(), &raw_event)?;
                     if let Some(network_key) = network_key.as_ref() {
                         if let Err(e) = send_direct_stream(
@@ -1016,7 +1016,7 @@ async fn handle_data<T>(
                         size += usize::try_from(packet_size).unwrap_or_default();
                     } else {
                         count += usize::from(recv_events_cnt);
-                        size += _recv_events_len;
+                        size += recv_events_len;
                     }
                     if start.elapsed().as_secs() > 3600 {
                         info!(

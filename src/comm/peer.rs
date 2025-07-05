@@ -28,7 +28,7 @@ use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 use crate::{
-    IngestSensors,
+    comm::IngestSensors,
     graphql::status::{
         CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR, TomlPeers, insert_toml_peers,
         parse_toml_element_to_string, read_toml_file, write_toml_file,
@@ -749,10 +749,11 @@ pub mod tests {
 
     use super::Peer;
     use crate::{
-        PeerInfo,
-        peer::{PeerCode, PeerIdentity, receive_peer_data, request_init_info},
+        comm::{
+            peer::{PeerCode, PeerIdentity, PeerInfo, receive_peer_data, request_init_info},
+            to_cert_chain, to_private_key, to_root_cert,
+        },
         server::Certs,
-        to_cert_chain, to_private_key, to_root_cert,
     };
 
     fn get_token() -> &'static Mutex<u32> {

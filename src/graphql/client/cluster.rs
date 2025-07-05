@@ -9,7 +9,10 @@ use num_traits::AsPrimitive;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::{IngestSensors, graphql::MAXIMUM_PAGE_SIZE, peer::Peers};
+use crate::{
+    comm::{IngestSensors, peer::Peers},
+    graphql::MAXIMUM_PAGE_SIZE,
+};
 
 pub trait ClusterSortKey {
     fn secondary(&self) -> Option<&str>;
@@ -885,22 +888,13 @@ pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
-
     use async_graphql::{
-        EmptySubscription, SimpleObject,
+        SimpleObject,
         connection::{Edge, EmptyFields},
     };
     use chrono::{DateTime, Utc};
-    use tokio::sync::Notify;
 
-    use super::{NodeName, schema, sort_and_trunk_edges};
-    use crate::graphql::{ClusterSortKey, Mutation, Query};
-    use crate::peer::{PeerInfo, Peers};
-    use crate::settings::{ConfigVisible, Settings};
-    use crate::storage::{Database, DbOptions};
-    use crate::{IngestSensors, new_pcap_sensors};
+    use super::{ClusterSortKey, sort_and_trunk_edges};
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
