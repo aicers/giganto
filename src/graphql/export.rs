@@ -49,8 +49,8 @@ use crate::graphql::client::{
     derives::{Export as Exports, export as exports},
 };
 use crate::{
+    comm::ingest::implement::EventFilter,
     graphql::events_in_cluster,
-    ingest::implement::EventFilter,
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
 

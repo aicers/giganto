@@ -1,14 +1,11 @@
+mod comm;
 mod graphql;
-mod ingest;
-mod peer;
-mod publish;
 mod server;
 mod settings;
 mod storage;
 mod web;
 
 use std::{
-    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     path::Path,
     process::exit,
@@ -20,18 +17,19 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use clap::Parser;
-use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
-use quinn::Connection;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use comm::{
+    ingest,
+    peer::{self},
+    publish,
+};
 use settings::{ConfigVisible, Settings};
-use storage::{Database, db_path_and_option, repair_db};
+use storage::{db_path_and_option, repair_db};
 use tokio::{
     runtime, select,
     sync::{
-        Notify, RwLock,
-        mpsc::{self, UnboundedSender},
+        Notify,
+        mpsc::{self},
     },
     task::{self, JoinHandle},
     time::sleep,
@@ -43,6 +41,10 @@ use tracing_subscriber::{
 };
 
 use crate::{
+    comm::{
+        new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
+        new_stream_direct_channels, to_cert_chain, to_private_key, to_root_cert,
+    },
     graphql::NodeName,
     server::{Certs, SERVER_REBOOT_DELAY, subject_from_cert},
     settings::Args,
@@ -51,11 +53,6 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
-
-pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
-pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
-pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
-pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
@@ -328,83 +325,6 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
-    let certs = rustls_pemfile::certs(&mut &*pem)
-        .collect::<Result<_, _>>()
-        .context("cannot parse certificate chain")?;
-    Ok(certs)
-}
-
-fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
-    match rustls_pemfile::read_one(&mut &*pem)
-        .context("cannot parse private key")?
-        .ok_or_else(|| anyhow!("empty private key"))?
-    {
-        rustls_pemfile::Item::Pkcs1Key(key) => Ok(key.into()),
-        rustls_pemfile::Item::Pkcs8Key(key) => Ok(key.into()),
-        _ => Err(anyhow!("unknown private key format")),
-    }
-}
-
-fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
-    let mut ca_certs_files = Vec::new();
-
-    for ca_cert in ca_certs_paths {
-        let file = fs::read(ca_cert)
-            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
-
-        ca_certs_files.push(file);
-    }
-    let mut root_cert = rustls::RootCertStore::empty();
-    for file in ca_certs_files {
-        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
-            .collect::<Result<_, _>>()
-            .context("invalid PEM-encoded certificate")?;
-        if let Some(cert) = root_certs.first() {
-            root_cert
-                .add(cert.to_owned())
-                .context("failed to add root cert")?;
-        }
-    }
-
-    Ok(root_cert)
-}
-
-fn to_hms(dur: Duration) -> String {
-    let total_sec = dur.as_secs();
-    let hours = total_sec / 3600;
-    let minutes = (total_sec % 3600) / 60;
-    let seconds = total_sec % 60;
-
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
-}
-
-fn new_pcap_sensors() -> PcapSensors {
-    Arc::new(RwLock::new(HashMap::<String, Vec<Connection>>::new()))
-}
-
-fn new_ingest_sensors(db: &Database) -> IngestSensors {
-    let sensor_store = db.sensors_store().expect("Failed to open sensor store");
-    Arc::new(RwLock::new(sensor_store.sensor_list()))
-}
-
-fn new_runtime_ingest_sensors() -> RunTimeIngestSensors {
-    Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
-}
-
-fn new_stream_direct_channels() -> StreamDirectChannels {
-    Arc::new(RwLock::new(
-        HashMap::<String, UnboundedSender<Vec<u8>>>::new(),
-    ))
-}
-
-fn new_peers_data(peers_list: Option<HashSet<PeerIdentity>>) -> (Peers, PeerIdents) {
-    (
-        Arc::new(RwLock::new(HashMap::<String, PeerInfo>::new())),
-        Arc::new(RwLock::new(peers_list.unwrap_or_default())),
-    )
 }
 
 /// Initializes the tracing subscriber and returns a `WorkerGuard`.

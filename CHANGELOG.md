@@ -16,6 +16,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     connecting to other instances. It avoids using GraphQL client functionality,
     allowing it to generate the `schema.graphql` file independently.
 
+### Changed
+
+- Extracted communication-related logic into a separate module named `comm`.
+  This refactoring removes common functionality from `main.rs`, preventing
+  redundant declarations when adding additional binaries.
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed

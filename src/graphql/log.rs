@@ -21,8 +21,8 @@ use super::{
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
-    derives::{LogRawEvents, log_raw_events},
     cluster::impl_from_giganto_time_range_struct_for_graphql_client,
+    derives::{LogRawEvents, log_raw_events},
 };
 use crate::{
     graphql::{RawEventFilter, TimeRange},

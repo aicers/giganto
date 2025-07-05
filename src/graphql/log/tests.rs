@@ -4,8 +4,8 @@ use chrono::DateTime;
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
 use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
+use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::load_connection;
-use crate::ingest::generation::SequenceGenerator;
 use crate::{
     graphql::{TimeRange, tests::TestSchema},
     storage::RawEventStore,
