@@ -95,7 +95,7 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
-            "listening on {}",
+            "Listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
 
@@ -127,7 +127,7 @@ impl Server {
                         if let Err(e) =
                             handle_connection(conn, db, pcap_sensors, sender, stream_direct_channels,notify_shutdown,shutdown_sig,ack_transmission_cnt).await
                         {
-                            error!("connection failed: {e}. {remote}");
+                            error!("Connection to {remote} failed: {e}");
                         }
                     });
                 },
@@ -195,11 +195,11 @@ async fn handle_connection(
                             .send((sensor, Utc::now(), ConnState::Disconnected, rep))
                             .await
                         {
-                            error!("Failed to send internal channel data : {error}");
+                            error!("Failed to send internal channel data: {error}");
                         }
                         match conn_err {
                             quinn::ConnectionError::ApplicationClosed(_) => {
-                                info!("application closed");
+                                info!("Application closed");
                                 return Ok(());
                             }
                             _ => return Err(conn_err.into()),
@@ -213,7 +213,7 @@ async fn handle_connection(
                 let shutdown_signal = shutdown_signal.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(sensor, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
-                        error!("failed: {e}");
+                        error!("Failed: {e}");
                     }
                 });
             },

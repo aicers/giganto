@@ -199,7 +199,7 @@ impl Peer {
                         )
                         .await
                         {
-                            error!("connection failed: {e}. {}", remote);
+                            error!("Connection to {remote} failed: {e}");
                         }
                     });
                 },
@@ -368,7 +368,7 @@ async fn client_connection(
                                     peer_conn_info.peer_conns.write().await.remove(&remote_hostname);
                                     peer_conn_info.peers.write().await.remove(&remote_addr);
                                     if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                                        info!("giganto peer({remote_hostname}/{remote_addr}) closed");
+                                        info!("Data store peer({remote_hostname}/{remote_addr}) closed");
                                         return Ok(());
                                     }
                                     continue 'connection;
@@ -384,7 +384,7 @@ async fn client_connection(
                             let path= peer_conn_info.config_path.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
-                                    error!("failed: {e}");
+                                    error!("Failed: {e}");
                                 }
                             });
                         },
@@ -419,7 +419,7 @@ async fn client_connection(
                         | ConnectionError::Reset
                         | ConnectionError::TimedOut => {
                             warn!(
-                                "Retry connection to {} after {PEER_RETRY_INTERVAL} seconds.",
+                                "Retrying connection to {} in {PEER_RETRY_INTERVAL} seconds",
                                 peer_info.addr,
                             );
                             sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
@@ -526,7 +526,7 @@ async fn server_connection(
                         peer_conn_info.peer_conns.write().await.remove(&remote_hostname);
                         peer_conn_info.peers.write().await.remove(&remote_addr);
                         if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                            info!("giganto peer({remote_hostname}/{remote_addr}) closed");
+                            info!("Data store peer({remote_hostname}/{remote_addr}) closed");
                             return Ok(());
                         }
                         return Err(e.into());
@@ -542,7 +542,7 @@ async fn server_connection(
                 let path = peer_conn_info.config_path.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
-                        error!("failed: {}", e);
+                        error!("Failed: {}", e);
                     }
                 });
             },
@@ -713,10 +713,10 @@ async fn update_to_new_peer_list(
     if is_change {
         let data: Vec<PeerIdentity> = peer_list.read().await.iter().cloned().collect();
         if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
-            error!("{e:?}");
+            error!("Unable to generate TOML content: {e:?}");
         }
         if let Err(e) = write_toml_file(&doc, path) {
-            error!("{e:?}");
+            error!("Failed to write TOML content to file: {e:?}");
         }
     }
 
