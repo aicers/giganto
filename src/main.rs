@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
         );
 
         if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {
-            error!("migration failed: {e}");
+            error!("Migration failed: {e}");
             bail!("migration failed")
         }
 
@@ -212,7 +212,7 @@ async fn main() -> Result<()> {
                     running_flag,
                 ))
             {
-                error!("retain_periodically task terminated unexpectedly: {e}");
+                warn!("retain_periodically task terminated unexpectedly: {e}");
             }
         });
 
@@ -269,13 +269,12 @@ async fn main() -> Result<()> {
                             break;
                         }
                         Err(e) => {
-                            error!("Failed to update configuration: {e:#}");
-                            warn!("Run giganto with the previous config");
+                            warn!("Failed to update configuration: {e:#}, run with previous config");
                         }
                     }
                 },
                 () = notify_terminate.notified() => {
-                    info!("Termination signal: giganto daemon exit");
+                    info!("Termination signal: daemon exit");
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;

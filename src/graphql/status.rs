@@ -206,7 +206,7 @@ impl ConfigMutation {
         new_config.validate()?;
 
         if s.config.visible == new_config {
-            info!("No changes.");
+            info!("No changes");
             return Err("No changes".to_string().into());
         }
 
@@ -222,7 +222,7 @@ impl ConfigMutation {
                 "Failed to send config".to_string()
             })
         });
-        info!("New config is applied.");
+        info!("New config applied");
 
         Ok(new_config)
     }
