@@ -34,7 +34,7 @@ use giganto_client::{
 };
 use graphql_client::GraphQLQuery;
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::{
     IpRange, NodeName, PortRange, RawEventFilter, TIMESTAMP_SIZE, TimeRange, check_address,
@@ -1874,7 +1874,7 @@ where
         write_filtered_data_to_file(filter, export_type, &key, &value, &mut writer)?;
     }
     if invalid_data_cnt > 1 {
-        error!("failed to read database or invalid data #{invalid_data_cnt}");
+        warn!("Failed to read database or invalid data #{invalid_data_cnt}");
     }
     fs::rename(progress_path, done_path)?;
     Ok(format!("export file success: {}", done_path.display()))
@@ -1958,7 +1958,7 @@ fn export_statistic_file(
     }
 
     if invalid_data_cnt > 1 {
-        error!("failed to read database or invalid data #{invalid_data_cnt}");
+        warn!("Failed to read database or invalid data #{invalid_data_cnt}");
     }
     fs::rename(progress_path, done_path)?;
     Ok(format!("export file success: {}", done_path.display()))

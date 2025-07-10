@@ -45,6 +45,6 @@ pub async fn serve<S: Executor>(
         .bind_with_graceful_shutdown(addr, async move { notify_shutdown.notified().await });
 
     // start Graphql Server
-    info!("listening on https://{addr:?}");
+    info!("Listening on https://{addr:?}");
     task::spawn(server);
 }

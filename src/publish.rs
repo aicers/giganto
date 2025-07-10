@@ -91,7 +91,7 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
-            "listening on {}",
+            "Listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
 
@@ -122,7 +122,7 @@ impl Server {
                         )
                         .await
                         {
-                            error!("connection failed: {}. {}", e, remote);
+                            error!("Connection to {remote} failed: {}", e);
                         }
                     }));
                 },
@@ -206,7 +206,7 @@ async fn handle_connection(
                 let certs = certs.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_request(stream, db, pcap_sensors, ingest_sensors, peers, peer_idents, certs).await {
-                        error!("failed: {}", e);
+                        error!("Failed: {}", e);
                     }
                 });
             },
@@ -314,7 +314,7 @@ async fn request_stream(
                 }
             }
             Err(e) => {
-                error!("publish error {}", e);
+                error!("Publish error {}", e);
                 let _ = recv.stop(VarInt::from_u32(0));
                 break;
             }
@@ -357,7 +357,7 @@ async fn process_pcap_extract(
                 // send/receive extract request from the Sensor
                 match pcap_extract_request(&sensor_conn, &filter).await {
                     Ok(()) => (),
-                    Err(e) => debug!("failed to relay pcap request, {e}"),
+                    Err(e) => debug!("Failed to relay pcap request: {e}"),
                 }
             } else if let Some(peer_addr) =
                 peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
@@ -372,7 +372,7 @@ async fn process_pcap_extract(
                         peer_ident.hostname.clone()
                     } else {
                         error!(
-                            "Peer giganto's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
+                            "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
                             filter.sensor
                         );
                         continue;
@@ -389,17 +389,17 @@ async fn process_pcap_extract(
                 {
                     if let Err(e) = recv_ack_response(&mut peer_recv).await {
                         error!(
-                            "Failed to receive ack response from peer giganto. addr: {peer_addr} name: {peer_name} {e}"
+                            "Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
                         );
                     }
                 } else {
                     error!(
-                        "Failed to connect to peer giganto's publish module. addr: {peer_addr} name: {peer_name}"
+                        "Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}"
                     );
                 }
             } else {
                 error!(
-                    "Neither current nor peer gigantos are in charge of requested pcap sensor {}",
+                    "Neither this node nor peers are in charge of requested pcap sensor {}",
                     filter.sensor
                 );
             }
@@ -558,7 +558,7 @@ where
                     )
                 })?;
             info!(
-                "start the Semi-supervised Engine's publish stream : {:?}",
+                "Start the Semi-supervised Engine's publish stream : {:?}",
                 record_type
             );
         }
@@ -573,7 +573,7 @@ where
                     )
                 })?;
             info!(
-                "start time-series-generator's publish stream : {:?}",
+                "Start Time-Series-Generator's publish stream : {:?}",
                 record_type
             );
 
@@ -1889,17 +1889,17 @@ async fn connect_repeatedly(
     let mut delay = Duration::from_millis(500);
 
     loop {
-        info!("connecting to {}", server_addr);
+        debug!("Connecting to {}", server_addr);
         match endpoint.connect(server_addr, server_name) {
             Ok(connecting) => match connecting.await {
                 Ok(conn) => {
-                    info!("connected to {}", server_addr);
+                    info!("Connected to {}", server_addr);
                     return conn;
                 }
-                Err(e) => error!("cannot connect to controller: {:#}", e),
+                Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
             },
             Err(e) => {
-                error!("{:#}", e);
+                warn!("Cannot connect: {:#}, retrying", e);
             }
         }
         delay = std::cmp::min(max_delay, delay * 2);

@@ -14,7 +14,7 @@ use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
-use tracing::error;
+use tracing::warn;
 
 use super::{TIMESTAMP_SIZE, client::derives::StringNumberI64};
 use crate::{
@@ -285,7 +285,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
             return result;
         }
     }
-    error!("Failed to convert period/len to f64");
+    warn!("Failed to convert period/len to f64, using default value");
     0.0
 }
 
