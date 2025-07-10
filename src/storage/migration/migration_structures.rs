@@ -4,7 +4,7 @@ use giganto_client::ingest::log::OpLogLevel;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ingest::implement::EventFilter,
+    comm::ingest::implement::EventFilter,
     storage::{
         Conn as ConnFromV21, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,

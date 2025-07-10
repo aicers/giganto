@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
+use generation::SequenceGenerator;
 use giganto_client::frame::recv_raw;
 use giganto_client::{
     RawEventKind,
@@ -41,14 +42,13 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
-use crate::ingest::generation::SequenceGenerator;
-use crate::publish::send_direct_stream;
+use crate::comm::publish::send_direct_stream;
+use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
     subject_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
-use crate::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -821,6 +821,7 @@ async fn handle_data<T>(
     let ack_time_notified = ack_time_notify.clone();
 
     let mut err_msg = None;
+    #[cfg(feature = "benchmark")]
     let stream_id = recv.id();
 
     #[cfg(feature = "benchmark")]

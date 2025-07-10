@@ -12,36 +12,44 @@ use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
     Ssh, Tls,
 };
+#[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
+#[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, base64_engine,
-    check_address, check_agent_id, check_port,
-    client::derives::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize},
-    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
-    handle_paged_events, impl_from_giganto_network_filter_for_graphql_client,
-    impl_from_giganto_range_structs_for_graphql_client,
-    impl_from_giganto_search_filter_for_graphql_client, min_max_time, paged_events_in_cluster,
+    Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, StringNumberI64,
+    StringNumberU32, StringNumberU64, StringNumberUsize, base64_engine, check_address,
+    check_agent_id, check_port, collect_exist_times, events_vec_in_cluster, get_peekable_iter,
+    get_time_from_key, handle_paged_events, min_max_time, paged_events_in_cluster,
 };
-use crate::graphql::client::derives::{
-    BootpRawEvents, ConnRawEvents, DceRpcRawEvents, DhcpRawEvents, DnsRawEvents, FtpRawEvents,
-    HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
-    NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
-    SearchBootpRawEvents, SearchConnRawEvents, SearchDceRpcRawEvents, SearchDhcpRawEvents,
-    SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents, SearchKerberosRawEvents,
-    SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents, SearchNtlmRawEvents,
-    SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents, SearchSshRawEvents,
-    SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents, TlsRawEvents, bootp_raw_events,
-    conn_raw_events, dce_rpc_raw_events, dhcp_raw_events, dns_raw_events, ftp_raw_events,
-    http_raw_events, kerberos_raw_events, ldap_raw_events, mqtt_raw_events, network_raw_events,
-    nfs_raw_events, ntlm_raw_events, rdp_raw_events, search_bootp_raw_events,
-    search_conn_raw_events, search_dce_rpc_raw_events, search_dhcp_raw_events,
-    search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
-    search_kerberos_raw_events, search_ldap_raw_events, search_mqtt_raw_events,
-    search_nfs_raw_events, search_ntlm_raw_events, search_rdp_raw_events, search_smb_raw_events,
-    search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
-    smtp_raw_events, ssh_raw_events, tls_raw_events,
+#[cfg(feature = "cluster")]
+use crate::graphql::client::{
+    cluster::{
+        impl_from_giganto_network_filter_for_graphql_client,
+        impl_from_giganto_range_structs_for_graphql_client,
+        impl_from_giganto_search_filter_for_graphql_client,
+    },
+    derives::{
+        BootpRawEvents, ConnRawEvents, DceRpcRawEvents, DhcpRawEvents, DnsRawEvents, FtpRawEvents,
+        HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+        NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RdpRawEvents,
+        SearchBootpRawEvents, SearchConnRawEvents, SearchDceRpcRawEvents, SearchDhcpRawEvents,
+        SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents, SearchKerberosRawEvents,
+        SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents, SearchNtlmRawEvents,
+        SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents, SearchSshRawEvents,
+        SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents, TlsRawEvents,
+        bootp_raw_events, conn_raw_events, dce_rpc_raw_events, dhcp_raw_events, dns_raw_events,
+        ftp_raw_events, http_raw_events, kerberos_raw_events, ldap_raw_events, mqtt_raw_events,
+        network_raw_events, nfs_raw_events, ntlm_raw_events, rdp_raw_events,
+        search_bootp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
+        search_dhcp_raw_events, search_dns_raw_events, search_ftp_raw_events,
+        search_http_raw_events, search_kerberos_raw_events, search_ldap_raw_events,
+        search_mqtt_raw_events, search_nfs_raw_events, search_ntlm_raw_events,
+        search_rdp_raw_events, search_smb_raw_events, search_smtp_raw_events,
+        search_ssh_raw_events, search_tls_raw_events, smb_raw_events, smtp_raw_events,
+        ssh_raw_events, tls_raw_events,
+    },
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
 
@@ -127,8 +135,12 @@ impl RawEventFilter for SearchFilter {
 }
 
 /// Represents an event extracted from a session.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    conn_raw_events::ConnRawEventsConnRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent
+]))]
 struct ConnRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -188,8 +200,12 @@ struct ConnRawEvent {
 
 /// Represents an event extracted from the DNS protocol.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dns_raw_events::DnsRawEventsDnsRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDnsRawEvent
+]))]
 struct DnsRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -236,8 +252,12 @@ struct DnsRawEvent {
 }
 
 /// Represents an event extracted from the HTTP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [http_raw_events::HttpRawEventsHttpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    http_raw_events::HttpRawEventsHttpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnHttpRawEvent
+]))]
 struct HttpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -304,8 +324,12 @@ struct HttpRawEvent {
 }
 
 /// Represents an event extracted from the RDP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    rdp_raw_events::RdpRawEventsRdpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnRdpRawEvent
+]))]
 struct RdpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -330,8 +354,12 @@ struct RdpRawEvent {
 }
 
 /// Represents an event extracted from the SMTP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    smtp_raw_events::SmtpRawEventsSmtpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmtpRawEvent
+]))]
 struct SmtpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -368,8 +396,12 @@ struct SmtpRawEvent {
 }
 
 /// Represents an event extracted from the NTLM protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    ntlm_raw_events::NtlmRawEventsNtlmRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNtlmRawEvent
+]))]
 struct NtlmRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -402,8 +434,12 @@ struct NtlmRawEvent {
 }
 
 /// Represents an event extracted from the Kerberos protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    kerberos_raw_events::KerberosRawEventsKerberosRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnKerberosRawEvent
+]))]
 struct KerberosRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -444,8 +480,12 @@ struct KerberosRawEvent {
 }
 
 /// Represents an event extracted from the SSH protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [ssh_raw_events::SshRawEventsSshRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    ssh_raw_events::SshRawEventsSshRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSshRawEvent
+]))]
 struct SshRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -494,8 +534,12 @@ struct SshRawEvent {
 }
 
 /// Represents an event extracted from the DCE-RPC protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEvent
+]))]
 struct DceRpcRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -526,8 +570,12 @@ struct DceRpcRawEvent {
 }
 
 /// Represents an event extracted from the FTP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEvent
+]))]
 struct FtpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -574,8 +622,12 @@ struct FtpRawEvent {
 }
 
 /// Represents an event extracted from the MQTT protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    mqtt_raw_events::MqttRawEventsMqttRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMqttRawEvent
+]))]
 struct MqttRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -610,8 +662,12 @@ struct MqttRawEvent {
 }
 
 /// Represents an event extracted from the LDAP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    ldap_raw_events::LdapRawEventsLdapRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnLdapRawEvent
+]))]
 struct LdapRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -648,8 +704,12 @@ struct LdapRawEvent {
 }
 
 /// Represents an event extracted from the TLS protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    tls_raw_events::TlsRawEventsTlsRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnTlsRawEvent
+]))]
 struct TlsRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -686,7 +746,7 @@ struct TlsRawEvent {
     /// Extensions
     extensions: Vec<u16>,
     /// JA3S Fingerprint
-    #[graphql_client_type(from_name = "ja3_s")]
+    #[cfg_attr(feature = "cluster", graphql_client_type(from_name = "ja3_s"))]
     ja3s: String,
     /// Certificate Serial Number
     serial: String,
@@ -715,8 +775,12 @@ struct TlsRawEvent {
 }
 
 /// Represents an event extracted from the SMB protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    smb_raw_events::SmbRawEventsSmbRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnSmbRawEvent
+]))]
 struct SmbRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -761,8 +825,12 @@ struct SmbRawEvent {
 }
 
 /// Represents an event extracted from the NFS protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    nfs_raw_events::NfsRawEventsNfsRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnNfsRawEvent
+]))]
 struct NfsRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -789,8 +857,12 @@ struct NfsRawEvent {
 }
 
 /// Represents an event extracted from the BOOTP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [bootp_raw_events::BootpRawEventsBootpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnBootpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    bootp_raw_events::BootpRawEventsBootpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnBootpRawEvent
+]))]
 struct BootpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -859,8 +931,12 @@ impl From<usize> for StringNumberUsize {
 }
 
 /// Represents an event extracted from the DHCP protocol.
-#[derive(SimpleObject, Debug, ConvertGraphQLEdgesNode)]
-#[graphql_client_type(names = [dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEvent])]
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEvent
+]))]
 struct DhcpRawEvent {
     /// Start Time
     time: DateTime<Utc>,
@@ -940,6 +1016,7 @@ enum NetworkRawEvents {
     DhcpRawEvent(DhcpRawEvent),
 }
 
+#[cfg(feature = "cluster")]
 impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for NetworkRawEvents {
     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode) -> Self {
         match node {
@@ -1765,6 +1842,7 @@ async fn handle_network_raw_events(
 }
 
 #[Object]
+#[allow(clippy::unused_async)]
 impl NetworkQuery {
     async fn conn_raw_events(
         &self,
@@ -3123,6 +3201,7 @@ fn network_connection(
     Ok(connection)
 }
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_range_structs_for_graphql_client!(
     network_raw_events,
     conn_raw_events,
@@ -3161,6 +3240,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_dhcp_raw_events
 );
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_network_filter_for_graphql_client!(
     network_raw_events,
     conn_raw_events,
@@ -3182,6 +3262,7 @@ impl_from_giganto_network_filter_for_graphql_client!(
     dhcp_raw_events
 );
 
+#[cfg(feature = "cluster")]
 impl_from_giganto_search_filter_for_graphql_client!(
     search_conn_raw_events,
     search_dce_rpc_raw_events,

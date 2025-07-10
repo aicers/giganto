@@ -12,8 +12,8 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
 };
 
+use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::tests::TestSchema;
-use crate::ingest::generation::SequenceGenerator;
 use crate::storage::RawEventStore;
 
 #[tokio::test]
