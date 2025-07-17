@@ -733,6 +733,8 @@ async fn update_to_new_sensor_list(
 
 #[cfg(test)]
 pub mod tests {
+    #![allow(clippy::items_after_statements)]
+
     use std::{
         collections::{HashMap, HashSet},
         fs::{self, File},
@@ -746,6 +748,14 @@ pub mod tests {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, RwLock};
+
+    static INIT: OnceLock<()> = OnceLock::new();
+
+    fn init_crypto() {
+        INIT.get_or_init(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
 
     use super::Peer;
     use crate::{
@@ -861,6 +871,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn recv_peer_data() {
+        init_crypto();
         let _lock = get_token().lock().await;
 
         // peer server's peer list

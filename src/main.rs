@@ -57,6 +57,9 @@ const WAIT_SHUTDOWN: u64 = 15;
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize rustls crypto provider
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let args = Args::parse();
     let mut settings = Settings::from_file(&args.config).or_else(|e| {
         eprintln!(
