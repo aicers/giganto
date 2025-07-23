@@ -733,8 +733,6 @@ async fn update_to_new_sensor_list(
 
 #[cfg(test)]
 pub mod tests {
-    #![allow(clippy::items_after_statements)]
-
     use std::{
         collections::{HashMap, HashSet},
         fs::{self, File},
