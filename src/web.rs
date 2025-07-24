@@ -1,12 +1,17 @@
-use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use async_graphql::{
     Executor,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
+use async_graphql_poem::GraphQL;
+use poem::{
+    Response, Route, Server,
+    endpoint::make_sync,
+    listener::{Listener, RustlsCertificate, RustlsConfig, TcpListener},
+};
 use tokio::{sync::Notify, task};
 use tracing::info;
-use warp::{Filter, http::Response as HttpResponse};
 
 /// Runs the GraphQL server.
 ///
@@ -20,31 +25,36 @@ pub async fn serve<S: Executor>(
     key: Vec<u8>,
     notify_shutdown: Arc<Notify>,
 ) {
-    let filter = async_graphql_warp::graphql(schema).and_then(
-        |(schema, request): (S, async_graphql::Request)| async move {
-            let resp = schema.execute(request).await;
+    let graphql = GraphQL::new(schema);
 
-            Ok::<_, Infallible>(async_graphql_warp::GraphQLResponse::from(resp))
-        },
-    );
-
-    let graphql_playground = warp::path!("graphql" / "playground").map(|| {
-        HttpResponse::builder()
-            .header("content-type", "text/html")
+    let playground = make_sync(move |_| {
+        Response::builder()
+            .content_type("text/html")
             .body(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
     });
 
-    let route_graphql = warp::path("graphql").and(warp::any()).and(filter);
-    let route_home = warp::path::end().map(|| "");
+    let home = make_sync(move |_| Response::builder().body(""));
 
-    let routes = graphql_playground.or(warp::any().and(route_graphql.or(route_home)));
-    let (_, server) = warp::serve(routes)
-        .tls()
-        .cert(cert)
-        .key(key)
-        .bind_with_graceful_shutdown(addr, async move { notify_shutdown.notified().await });
+    let app = Route::new()
+        .at("/graphql", graphql)
+        .at("/graphql/playground", playground)
+        .at("/", home);
 
-    // start Graphql Server
+    let certificate = RustlsCertificate::new().cert(cert).key(key);
+
+    let listener = TcpListener::bind(addr).rustls(RustlsConfig::new().fallback(certificate));
+
     info!("listening on https://{addr:?}");
-    task::spawn(server);
+
+    task::spawn(async move {
+        let server = Server::new(listener).run_with_graceful_shutdown(
+            app,
+            async move { notify_shutdown.notified().await },
+            None,
+        );
+
+        if let Err(e) = server.await {
+            tracing::error!("Server error: {}", e);
+        }
+    });
 }

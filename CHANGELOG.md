@@ -21,6 +21,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Extracted communication-related logic into a separate module named `comm`.
   This refactoring removes common functionality from `main.rs`, preventing
   redundant declarations when adding additional binaries.
+- Migrated web server from `warp` to `poem` framework for better maintainability
+  and future OpenAPI support. The GraphQL endpoint and playground functionality
+  remain unchanged.
 
 ## [0.25.1] - 2025-07-08
 

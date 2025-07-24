@@ -13,7 +13,6 @@ name = "giganto"
 [dependencies]
 anyhow = "1"
 async-graphql = { version = "7", features = ["chrono", "string_number"] }
-async-graphql-warp = "7"
 base64 = "0.22"
 bincode = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -53,8 +52,10 @@ toml_edit = "0.23"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-warp = { version = "0.3", features = ["tls"] }
 x509-parser = "0.17"
+poem = { version = "3", features = ["rustls"] }
+tokio-rustls = "0.26"
+async-graphql-poem = "7"
 
 [dev-dependencies]
 mockito = "1"

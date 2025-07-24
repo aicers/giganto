@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_statements)]
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -34,6 +36,14 @@ use quinn::{Connection, Endpoint, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
 use tokio::sync::{Mutex, Notify, RwLock};
+
+static INIT: OnceLock<()> = OnceLock::new();
+
+fn init_crypto() {
+    INIT.get_or_init(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 use super::Server;
 use crate::{
@@ -749,6 +759,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_range_data_with_protocol() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "ingest src 1";
     const CONN_KIND: &str = "conn";
@@ -1883,6 +1894,7 @@ async fn request_range_data_with_protocol() {
 
 #[tokio::test]
 async fn request_range_data_with_log() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "src1";
     const KIND: &str = "Hello";
@@ -1990,6 +2002,7 @@ async fn request_range_data_with_log() {
 
 #[tokio::test]
 async fn request_range_data_with_period_time_series() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 1";
     const KIND: &str = "timeseries";
@@ -2100,6 +2113,7 @@ async fn request_range_data_with_period_time_series() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_network_event_stream() {
+    init_crypto();
     use crate::comm::{ingest::NetworkKey, publish::send_direct_stream};
 
     const SEMI_SUPERVISED_TYPE: NodeType = NodeType::SemiSupervised;
@@ -4056,6 +4070,7 @@ async fn request_network_event_stream() {
 
 #[tokio::test]
 async fn request_raw_events() {
+    init_crypto();
     const SENSOR: &str = "src 1";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
@@ -4140,6 +4155,7 @@ async fn request_raw_events() {
 #[tokio::test]
 #[serial]
 async fn request_range_data_with_protocol_giganto_cluster() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "ingest src 2";
     const CONN_KIND: &str = "conn";
@@ -4348,6 +4364,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 #[tokio::test]
 #[serial]
 async fn request_range_data_with_log_giganto_cluster() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "src2";
     const KIND: &str = "Hello";
@@ -4555,6 +4572,7 @@ async fn request_range_data_with_log_giganto_cluster() {
 #[tokio::test]
 #[serial]
 async fn request_range_data_with_period_time_series_giganto_cluster() {
+    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 2";
     const KIND: &str = "timeseries";
@@ -4767,6 +4785,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 #[tokio::test]
 #[serial]
 async fn request_raw_events_giganto_cluster() {
+    init_crypto();
     const SENSOR: &str = "src 2";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;

@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_statements)]
+
 use std::{
     fs,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -27,6 +29,14 @@ use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
 use tempfile::TempDir;
+static INIT: OnceLock<()> = OnceLock::new();
+
+fn init_crypto() {
+    INIT.get_or_init(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
 use tokio::{
     sync::{Mutex, Notify},
     task::JoinHandle,
@@ -144,6 +154,7 @@ fn init_client() -> Endpoint {
 
 #[tokio::test]
 async fn conn() {
+    init_crypto();
     const RAW_EVENT_KIND_CONN: RawEventKind = RawEventKind::Conn;
 
     let _lock = get_token().lock().await;
@@ -191,6 +202,7 @@ async fn conn() {
 
 #[tokio::test]
 async fn dns() {
+    init_crypto();
     const RAW_EVENT_KIND_DNS: RawEventKind = RawEventKind::Dns;
 
     let _lock = get_token().lock().await;
@@ -240,6 +252,7 @@ async fn dns() {
 
 #[tokio::test]
 async fn log() {
+    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
     let _lock = get_token().lock().await;
@@ -273,6 +286,7 @@ async fn log() {
 
 #[tokio::test]
 async fn http() {
+    init_crypto();
     const RAW_EVENT_KIND_HTTP: RawEventKind = RawEventKind::Http;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -331,6 +345,7 @@ async fn http() {
 
 #[tokio::test]
 async fn rdp() {
+    init_crypto();
     const RAW_EVENT_KIND_RDP: RawEventKind = RawEventKind::Rdp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -368,6 +383,7 @@ async fn rdp() {
 
 #[tokio::test]
 async fn periodic_time_series() {
+    init_crypto();
     const RAW_EVENT_KIND_PERIOD_TIME_SERIES: RawEventKind = RawEventKind::PeriodicTimeSeries;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -406,6 +422,7 @@ async fn periodic_time_series() {
 
 #[tokio::test]
 async fn smtp() {
+    init_crypto();
     const RAW_EVENT_KIND_SMTP: RawEventKind = RawEventKind::Smtp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -449,6 +466,7 @@ async fn smtp() {
 
 #[tokio::test]
 async fn ntlm() {
+    init_crypto();
     const RAW_EVENT_KIND_NTLM: RawEventKind = RawEventKind::Ntlm;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -490,6 +508,7 @@ async fn ntlm() {
 
 #[tokio::test]
 async fn kerberos() {
+    init_crypto();
     const RAW_EVENT_KIND_KERBEROS: RawEventKind = RawEventKind::Kerberos;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -535,6 +554,7 @@ async fn kerberos() {
 
 #[tokio::test]
 async fn ssh() {
+    init_crypto();
     const RAW_EVENT_KIND_SSH: RawEventKind = RawEventKind::Ssh;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -584,6 +604,7 @@ async fn ssh() {
 
 #[tokio::test]
 async fn dce_rpc() {
+    init_crypto();
     const RAW_EVENT_KIND_DCE_RPC: RawEventKind = RawEventKind::DceRpc;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -624,6 +645,7 @@ async fn dce_rpc() {
 
 #[tokio::test]
 async fn op_log() {
+    init_crypto();
     const RAW_EVENT_KIND_OPLOG: RawEventKind = RawEventKind::OpLog;
 
     let _lock = get_token().lock().await;
@@ -659,6 +681,7 @@ async fn op_log() {
 
 #[tokio::test]
 async fn packet() {
+    init_crypto();
     const RAW_EVENT_KIND_PACKET: RawEventKind = RawEventKind::Packet;
 
     let _lock = get_token().lock().await;
@@ -693,6 +716,7 @@ async fn packet() {
 
 #[tokio::test]
 async fn ftp() {
+    init_crypto();
     const RAW_EVENT_KIND_FTP: RawEventKind = RawEventKind::Ftp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -741,6 +765,7 @@ async fn ftp() {
 
 #[tokio::test]
 async fn mqtt() {
+    init_crypto();
     const RAW_EVENT_KIND_MQTT: RawEventKind = RawEventKind::Mqtt;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -783,6 +808,7 @@ async fn mqtt() {
 
 #[tokio::test]
 async fn ldap() {
+    init_crypto();
     const RAW_EVENT_KIND_LDAP: RawEventKind = RawEventKind::Ldap;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -826,6 +852,7 @@ async fn ldap() {
 
 #[tokio::test]
 async fn tls() {
+    init_crypto();
     const RAW_EVENT_KIND_TLS: RawEventKind = RawEventKind::Tls;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -883,6 +910,7 @@ async fn tls() {
 
 #[tokio::test]
 async fn smb() {
+    init_crypto();
     const RAW_EVENT_KIND_SMB: RawEventKind = RawEventKind::Smb;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -930,6 +958,7 @@ async fn smb() {
 
 #[tokio::test]
 async fn nfs() {
+    init_crypto();
     const RAW_EVENT_KIND_NFS: RawEventKind = RawEventKind::Nfs;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -968,6 +997,7 @@ async fn nfs() {
 
 #[tokio::test]
 async fn bootp() {
+    init_crypto();
     const RAW_EVENT_KIND_BOOTP: RawEventKind = RawEventKind::Bootp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1015,6 +1045,7 @@ async fn bootp() {
 
 #[tokio::test]
 async fn dhcp() {
+    init_crypto();
     const RAW_EVENT_KIND_DHCP: RawEventKind = RawEventKind::Dhcp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1074,6 +1105,7 @@ async fn dhcp() {
 }
 #[tokio::test]
 async fn statistics() {
+    init_crypto();
     const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1107,6 +1139,7 @@ async fn statistics() {
 
 #[tokio::test]
 async fn ack_info() {
+    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
     let _lock = get_token().lock().await;
@@ -1153,6 +1186,7 @@ async fn ack_info() {
 
 #[tokio::test]
 async fn one_short_reproduce_channel_close() {
+    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
     const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
     const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
