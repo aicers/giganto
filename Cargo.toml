@@ -2,6 +2,7 @@
 name = "giganto"
 version = "0.25.1"
 edition = "2024"
+default-run = "giganto"
 
 [lib]
 name = "giganto_proc_macro"
@@ -9,6 +10,10 @@ proc-macro = true
 
 [[bin]]
 name = "giganto"
+
+[[bin]]
+name = "gen_schema"
+path = "src/gen_schema.rs"
 
 [dependencies]
 anyhow = "1"

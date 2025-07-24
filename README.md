@@ -124,6 +124,19 @@ cargo run -- -c tests/config.toml --cert tests/certs/node1/cert.pem \
 --key tests/certs/node1/key.pem --ca-certs tests/certs/ca_cert.pem
 ```
 
+## Development
+
+### Generating GraphQL Schema
+
+To generate the GraphQL schema file, use the `gen_schema` binary:
+
+```sh
+cargo run --bin gen_schema --no-default-features
+```
+
+This command reads the GraphQL API definitions and exports the schema to
+`src/graphql/client/schema/schema.graphql`.
+
 ## License
 
 Copyright 2022-2025 ClumL Inc.

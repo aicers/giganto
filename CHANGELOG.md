@@ -15,6 +15,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - When `cluster` is disabled, Giganto operates in standalone mode, without
     connecting to other instances. It avoids using GraphQL client functionality,
     allowing it to generate the `schema.graphql` file independently.
+- Added a new binary target, `gen_schema`, to generate the GraphQL schema file
+  from the API definitions.
 
 ### Changed
 
