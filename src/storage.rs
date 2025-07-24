@@ -1000,7 +1000,7 @@ pub async fn retain_periodically(
                                     store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
                                 }
                             } else {
-                                error!("Failed to delete file in range");
+                                warn!("Failed to delete file in range");
                             }
                         }
 
@@ -1016,7 +1016,7 @@ pub async fn retain_periodically(
 
                                 if retention_timestamp > data_timestamp {
                                     if store.delete(&key).is_err() {
-                                        error!("Failed to delete data");
+                                        warn!("Failed to delete data");
                                     }
                                 } else {
                                     break;
@@ -1127,11 +1127,11 @@ pub fn repair_db(
     );
     let start = Instant::now();
     let (db_opts, _) = rocksdb_options(&db_options);
-    info!("repair db start.");
+    info!("Starting DB repair");
     match DB::repair(&db_opts, db_path) {
-        Ok(()) => info!("repair ok"),
-        Err(e) => error!("repair error: {e}"),
+        Ok(()) => info!("DB repair completed successfully"),
+        Err(e) => error!("DB repair failed: {e}"),
     }
     let dur = start.elapsed();
-    info!("repair db duration: {}", to_hms(dur));
+    info!("DB repair duration: {}", to_hms(dur));
 }

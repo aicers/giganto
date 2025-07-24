@@ -209,7 +209,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open_with_old_cfs(db_path, db_opts)?;
 
     // migration ntlm raw event
-    info!("start migration for ntlm");
+    info!("Starting migration for ntlm");
     let store = db.ntlm_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -218,10 +218,10 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("ntlm migration complete");
+    info!("Completed migration for ntlm");
 
     // migration http raw event
-    info!("start migration for http");
+    info!("Starting migration for http");
     let store = db.http_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -230,10 +230,10 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("http migration complete");
+    info!("Completed migration for http");
 
     // migration ssh raw event
-    info!("start migration for ssh");
+    info!("Starting migration for ssh");
     let store = db.ssh_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -242,10 +242,10 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("ssh migration complete");
+    info!("Completed migration for ssh");
 
     // migration tls raw event
-    info!("start migration for tls");
+    info!("Starting migration for tls");
     let store = db.tls_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -254,10 +254,10 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("tls migration complete");
+    info!("Completed migration for tls");
 
     // migration smtp raw event
-    info!("start migration for smtp");
+    info!("Starting migration for smtp");
     let store = db.smtp_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -266,10 +266,10 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("smtp migration complete");
+    info!("Completed migration for smtp");
 
     // migration conn raw event
-    info!("start migration for conn");
+    info!("Starting migration for conn");
     let store = db.conn_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -278,7 +278,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("conn migration complete");
+    info!("Completed migration for conn");
 
     Ok(())
 }
@@ -308,7 +308,7 @@ fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("netflow5 migration complete");
+    info!("Completed migration for netflow5");
     Ok(())
 }
 
@@ -321,7 +321,7 @@ fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("netflow9 migration complete");
+    info!("Completed migration for netflow9");
     Ok(())
 }
 
@@ -334,12 +334,12 @@ fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
-    info!("secu log migration complete");
+    info!("Completed migration for secu log");
     Ok(())
 }
 
 fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
-    info!("start migration for oplog");
+    info!("Starting migration for oplog");
     let store = db.op_log_store()?;
     let counter = AtomicUsize::new(0);
 
@@ -374,7 +374,7 @@ fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
             store.delete(&key)?;
         }
     }
-    info!("oplog migration complete");
+    info!("Completed migration for oplog");
     Ok(())
 }
 
@@ -389,7 +389,7 @@ fn rename_sources_to_sensors(db_path: &Path, db_opts: &DbOptions) -> Result<()> 
     let mut cfs = DB::list_cf(&db_opts, db_path).unwrap_or_default();
 
     if cfs.iter().all(|cf| cf.as_str() != OLD_CF) {
-        info!("Ignore column family renaming: column family {OLD_CF} does not exist.");
+        info!("Ignore column family renaming: column family {OLD_CF} does not exist");
         return Ok(());
     }
 
