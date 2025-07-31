@@ -19,6 +19,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   from the API definitions.
 - Added `build.rs` to automatically generate the GraphQL schema file during the
   build process.
+- Added client certificate support for GraphQL API to enable mutual TLS (mTLS)
+  authentication when communicating with other Giganto instances in a cluster.
 
 ### Changed
 
