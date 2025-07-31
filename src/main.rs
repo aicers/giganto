@@ -54,6 +54,34 @@ use crate::{
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
 const WAIT_SHUTDOWN: u64 = 15;
 
+/// Creates a reqwest client configured for mTLS GraphQL communication.
+///
+/// # Arguments
+///
+/// * `cert_pem` - The client certificate in PEM format
+/// * `key_pem` - The private key in PEM format
+///
+/// # Returns
+///
+/// Returns a configured `reqwest::Client` with client certificate authentication.
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// * The certificate and key cannot be combined into a PKCS#12 identity
+/// * The reqwest client cannot be built with the provided configuration
+fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Client> {
+    let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat())
+        .context("failed to create client identity from certificate and key")?;
+
+    reqwest::Client::builder()
+        .identity(identity)
+        .danger_accept_invalid_certs(true)
+        .tls_sni(false)
+        .build()
+        .context("failed to build GraphQL client with mTLS support")
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -136,11 +164,8 @@ async fn main() -> Result<()> {
         return Err(anyhow!("failed to set signal handler: {}", e));
     }
 
-    let request_client_pool = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .tls_sni(false)
-        .build()
-        .expect("Failed to build request client pool");
+    let request_client_pool =
+        create_graphql_client(&cert_pem, &key_pem).expect("Failed to build request client pool");
 
     loop {
         let (db_path, db_options) = db_path_and_option(
@@ -389,4 +414,18 @@ async fn wait_for_task_shutdown(
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
     let _ = retain_task_handle.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_graphql_client_with_invalid_cert() {
+        let invalid_cert = b"invalid cert";
+        let invalid_key = b"invalid key";
+
+        let result = create_graphql_client(invalid_cert, invalid_key);
+        assert!(result.is_err());
+    }
 }
