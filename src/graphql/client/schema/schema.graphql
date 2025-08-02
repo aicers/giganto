@@ -2,82 +2,63 @@
 Represents an event extracted from the BOOTP protocol.
 """
 type BootpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Operation Code
-	"""
-	op: Int!
-	"""
-	Hardware Type
-	"""
-	htype: Int!
-	"""
-	Hop Count
-	"""
-	hops: Int!
-	"""
-	Transaction ID
-	"""
-	xid: StringNumberU32!
-	"""
-	Client IP Address
-	"""
-	ciaddr: String!
-	"""
-	Your IP Address
-	"""
-	yiaddr: String!
-	"""
-	Server IP Address
-	"""
-	siaddr: String!
-	"""
-	Gateway IP Address
-	"""
-	giaddr: String!
-	"""
-	Client Hardware IP Address
-	"""
-	chaddr: [Int!]!
-	"""
-	Server Hostname
-	"""
-	sname: String!
-	"""
-	Boot Filename
-	"""
-	file: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Operation Code
+  op: Int!
+
+  # Hardware Type
+  htype: Int!
+
+  # Hop Count
+  hops: Int!
+
+  # Transaction ID
+  xid: StringNumberU32!
+
+  # Client IP Address
+  ciaddr: String!
+
+  # Your IP Address
+  yiaddr: String!
+
+  # Server IP Address
+  siaddr: String!
+
+  # Gateway IP Address
+  giaddr: String!
+
+  # Client Hardware IP Address
+  chaddr: [Int!]!
+
+  # Server Hostname
+  sname: String!
+
+  # Boot Filename
+  file: String!
 }
 
 type BootpRawEventConnection {
@@ -127,90 +108,74 @@ type Config {
 Represents an event extracted from a session.
 """
 type ConnRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	Connection State
-	
-	This is only used in TCP connections.
-	
-	The connection state is a string of letters that represent the state of the connection. The
-	letters are as follows:
-	
-	- S: The originator sent a SYN segment.
-	- h: The responder sent a SYN ACK segment.
-	- A: The originator sent an ACK segment.
-	- D: The originator sent at least one segment with payload data. In this case, that was HTTP
-	over TCP.
-	- a: The responder replied with an ACK segment.
-	- d: The responder replied with at least one segment with payload data.
-	- F: The originator sent a FIN ACK segment.
-	- f: The responder replied with a FIN ACK segment.
-	- R: The originator sent a RST segment.
-	- r: The responder sent a RST segment.
-	- T: Timeout
-	
-	For example, `ShDdAaFf` indicates a session without packet loss.
-	"""
-	connState: String!
-	"""
-	Duration
-	
-	It is measured in nanoseconds.
-	"""
-	duration: StringNumberI64!
-	"""
-	Service Name
-	"""
-	service: String!
-	"""
-	Bytes Sent by Source
-	"""
-	origBytes: StringNumberU64!
-	"""
-	Bytes Received by Destination
-	"""
-	respBytes: StringNumberU64!
-	"""
-	Packets Sent by Source
-	"""
-	origPkts: StringNumberU64!
-	"""
-	Packets Received by Destination
-	"""
-	respPkts: StringNumberU64!
-	"""
-	Layer 2 Bytes Sent by Source
-	"""
-	origL2Bytes: StringNumberU64!
-	"""
-	Layer 2 Bytes Received by Destination
-	"""
-	respL2Bytes: StringNumberU64!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # Connection State
+  #
+  # This is only used in TCP connections.
+  #
+  # The connection state is a string of letters that represent the state of the connection. The
+  # letters are as follows:
+  #
+  # - S: The originator sent a SYN segment.
+  # - h: The responder sent a SYN ACK segment.
+  # - A: The originator sent an ACK segment.
+  # - D: The originator sent at least one segment with payload data. In this case, that was HTTP
+  # over TCP.
+  # - a: The responder replied with an ACK segment.
+  # - d: The responder replied with at least one segment with payload data.
+  # - F: The originator sent a FIN ACK segment.
+  # - f: The responder replied with a FIN ACK segment.
+  # - R: The originator sent a RST segment.
+  # - r: The responder sent a RST segment.
+  # - T: Timeout
+  #
+  # For example, `ShDdAaFf` indicates a session without packet loss.
+  connState: String!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Service Name
+  service: String!
+
+  # Bytes Sent by Source
+  origBytes: StringNumberU64!
+
+  # Bytes Received by Destination
+  respBytes: StringNumberU64!
+
+  # Packets Sent by Source
+  origPkts: StringNumberU64!
+
+  # Packets Received by Destination
+  respPkts: StringNumberU64!
+
+  # Layer 2 Bytes Sent by Source
+  origL2Bytes: StringNumberU64!
+
+  # Layer 2 Bytes Received by Destination
+  respL2Bytes: StringNumberU64!
 }
 
 type ConnRawEventConnection {
@@ -253,54 +218,42 @@ scalar DateTime
 Represents an event extracted from the DCE-RPC protocol.
 """
 type DceRpcRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Round-Trip Time
-	"""
-	rtt: StringNumberI64!
-	"""
-	Named Pipe
-	"""
-	namedPipe: String!
-	"""
-	Endpoint
-	"""
-	endpoint: String!
-	"""
-	Operation
-	"""
-	operation: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Round-Trip Time
+  rtt: StringNumberI64!
+
+  # Named Pipe
+  namedPipe: String!
+
+  # Endpoint
+  endpoint: String!
+
+  # Operation
+  operation: String!
 }
 
 type DceRpcRawEventConnection {
@@ -336,110 +289,84 @@ type DceRpcRawEventEdge {
 Represents an event extracted from the DHCP protocol.
 """
 type DhcpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Message Type
-	"""
-	msgType: Int!
-	"""
-	Client IP Address
-	"""
-	ciaddr: String!
-	"""
-	Your IP Address
-	"""
-	yiaddr: String!
-	"""
-	Server IP Address
-	"""
-	siaddr: String!
-	"""
-	Gateway IP Address
-	"""
-	giaddr: String!
-	"""
-	Subnet Mask
-	"""
-	subnetMask: String!
-	"""
-	Routers
-	"""
-	router: [String!]!
-	"""
-	Domain Name Servers
-	"""
-	domainNameServer: [String!]!
-	"""
-	Request IP Address
-	"""
-	reqIpAddr: String!
-	"""
-	Lease Time
-	"""
-	leaseTime: StringNumberU32!
-	"""
-	Server ID
-	"""
-	serverId: String!
-	"""
-	Parameter Request List
-	"""
-	paramReqList: [Int!]!
-	"""
-	Message
-	"""
-	message: String!
-	"""
-	Renewal Time
-	"""
-	renewalTime: StringNumberU32!
-	"""
-	Rebinding Time
-	"""
-	rebindingTime: StringNumberU32!
-	"""
-	Class ID List
-	"""
-	classId: [Int!]!
-	"""
-	Client ID Type
-	"""
-	clientIdType: Int!
-	"""
-	Client ID List
-	"""
-	clientId: [Int!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Message Type
+  msgType: Int!
+
+  # Client IP Address
+  ciaddr: String!
+
+  # Your IP Address
+  yiaddr: String!
+
+  # Server IP Address
+  siaddr: String!
+
+  # Gateway IP Address
+  giaddr: String!
+
+  # Subnet Mask
+  subnetMask: String!
+
+  # Routers
+  router: [String!]!
+
+  # Domain Name Servers
+  domainNameServer: [String!]!
+
+  # Request IP Address
+  reqIpAddr: String!
+
+  # Lease Time
+  leaseTime: StringNumberU32!
+
+  # Server ID
+  serverId: String!
+
+  # Parameter Request List
+  paramReqList: [Int!]!
+
+  # Message
+  message: String!
+
+  # Renewal Time
+  renewalTime: StringNumberU32!
+
+  # Rebinding Time
+  rebindingTime: StringNumberU32!
+
+  # Class ID List
+  classId: [Int!]!
+
+  # Client ID Type
+  clientIdType: Int!
+
+  # Client ID List
+  clientId: [Int!]!
 }
 
 type DhcpRawEventConnection {
@@ -517,86 +444,66 @@ type DnsEventEventEdge {
 Represents an event extracted from the DNS protocol.
 """
 type DnsRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Query
-	"""
-	query: String!
-	"""
-	Answer
-	"""
-	answer: [String!]!
-	"""
-	Transaction ID
-	"""
-	transId: Int!
-	"""
-	Round-Trip Time
-	"""
-	rtt: StringNumberI64!
-	"""
-	Query Class
-	"""
-	qclass: Int!
-	"""
-	Query Type
-	"""
-	qtype: Int!
-	"""
-	Response Code
-	"""
-	rcode: Int!
-	"""
-	Authoritative Answer Flag
-	"""
-	aaFlag: Boolean!
-	"""
-	Truncated Flag
-	"""
-	tcFlag: Boolean!
-	"""
-	Recursion Desired Flag
-	"""
-	rdFlag: Boolean!
-	"""
-	Recursion Available Flag
-	"""
-	raFlag: Boolean!
-	"""
-	Time to Live
-	"""
-	ttl: [Int!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Query
+  query: String!
+
+  # Answer
+  answer: [String!]!
+
+  # Transaction ID
+  transId: Int!
+
+  # Round-Trip Time
+  rtt: StringNumberI64!
+
+  # Query Class
+  qclass: Int!
+
+  # Query Type
+  qtype: Int!
+
+  # Response Code
+  rcode: Int!
+
+  # Authoritative Answer Flag
+  aaFlag: Boolean!
+
+  # Truncated Flag
+  tcFlag: Boolean!
+
+  # Recursion Desired Flag
+  rdFlag: Boolean!
+
+  # Recursion Available Flag
+  raFlag: Boolean!
+
+  # Time to Live
+  ttl: [Int!]!
 }
 
 type DnsRawEventConnection {
@@ -856,86 +763,66 @@ type FileDeleteEventEdge {
 Represents an event extracted from the FTP protocol.
 """
 type FtpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Username
-	"""
-	user: String!
-	"""
-	Password
-	"""
-	password: String!
-	"""
-	Command
-	"""
-	command: String!
-	"""
-	Reply Code
-	"""
-	replyCode: String!
-	"""
-	Reply Message
-	"""
-	replyMsg: String!
-	"""
-	Passive Mode Flag
-	"""
-	dataPassive: Boolean!
-	"""
-	Data Channel Source IP Address
-	"""
-	dataOrigAddr: String!
-	"""
-	Data Channel Destination IP Address
-	"""
-	dataRespAddr: String!
-	"""
-	Data Channel Destination Port Number
-	"""
-	dataRespPort: Int!
-	"""
-	Filename
-	"""
-	file: String!
-	"""
-	File Size
-	"""
-	fileSize: StringNumberU64!
-	"""
-	File ID
-	"""
-	fileId: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Username
+  user: String!
+
+  # Password
+  password: String!
+
+  # Command
+  command: String!
+
+  # Reply Code
+  replyCode: String!
+
+  # Reply Message
+  replyMsg: String!
+
+  # Passive Mode Flag
+  dataPassive: Boolean!
+
+  # Data Channel Source IP Address
+  dataOrigAddr: String!
+
+  # Data Channel Destination IP Address
+  dataRespAddr: String!
+
+  # Data Channel Destination Port Number
+  dataRespPort: Int!
+
+  # Filename
+  file: String!
+
+  # File Size
+  fileSize: StringNumberU64!
+
+  # File ID
+  fileId: String!
 }
 
 type FtpRawEventConnection {
@@ -971,126 +858,96 @@ type FtpRawEventEdge {
 Represents an event extracted from the HTTP protocol.
 """
 type HttpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	HTTP Method
-	"""
-	method: String!
-	"""
-	Host
-	"""
-	host: String!
-	"""
-	URI
-	"""
-	uri: String!
-	"""
-	Referer
-	"""
-	referer: String!
-	"""
-	HTTP Version
-	"""
-	version: String!
-	"""
-	User Agent
-	"""
-	userAgent: String!
-	"""
-	Request Length
-	"""
-	requestLen: StringNumberUsize!
-	"""
-	Response Length
-	"""
-	responseLen: StringNumberUsize!
-	"""
-	Status Code
-	"""
-	statusCode: Int!
-	"""
-	Status Message
-	"""
-	statusMsg: String!
-	"""
-	Username
-	"""
-	username: String!
-	"""
-	Password
-	"""
-	password: String!
-	"""
-	Cookie
-	"""
-	cookie: String!
-	"""
-	Content Encoding
-	"""
-	contentEncoding: String!
-	"""
-	Content Type
-	"""
-	contentType: String!
-	"""
-	Cache Control
-	"""
-	cacheControl: String!
-	"""
-	Request Filenames
-	"""
-	origFilenames: [String!]!
-	"""
-	Request MIME Types
-	"""
-	origMimeTypes: [String!]!
-	"""
-	Response Filenames
-	"""
-	respFilenames: [String!]!
-	"""
-	Response MIME Types
-	"""
-	respMimeTypes: [String!]!
-	"""
-	POST Body
-	"""
-	postBody: [Int!]!
-	"""
-	Last State
-	"""
-	state: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # HTTP Method
+  method: String!
+
+  # Host
+  host: String!
+
+  # URI
+  uri: String!
+
+  # Referer
+  referer: String!
+
+  # HTTP Version
+  version: String!
+
+  # User Agent
+  userAgent: String!
+
+  # Request Length
+  requestLen: StringNumberUsize!
+
+  # Response Length
+  responseLen: StringNumberUsize!
+
+  # Status Code
+  statusCode: Int!
+
+  # Status Message
+  statusMsg: String!
+
+  # Username
+  username: String!
+
+  # Password
+  password: String!
+
+  # Cookie
+  cookie: String!
+
+  # Content Encoding
+  contentEncoding: String!
+
+  # Content Type
+  contentType: String!
+
+  # Cache Control
+  cacheControl: String!
+
+  # Request Filenames
+  origFilenames: [String!]!
+
+  # Request MIME Types
+  origMimeTypes: [String!]!
+
+  # Response Filenames
+  respFilenames: [String!]!
+
+  # Response MIME Types
+  respMimeTypes: [String!]!
+
+  # POST Body
+  postBody: [Int!]!
+
+  # Last State
+  state: String!
 }
 
 type HttpRawEventConnection {
@@ -1180,74 +1037,57 @@ input IpRange {
 Represents an event extracted from the Kerberos protocol.
 """
 type KerberosRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Client Time
-	"""
-	clientTime: StringNumberI64!
-	"""
-	Server Time
-	"""
-	serverTime: StringNumberI64!
-	"""
-	Error Code
-	"""
-	errorCode: StringNumberU32!
-	"""
-	Client Realm
-	"""
-	clientRealm: String!
-	"""
-	Client Name Type
-	"""
-	cnameType: Int!
-	"""
-	Client Name
-	"""
-	clientName: [String!]!
-	"""
-	Realm
-	"""
-	realm: String!
-	"""
-	Service Name Type
-	"""
-	snameType: Int!
-	"""
-	Service Name
-	"""
-	serviceName: [String!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Client Time
+  clientTime: StringNumberI64!
+
+  # Server Time
+  serverTime: StringNumberI64!
+
+  # Error Code
+  errorCode: StringNumberU32!
+
+  # Client Realm
+  clientRealm: String!
+
+  # Client Name Type
+  cnameType: Int!
+
+  # Client Name
+  clientName: [String!]!
+
+  # Realm
+  realm: String!
+
+  # Service Name Type
+  snameType: Int!
+
+  # Service Name
+  serviceName: [String!]!
 }
 
 type KerberosRawEventConnection {
@@ -1283,66 +1123,51 @@ type KerberosRawEventEdge {
 Represents an event extracted from the LDAP protocol.
 """
 type LdapRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Message ID
-	"""
-	messageId: StringNumberU32!
-	"""
-	Version
-	"""
-	version: Int!
-	"""
-	Operation Code
-	"""
-	opcode: [String!]!
-	"""
-	Result Code
-	"""
-	result: [String!]!
-	"""
-	Diagnostic Message
-	"""
-	diagnosticMessage: [String!]!
-	"""
-	Object
-	"""
-	object: [String!]!
-	"""
-	Argument
-	"""
-	argument: [String!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Message ID
+  messageId: StringNumberU32!
+
+  # Version
+  version: Int!
+
+  # Operation Code
+  opcode: [String!]!
+
+  # Result Code
+  result: [String!]!
+
+  # Diagnostic Message
+  diagnosticMessage: [String!]!
+
+  # Object
+  object: [String!]!
+
+  # Argument
+  argument: [String!]!
 }
 
 type LdapRawEventConnection {
@@ -1418,62 +1243,48 @@ type LogRawEventEdge {
 Represents an event extracted from the MQTT protocol.
 """
 type MqttRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	MQTT Protocol
-	"""
-	protocol: String!
-	"""
-	Version
-	"""
-	version: Int!
-	"""
-	Client ID
-	"""
-	clientId: String!
-	"""
-	Connection Acknowledgement Response
-	"""
-	connackReason: Int!
-	"""
-	Subscription Request
-	"""
-	subscribe: [String!]!
-	"""
-	Subscription Acknowledgement Response
-	"""
-	subackReason: [Int!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # MQTT Protocol
+  protocol: String!
+
+  # Version
+  version: Int!
+
+  # Client ID
+  clientId: String!
+
+  # Connection Acknowledgement Response
+  connackReason: Int!
+
+  # Subscription Request
+  subscribe: [String!]!
+
+  # Subscription Acknowledgement Response
+  subackReason: [Int!]!
 }
 
 type MqttRawEventConnection {
@@ -1730,46 +1541,36 @@ type NetworkRawEventsEdge {
 Represents an event extracted from the NFS protocol.
 """
 type NfsRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Read Files
-	"""
-	readFiles: [String!]!
-	"""
-	Write Files
-	"""
-	writeFiles: [String!]!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Read Files
+  readFiles: [String!]!
+
+  # Write Files
+  writeFiles: [String!]!
 }
 
 type NfsRawEventConnection {
@@ -1805,58 +1606,45 @@ type NfsRawEventEdge {
 Represents an event extracted from the NTLM protocol.
 """
 type NtlmRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Username
-	"""
-	username: String!
-	"""
-	Hostname
-	"""
-	hostname: String!
-	"""
-	Domain Name
-	"""
-	domainname: String!
-	"""
-	Authentication Success
-	"""
-	success: String!
-	"""
-	Transport Protocol
-	"""
-	protocol: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Username
+  username: String!
+
+  # Hostname
+  hostname: String!
+
+  # Domain Name
+  domainname: String!
+
+  # Authentication Success
+  success: String!
+
+  # Transport Protocol
+  protocol: String!
 }
 
 type NtlmRawEventConnection {
@@ -2278,42 +2066,33 @@ type Query {
 Represents an event extracted from the RDP protocol.
 """
 type RdpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Cookie
-	"""
-	cookie: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Cookie
+  cookie: String!
 }
 
 type RdpRawEventConnection {
@@ -2499,82 +2278,63 @@ type SecuLogRawEventEdge {
 Represents an event extracted from the SMB protocol.
 """
 type SmbRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Command
-	"""
-	command: Int!
-	"""
-	Path
-	"""
-	path: String!
-	"""
-	Service
-	"""
-	service: String!
-	"""
-	Filename
-	"""
-	fileName: String!
-	"""
-	File Size
-	"""
-	fileSize: StringNumberU64!
-	"""
-	Resource Type
-	"""
-	resourceType: Int!
-	"""
-	File ID
-	"""
-	fid: Int!
-	"""
-	Create Time
-	"""
-	createTime: StringNumberI64!
-	"""
-	Access Time
-	"""
-	accessTime: StringNumberI64!
-	"""
-	Write Time
-	"""
-	writeTime: StringNumberI64!
-	"""
-	Change Time
-	"""
-	changeTime: StringNumberI64!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Command
+  command: Int!
+
+  # Path
+  path: String!
+
+  # Service
+  service: String!
+
+  # Filename
+  fileName: String!
+
+  # File Size
+  fileSize: StringNumberU64!
+
+  # Resource Type
+  resourceType: Int!
+
+  # File ID
+  fid: Int!
+
+  # Create Time
+  createTime: StringNumberI64!
+
+  # Access Time
+  accessTime: StringNumberI64!
+
+  # Write Time
+  writeTime: StringNumberI64!
+
+  # Change Time
+  changeTime: StringNumberI64!
 }
 
 type SmbRawEventConnection {
@@ -2610,66 +2370,51 @@ type SmbRawEventEdge {
 Represents an event extracted from the SMTP protocol.
 """
 type SmtpRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Mail From
-	"""
-	mailfrom: String!
-	"""
-	Date
-	"""
-	date: String!
-	"""
-	From
-	"""
-	from: String!
-	"""
-	To
-	"""
-	to: String!
-	"""
-	Subject
-	"""
-	subject: String!
-	"""
-	Agent
-	"""
-	agent: String!
-	"""
-	State
-	"""
-	state: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Mail From
+  mailfrom: String!
+
+  # Date
+  date: String!
+
+  # From
+  from: String!
+
+  # To
+  to: String!
+
+  # Subject
+  subject: String!
+
+  # Agent
+  agent: String!
+
+  # State
+  state: String!
 }
 
 type SmtpRawEventConnection {
@@ -2705,90 +2450,69 @@ type SmtpRawEventEdge {
 Represents an event extracted from the SSH protocol.
 """
 type SshRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Client
-	"""
-	client: String!
-	"""
-	Server
-	"""
-	server: String!
-	"""
-	Cipher Algorithm
-	"""
-	cipherAlg: String!
-	"""
-	MAC Algorithms
-	"""
-	macAlg: String!
-	"""
-	Compression Algorithm
-	"""
-	compressionAlg: String!
-	"""
-	Key Exchange Algorithm
-	"""
-	kexAlg: String!
-	"""
-	Host Key Algorithm
-	"""
-	hostKeyAlg: String!
-	"""
-	HASSH Algorithms
-	"""
-	hasshAlgorithms: String!
-	"""
-	HASSH
-	"""
-	hassh: String!
-	"""
-	HASSH Server Algorithm
-	"""
-	hasshServerAlgorithms: String!
-	"""
-	HASSH Server
-	"""
-	hasshServer: String!
-	"""
-	Client Signed Host Key Algorithm
-	"""
-	clientShka: String!
-	"""
-	Server Signed Host Key Algorithm
-	"""
-	serverShka: String!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Client
+  client: String!
+
+  # Server
+  server: String!
+
+  # Cipher Algorithm
+  cipherAlg: String!
+
+  # MAC Algorithms
+  macAlg: String!
+
+  # Compression Algorithm
+  compressionAlg: String!
+
+  # Key Exchange Algorithm
+  kexAlg: String!
+
+  # Host Key Algorithm
+  hostKeyAlg: String!
+
+  # HASSH Algorithms
+  hasshAlgorithms: String!
+
+  # HASSH
+  hassh: String!
+
+  # HASSH Server Algorithm
+  hasshServerAlgorithms: String!
+
+  # HASSH Server
+  hasshServer: String!
+
+  # Client Signed Host Key Algorithm
+  clientShka: String!
+
+  # Server Signed Host Key Algorithm
+  serverShka: String!
 }
 
 type SshRawEventConnection {
@@ -2934,122 +2658,93 @@ input TimeSeriesFilter {
 Represents an event extracted from the TLS protocol.
 """
 type TlsRawEvent {
-	"""
-	Start Time
-	"""
-	time: DateTime!
-	"""
-	Source IP Address
-	"""
-	origAddr: String!
-	"""
-	Source Port Number
-	"""
-	origPort: Int!
-	"""
-	Destination IP Address
-	"""
-	respAddr: String!
-	"""
-	Destination Port Number
-	"""
-	respPort: Int!
-	"""
-	Protocol Number
-	
-	TCP is 6, and UDP is 17.
-	"""
-	proto: Int!
-	"""
-	End Time
-	
-	It is measured in nanoseconds.
-	"""
-	lastTime: StringNumberI64!
-	"""
-	Server Name
-	"""
-	serverName: String!
-	"""
-	ALPN Protocol
-	"""
-	alpnProtocol: String!
-	"""
-	JA3 Fingerprint
-	"""
-	ja3: String!
-	"""
-	TLS Version
-	"""
-	version: String!
-	"""
-	Client Cipher Suites
-	"""
-	clientCipherSuites: [Int!]!
-	"""
-	Client Extensions
-	"""
-	clientExtensions: [Int!]!
-	"""
-	Cipher
-	"""
-	cipher: Int!
-	"""
-	Extensions
-	"""
-	extensions: [Int!]!
-	"""
-	JA3S Fingerprint
-	"""
-	ja3S: String!
-	"""
-	Certificate Serial Number
-	"""
-	serial: String!
-	"""
-	Certificate Subject Country Name
-	"""
-	subjectCountry: String!
-	"""
-	Certificate Subject Organization Name
-	"""
-	subjectOrgName: String!
-	"""
-	Certificate Common Name
-	"""
-	subjectCommonName: String!
-	"""
-	Certificate Validity Start
-	"""
-	validityNotBefore: StringNumberI64!
-	"""
-	Certificate Validity End
-	"""
-	validityNotAfter: StringNumberI64!
-	"""
-	Certificate Subject Alternative Name
-	"""
-	subjectAltName: String!
-	"""
-	Certificate Issuer Country
-	"""
-	issuerCountry: String!
-	"""
-	Certificate Issuer Organization Name
-	"""
-	issuerOrgName: String!
-	"""
-	Certificate Issuer Organization Unit Name
-	"""
-	issuerOrgUnitName: String!
-	"""
-	Certificate Issuer Common Name
-	"""
-	issuerCommonName: String!
-	"""
-	Last Alert Message
-	"""
-	lastAlert: Int!
+  # Start Time
+  time: DateTime!
+
+  # Source IP Address
+  origAddr: String!
+
+  # Source Port Number
+  origPort: Int!
+
+  # Destination IP Address
+  respAddr: String!
+
+  # Destination Port Number
+  respPort: Int!
+
+  # Protocol Number
+  #
+  # TCP is 6, and UDP is 17.
+  proto: Int!
+
+  # End Time
+  #
+  # It is measured in nanoseconds.
+  endTime: StringNumberI64!
+
+  # Server Name
+  serverName: String!
+
+  # ALPN Protocol
+  alpnProtocol: String!
+
+  # JA3 Fingerprint
+  ja3: String!
+
+  # TLS Version
+  version: String!
+
+  # Client Cipher Suites
+  clientCipherSuites: [Int!]!
+
+  # Client Extensions
+  clientExtensions: [Int!]!
+
+  # Cipher
+  cipher: Int!
+
+  # Extensions
+  extensions: [Int!]!
+
+  # JA3S Fingerprint
+  ja3S: String!
+
+  # Certificate Serial Number
+  serial: String!
+
+  # Certificate Subject Country Name
+  subjectCountry: String!
+
+  # Certificate Subject Organization Name
+  subjectOrgName: String!
+
+  # Certificate Common Name
+  subjectCommonName: String!
+
+  # Certificate Validity Start
+  validityNotBefore: StringNumberI64!
+
+  # Certificate Validity End
+  validityNotAfter: StringNumberI64!
+
+  # Certificate Subject Alternative Name
+  subjectAltName: String!
+
+  # Certificate Issuer Country
+  issuerCountry: String!
+
+  # Certificate Issuer Organization Name
+  issuerOrgName: String!
+
+  # Certificate Issuer Organization Unit Name
+  issuerOrgUnitName: String!
+
+  # Certificate Issuer Common Name
+  issuerCommonName: String!
+
+  # Last Alert Message
+  lastAlert: Int!
 }
 
 type TlsRawEventConnection {
