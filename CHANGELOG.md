@@ -17,6 +17,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     allowing it to generate the `schema.graphql` file independently.
 - Added a new binary target, `gen_schema`, to generate the GraphQL schema file
   from the API definitions.
+- Added `build.rs` to automatically generate the GraphQL schema file during the
+  build process.
 
 ### Changed
 
