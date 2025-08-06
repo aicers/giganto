@@ -95,7 +95,7 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
-            "Listening on {}",
+            "Ingest listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
 
@@ -199,7 +199,7 @@ async fn handle_connection(
                         }
                         match conn_err {
                             quinn::ConnectionError::ApplicationClosed(_) => {
-                                info!("Application closed");
+                                info!("{agent} has disconnected from ingest");
                                 return Ok(());
                             }
                             _ => return Err(conn_err.into()),
@@ -806,6 +806,7 @@ async fn handle_data<T>(
     shutdown_signal: Arc<AtomicBool>,
     ack_trans_cnt: u16,
 ) -> Result<()> {
+    info!("Raw event {raw_event_kind:?} has been connected");
     let sender_rotation = Arc::new(Mutex::new(send));
     let sender_interval = Arc::clone(&sender_rotation);
 
@@ -1048,6 +1049,7 @@ async fn handle_data<T>(
         }
     }
     store.flush()?;
+    info!("Raw event {raw_event_kind:?} has been disconnected");
     if let Some(msg) = err_msg {
         bail!(msg);
     }

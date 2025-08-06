@@ -290,7 +290,7 @@ async fn client_connection(
                 .await
                 {
                     Ok((addr, name)) => {
-                        info!("Connection established to {addr}/{name} (client role)");
+                        info!("Peer connection established to {addr}/{name} (client role)");
                         (addr, name)
                     }
                     Err(_) => {
@@ -455,7 +455,7 @@ async fn server_connection(
         match check_for_duplicate_connections(&connection, peer_conn_info.peer_conns.clone()).await
         {
             Ok((addr, name)) => {
-                info!("Connection established to {addr}/{name} (server role)");
+                info!("Peer connection established to {addr}/{name} (server role)");
                 (addr, name)
             }
             Err(_) => {
@@ -718,6 +718,7 @@ async fn update_to_new_peer_list(
         if let Err(e) = write_toml_file(&doc, path) {
             error!("Failed to write TOML content to file: {e:?}");
         }
+        info!("Peer list updated - {peer_list:?}");
     }
 
     Ok(())
@@ -728,6 +729,7 @@ async fn update_to_new_sensor_list(
     remote_addr: String,
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
 ) {
+    info!("Sensor list updated - {recv_sensor_list:?}");
     peers.write().await.insert(remote_addr, recv_sensor_list);
 }
 

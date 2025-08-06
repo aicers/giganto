@@ -143,6 +143,7 @@ async fn main() -> Result<()> {
         .expect("Failed to build request client pool");
 
     loop {
+        info!("Data store started");
         let (db_path, db_options) = db_path_and_option(
             &settings.config.visible.data_dir,
             settings.config.visible.max_open_files,

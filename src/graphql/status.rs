@@ -227,6 +227,7 @@ impl ConfigMutation {
 
     #[allow(clippy::unused_async)]
     async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
+        info!("Received request to stop service");
         let terminate_notify = ctx.data::<TerminateNotify>()?;
         terminate_notify.0.notify_one();
 
@@ -235,6 +236,7 @@ impl ConfigMutation {
 
     #[allow(clippy::unused_async)]
     async fn reboot(&self, ctx: &Context<'_>) -> Result<bool> {
+        info!("Received request to reboot system");
         let reboot_notify = ctx.data::<RebootNotify>()?;
         reboot_notify.0.notify_one();
 
@@ -243,6 +245,7 @@ impl ConfigMutation {
 
     #[allow(clippy::unused_async)]
     async fn shutdown(&self, ctx: &Context<'_>) -> Result<bool> {
+        info!("Received request to shutdown system");
         let power_off_notify = ctx.data::<PowerOffNotify>()?;
         power_off_notify.0.notify_one();
 

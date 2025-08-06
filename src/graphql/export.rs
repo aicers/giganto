@@ -1629,6 +1629,10 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         fs::create_dir_all(path)?;
     }
 
+    info!(
+        "File export request received. Protocol: {}, Sensor: {}, Format: {export_type}",
+        filter.protocol, filter.sensor_id
+    );
     let filename = format!(
         "{}_{}{}.{export_type}",
         filter.protocol,
