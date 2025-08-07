@@ -69,7 +69,7 @@ pub struct Query(
 #[derive(Default, MergedObject)]
 pub struct Mutation(status::ConfigMutation);
 
-#[derive(InputObject, Serialize, Clone)]
+#[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,

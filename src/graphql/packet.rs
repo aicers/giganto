@@ -8,6 +8,7 @@ use giganto_client::ingest::Packet as pk;
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use tracing::info;
 
 use super::{
     Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
@@ -187,6 +188,10 @@ impl PacketQuery {
     }
 
     async fn pcap(&self, ctx: &Context<'_>, filter: PacketFilter) -> Result<Pcap> {
+        info!(
+            "PCAP extraction request received. Sensor: {}, Time range: {:?}",
+            filter.sensor, filter.packet_time
+        );
         let handler = handle_pcap;
 
         events_in_cluster!(

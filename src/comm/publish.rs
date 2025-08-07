@@ -93,7 +93,7 @@ impl Server {
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
-            "Listening on {}",
+            "Publish listening on {}",
             endpoint.local_addr().expect("for local addr display")
         );
 
@@ -167,7 +167,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (_, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
 
     let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
         tokio::spawn({
@@ -192,6 +192,7 @@ async fn handle_connection(
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                        info!("{agent} has disconnected from publish");
                         return Ok(());
                     }
                     Err(e) => {

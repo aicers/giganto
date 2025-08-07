@@ -44,7 +44,7 @@ pub async fn serve<S: Executor>(
 
     let listener = TcpListener::bind(addr).rustls(RustlsConfig::new().fallback(certificate));
 
-    info!("Listening on https://{addr:?}");
+    info!("GraphQL web server is starting on https://{addr:?}");
 
     task::spawn(async move {
         let server = Server::new(listener).run_with_graceful_shutdown(
