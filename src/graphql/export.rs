@@ -2014,14 +2014,14 @@ where
     Ok(())
 }
 
-fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
-    if let Some(pos) = key.iter().position(|x| *x == 0) {
-        if let Some(s) = key.get(..pos) {
-            let sensor = String::from_utf8_lossy(s);
-            if let Some(t) = key.get(key.len() - 8..) {
-                let timestamp = i64::from_be_bytes(t.try_into()?);
-                return Ok((sensor, timestamp));
-            }
+fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
+    if let Some(pos) = key.iter().position(|x| *x == 0)
+        && let Some(s) = key.get(..pos)
+    {
+        let sensor = String::from_utf8_lossy(s);
+        if let Some(t) = key.get(key.len() - 8..) {
+            let timestamp = i64::from_be_bytes(t.try_into()?);
+            return Ok((sensor, timestamp));
         }
     }
     Err(anyhow!("Invalid key"))

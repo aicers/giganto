@@ -980,8 +980,8 @@ async fn handle_data<T>(
                     recv_events_cnt += 1;
                     recv_events_len += raw_event.len();
                     store.append(&storage_key.key(), &raw_event)?;
-                    if let Some(network_key) = network_key.as_ref() {
-                        if let Err(e) = send_direct_stream(
+                    if let Some(network_key) = network_key.as_ref()
+                        && let Err(e) = send_direct_stream(
                             network_key,
                             &raw_event,
                             timestamp,
@@ -989,10 +989,9 @@ async fn handle_data<T>(
                             stream_direct_channels.clone(),
                         )
                         .await
-                        {
-                            err_msg = Some(format!("Failed to send stream events: {e}"));
-                            break;
-                        }
+                    {
+                        err_msg = Some(format!("Failed to send stream events: {e}"));
+                        break;
                     }
                 }
 

@@ -326,27 +326,27 @@ enum CastStyle {
 }
 
 fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType, CastStyle) {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Vec" {
-                if let PathArguments::AngleBracketed(vec_element_type_arg) = &segment.arguments {
-                    for arg in &vec_element_type_arg.args {
-                        if let GenericArgument::Type(el_type) = arg {
-                            return (SegmentType::Vec, cast_style(el_type, recursive_into));
-                        }
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        if segment.ident == "Vec" {
+            if let PathArguments::AngleBracketed(vec_element_type_arg) = &segment.arguments {
+                for arg in &vec_element_type_arg.args {
+                    if let GenericArgument::Type(el_type) = arg {
+                        return (SegmentType::Vec, cast_style(el_type, recursive_into));
                     }
                 }
-            } else if segment.ident == "Option" {
-                if let PathArguments::AngleBracketed(option_element_type_arg) = &segment.arguments {
-                    for arg in &option_element_type_arg.args {
-                        if let GenericArgument::Type(el_type) = arg {
-                            return (SegmentType::Option, cast_style(el_type, recursive_into));
-                        }
-                    }
-                }
-            } else {
-                return (SegmentType::Other, cast_style(ty, recursive_into));
             }
+        } else if segment.ident == "Option" {
+            if let PathArguments::AngleBracketed(option_element_type_arg) = &segment.arguments {
+                for arg in &option_element_type_arg.args {
+                    if let GenericArgument::Type(el_type) = arg {
+                        return (SegmentType::Option, cast_style(el_type, recursive_into));
+                    }
+                }
+            }
+        } else {
+            return (SegmentType::Other, cast_style(ty, recursive_into));
         }
     }
     (SegmentType::Other, cast_style(ty, recursive_into))

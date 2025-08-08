@@ -54,7 +54,7 @@ pub fn config_server(certs: &Certs) -> Result<ServerConfig> {
     Ok(server_config)
 }
 
-pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<CertificateDer>> {
+pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<CertificateDer<'_>>> {
     let Some(conn_info) = connection.peer_identity() else {
         bail!("no peer identity");
     };
