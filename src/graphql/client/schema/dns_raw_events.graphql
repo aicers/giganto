@@ -14,7 +14,7 @@ query DnsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 respAddr
                 origPort
                 respPort
-                lastTime
+                endTime
                 proto
                 query
                 answer

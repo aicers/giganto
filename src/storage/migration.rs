@@ -15,8 +15,8 @@ use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21,
-    SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, Netflow5BeforeV23,
+    Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
 use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
@@ -24,14 +24,14 @@ use crate::{
     comm::ingest::implement::EventFilter,
     graphql::TIMESTAMP_SIZE,
     storage::{
-        Conn as ConnFromV21, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Conn as ConnFromV26, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
         Tls as TlsFromV21, rocksdb_options,
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.24.0,<0.26.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.1,<0.26.0-alpha.2";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -67,6 +67,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.23.0,<0.24.0").expect("valid version requirement"),
             Version::parse("0.24.0").expect("valid version"),
             migrate_0_23_to_0_24,
+        ),
+        (
+            VersionReq::parse(">=0.24.0,<0.26.0-alpha.1").expect("valid version requirement"),
+            Version::parse("0.26.0-alpha.1").expect("valid version"),
+            migrate_0_24_to_0_26,
         ),
     ];
 
@@ -274,7 +279,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<ConnBeforeV21>(&val)?;
-        let convert_new: ConnFromV21 = old.into();
+        let convert_new: ConnFromV21BeforeV26 = old.into();
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
@@ -296,6 +301,12 @@ fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_23_0_to_0_24_0_op_log(&db)?;
+    Ok(())
+}
+
+fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    migrate_0_24_to_0_26_conn(&db)?;
     Ok(())
 }
 
@@ -430,6 +441,48 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
+fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
+    info!("start migration for conn duration to end_time");
+    let store = db.conn_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+
+        // Deserialize the old conn structure that has duration field
+        let old = bincode::deserialize::<ConnFromV21BeforeV26>(&val)?;
+
+        // Extract session start time from the key
+        let session_start_time = get_timestamp_from_key(&key)?;
+
+        // Calculate end_time by adding duration to session start time
+        let end_time = session_start_time + old.duration;
+
+        // Create new conn structure with end_time instead of duration
+        let new_conn = ConnFromV26 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            conn_state: old.conn_state,
+            end_time,
+            service: old.service,
+            orig_bytes: old.orig_bytes,
+            resp_bytes: old.resp_bytes,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+        };
+
+        let new = bincode::serialize(&new_conn)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("conn migration complete");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -445,9 +498,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
-    use crate::storage::migration::migration_structures::OpLogBeforeV24;
+    use crate::storage::migration::migration_structures::{ConnFromV21BeforeV26, OpLogBeforeV24};
     use crate::storage::{
-        Conn as ConnFromV21, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Conn as ConnFromV26, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
         Tls as TlsFromV21, data_dir_to_db_path, migrate_data_dir,
@@ -822,8 +875,8 @@ mod tests {
         let conn_store = db.conn_store().unwrap();
         let raw_event = conn_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::deserialize::<ConnFromV21>(&val).unwrap();
-        let new_conn = ConnFromV21 {
+        let store_conn = bincode::deserialize::<ConnFromV21BeforeV26>(&val).unwrap();
+        let new_conn = ConnFromV21BeforeV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -852,7 +905,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            last_time: 1,
+            end_time: 1,
             method: "POST".to_string(),
             host: "cluml".to_string(),
             uri: "/cluml.gif".to_string(),
@@ -889,7 +942,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            last_time: 1,
+            end_time: 1,
             mailfrom: "mailfrom".to_string(),
             date: "date".to_string(),
             from: "from".to_string(),
@@ -911,7 +964,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            last_time: 1,
+            end_time: 1,
             protocol: String::new(),
             username: "bly".to_string(),
             hostname: "host".to_string(),
@@ -931,7 +984,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            last_time: 1,
+            end_time: 1,
             client: "client".to_string(),
             server: "server".to_string(),
             cipher_alg: "cipher_alg".to_string(),
@@ -959,7 +1012,7 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            last_time: 1,
+            end_time: 1,
             server_name: "server_name".to_string(),
             alpn_protocol: "alpn_protocol".to_string(),
             ja3: "ja3".to_string(),
@@ -1227,6 +1280,69 @@ mod tests {
             assert_eq!(oplog.sensor, "sr1".to_string());
             assert_eq!(oplog.agent_name, "local".to_string());
         }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn migrate_0_24_to_0_26_0() {
+        // open temp db & store
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let conn_store = db.conn_store().unwrap();
+
+        // prepare old conn raw data
+        let old_conn = ConnFromV21BeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: String::new(),
+            duration: 100,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+            orig_l2_bytes: 0,
+            resp_l2_bytes: 0,
+        };
+        let ser_old_conn = bincode::serialize(&old_conn).unwrap();
+
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let sensor = "src1";
+        let conn_old_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+
+        conn_store.append(&conn_old_key, &ser_old_conn).unwrap();
+
+        // migration 0.24.0 to 0.26.0
+        super::migrate_0_24_to_0_26_conn(&db).unwrap();
+
+        // check conn migration
+        let raw_event = conn_store.iter_forward().next().unwrap();
+        let (_, val) = raw_event.expect("Failed to read Database");
+        let store_conn = bincode::deserialize::<ConnFromV26>(&val).unwrap();
+        let new_conn = ConnFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: String::new(),
+            end_time: timestamp + 100,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+            orig_l2_bytes: 0,
+            resp_l2_bytes: 0,
+        };
+        assert_eq!(new_conn, store_conn);
     }
 
     #[test]
