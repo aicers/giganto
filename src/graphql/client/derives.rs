@@ -79,12 +79,15 @@ pub struct BootpRawEvents;
 )]
 pub struct DhcpRawEvents;
 
+// Currently, `PeriodicTimeSeries` is not used in cluster mode. However, this API may be extended
+// for use in the future. For now, `#[allow(dead_code)]` is applied to suppress clippy warnings.
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/graphql/client/schema/schema.graphql",
     query_path = "src/graphql/client/schema/periodic_time_series.graphql",
     response_derives = "Clone, Default, PartialEq"
 )]
+#[allow(dead_code)]
 pub struct PeriodicTimeSeries;
 
 #[derive(GraphQLQuery)]

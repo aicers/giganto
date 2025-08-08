@@ -267,10 +267,10 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() {
-            if key.as_ref() == cursor {
-                iter.next();
-            }
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
+            iter.next();
         }
         let (mut records, has_previous) = collect_records(iter, last, filter);
         records.reverse();
@@ -303,10 +303,10 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() {
-            if key.as_ref() == cursor {
-                iter.next();
-            }
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
+            iter.next();
         }
         let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
@@ -392,10 +392,10 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() {
-            if key.as_ref() == cursor {
-                iter.next();
-            }
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
+            iter.next();
         }
         let (mut records, has_previous) = collect_records(iter, last, filter);
         records.reverse();
@@ -426,10 +426,10 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() {
-            if key.as_ref() == cursor {
-                iter.next();
-            }
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
+            iter.next();
         }
         let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
@@ -608,12 +608,11 @@ where
     let (filtered_iter, cursor, size) =
         get_filtered_iter(store, filter, after, before, first, last)?;
     let mut filtered_iter = filtered_iter.peekable();
-    if let Some(cursor) = cursor {
-        if let Some((key, _)) = filtered_iter.peek() {
-            if key.as_ref() == cursor {
-                filtered_iter.next();
-            }
-        }
+    if let Some(cursor) = cursor
+        && let Some((key, _)) = filtered_iter.peek()
+        && key.as_ref() == cursor
+    {
+        filtered_iter.next();
     }
     Ok((filtered_iter, size))
 }
