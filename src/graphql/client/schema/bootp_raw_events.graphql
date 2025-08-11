@@ -15,7 +15,7 @@ query BootpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 op
                 htype
                 hops

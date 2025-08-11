@@ -15,7 +15,7 @@ query DhcpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 msgType
                 ciaddr
                 yiaddr

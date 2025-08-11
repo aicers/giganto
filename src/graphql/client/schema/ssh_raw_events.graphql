@@ -15,7 +15,7 @@ query SshRawEvents($filter: NetworkFilter!, $after: String, $before: String, $fi
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 client
                 server
                 cipherAlg

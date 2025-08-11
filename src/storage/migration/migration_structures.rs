@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
-        Conn as ConnFromV21, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
-        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, Tls as TlsFromV21,
+        Http as HttpFromV21, Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23,
+        Ntlm as NtlmFromV21, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21,
+        Ssh as SshFromV21, Tls as TlsFromV21,
     },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -54,6 +54,24 @@ pub struct ConnBeforeV21 {
     pub resp_bytes: u64,
     pub orig_pkts: u64,
     pub resp_pkts: u64,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct ConnFromV21BeforeV26 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub conn_state: String,
+    pub duration: i64,
+    pub service: String,
+    pub orig_bytes: u64,
+    pub resp_bytes: u64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
+    pub orig_l2_bytes: u64,
+    pub resp_l2_bytes: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -139,7 +157,7 @@ pub struct TlsBeforeV21 {
     pub last_alert: u8,
 }
 
-impl From<ConnBeforeV21> for ConnFromV21 {
+impl From<ConnBeforeV21> for ConnFromV21BeforeV26 {
     fn from(input: ConnBeforeV21) -> Self {
         Self {
             orig_addr: input.orig_addr,
@@ -168,7 +186,7 @@ impl From<HttpFromV12BeforeV21> for HttpFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             method: input.method,
             host: input.host,
             uri: input.uri,
@@ -202,7 +220,7 @@ impl From<SmtpBeforeV21> for SmtpFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             mailfrom: input.mailfrom,
             date: input.date,
             from: input.from,
@@ -221,7 +239,7 @@ impl From<NtlmBeforeV21> for NtlmFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             protocol: String::new(),
             username: input.username,
             hostname: input.hostname,
@@ -238,7 +256,7 @@ impl From<SshBeforeV21> for SshFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             client: input.client,
             server: input.server,
             cipher_alg: input.cipher_alg,
@@ -264,7 +282,7 @@ impl From<TlsBeforeV21> for TlsFromV21 {
             resp_addr: input.resp_addr,
             resp_port: input.resp_port,
             proto: input.proto,
-            last_time: input.last_time,
+            end_time: input.last_time,
             server_name: input.server_name,
             alpn_protocol: input.alpn_protocol,
             ja3: input.ja3,

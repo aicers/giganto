@@ -15,7 +15,7 @@ query NtlmRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 username
                 hostname
                 domainname

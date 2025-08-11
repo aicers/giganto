@@ -15,7 +15,7 @@ query DceRpcRawEvents($filter: NetworkFilter!, $after: String, $before: String, 
                 origPort
                 respPort
                 proto
-                lastTime
+                endTime
                 rtt
                 namedPipe
                 endpoint
