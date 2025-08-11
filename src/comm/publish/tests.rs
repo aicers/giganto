@@ -2116,7 +2116,6 @@ async fn request_network_event_stream() {
     init_crypto();
     use crate::comm::{ingest::NetworkKey, publish::send_direct_stream};
 
-    // NodeType constants removed - now using StreamRequestPayload variants directly
     const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
     const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
     const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;

@@ -24,7 +24,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **Refactored Publish API to use request type-driven processing**: The Publish
+- Refactored Publish API to use request type-driven processing. The Publish
   API now processes requests based on their specific request type rather than
   the client's `NodeType`. This change decouples request handling from client
   identity, allowing any client to make any type of request regardless of their
