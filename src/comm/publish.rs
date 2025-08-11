@@ -36,10 +36,7 @@ use giganto_client::{
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err, send_ok, send_range_data,
         send_semi_supervised_stream_start_message,
-        stream::{
-            NodeType, RequestSemiSupervisedStream, RequestStreamRecord,
-            RequestTimeSeriesGeneratorStream,
-        },
+        stream::{RequestStreamRecord, StreamRequestPayload},
     },
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
@@ -238,82 +235,68 @@ async fn request_stream(
 ) -> Result<()> {
     loop {
         match receive_stream_request(&mut recv).await {
-            Ok((node_type, record_type, raw_data)) => {
+            Ok(stream_payload) => {
                 let db = stream_db.clone();
                 let conn = connection.clone();
                 let sensor = conn_sensor.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
-                if record_type == RequestStreamRecord::Pcap {
-                    process_pcap_extract(
-                        &raw_data,
-                        pcap_sensors.clone(),
-                        peers.clone(),
-                        peer_idents.clone(),
-                        certs.clone(),
-                        &mut send,
-                    )
-                    .await?;
-                } else {
-                    let notify_shutdown = notify_shutdown.clone();
-                    tokio::spawn(async move {
-                        match node_type {
-                            NodeType::SemiSupervised => {
-                                match bincode::deserialize::<RequestSemiSupervisedStream>(&raw_data)
-                                {
-                                    Ok(msg) => {
-                                        if let Err(e) = process_stream(
-                                            db,
-                                            conn,
-                                            Some(sensor),
-                                            None,
-                                            node_type,
-                                            record_type,
-                                            msg,
-                                            stream_direct_channels,
-                                            notify_shutdown,
-                                        )
-                                        .await
-                                        {
-                                            error!("{}", e);
-                                        }
-                                    }
-                                    Err(_) => {
-                                        error!(
-                                            "Failed to deserialize the Semi-supervised Engine message"
-                                        );
-                                    }
-                                }
+
+                match stream_payload {
+                    StreamRequestPayload::PcapExtraction { filter } => {
+                        process_pcap_extract_filters(
+                            filter,
+                            pcap_sensors.clone(),
+                            peers.clone(),
+                            peer_idents.clone(),
+                            certs.clone(),
+                            &mut send,
+                        )
+                        .await?;
+                    }
+                    StreamRequestPayload::SemiSupervised {
+                        record_type,
+                        request,
+                    } => {
+                        let notify_shutdown = notify_shutdown.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = process_stream(
+                                db,
+                                conn,
+                                Some(sensor),
+                                None,
+                                record_type,
+                                request,
+                                stream_direct_channels,
+                                notify_shutdown,
+                            )
+                            .await
+                            {
+                                error!("{}", e);
                             }
-                            NodeType::TimeSeriesGenerator => {
-                                match bincode::deserialize::<RequestTimeSeriesGeneratorStream>(
-                                    &raw_data,
-                                ) {
-                                    Ok(msg) => {
-                                        if let Err(e) = process_stream(
-                                            db,
-                                            conn,
-                                            None,
-                                            None, //if the Time Series Generator supports generating time series of logs, It will change to valid values.
-                                            node_type,
-                                            record_type,
-                                            msg,
-                                            stream_direct_channels,
-                                            notify_shutdown,
-                                        )
-                                        .await
-                                        {
-                                            error!("{}", e);
-                                        }
-                                    }
-                                    Err(_) => {
-                                        error!(
-                                            "Failed to deserialize the Time Series Generator message"
-                                        );
-                                    }
-                                }
+                        });
+                    }
+                    StreamRequestPayload::TimeSeriesGenerator {
+                        record_type,
+                        request,
+                    } => {
+                        let notify_shutdown = notify_shutdown.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = process_stream(
+                                db,
+                                conn,
+                                None,
+                                None,
+                                record_type,
+                                request,
+                                stream_direct_channels,
+                                notify_shutdown,
+                            )
+                            .await
+                            {
+                                error!("{}", e);
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
             Err(e) => {
@@ -323,6 +306,81 @@ async fn request_stream(
             }
         }
     }
+    Ok(())
+}
+
+async fn process_pcap_extract_filters(
+    filters: Vec<PcapFilter>,
+    pcap_sensors: PcapSensors,
+    peers: Peers,
+    peer_idents: PeerIdents,
+    certs: Arc<Certs>,
+    resp_send: &mut SendStream,
+) -> Result<()> {
+    let mut buf = Vec::new();
+    send_ok(resp_send, &mut buf, ())
+        .await
+        .context("Failed to send ok")?;
+
+    let certs = certs.clone();
+    tokio::spawn(async move {
+        for filter in filters {
+            if let Some(sensor_conn) =
+                get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
+                    .await
+            {
+                // send/receive extract request from the Sensor
+                match pcap_extract_request(&sensor_conn, &filter).await {
+                    Ok(()) => (),
+                    Err(e) => debug!("Failed to relay pcap request: {e}"),
+                }
+            } else if let Some(peer_addr) =
+                peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
+            {
+                let peer_name: String = {
+                    let peer_idents_guard = peer_idents.read().await;
+                    let peer_ident = peer_idents_guard
+                        .iter()
+                        .find(|idents| idents.addr.eq(&peer_addr));
+
+                    if let Some(peer_ident) = peer_ident {
+                        peer_ident.hostname.clone()
+                    } else {
+                        error!(
+                            "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
+                            filter.sensor
+                        );
+                        continue;
+                    }
+                };
+                if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
+                    peer_addr,
+                    peer_name.as_str(),
+                    &certs,
+                    MessageCode::Pcap,
+                    filter,
+                )
+                .await
+                {
+                    if let Err(e) = recv_ack_response(&mut peer_recv).await {
+                        error!(
+                            "Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
+                        );
+                    }
+                } else {
+                    error!(
+                        "Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}"
+                    );
+                }
+            } else {
+                error!(
+                    "Neither this node nor peers are in charge of requested pcap sensor {}",
+                    filter.sensor
+                );
+            }
+        }
+    });
+
     Ok(())
 }
 
@@ -429,7 +487,6 @@ async fn process_stream<T>(
     conn: Connection,
     sensor: Option<String>,
     kind: Option<String>,
-    node_type: NodeType,
     record_type: RequestStreamRecord,
     request_msg: T,
     stream_direct_channels: StreamDirectChannels,
@@ -449,7 +506,6 @@ where
                         request_msg,
                         sensor,
                         kind,
-                        node_type,
                         stream_direct_channels,
                         notify_shutdown,
                     )
@@ -504,7 +560,7 @@ pub async fn send_direct_stream(
             let mut send_buf: Vec<u8> = Vec::new();
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
-            if req_key.contains(&NodeType::SemiSupervised.to_string()) {
+            if req_key.contains("SemiSupervised") {
                 let sensor_bytes = bincode::serialize(&sensor)?;
                 let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&sensor_len);
@@ -527,7 +583,6 @@ async fn send_stream<T, N>(
     msg: N,
     sensor: Option<String>,
     kind: Option<String>,
-    node_type: NodeType,
     stream_direct_channels: StreamDirectChannels,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()>
@@ -550,57 +605,53 @@ where
     let mut last_ts = 0_i64;
 
     // send stored record raw data
-    match node_type {
-        NodeType::SemiSupervised => {
-            send_semi_supervised_stream_start_message(&mut sender, record_type)
-                .await
-                .map_err(|e| {
-                    anyhow!(
-                        "Failed to write the semi-supervised engine start message: {}",
-                        e
-                    )
-                })?;
-            info!(
-                "Start the semi-supervised engine's publish stream : {:?}",
-                record_type
-            );
-        }
-        NodeType::TimeSeriesGenerator => {
-            let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
-            send_time_series_generator_stream_start_message(&mut sender, id)
-                .await
-                .map_err(|e| {
-                    anyhow!(
-                        "Failed to write the time series generator start message: {}",
-                        e
-                    )
-                })?;
-            info!(
-                "Start time series generator's publish stream : {:?}",
-                record_type
-            );
+    if msg.is_semi_supervised() {
+        send_semi_supervised_stream_start_message(&mut sender, record_type)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to write the semi-supervised engine start message: {}",
+                    e
+                )
+            })?;
+        info!(
+            "Start the semi-supervised engine's publish stream : {:?}",
+            record_type
+        );
+    } else if msg.is_time_series_generator() {
+        let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
+        send_time_series_generator_stream_start_message(&mut sender, id)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to write the time series generator start message: {}",
+                    e
+                )
+            })?;
+        info!(
+            "Start time series generator's publish stream : {:?}",
+            record_type
+        );
 
-            let key_builder = StorageKey::builder()
-                .start_key(&msg.sensor()?)
-                .mid_key(kind.map(|s| s.as_bytes().to_vec()));
-            let from_key = key_builder
-                .clone()
-                .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start_time())))
-                .build();
-            let to_key = key_builder.upper_open_bound_end_key(None).build();
-            let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        let key_builder = StorageKey::builder()
+            .start_key(&msg.sensor()?)
+            .mid_key(kind.map(|s| s.as_bytes().to_vec()));
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start_time())))
+            .build();
+        let to_key = key_builder.upper_open_bound_end_key(None).build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
 
-            for item in iter {
-                let (key, val) = item.context("Failed to read database")?;
-                let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
-                    bail!("Failed to deserialize database data");
-                };
-                if msg.filter_ip(orig_addr, resp_addr) {
-                    let timestamp =
-                        i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                    send_time_series_generator_data(&mut sender, timestamp, val).await?;
-                    last_ts = timestamp;
-                }
+        for item in iter {
+            let (key, val) = item.context("Failed to read database")?;
+            let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
+                bail!("Failed to deserialize database data");
+            };
+            if msg.filter_ip(orig_addr, resp_addr) {
+                let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+                send_time_series_generator_data(&mut sender, timestamp, val).await?;
+                last_ts = timestamp;
             }
         }
     }

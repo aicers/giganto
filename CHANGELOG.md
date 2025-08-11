@@ -24,6 +24,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Refactored Publish API to use request type-driven processing**: The Publish
+  API now processes requests based on their specific request type rather than
+  the client's `NodeType`. This change decouples request handling from client
+  identity, allowing any client to make any type of request regardless of their
+  `NodeType`. This increases flexibility and removes artificial limitations on
+  client capabilities.
+- Updated `giganto-client` dependency to support the new request type-driven
+  processing model.
 - Extracted communication-related logic into a separate module named `comm`.
   This refactoring removes common functionality from `main.rs`, preventing
   redundant declarations when adding additional binaries.

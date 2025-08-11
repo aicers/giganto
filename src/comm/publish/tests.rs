@@ -27,8 +27,8 @@ use giganto_client::{
         receive_time_series_generator_stream_start_message, send_range_data_request,
         send_stream_request,
         stream::{
-            NodeType, RequestSemiSupervisedStream, RequestStreamRecord,
-            RequestTimeSeriesGeneratorStream,
+            RequestSemiSupervisedStream, RequestStreamRecord, RequestTimeSeriesGeneratorStream,
+            StreamRequestPayload,
         },
     },
 };
@@ -2116,8 +2116,7 @@ async fn request_network_event_stream() {
     init_crypto();
     use crate::comm::{ingest::NetworkKey, publish::send_direct_stream};
 
-    const SEMI_SUPERVISED_TYPE: NodeType = NodeType::SemiSupervised;
-    const TIME_SERIES_GENERATOR_TYPE: NodeType = NodeType::TimeSeriesGenerator;
+    // NodeType constants removed - now using StreamRequestPayload variants directly
     const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
     const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
     const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;
@@ -2200,9 +2199,10 @@ async fn request_network_event_stream() {
         // direct conn network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_CONN,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_CONN,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2258,9 +2258,10 @@ async fn request_network_event_stream() {
         );
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_CONN,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_CONN,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2306,9 +2307,10 @@ async fn request_network_event_stream() {
         // direct dns network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DNS,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_DNS,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2366,9 +2368,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DNS,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_DNS,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2415,9 +2418,10 @@ async fn request_network_event_stream() {
         // direct rdp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_RDP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_RDP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2475,9 +2479,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_RDP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_RDP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2523,9 +2528,10 @@ async fn request_network_event_stream() {
         // direct http network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_HTTP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_HTTP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2585,9 +2591,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_HTTP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_HTTP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2633,9 +2640,10 @@ async fn request_network_event_stream() {
         // direct smtp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SMTP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_SMTP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2695,9 +2703,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SMTP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_SMTP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2743,9 +2752,10 @@ async fn request_network_event_stream() {
         // direct ntlm network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_NTLM,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_NTLM,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2805,9 +2815,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_NTLM,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_NTLM,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2853,9 +2864,10 @@ async fn request_network_event_stream() {
         // direct kerberos network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_KERBEROS,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_KERBEROS,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2915,9 +2927,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_KERBEROS,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_KERBEROS,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -2965,9 +2978,10 @@ async fn request_network_event_stream() {
         // direct ssh network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SSH,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_SSH,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3027,9 +3041,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SSH,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_SSH,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3075,9 +3090,10 @@ async fn request_network_event_stream() {
         // direct dce_rpc network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DCE_RPC,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_DCE_RPC,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3138,9 +3154,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DCE_RPC,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_DCE_RPC,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3188,9 +3205,10 @@ async fn request_network_event_stream() {
         // direct ftp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_FTP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_FTP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3250,9 +3268,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_FTP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_FTP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3298,9 +3317,10 @@ async fn request_network_event_stream() {
         // direct mqtt network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_MQTT,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_MQTT,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3360,9 +3380,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_MQTT,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_MQTT,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3408,9 +3429,10 @@ async fn request_network_event_stream() {
         // direct ldap network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_LDAP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_LDAP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3470,9 +3492,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_LDAP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_LDAP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3518,9 +3541,10 @@ async fn request_network_event_stream() {
         // direct tls network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_TLS,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_TLS,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3580,9 +3604,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_TLS,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_TLS,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3628,9 +3653,10 @@ async fn request_network_event_stream() {
         // direct smb network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SMB,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_SMB,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3690,9 +3716,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_SMB,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_SMB,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3738,9 +3765,10 @@ async fn request_network_event_stream() {
         // direct nfs network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_NFS,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_NFS,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3800,9 +3828,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_NFS,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_NFS,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3848,9 +3877,10 @@ async fn request_network_event_stream() {
         // direct bootp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_BOOTP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_BOOTP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3910,9 +3940,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_BOOTP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_BOOTP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -3960,9 +3991,10 @@ async fn request_network_event_stream() {
         // direct dhcp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DHCP,
-            SEMI_SUPERVISED_TYPE,
-            semi_supervised_msg.clone(),
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_DHCP,
+                request: semi_supervised_msg.clone(),
+            },
         )
         .await
         .unwrap();
@@ -4022,9 +4054,10 @@ async fn request_network_event_stream() {
 
         send_stream_request(
             &mut publish.send,
-            NETWORK_STREAM_DHCP,
-            TIME_SERIES_GENERATOR_TYPE,
-            time_series_generator_msg.clone(),
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_DHCP,
+                request: time_series_generator_msg.clone(),
+            },
         )
         .await
         .unwrap();
