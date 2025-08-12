@@ -17,6 +17,9 @@ jobs:
           rust-version: stable
       - uses: actions/checkout@v2
       - uses: ./.github/cache-cargo
+      - name: Install libcap on Ubuntu
+        run: |
+          sudo apt-get install libpcap-dev libpcap0.8
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
       - name: Clippy (Cluster)
