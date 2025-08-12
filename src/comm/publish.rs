@@ -384,92 +384,6 @@ async fn process_pcap_extract_filters(
     Ok(())
 }
 
-async fn process_pcap_extract(
-    filter_data: &[u8],
-    pcap_sensors: PcapSensors,
-    peers: Peers,
-    peer_idents: PeerIdents,
-    certs: Arc<Certs>,
-    resp_send: &mut SendStream,
-) -> Result<()> {
-    let mut buf = Vec::new();
-    let filters = match bincode::deserialize::<Vec<PcapFilter>>(filter_data) {
-        Ok(filters) => {
-            send_ok(resp_send, &mut buf, ())
-                .await
-                .context("Failed to send ok")?;
-            filters
-        }
-        Err(e) => {
-            send_err(resp_send, &mut buf, e)
-                .await
-                .context("Failed to send err")?;
-            bail!("Failed to deserialize Pcapfilters")
-        }
-    };
-
-    let certs = certs.clone();
-    tokio::spawn(async move {
-        for filter in filters {
-            if let Some(sensor_conn) =
-                get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
-                    .await
-            {
-                // send/receive extract request from the Sensor
-                match pcap_extract_request(&sensor_conn, &filter).await {
-                    Ok(()) => (),
-                    Err(e) => debug!("Failed to relay pcap request: {e}"),
-                }
-            } else if let Some(peer_addr) =
-                peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
-            {
-                let peer_name: String = {
-                    let peer_idents_guard = peer_idents.read().await;
-                    let peer_ident = peer_idents_guard
-                        .iter()
-                        .find(|idents| idents.addr.eq(&peer_addr));
-
-                    if let Some(peer_ident) = peer_ident {
-                        peer_ident.hostname.clone()
-                    } else {
-                        error!(
-                            "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
-                            filter.sensor
-                        );
-                        continue;
-                    }
-                };
-                if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
-                    peer_addr,
-                    peer_name.as_str(),
-                    &certs,
-                    MessageCode::Pcap,
-                    filter,
-                )
-                .await
-                {
-                    if let Err(e) = recv_ack_response(&mut peer_recv).await {
-                        error!(
-                            "Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
-                        );
-                    }
-                } else {
-                    error!(
-                        "Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}"
-                    );
-                }
-            } else {
-                error!(
-                    "Neither this node nor peers are in charge of requested pcap sensor {}",
-                    filter.sensor
-                );
-            }
-        }
-    });
-
-    Ok(())
-}
-
 async fn get_pcap_conn_if_current_giganto_in_charge(
     pcap_sensors: PcapSensors,
     sensor: &str,
@@ -1213,8 +1127,19 @@ async fn handle_request(
             }
         }
         MessageCode::Pcap => {
-            process_pcap_extract(
-                &msg_buf,
+            let filters = match bincode::deserialize::<Vec<PcapFilter>>(&msg_buf) {
+                Ok(filters) => filters,
+                Err(e) => {
+                    let mut buf = Vec::new();
+                    send_err(&mut send, &mut buf, e)
+                        .await
+                        .context("Failed to send err")?;
+                    bail!("Failed to deserialize Pcapfilters")
+                }
+            };
+
+            process_pcap_extract_filters(
+                filters,
                 pcap_sensors.clone(),
                 peers,
                 peer_idents.clone(),
