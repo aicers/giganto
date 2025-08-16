@@ -2,7 +2,7 @@ use std::{net::IpAddr, vec};
 
 use anyhow::{Result, anyhow, bail};
 use giganto_client::publish::stream::{
-    NodeType, RequestSemiSupervisedStream, RequestTimeSeriesGeneratorStream,
+    RequestSemiSupervisedStream, RequestTimeSeriesGeneratorStream,
 };
 
 pub trait RequestStreamMessage {
@@ -11,6 +11,8 @@ pub trait RequestStreamMessage {
     fn filter_ip(&self, orig_addr: IpAddr, resp_addr: IpAddr) -> bool;
     fn sensor(&self) -> Result<String>;
     fn id(&self) -> Option<String>;
+    fn is_semi_supervised(&self) -> bool;
+    fn is_time_series_generator(&self) -> bool;
 }
 
 impl RequestStreamMessage for RequestSemiSupervisedStream {
@@ -23,7 +25,7 @@ impl RequestStreamMessage for RequestSemiSupervisedStream {
                 .iter()
                 .map(|target_sensor| {
                     let mut key = String::new();
-                    key.push_str(&NodeType::SemiSupervised.to_string());
+                    key.push_str("SemiSupervised");
                     key.push('\0');
                     key.push_str(&sensor);
                     key.push('\0');
@@ -55,13 +57,21 @@ impl RequestStreamMessage for RequestSemiSupervisedStream {
     fn id(&self) -> Option<String> {
         unreachable!()
     }
+
+    fn is_semi_supervised(&self) -> bool {
+        true
+    }
+
+    fn is_time_series_generator(&self) -> bool {
+        false
+    }
 }
 
 impl RequestStreamMessage for RequestTimeSeriesGeneratorStream {
     fn channel_key(&self, _sensor: Option<String>, record_type: &str) -> Result<Vec<String>> {
         if let Some(ref target_sensor) = self.sensor {
             let mut time_series_generator_key = String::new();
-            time_series_generator_key.push_str(&NodeType::TimeSeriesGenerator.to_string());
+            time_series_generator_key.push_str("TimeSeriesGenerator");
             time_series_generator_key.push('\0');
             time_series_generator_key.push_str(&self.id);
             time_series_generator_key.push('\0');
@@ -110,5 +120,13 @@ impl RequestStreamMessage for RequestTimeSeriesGeneratorStream {
 
     fn id(&self) -> Option<String> {
         Some(self.id.clone())
+    }
+
+    fn is_semi_supervised(&self) -> bool {
+        false
+    }
+
+    fn is_time_series_generator(&self) -> bool {
+        true
     }
 }
