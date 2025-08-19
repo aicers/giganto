@@ -309,16 +309,18 @@ struct HttpRawEvent {
     content_type: String,
     /// Cache Control
     cache_control: String,
-    /// Request Filenames
-    orig_filenames: Vec<String>,
-    /// Request MIME Types
-    orig_mime_types: Vec<String>,
-    /// Response Filenames
-    resp_filenames: Vec<String>,
-    /// Response MIME Types
-    resp_mime_types: Vec<String>,
-    /// POST Body
-    post_body: Vec<u8>,
+    /// Filenames
+    #[cfg_attr(feature = "cluster", graphql_client_type(from_name = "orig_filenames"))]
+    filenames: Vec<String>,
+    /// MIME Types  
+    #[cfg_attr(
+        feature = "cluster",
+        graphql_client_type(from_name = "orig_mime_types")
+    )]
+    mime_types: Vec<String>,
+    /// Body
+    #[cfg_attr(feature = "cluster", graphql_client_type(from_name = "post_body"))]
+    body: Vec<u8>,
     /// Last State
     state: String,
 }
@@ -1125,11 +1127,9 @@ impl FromKeyValue<Http> for HttpRawEvent {
             content_encoding: val.content_encoding,
             content_type: val.content_type,
             cache_control: val.cache_control,
-            orig_filenames: val.orig_filenames.clone(),
-            orig_mime_types: val.orig_mime_types.clone(),
-            resp_filenames: val.resp_filenames.clone(),
-            resp_mime_types: val.resp_mime_types.clone(),
-            post_body: val.post_body.clone(),
+            filenames: val.filenames.clone(),
+            mime_types: val.mime_types.clone(),
+            body: val.body.clone(),
             state: val.state,
             request_len: StringNumberUsize(val.request_len),
             response_len: StringNumberUsize(val.response_len),

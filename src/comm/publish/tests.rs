@@ -276,11 +276,9 @@ fn gen_http_raw_event() -> Vec<u8> {
         content_encoding: String::new(),
         content_type: String::new(),
         cache_control: String::new(),
-        orig_filenames: Vec::new(),
-        orig_mime_types: Vec::new(),
-        resp_filenames: Vec::new(),
-        resp_mime_types: Vec::new(),
-        post_body: Vec::new(),
+        filenames: Vec::new(),
+        mime_types: Vec::new(),
+        body: Vec::new(),
         state: String::new(),
     };
 

@@ -166,11 +166,9 @@ struct HttpJsonOutput {
     content_encoding: String,
     content_type: String,
     cache_control: String,
-    orig_filenames: Vec<String>,
-    orig_mime_types: Vec<String>,
-    resp_filenames: Vec<String>,
-    resp_mime_types: Vec<String>,
-    post_body: Vec<u8>,
+    filenames: Vec<String>,
+    mime_types: Vec<String>,
+    body: Vec<u8>,
     state: String,
 }
 
@@ -837,11 +835,9 @@ convert_json_output!(
     content_encoding,
     content_type,
     cache_control,
-    orig_filenames,
-    orig_mime_types,
-    resp_filenames,
-    resp_mime_types,
-    post_body,
+    filenames,
+    mime_types,
+    body,
     state
 );
 

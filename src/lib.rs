@@ -67,7 +67,7 @@ extern crate proc_macro;
 ///     service: String,
 ///     resp_pkts: u64,
 ///     ttl: Vec<i32>,
-///     orig_filenames: Vec<String>,
+///     filenames: Vec<String>,
 ///     #[graphql_client_type(from_name = "ja3_s")]
 ///     ja3s: String,
 ///     #[graphql_client_type(skip = true)]
@@ -102,7 +102,7 @@ extern crate proc_macro;
 ///             service: node.service as _,
 ///             resp_pkts: node.resp_pkts as _,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
-///             orig_filenames: node.orig_filenames,
+///             filenames: node.filenames,
 ///             ja3s: node.ja3_s,
 ///             details: node.details.into_iter().map(|x| x.into()).collect(),
 ///         }
@@ -119,7 +119,7 @@ extern crate proc_macro;
 ///             service: node.service as _,
 ///             resp_pkts: node.resp_pkts as _,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
-///             orig_filenames: node.orig_filenames,
+///             filenames: node.filenames,
 ///             ja3s: node.ja3_s,
 ///             details: node.details.into_iter().map(|x| x.into()).collect(),
 ///         }

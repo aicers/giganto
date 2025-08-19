@@ -15,8 +15,9 @@ use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, Netflow5BeforeV23,
-    Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, HttpFromV21BeforeV27,
+    Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21,
+    SshBeforeV21, TlsBeforeV21,
 };
 use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
@@ -31,7 +32,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.1,<0.26.0-alpha.2";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0,<0.28.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -72,6 +73,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.24.0,<0.26.0-alpha.1").expect("valid version requirement"),
             Version::parse("0.26.0-alpha.1").expect("valid version"),
             migrate_0_24_to_0_26,
+        ),
+        (
+            VersionReq::parse(">=0.26.0-alpha.1,<0.27.0").expect("valid version requirement"),
+            Version::parse("0.27.0").expect("valid version"),
+            migrate_0_26_to_0_27,
         ),
     ];
 
@@ -231,7 +237,8 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<HttpFromV12BeforeV21>(&val)?;
-        let convert_new: HttpFromV21 = old.into();
+        let intermediate: HttpFromV21BeforeV27 = old.into();
+        let convert_new: HttpFromV21 = intermediate.into();
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
@@ -307,6 +314,12 @@ fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
+    Ok(())
+}
+
+fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    migrate_0_26_to_0_27_http(&db)?;
     Ok(())
 }
 
@@ -480,6 +493,22 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
     }
 
     info!("conn migration complete");
+    Ok(())
+}
+
+fn migrate_0_26_to_0_27_http(db: &Database) -> Result<()> {
+    info!("Starting migration for http field consolidation");
+    let store = db.http_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<HttpFromV21BeforeV27>(&val)?;
+        let convert_new: HttpFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for http field consolidation");
     Ok(())
 }
 
@@ -922,11 +951,9 @@ mod tests {
             content_encoding: String::new(),
             content_type: String::new(),
             cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-            post_body: Vec::new(),
+            filenames: vec!["-".to_string(), "-".to_string()],
+            mime_types: vec!["-".to_string(), "-".to_string()],
+            body: Vec::new(),
             state: String::new(),
         };
         assert_eq!(new_http, store_http);

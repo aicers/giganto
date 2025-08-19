@@ -12,6 +12,38 @@ use crate::{
     },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct HttpFromV21BeforeV27 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub end_time: i64,
+    pub method: String,
+    pub host: String,
+    pub uri: String,
+    pub referer: String,
+    pub version: String,
+    pub user_agent: String,
+    pub request_len: usize,
+    pub response_len: usize,
+    pub status_code: u16,
+    pub status_msg: String,
+    pub username: String,
+    pub password: String,
+    pub cookie: String,
+    pub content_encoding: String,
+    pub content_type: String,
+    pub cache_control: String,
+    pub orig_filenames: Vec<String>,
+    pub orig_mime_types: Vec<String>,
+    pub resp_filenames: Vec<String>,
+    pub resp_mime_types: Vec<String>,
+    pub post_body: Vec<u8>,
+    pub state: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct HttpFromV12BeforeV21 {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
@@ -178,7 +210,46 @@ impl From<ConnBeforeV21> for ConnFromV21BeforeV26 {
     }
 }
 
-impl From<HttpFromV12BeforeV21> for HttpFromV21 {
+impl From<HttpFromV21BeforeV27> for HttpFromV21 {
+    fn from(input: HttpFromV21BeforeV27) -> Self {
+        let mut filenames = input.orig_filenames;
+        filenames.extend(input.resp_filenames);
+
+        let mut mime_types = input.orig_mime_types;
+        mime_types.extend(input.resp_mime_types);
+
+        Self {
+            orig_addr: input.orig_addr,
+            orig_port: input.orig_port,
+            resp_addr: input.resp_addr,
+            resp_port: input.resp_port,
+            proto: input.proto,
+            end_time: input.end_time,
+            method: input.method,
+            host: input.host,
+            uri: input.uri,
+            referer: input.referer,
+            version: input.version,
+            user_agent: input.user_agent,
+            request_len: input.request_len,
+            response_len: input.response_len,
+            status_code: input.status_code,
+            status_msg: input.status_msg,
+            username: input.username,
+            password: input.password,
+            cookie: input.cookie,
+            content_encoding: input.content_encoding,
+            content_type: input.content_type,
+            cache_control: input.cache_control,
+            filenames,
+            mime_types,
+            body: input.post_body,
+            state: input.state,
+        }
+    }
+}
+
+impl From<HttpFromV12BeforeV21> for HttpFromV21BeforeV27 {
     fn from(input: HttpFromV12BeforeV21) -> Self {
         Self {
             orig_addr: input.orig_addr,
