@@ -104,6 +104,23 @@ impl TestClient {
             endpoint,
         }
     }
+
+    async fn new_with_addr(addr: SocketAddr, hostname: &str) -> Self {
+        let endpoint = init_client();
+        let conn = endpoint
+            .connect(addr, hostname)
+            .expect(
+                "Failed to connect server's endpoint, Please check if the setting value is correct",
+            )
+            .await
+            .expect("Failed to connect server's endpoint, Please make sure the Server is alive");
+        let (send, _) = client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
+        Self {
+            send,
+            conn,
+            endpoint,
+        }
+    }
 }
 
 fn server() -> Server {
@@ -4328,7 +4345,11 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         Arc::new(Notify::new()),
     ));
 
-    let publish = TestClient::new().await;
+    let publish = TestClient::new_with_addr(
+        SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+        NODE2_HOST,
+    )
+    .await;
 
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
@@ -4537,7 +4558,11 @@ async fn request_range_data_with_log_giganto_cluster() {
         certs,
         Arc::new(Notify::new()),
     ));
-    let publish = TestClient::new().await;
+    let publish = TestClient::new_with_addr(
+        SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+        NODE2_HOST,
+    )
+    .await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
@@ -4750,7 +4775,11 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         certs,
         Arc::new(Notify::new()),
     ));
-    let publish = TestClient::new().await;
+    let publish = TestClient::new_with_addr(
+        SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+        NODE2_HOST,
+    )
+    .await;
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
@@ -4952,7 +4981,11 @@ async fn request_raw_events_giganto_cluster() {
         certs,
         Arc::new(Notify::new()),
     ));
-    let publish = TestClient::new().await;
+    let publish = TestClient::new_with_addr(
+        SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
+        NODE2_HOST,
+    )
+    .await;
 
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
