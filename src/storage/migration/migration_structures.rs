@@ -12,7 +12,7 @@ use crate::{
     },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub struct HttpFromV21BeforeV27 {
+pub struct HttpFromV21BeforeV26 {
     pub orig_addr: IpAddr,
     pub orig_port: u16,
     pub resp_addr: IpAddr,
@@ -210,8 +210,8 @@ impl From<ConnBeforeV21> for ConnFromV21BeforeV26 {
     }
 }
 
-impl From<HttpFromV21BeforeV27> for HttpFromV21 {
-    fn from(input: HttpFromV21BeforeV27) -> Self {
+impl From<HttpFromV21BeforeV26> for HttpFromV21 {
+    fn from(input: HttpFromV21BeforeV26) -> Self {
         let mut filenames = input.orig_filenames;
         filenames.extend(input.resp_filenames);
 
@@ -249,7 +249,7 @@ impl From<HttpFromV21BeforeV27> for HttpFromV21 {
     }
 }
 
-impl From<HttpFromV12BeforeV21> for HttpFromV21BeforeV27 {
+impl From<HttpFromV12BeforeV21> for HttpFromV21BeforeV26 {
     fn from(input: HttpFromV12BeforeV21) -> Self {
         Self {
             orig_addr: input.orig_addr,
