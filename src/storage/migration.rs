@@ -70,14 +70,9 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             migrate_0_23_to_0_24,
         ),
         (
-            VersionReq::parse(">=0.24.0,<0.26.0-alpha.1").expect("valid version requirement"),
-            Version::parse("0.26.0-alpha.1").expect("valid version"),
-            migrate_0_24_to_0_26,
-        ),
-        (
-            VersionReq::parse(">=0.26.0-alpha.1,<0.26.0").expect("valid version requirement"),
+            VersionReq::parse(">=0.24.0,<0.26.0").expect("valid version requirement"),
             Version::parse("0.26.0").expect("valid version"),
-            migrate_0_26_alpha_to_0_26,
+            migrate_0_24_to_0_26_http,
         ),
     ];
 
@@ -311,14 +306,9 @@ fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
-fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+fn migrate_0_24_to_0_26_http(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
-    Ok(())
-}
-
-fn migrate_0_26_alpha_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open(db_path, db_opts)?;
     migrate_0_26_alpha_to_0_26_http(&db)?;
     Ok(())
 }
