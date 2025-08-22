@@ -310,16 +310,10 @@ struct HttpRawEvent {
     /// Cache Control
     cache_control: String,
     /// Filenames
-    #[cfg_attr(feature = "cluster", graphql_client_type(from_name = "orig_filenames"))]
     filenames: Vec<String>,
-    /// MIME Types  
-    #[cfg_attr(
-        feature = "cluster",
-        graphql_client_type(from_name = "orig_mime_types")
-    )]
+    /// MIME Types
     mime_types: Vec<String>,
     /// Body
-    #[cfg_attr(feature = "cluster", graphql_client_type(from_name = "post_body"))]
     body: Vec<u8>,
     /// Last State
     state: String,

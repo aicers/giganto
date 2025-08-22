@@ -1,5 +1,17 @@
-query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    httpRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+query HttpRawEvents(
+    $filter: NetworkFilter!
+    $after: String
+    $before: String
+    $first: Int
+    $last: Int
+) {
+    httpRawEvents(
+        filter: $filter
+        after: $after
+        before: $before
+        first: $first
+        last: $last
+    ) {
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -32,11 +44,9 @@ query HttpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $f
                 contentEncoding
                 contentType
                 cacheControl
-                origFilenames
-                origMimeTypes
-                respFilenames
-                respMimeTypes
-                postBody
+                filenames
+                mimeTypes
+                body
                 state
             }
         }

@@ -1,5 +1,17 @@
-query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    networkRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
+query NetworkRawEvents(
+    $filter: NetworkFilter!
+    $after: String
+    $before: String
+    $first: Int
+    $last: Int
+) {
+    networkRawEvents(
+        filter: $filter
+        after: $after
+        before: $before
+        first: $first
+        last: $last
+    ) {
         pageInfo {
             hasPreviousPage
             hasNextPage
@@ -72,11 +84,9 @@ query NetworkRawEvents($filter: NetworkFilter!, $after: String, $before: String,
                     contentEncoding
                     contentType
                     cacheControl
-                    origFilenames
-                    origMimeTypes
-                    respFilenames
-                    respMimeTypes
-                    postBody
+                    filenames
+                    mimeTypes
+                    body
                     state
                 }
                 ... on RdpRawEvent {

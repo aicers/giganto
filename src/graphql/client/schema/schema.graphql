@@ -1068,25 +1068,17 @@ type HttpRawEvent {
 	"""
 	cacheControl: String!
 	"""
-	Request Filenames
+	Filenames
 	"""
-	origFilenames: [String!]!
+	filenames: [String!]!
 	"""
-	Request MIME Types
+	MIME Types
 	"""
-	origMimeTypes: [String!]!
+	mimeTypes: [String!]!
 	"""
-	Response Filenames
+	Body
 	"""
-	respFilenames: [String!]!
-	"""
-	Response MIME Types
-	"""
-	respMimeTypes: [String!]!
-	"""
-	POST Body
-	"""
-	postBody: [Int!]!
+	body: [Int!]!
 	"""
 	Last State
 	"""

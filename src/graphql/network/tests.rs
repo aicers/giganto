@@ -782,23 +782,17 @@ async fn http_with_data_giganto_cluster() {
                             "contentEncoding": "gzip",
                             "contentType": "text/html",
                             "cacheControl": "no-cache",
-                            "origFilenames": [
+                            "filenames": [
                                 "file1.txt",
-                                "file2.txt"
-                            ],
-                            "origMimeTypes": [
-                                "text/plain",
-                                "text/plain"
-                            ],
-                            "respFilenames": [
+                                "file2.txt",
                                 "response1.txt",
                                 "response2.txt"
                             ],
-                            "respMimeTypes": [
+                            "mimeTypes": [
                                 "text/plain",
                                 "text/plain"
                             ],
-                            "postBody": [
+                            "body": [
                                 200,
                                 300
                             ],
