@@ -25,8 +25,10 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/graphql.rs");
     // Re-run if non-client files in `src/graphql` change
-    for entry in fs::read_dir("src/graphql").expect("Failed to read src/graphql directory") {
-        let entry = entry.expect("Failed to read directory entry");
+    for entry in fs::read_dir("src/graphql")
+        .expect("src/graphql directory must exist as it's part of the source tree")
+    {
+        let entry = entry.expect("directory entries from fs::read_dir should always be readable");
         let name = entry.file_name();
         if name == "client" || name == "client.rs" {
             continue;
