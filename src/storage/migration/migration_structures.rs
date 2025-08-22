@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
-        Http as HttpFromV21, Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23,
+        Http as HttpFromV26, Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23,
         Ntlm as NtlmFromV21, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, Smtp as SmtpFromV21,
         Ssh as SshFromV21, Tls as TlsFromV21,
     },
@@ -210,7 +210,7 @@ impl From<ConnBeforeV21> for ConnFromV21BeforeV26 {
     }
 }
 
-impl From<HttpFromV21BeforeV26> for HttpFromV21 {
+impl From<HttpFromV21BeforeV26> for HttpFromV26 {
     fn from(input: HttpFromV21BeforeV26) -> Self {
         let mut filenames = input.orig_filenames;
         filenames.extend(input.resp_filenames);
