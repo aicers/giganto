@@ -24,13 +24,13 @@ type BootpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -149,18 +149,18 @@ type ConnRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	Connection State
-
+	
 	This is only used in TCP connections.
-
+	
 	The connection state is a string of letters that represent the state of the connection. The
 	letters are as follows:
-
+	
 	- S: The originator sent a SYN segment.
 	- h: The responder sent a SYN ACK segment.
 	- A: The originator sent an ACK segment.
@@ -173,13 +173,13 @@ type ConnRawEvent {
 	- R: The originator sent a RST segment.
 	- r: The responder sent a RST segment.
 	- T: Timeout
-
+	
 	For example, `ShDdAaFf` indicates a session without packet loss.
 	"""
 	connState: String!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -275,13 +275,13 @@ type DceRpcRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -358,13 +358,13 @@ type DhcpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -539,13 +539,13 @@ type DnsRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -878,13 +878,13 @@ type FtpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -993,13 +993,13 @@ type HttpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -1202,13 +1202,13 @@ type KerberosRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -1305,13 +1305,13 @@ type LdapRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -1440,13 +1440,13 @@ type MqttRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -1509,9 +1509,9 @@ type Mutation {
 	"""
 	Updates the config with the given `new` config. It involves reloading the module with the
 	new config.
-
+	
 	# Errors
-
+	
 	Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
 	invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
 	`num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
@@ -1752,13 +1752,13 @@ type NfsRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -1827,13 +1827,13 @@ type NtlmRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -2300,13 +2300,13 @@ type RdpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -2521,13 +2521,13 @@ type SmbRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -2632,13 +2632,13 @@ type SmtpRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -2727,13 +2727,13 @@ type SshRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
@@ -2956,13 +2956,13 @@ type TlsRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
 	"""
 	End Time
-
+	
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!

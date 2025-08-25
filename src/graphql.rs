@@ -50,6 +50,11 @@ use crate::{
 };
 
 pub const TIMESTAMP_SIZE: usize = 8;
+/// Note: The `unused` warning appears because this constant is only used in
+/// `schema_should_be_up_to_date` (test code) and `gen_schema.rs` (an auxiliary binary), which are
+/// not detected by the compiler as part of the main binary.
+#[allow(unused)]
+pub(crate) const SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
 
 #[derive(Default, MergedObject)]
 pub struct Query(
@@ -845,6 +850,18 @@ where
     .await
 }
 
+/// Generates the GraphQL schema.
+///
+/// Note: The `unused` warning appears because this function is only used in
+/// `schema_should_be_up_to_date` (test code) and `gen_schema.rs` (an auxiliary binary), which are
+/// not detected by the compiler as part of the main binary.
+#[allow(unused)]
+pub(crate) fn generate_schema() -> String {
+    Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+        .finish()
+        .sdl()
+}
+
 macro_rules! impl_string_number {
     ($struct_name:ident, $type:ty) => {
         #[derive(Debug, PartialEq, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -973,5 +990,16 @@ mod tests {
             let request: async_graphql::Request = query.into();
             self.schema.execute(request).await
         }
+    }
+
+    #[test]
+    fn schema_should_be_up_to_date() {
+        let expect = super::generate_schema();
+        let actual = std::fs::read_to_string(super::SCHEMA_PATH).unwrap();
+        assert!(
+            expect == actual,
+            "The GraphQL schema is not up to date. Please run the following command to update it.\n\
+            `cargo run --bin gen_schema --no-default-features --target-dir target_gen_schema`"
+        );
     }
 }
