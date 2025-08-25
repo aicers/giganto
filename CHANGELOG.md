@@ -58,6 +58,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   String representations of numbers (e.g., "123456") are now correctly parsed
   into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
 
+### Fixed
+
+- Fixed `retain_periodically` function to stop further delete operations on a
+  column family when a delete operation fails, preventing cascading failures
+  and reducing excessive error logs.
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed
@@ -252,9 +258,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Fixed a missing update to the schema.graphql file necessary for communication
   within the Giganto cluster.
-- Fixed `retain_periodically` function to stop further delete operations on a
-  column family when a delete operation fails, preventing cascading failures
-  and reducing excessive error logs.
 
 ## [0.22.1] - 2024-10-22
 
