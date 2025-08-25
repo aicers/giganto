@@ -79,6 +79,14 @@ pub struct BootpRawEvents;
 )]
 pub struct DhcpRawEvents;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/radius_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct RadiusRawEvents;
+
 // Currently, `PeriodicTimeSeries` is not used in cluster mode. However, this API may be extended
 // for use in the future. For now, `#[allow(dead_code)]` is applied to suppress clippy warnings.
 #[derive(GraphQLQuery)]
@@ -433,6 +441,14 @@ pub struct SearchBootpRawEvents;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct SearchDhcpRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_radius_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchRadiusRawEvents;
 
 #[derive(GraphQLQuery)]
 #[graphql(

@@ -21,6 +21,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   build process.
 - Added client certificate support for GraphQL API to enable mutual TLS (mTLS)
   authentication when communicating with other Giganto instances in a cluster.
+- Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
+  APIs (`radiusRawEvents`, `searchRadiusRawEvents`).
 
 ### Changed
 
