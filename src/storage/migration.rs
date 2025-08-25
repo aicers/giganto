@@ -15,8 +15,9 @@ use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, Netflow5BeforeV23,
-    Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, HttpFromV21BeforeV26,
+    Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21,
+    SshBeforeV21, TlsBeforeV21,
 };
 use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
@@ -24,14 +25,14 @@ use crate::{
     comm::ingest::implement::EventFilter,
     graphql::TIMESTAMP_SIZE,
     storage::{
-        Conn as ConnFromV26, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Conn as ConnFromV26, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
         Tls as TlsFromV21, rocksdb_options,
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.1,<0.26.0-alpha.2";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.2,<0.26.0-alpha.3";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -69,8 +70,8 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             migrate_0_23_to_0_24,
         ),
         (
-            VersionReq::parse(">=0.24.0,<0.26.0-alpha.1").expect("valid version requirement"),
-            Version::parse("0.26.0-alpha.1").expect("valid version"),
+            VersionReq::parse(">=0.24.0,<0.26.0-alpha.2").expect("valid version requirement"),
+            Version::parse("0.26.0-alpha.2").expect("valid version"),
             migrate_0_24_to_0_26,
         ),
     ];
@@ -231,7 +232,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<HttpFromV12BeforeV21>(&val)?;
-        let convert_new: HttpFromV21 = old.into();
+        let convert_new: HttpFromV21BeforeV26 = old.into();
         let new = bincode::serialize(&convert_new)?;
         store.append(&key, &new)?;
     }
@@ -307,6 +308,7 @@ fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
+    migrate_0_24_to_0_26_http(&db)?;
     Ok(())
 }
 
@@ -483,6 +485,22 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
     Ok(())
 }
 
+fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
+    info!("Starting migration for http field consolidation");
+    let store = db.http_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<HttpFromV21BeforeV26>(&val)?;
+        let convert_new: HttpFromV26 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for http field consolidation");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -500,13 +518,14 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::migration::migration_structures::{ConnFromV21BeforeV26, OpLogBeforeV24};
     use crate::storage::{
-        Conn as ConnFromV26, Database, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
+        Conn as ConnFromV26, Database, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
         Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
         Tls as TlsFromV21, data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
-            ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23,
-            NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
+            ConnBeforeV21, HttpFromV12BeforeV21, HttpFromV21BeforeV26, Netflow5BeforeV23,
+            Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21,
+            TlsBeforeV21,
         },
     };
 
@@ -898,8 +917,8 @@ mod tests {
         let http_store = db.http_store().unwrap();
         let raw_event = http_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
-        let store_http = bincode::deserialize::<HttpFromV21>(&val).unwrap();
-        let new_http = HttpFromV21 {
+        let store_http = bincode::deserialize::<HttpFromV21BeforeV26>(&val).unwrap();
+        let new_http = HttpFromV21BeforeV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1288,7 +1307,6 @@ mod tests {
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let conn_store = db.conn_store().unwrap();
 
         // prepare old conn raw data
         let old_conn = ConnFromV21BeforeV26 {
@@ -1317,10 +1335,52 @@ mod tests {
             .build()
             .key();
 
+        let old_http = HttpFromV21BeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            method: "POST".to_string(),
+            host: "cluml".to_string(),
+            uri: "/cluml.gif".to_string(),
+            referer: "cluml.com".to_string(),
+            version: String::new(),
+            user_agent: "giganto".to_string(),
+            request_len: 0,
+            response_len: 0,
+            status_code: 200,
+            status_msg: String::new(),
+            username: String::new(),
+            password: String::new(),
+            cookie: String::new(),
+            content_encoding: String::new(),
+            content_type: String::new(),
+            cache_control: String::new(),
+            orig_filenames: vec!["a".to_string()],
+            orig_mime_types: vec!["1".to_string()],
+            resp_filenames: vec!["b".to_string()],
+            resp_mime_types: vec!["2".to_string()],
+            post_body: vec![30, 31],
+            state: String::new(),
+        };
+        let ser_old_http = bincode::serialize(&old_http).unwrap();
+        let http_old_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+
+        let conn_store = db.conn_store().unwrap();
         conn_store.append(&conn_old_key, &ser_old_conn).unwrap();
+
+        let http_store = db.http_store().unwrap();
+        http_store.append(&http_old_key, &ser_old_http).unwrap();
 
         // migration 0.24.0 to 0.26.0
         super::migrate_0_24_to_0_26_conn(&db).unwrap();
+        super::migrate_0_24_to_0_26_http(&db).unwrap();
 
         // check conn migration
         let raw_event = conn_store.iter_forward().next().unwrap();
@@ -1343,6 +1403,40 @@ mod tests {
             resp_l2_bytes: 0,
         };
         assert_eq!(new_conn, store_conn);
+
+        // check http migration
+        let raw_event = http_store.iter_forward().next().unwrap();
+        let (_, val) = raw_event.expect("Failed to read Database");
+        let store_http = bincode::deserialize::<HttpFromV26>(&val).unwrap();
+        let new_http = HttpFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            method: "POST".to_string(),
+            host: "cluml".to_string(),
+            uri: "/cluml.gif".to_string(),
+            referer: "cluml.com".to_string(),
+            version: String::new(),
+            user_agent: "giganto".to_string(),
+            request_len: 0,
+            response_len: 0,
+            status_code: 200,
+            status_msg: String::new(),
+            username: String::new(),
+            password: String::new(),
+            cookie: String::new(),
+            content_encoding: String::new(),
+            content_type: String::new(),
+            cache_control: String::new(),
+            filenames: vec!["a".to_string(), "b".to_string()],
+            mime_types: vec!["1".to_string(), "2".to_string()],
+            body: vec![30, 31],
+            state: String::new(),
+        };
+        assert_eq!(new_http, store_http);
     }
 
     #[test]

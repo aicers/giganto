@@ -63,7 +63,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.1";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.2";
 
 struct TestClient {
     conn: Connection,
@@ -318,11 +318,9 @@ async fn http() {
         content_encoding: String::new(),
         content_type: String::new(),
         cache_control: String::new(),
-        orig_filenames: Vec::new(),
-        orig_mime_types: Vec::new(),
-        resp_filenames: Vec::new(),
-        resp_mime_types: Vec::new(),
-        post_body: Vec::new(),
+        filenames: Vec::new(),
+        mime_types: Vec::new(),
+        body: Vec::new(),
         state: String::new(),
     };
 

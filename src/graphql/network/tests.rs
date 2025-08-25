@@ -707,11 +707,9 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
         content_encoding: String::new(),
         content_type: String::new(),
         cache_control: String::new(),
-        orig_filenames: Vec::new(),
-        orig_mime_types: Vec::new(),
-        resp_filenames: Vec::new(),
-        resp_mime_types: Vec::new(),
-        post_body: Vec::new(),
+        filenames: Vec::new(),
+        mime_types: Vec::new(),
+        body: Vec::new(),
         state: String::new(),
     };
     let ser_http_body = bincode::serialize(&http_body).unwrap();
@@ -784,23 +782,17 @@ async fn http_with_data_giganto_cluster() {
                             "contentEncoding": "gzip",
                             "contentType": "text/html",
                             "cacheControl": "no-cache",
-                            "origFilenames": [
+                            "filenames": [
                                 "file1.txt",
-                                "file2.txt"
-                            ],
-                            "origMimeTypes": [
-                                "text/plain",
-                                "text/plain"
-                            ],
-                            "respFilenames": [
+                                "file2.txt",
                                 "response1.txt",
                                 "response2.txt"
                             ],
-                            "respMimeTypes": [
+                            "mimeTypes": [
                                 "text/plain",
                                 "text/plain"
                             ],
-                            "postBody": [
+                            "body": [
                                 200,
                                 300
                             ],

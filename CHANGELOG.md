@@ -45,6 +45,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Changed `duration` field to `end_time` for Conn raw events in GraphQL APIs and
   data structures to align with other network event structures and provide clearer
   semantics. This field represents the end time of connection sessions.
+- Consolidated HTTP event fields to improve data structure efficiency and reduce
+  redundancy. Changes include:
+  - Merged `orig_filenames` and `resp_filenames` into single `filenames` field
+  - Merged `orig_mime_types` and `resp_mime_types` into single `mime_types` field
+  - Renamed `post_body` field to `body` for consistency
+  - Updated migration functionality to handle field consolidation from older versions
 
 ## [0.25.1] - 2025-07-08
 
