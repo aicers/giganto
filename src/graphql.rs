@@ -909,7 +909,9 @@ mod tests {
     use async_graphql::EmptySubscription;
     use tokio::sync::Notify;
 
-    use super::{NodeName, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, schema};
+    use super::{
+        NodeName, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, schema,
+    };
     use crate::comm::{
         IngestSensors, new_pcap_sensors,
         peer::{PeerInfo, Peers},
