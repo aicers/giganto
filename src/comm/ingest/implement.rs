@@ -36,6 +36,10 @@ pub trait EventFilter {
     }
 }
 
+pub trait EventStartTime {
+    fn start_time(&self) -> Option<i64>;
+}
+
 impl EventFilter for Conn {
     fn data_type(&self) -> String {
         "conn".to_string()
@@ -1025,5 +1029,41 @@ impl EventFilter for SecuLog {
     }
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
+    }
+}
+
+impl EventStartTime for Conn {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
+    }
+}
+
+impl EventStartTime for Http {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
+    }
+}
+
+impl EventStartTime for Smtp {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
+    }
+}
+
+impl EventStartTime for Ntlm {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
+    }
+}
+
+impl EventStartTime for Ssh {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
+    }
+}
+
+impl EventStartTime for Tls {
+    fn start_time(&self) -> Option<i64> {
+        Some(self.start_time)
     }
 }

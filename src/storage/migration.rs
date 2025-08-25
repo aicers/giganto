@@ -309,6 +309,10 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
     migrate_0_24_to_0_26_http(&db)?;
+    migrate_0_24_to_0_26_smtp(&db)?;
+    migrate_0_24_to_0_26_ntlm(&db)?;
+    migrate_0_24_to_0_26_ssh(&db)?;
+    migrate_0_24_to_0_26_tls(&db)?;
     Ok(())
 }
 
@@ -459,7 +463,7 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
         // Calculate end_time by adding duration to session start time
         let end_time = session_start_time + old.duration;
 
-        // Create new conn structure with end_time instead of duration
+        // Create new conn structure with start_time and end_time instead of duration
         let new_conn = ConnFromV26 {
             orig_addr: old.orig_addr,
             orig_port: old.orig_port,
@@ -467,6 +471,7 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
             resp_port: old.resp_port,
             proto: old.proto,
             conn_state: old.conn_state,
+            start_time: session_start_time,
             end_time,
             service: old.service,
             orig_bytes: old.orig_bytes,
@@ -498,6 +503,70 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
     }
 
     info!("Completed migration for http field consolidation");
+    Ok(())
+}
+
+fn migrate_0_24_to_0_26_smtp(db: &Database) -> Result<()> {
+    info!("Starting migration for smtp start_time field");
+    let store = db.smtp_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<SmtpBeforeV21>(&val)?;
+        let convert_new: SmtpFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for smtp start_time field");
+    Ok(())
+}
+
+fn migrate_0_24_to_0_26_ntlm(db: &Database) -> Result<()> {
+    info!("Starting migration for ntlm start_time field");
+    let store = db.ntlm_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<NtlmBeforeV21>(&val)?;
+        let convert_new: NtlmFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for ntlm start_time field");
+    Ok(())
+}
+
+fn migrate_0_24_to_0_26_ssh(db: &Database) -> Result<()> {
+    info!("Starting migration for ssh start_time field");
+    let store = db.ssh_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<SshBeforeV21>(&val)?;
+        let convert_new: SshFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for ssh start_time field");
+    Ok(())
+}
+
+fn migrate_0_24_to_0_26_tls(db: &Database) -> Result<()> {
+    info!("Starting migration for tls start_time field");
+    let store = db.tls_store()?;
+
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<TlsBeforeV21>(&val)?;
+        let convert_new: TlsFromV21 = old.into();
+        let new = bincode::serialize(&convert_new)?;
+        store.append(&key, &new)?;
+    }
+
+    info!("Completed migration for tls start_time field");
     Ok(())
 }
 
@@ -924,6 +993,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             method: "POST".to_string(),
             host: "cluml".to_string(),
@@ -961,6 +1031,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             mailfrom: "mailfrom".to_string(),
             date: "date".to_string(),
@@ -983,6 +1054,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             protocol: String::new(),
             username: "bly".to_string(),
@@ -1003,6 +1075,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             client: "client".to_string(),
             server: "server".to_string(),
@@ -1031,6 +1104,7 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             server_name: "server_name".to_string(),
             alpn_protocol: "alpn_protocol".to_string(),
@@ -1341,6 +1415,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             method: "POST".to_string(),
             host: "cluml".to_string(),
@@ -1393,6 +1468,7 @@ mod tests {
             resp_port: 80,
             proto: 6,
             conn_state: String::new(),
+            start_time: timestamp,
             end_time: timestamp + 100,
             service: "-".to_string(),
             orig_bytes: 77,
@@ -1414,6 +1490,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: 1,
             end_time: 1,
             method: "POST".to_string(),
             host: "cluml".to_string(),
