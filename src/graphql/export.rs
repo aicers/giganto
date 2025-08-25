@@ -21,7 +21,7 @@ use giganto_client::{
         netflow::{Netflow5, Netflow9},
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass,
-            Qtype, Rdp, Smb, Smtp, Ssh, Tls,
+            Qtype, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -54,7 +54,7 @@ use crate::{
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
 
-const ADDRESS_PROTOCOL: [&str; 18] = [
+const ADDRESS_PROTOCOL: [&str; 19] = [
     "conn",
     "dns",
     "http",
@@ -72,6 +72,7 @@ const ADDRESS_PROTOCOL: [&str; 18] = [
     "nfs",
     "bootp",
     "dhcp",
+    "radius",
     "network connect",
 ];
 const AGENT_PROTOCOL: [&str; 14] = [
@@ -487,6 +488,33 @@ struct DhcpJsonOutput {
     class_id: Vec<u8>,
     client_id_type: u8,
     client_id: Vec<u8>,
+}
+
+#[derive(Serialize, Debug)]
+struct RadiusJsonOutput {
+    time: String,
+    sensor: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    start_time: i64,
+    end_time: i64,
+    id: u8,
+    code: u8,
+    resp_code: u8,
+    auth: String,
+    resp_auth: String,
+    user_name: Vec<u8>,
+    user_passwd: Vec<u8>,
+    chap_passwd: Vec<u8>,
+    nas_ip: String,
+    nas_port: u32,
+    state: Vec<u8>,
+    nas_id: Vec<u8>,
+    nas_port_type: u32,
+    message: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -1208,6 +1236,36 @@ impl JsonOutput<DhcpJsonOutput> for Dhcp {
     }
 }
 
+impl JsonOutput<RadiusJsonOutput> for Radius {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<RadiusJsonOutput> {
+        Ok(RadiusJsonOutput {
+            time,
+            sensor,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            start_time: self.start_time,
+            end_time: self.end_time,
+            id: self.id,
+            code: self.code,
+            resp_code: self.resp_code,
+            auth: self.auth.clone(),
+            resp_auth: self.resp_auth.clone(),
+            user_name: self.user_name.clone(),
+            user_passwd: self.user_passwd.clone(),
+            chap_passwd: self.chap_passwd.clone(),
+            nas_ip: self.nas_ip.to_string(),
+            nas_port: self.nas_port,
+            state: self.state.clone(),
+            nas_id: self.nas_id.clone(),
+            nas_port_type: self.nas_port_type,
+            message: self.message.clone(),
+        })
+    }
+}
+
 impl JsonOutput<StatisticsJsonOutput> for Statistics {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<StatisticsJsonOutput> {
         Ok(StatisticsJsonOutput {
@@ -1797,6 +1855,7 @@ fn export_by_protocol(
         "nfs" => spawn_export!(nfs_store, process_export),
         "bootp" => spawn_export!(bootp_store, process_export),
         "dhcp" => spawn_export!(dhcp_store, process_export),
+        "radius" => spawn_export!(radius_store, process_export),
         "statistics" => spawn_export!(statistics_store, process_statistics_export),
         "process create" => spawn_export!(process_create_store, process_export),
         "file create time" => spawn_export!(file_create_time_store, process_export),

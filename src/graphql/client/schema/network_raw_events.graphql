@@ -361,6 +361,30 @@ query NetworkRawEvents(
           clientIdType
           clientId
         }
+        ... on RadiusRawEvent {
+          time
+          origAddr
+          origPort
+          respAddr
+          respPort
+          proto
+          startTime
+          endTime
+          id
+          code
+          respCode
+          auth
+          respAuth
+          userName
+          userPasswd
+          chapPasswd
+          nasIp
+          nasPort
+          state
+          nasId
+          nasPortType
+          message
+        }
       }
     }
   }

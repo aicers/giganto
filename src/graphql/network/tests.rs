@@ -3,8 +3,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{Duration, TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp,
-    Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
+    Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 
@@ -3000,6 +3000,165 @@ async fn dhcp_with_data_giganto_cluster() {
 }
 
 #[tokio::test]
+async fn radius_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.radius_store().unwrap();
+
+    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        radiusRawEvents(
+            filter: {
+                sensor: "src 1"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    nasPort,
+                    code,
+                    respCode,
+                    message,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", nasPort: \"12345\", \
+        code: 1, respCode: 2, message: \"test_message\"}}]}}"
+    );
+}
+
+fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let radius_body = Radius {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 1812,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 1813,
+        proto: 17,
+        start_time: 1,
+        end_time: 2,
+        id: 123,
+        code: 1,
+        resp_code: 2,
+        auth: "00112233445566778899aabbccddeeff".to_string(),
+        resp_auth: "ffeeddccbbaa99887766554433221100".to_string(),
+        user_name: "test_user".to_string().into_bytes(),
+        user_passwd: "test_password".to_string().into_bytes(),
+        chap_passwd: vec![2u8; 16],
+        nas_ip: "192.168.1.1".parse::<IpAddr>().unwrap(),
+        nas_port: 12345,
+        state: vec![3u8; 8],
+        nas_id: "test_nas".to_string().into_bytes(),
+        nas_port_type: 15,
+        message: "test_message".to_string(),
+    };
+    let ser_radius_body = bincode::serialize(&radius_body).unwrap();
+
+    store.append(&key, &ser_radius_body).unwrap();
+}
+
+#[tokio::test]
+async fn radius_with_data_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        radiusRawEvents(
+            filter: {
+                sensor: "src 2"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    nasPort,
+                    code,
+                    respCode,
+                    message,
+                }
+            }
+        }
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "radiusRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": true,
+                    "hasNextPage": false
+                },
+                "edges": [
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 1812,
+                            "respPort": 1813,
+                            "proto": 17,
+                            "startTime": "1",
+                            "endTime": "2",
+                            "id": 123,
+                            "code": 1,
+                            "respCode": 2,
+                            "auth": "00112233445566778899aabbccddeeff",
+                            "respAuth": "ffeeddccbbaa99887766554433221100",
+                            "userName": [116, 101, 115, 116, 95, 117, 115, 101, 114],
+                            "userPasswd": [116, 101, 115, 116, 95, 112, 97, 115, 115, 119, 111, 114, 100],
+                            "chapPasswd": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+                            "nasIp": "192.168.1.1",
+                            "nasPort": "12345",
+                            "state": [3, 3, 3, 3, 3, 3, 3, 3],
+                            "nasId": [116, 101, 115, 116, 95, 110, 97, 115],
+                            "nasPortType": "15",
+                            "message": "test_message"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(
+        res.data.to_string(),
+        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", nasPort: \"12345\", \
+        code: 1, respCode: 2, message: \"test_message\"}}]}}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_search_boundary_for_addr_port() {
     let schema = TestSchema::new();
@@ -4504,5 +4663,41 @@ async fn search_dhcp_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{searchDhcpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+}
+
+#[tokio::test]
+async fn search_radius_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.radius_store().unwrap();
+
+    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+    insert_radius_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        searchRadiusRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 1810, end: 1815 }
+                respPort: { start: 1810, end: 1815 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
 }

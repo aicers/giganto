@@ -1,0 +1,3 @@
+query SearchRadiusRawEvents($filter: SearchFilter!) {
+  searchRadiusRawEvents(filter: $filter)
+}
