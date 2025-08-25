@@ -52,6 +52,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - Renamed `post_body` field to `body` for consistency
   - Updated migration functionality to handle field consolidation from older versions
 
+### Fixed
+
+- Fixed `retain_periodically` function to stop further delete operations on a
+  column family when a delete operation fails, preventing cascading failures
+  and reducing excessive error logs.
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed
