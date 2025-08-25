@@ -395,7 +395,7 @@ mod tests {
                         "sensor": "src 2",
                         "stats": [
                             {
-                                "timestamp": 1702272566,
+                                "timestamp": "1702272566",
                                 "detail": [
                                     {
                                         "protocol": "Statistics",
@@ -467,7 +467,7 @@ mod tests {
                         "sensor": "src2",
                         "stats": [
                             {
-                                "timestamp": 1702272560,
+                                "timestamp": "1702272560",
                                 "detail": [
                                     {
                                         "protocol": "Statistics",
@@ -483,7 +483,7 @@ mod tests {
                         "sensor": "ingest src 2",
                         "stats": [
                             {
-                                "timestamp": 1702272560,
+                                "timestamp": "1702272560",
                                 "detail": [
                                     {
                                         "protocol": "Statistics",
@@ -499,7 +499,7 @@ mod tests {
                         "sensor": "src 2",
                         "stats": [
                             {
-                                "timestamp": 1702272560,
+                                "timestamp": "1702272560",
                                 "detail": [
                                     {
                                         "protocol": "Statistics",
