@@ -46,6 +46,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   data structures to align with other network event structures and provide clearer
   semantics. This field represents the end time of connection sessions.
 
+### Fixed
+
+- Fixed `retain_periodically` function to stop further delete operations on a
+  column family when a delete operation fails, preventing cascading failures
+  and reducing excessive error logs.
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed
@@ -240,9 +246,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Fixed a missing update to the schema.graphql file necessary for communication
   within the Giganto cluster.
-- Fixed `retain_periodically` function to stop further delete operations on a
-  column family when a delete operation fails, preventing cascading failures
-  and reducing excessive error logs.
 
 ## [0.22.1] - 2024-10-22
 
