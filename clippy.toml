@@ -1,1 +1,2 @@
 doc-valid-idents = [ "GraphQL", "RocksDB" ]
+allow-unwrap-in-tests = true
