@@ -42,6 +42,7 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
+use crate::comm::ingest::implement::EventStartTime;
 use crate::comm::publish::send_direct_stream;
 use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::server::{
@@ -64,6 +65,20 @@ static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 enum ConnState {
     Connected,
     Disconnected,
+}
+
+fn get_event_start_time(event_kind: RawEventKind, raw_event: &[u8]) -> Option<i64> {
+    use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
+
+    match event_kind {
+        RawEventKind::Conn => bincode::deserialize::<Conn>(raw_event).ok()?.start_time(),
+        RawEventKind::Http => bincode::deserialize::<Http>(raw_event).ok()?.start_time(),
+        RawEventKind::Smtp => bincode::deserialize::<Smtp>(raw_event).ok()?.start_time(),
+        RawEventKind::Ntlm => bincode::deserialize::<Ntlm>(raw_event).ok()?.start_time(),
+        RawEventKind::Ssh => bincode::deserialize::<Ssh>(raw_event).ok()?.start_time(),
+        RawEventKind::Tls => bincode::deserialize::<Tls>(raw_event).ok()?.start_time(),
+        _ => None,
+    }
 }
 
 pub struct Server {
@@ -971,10 +986,14 @@ async fn handle_data<T>(
                                 .end_key(timestamp)
                                 .build()
                         }
-                        _ => StorageKey::builder()
-                            .start_key(&sensor)
-                            .end_key(timestamp)
-                            .build(),
+                        _ => {
+                            let event_time = get_event_start_time(raw_event_kind, &raw_event)
+                                .unwrap_or(timestamp);
+                            StorageKey::builder()
+                                .start_key(&sensor)
+                                .end_key(event_time)
+                                .build()
+                        }
                     };
 
                     recv_events_cnt += 1;
