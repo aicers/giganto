@@ -549,6 +549,20 @@ async fn handle_request(
             )
             .await?;
         }
+        RawEventKind::Radius => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::Radius,
+                Some(NetworkKey::new(&sensor, "radius")),
+                sensor,
+                db.radius_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
         RawEventKind::ProcessCreate => {
             handle_data(
                 send,

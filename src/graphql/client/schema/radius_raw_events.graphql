@@ -1,0 +1,49 @@
+query RadiusRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  radiusRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        origPort
+        respAddr
+        respPort
+        proto
+        startTime
+        endTime
+        id
+        code
+        respCode
+        auth
+        respAuth
+        userName
+        userPasswd
+        chapPasswd
+        nasIp
+        nasPort
+        state
+        nasId
+        nasPortType
+        message
+      }
+    }
+  }
+}
