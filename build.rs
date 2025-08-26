@@ -1,9 +1,15 @@
 use std::{env, fs, process::Command};
 
 fn main() {
-    if env::var("BUILD_GEN_SCHEMA").is_err() && env::var("PROFILE").unwrap_or_default() == "dev" {
+    if env::var("CARGO_CFG_FEATURE")
+        .unwrap_or_default()
+        .contains("cluster")
+        && !env::var("CI")
+            .unwrap_or_default()
+            .parse::<bool>()
+            .unwrap_or(false)
+    {
         let status = Command::new("cargo")
-            .env("BUILD_GEN_SCHEMA", "1")
             .args([
                 "run",
                 "--bin",
