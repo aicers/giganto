@@ -907,9 +907,11 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|item| match item {
-            Ok((key, value)) => bincode::deserialize::<T>(&value)
-                .map(|value| (key, value))
-                .map_err(Into::into),
+            Ok((key, value)) => {
+                bincode::serde::decode_from_slice::<T, _>(&value, bincode::config::legacy())
+                    .map(|(value, _)| (key, value))
+                    .map_err(Into::into)
+            }
 
             Err(e) => Err(e.into()),
         })

@@ -169,7 +169,8 @@ mod tests {
             id: id.to_string(),
             data,
         };
-        let value = bincode::serialize(&time_series_data).unwrap();
+        let value =
+            bincode::serde::encode_to_vec(&time_series_data, bincode::config::legacy()).unwrap();
         store.append(&key, &value).unwrap();
     }
 }
