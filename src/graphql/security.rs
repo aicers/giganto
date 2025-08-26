@@ -320,7 +320,8 @@ mod tests {
             proto: None,
             contents: format!("secu_log_contents {timestamp}").to_string(),
         };
-        let value = bincode::serialize(&secu_log_body).unwrap();
+        let value =
+            bincode::serde::encode_to_vec(&secu_log_body, bincode::config::legacy()).unwrap();
 
         store.append(&key, &value).unwrap();
     }

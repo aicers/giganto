@@ -1257,8 +1257,8 @@ async fn send_events<T: Serialize>(
     timestamp: i64,
     msg: T,
 ) -> anyhow::Result<()> {
-    let msg_buf = bincode::serialize(&msg)?;
-    let buf = bincode::serialize(&vec![(timestamp, msg_buf)])?;
+    let msg_buf = bincode::serde::encode_to_vec(&msg, bincode::config::legacy())?;
+    let buf = bincode::serde::encode_to_vec(vec![(timestamp, msg_buf)], bincode::config::legacy())?;
     send_raw(send, &buf).await?;
     Ok(())
 }

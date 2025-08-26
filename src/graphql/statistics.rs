@@ -363,7 +363,7 @@ mod tests {
             period,
             stats: vec![(RawEventKind::Statistics, count, size)],
         };
-        let msg = bincode::serialize(&msg).unwrap();
+        let msg = bincode::serde::encode_to_vec(&msg, bincode::config::legacy()).unwrap();
         store.append(&key, &msg).unwrap();
     }
 
