@@ -57,7 +57,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.
   String representations of numbers (e.g., "123456") are now correctly parsed
   into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
-- Fixed `retain_periodically` function to stop further delete operations on a
+- Modified `retain_periodically` function to stop further delete operations on a
   column family when a delete operation fails, preventing cascading failures
   and reducing excessive error logs.
 
