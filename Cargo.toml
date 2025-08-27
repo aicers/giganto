@@ -79,3 +79,4 @@ cluster = []
 
 [lints.clippy]
 pedantic = "warn"
+unwrap_used = "warn"
