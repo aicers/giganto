@@ -864,8 +864,20 @@ pub(crate) fn generate_schema() -> String {
 
 macro_rules! impl_string_number {
     ($struct_name:ident, $type:ty) => {
-        #[derive(Debug, PartialEq, Default, Clone, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, PartialEq, Default, Clone, serde::Serialize)]
         pub struct $struct_name(pub $type);
+
+        impl<'de> serde::Deserialize<'de> for $struct_name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                s.parse::<$type>()
+                    .map($struct_name)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
 
         #[Scalar]
         impl ScalarType for $struct_name {
@@ -897,7 +909,9 @@ mod tests {
     use async_graphql::EmptySubscription;
     use tokio::sync::Notify;
 
-    use super::{NodeName, schema};
+    use super::{
+        NodeName, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, schema,
+    };
     use crate::comm::{
         IngestSensors, new_pcap_sensors,
         peer::{PeerInfo, Peers},
@@ -1001,5 +1015,46 @@ mod tests {
             "The GraphQL schema is not up to date. Please run the following command to update it.\n\
             `cargo run --bin gen_schema --no-default-features --target-dir target_gen_schema`"
         );
+    }
+
+    #[test]
+    fn string_number_deserialization_from_string() {
+        // Test StringNumberU64
+        let json_str = r#""12345678901234""#;
+        let result: StringNumberU64 = serde_json::from_str(json_str).unwrap();
+        assert_eq!(result.0, 12_345_678_901_234_u64);
+
+        // Test StringNumberU32
+        let json_str = r#""12345""#;
+        let result: StringNumberU32 = serde_json::from_str(json_str).unwrap();
+        assert_eq!(result.0, 12345_u32);
+
+        // Test StringNumberI64
+        let json_str = r#""-9876543210""#;
+        let result: StringNumberI64 = serde_json::from_str(json_str).unwrap();
+        assert_eq!(result.0, -9_876_543_210_i64);
+
+        // Test StringNumberUsize
+        let json_str = r#""98765""#;
+        let result: StringNumberUsize = serde_json::from_str(json_str).unwrap();
+        assert_eq!(result.0, 98765_usize);
+    }
+
+    #[test]
+    fn string_number_deserialization_handles_invalid_input() {
+        // Test invalid string for StringNumberU64
+        let json_str = r#""not_a_number""#;
+        let result: Result<StringNumberU64, _> = serde_json::from_str(json_str);
+        assert!(result.is_err());
+
+        // Test empty string
+        let json_str = r#""""#;
+        let result: Result<StringNumberU64, _> = serde_json::from_str(json_str);
+        assert!(result.is_err());
+
+        // Test overflow for u32
+        let json_str = r#""99999999999999999999""#;
+        let result: Result<StringNumberU32, _> = serde_json::from_str(json_str);
+        assert!(result.is_err());
     }
 }
