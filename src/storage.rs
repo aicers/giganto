@@ -1017,6 +1017,7 @@ pub async fn retain_periodically(
                                 if retention_timestamp > data_timestamp {
                                     if store.delete(&key).is_err() {
                                         warn!("Failed to delete data");
+                                        break;
                                     }
                                 } else {
                                     break;
