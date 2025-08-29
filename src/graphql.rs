@@ -197,25 +197,28 @@ where
     target_data
         .iter()
         .filter_map(|(time, value)| {
-            bincode::deserialize::<T>(value).ok().and_then(|raw_event| {
-                if *time >= start && *time < end {
-                    filter
-                        .check(
-                            raw_event.orig_addr(),
-                            raw_event.resp_addr(),
-                            raw_event.orig_port(),
-                            raw_event.resp_port(),
-                            raw_event.log_level(),
-                            raw_event.log_contents(),
-                            raw_event.text(),
-                            raw_event.sensor(),
-                            raw_event.agent_id(),
-                        )
-                        .map_or(None, |c| c.then_some(*time))
-                } else {
-                    None
-                }
-            })
+            bincode::serde::decode_from_slice::<T, _>(value, bincode::config::legacy())
+                .ok()
+                .map(|(v, _)| v)
+                .and_then(|raw_event| {
+                    if *time >= start && *time < end {
+                        filter
+                            .check(
+                                raw_event.orig_addr(),
+                                raw_event.resp_addr(),
+                                raw_event.orig_port(),
+                                raw_event.resp_port(),
+                                raw_event.log_level(),
+                                raw_event.log_contents(),
+                                raw_event.text(),
+                                raw_event.sensor(),
+                                raw_event.agent_id(),
+                            )
+                            .map_or(None, |c| c.then_some(*time))
+                    } else {
+                        None
+                    }
+                })
         })
         .collect::<Vec<_>>()
 }

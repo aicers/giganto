@@ -24,9 +24,7 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
-use giganto_client::publish::{
-    PublishError, receive_range_data, recv_ack_response, send_range_data_request,
-};
+use giganto_client::publish::{receive_range_data, recv_ack_response, send_range_data_request};
 use giganto_client::{
     RawEventKind,
     connection::server_handshake,
@@ -475,7 +473,8 @@ pub async fn send_direct_stream(
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
             if req_key.contains("SemiSupervised") {
-                let sensor_bytes = bincode::serialize(&sensor)?;
+                let sensor_bytes =
+                    bincode::serde::encode_to_vec(sensor, bincode::config::legacy())?;
                 let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&sensor_len);
                 send_buf.extend_from_slice(&sensor_bytes);
@@ -643,8 +642,12 @@ async fn handle_request(
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
         MessageCode::ReqRange => {
-            let msg = bincode::deserialize::<RequestRange>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
+            let msg = bincode::serde::decode_from_slice::<RequestRange, _>(
+                &msg_buf,
+                bincode::config::legacy(),
+            )
+            .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?
+            .0;
 
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
@@ -1127,7 +1130,12 @@ async fn handle_request(
             }
         }
         MessageCode::Pcap => {
-            let filters = match bincode::deserialize::<Vec<PcapFilter>>(&msg_buf) {
+            let filters = match bincode::serde::decode_from_slice::<Vec<PcapFilter>, _>(
+                &msg_buf,
+                bincode::config::legacy(),
+            )
+            .map(|(v, _)| v)
+            {
                 Ok(filters) => filters,
                 Err(e) => {
                     let mut buf = Vec::new();
@@ -1149,8 +1157,12 @@ async fn handle_request(
             .await?;
         }
         MessageCode::RawData => {
-            let msg: RequestRawData = bincode::deserialize::<RequestRawData>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
+            let msg: RequestRawData = bincode::serde::decode_from_slice::<RequestRawData, _>(
+                &msg_buf,
+                bincode::config::legacy(),
+            )
+            .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?
+            .0;
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
                     process_raw_events::<Conn, u8>(
@@ -1690,8 +1702,9 @@ where
         let event: Option<(i64, String, Vec<I>)> = receive_range_data(&mut peer_recv).await?;
         if let Some(event_data) = event {
             let event_data_again: Option<(i64, String, Vec<I>)> = Some(event_data);
-            let send_buf = bincode::serialize(&event_data_again)
-                .map_err(PublishError::SerialDeserialFailure)?;
+            let send_buf =
+                bincode::serde::encode_to_vec(&event_data_again, bincode::config::legacy())
+                    .map_err(|e| anyhow!("Serialization error: {}", e))?;
             send_raw(send, &send_buf).await?;
         } else {
             break;
@@ -1786,7 +1799,7 @@ where
     }
 
     for (timestamp, sensor, value) in output {
-        let val = bincode::deserialize::<T>(&value)?;
+        let val = bincode::serde::decode_from_slice::<T, _>(&value, bincode::config::legacy())?.0;
         send_range_data(send, Some((val, timestamp, &sensor))).await?;
     }
 
@@ -1833,8 +1846,9 @@ where
             while let Some(event) =
                 receive_range_data::<Option<(i64, String, Vec<I>)>>(&mut peer_recv).await?
             {
-                let send_buf = bincode::serialize(&Some(event))
-                    .map_err(PublishError::SerialDeserialFailure)?;
+                let send_buf =
+                    bincode::serde::encode_to_vec(Some(event), bincode::config::legacy())
+                        .map_err(|e| anyhow!("Serialization error: {}", e))?;
                 send_raw(send, &send_buf).await?;
             }
         }
