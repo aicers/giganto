@@ -52,6 +52,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - Renamed `post_body` field to `body` for consistency
   - Updated migration functionality to handle field consolidation from older versions
 
+### Removed
+
+- Removed migration support for versions earlier than v0.21.0. Database
+  migration is now only supported from v0.21.0 and above. This change removes
+  legacy migration code and improves maintainability by eliminating support for
+  outdated application versions.
+
 ### Fixed
 
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.

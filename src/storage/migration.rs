@@ -11,24 +11,20 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use rocksdb::{ColumnFamilyDescriptor, DB, WriteBatch};
 use semver::{Version, VersionReq};
-use serde::de::DeserializeOwned;
 use tracing::info;
 
 use self::migration_structures::{
-    ConnBeforeV21, ConnFromV21BeforeV26, HttpFromV12BeforeV21, HttpFromV21BeforeV26,
-    Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21,
-    SshBeforeV21, TlsBeforeV21,
+    ConnFromV21BeforeV26, HttpFromV21BeforeV26, Netflow5BeforeV23, Netflow9BeforeV23,
+    SecuLogBeforeV23,
 };
 use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
-    comm::ingest::implement::EventFilter,
     graphql::TIMESTAMP_SIZE,
     storage::{
         Conn as ConnFromV26, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,
-        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
-        Tls as TlsFromV21, rocksdb_options,
+        Netflow9 as Netflow9FromV23, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, StorageKey,
+        rocksdb_options,
     },
 };
 
@@ -49,16 +45,6 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
 
     let db_path = data_dir_to_db_path(data_dir);
     let migration: Vec<(_, _, fn(_, _) -> Result<_, _>)> = vec![
-        (
-            VersionReq::parse(">=0.13.0,<0.19.0").expect("valid version requirement"),
-            Version::parse("0.19.0").expect("valid version"),
-            migrate_0_13_to_0_19_0,
-        ),
-        (
-            VersionReq::parse(">=0.19.0,<0.21.0").expect("valid version requirement"),
-            Version::parse("0.21.0").expect("valid version"),
-            migrate_0_19_to_0_21_0,
-        ),
         (
             VersionReq::parse(">=0.21.0,<0.23.0").expect("valid version requirement"),
             Version::parse("0.23.0").expect("valid version"),
@@ -88,7 +74,9 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
                 .context("failed to update VERSION");
         }
     }
-    Err(anyhow!("migration from {version} is not supported",))
+    Err(anyhow!(
+        "migration from {version} is not supported. Only versions 0.21.0 and above are supported",
+    ))
 }
 
 fn retrieve_or_create_version(path: &Path) -> Result<Version> {
@@ -148,145 +136,6 @@ impl Database {
             db: std::sync::Arc::new(db),
         })
     }
-}
-
-// Delete the netflow5/netflow5/secuLog data in the old key and insert it with the new key.
-fn migrate_0_13_to_0_19_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open_with_old_cfs(db_path, db_opts)?;
-
-    let netflow5_store: RawEventStore<'_, Netflow5FromV23> = db.netflow5_store()?;
-    migrate_netflow_from_0_13_to_0_19_0::<Netflow5FromV23, Netflow5BeforeV23>(&netflow5_store)?;
-
-    let netflow9_store = db.netflow9_store()?;
-    migrate_netflow_from_0_13_to_0_19_0::<Netflow9FromV23, Netflow9BeforeV23>(&netflow9_store)?;
-
-    let secu_log_store = db.secu_log_store()?;
-    for raw_event in secu_log_store.iter_forward() {
-        let Ok((key, value)) = raw_event else {
-            continue;
-        };
-        secu_log_store.delete(&key)?;
-
-        let (Ok(timestamp), Ok(secu_log_raw_event)) = (
-            get_timestamp_from_key(&key),
-            bincode::deserialize::<SecuLogBeforeV23>(&value),
-        ) else {
-            continue;
-        };
-        let new_key = StorageKey::builder()
-            .start_key(&secu_log_raw_event.source)
-            .mid_key(Some(secu_log_raw_event.kind.as_bytes().to_vec()))
-            .end_key(timestamp)
-            .build();
-        secu_log_store.append(&new_key.key(), &value)?;
-    }
-
-    Ok(())
-}
-
-fn migrate_netflow_from_0_13_to_0_19_0<S, T>(store: &RawEventStore<'_, S>) -> Result<()>
-where
-    T: DeserializeOwned + EventFilter,
-    S: DeserializeOwned,
-{
-    for raw_event in store.iter_forward() {
-        let Ok((key, value)) = raw_event else {
-            continue;
-        };
-        store.delete(&key)?;
-
-        let (Ok(timestamp), Ok(netflow_raw_event)) = (
-            get_timestamp_from_key(&key),
-            bincode::deserialize::<T>(&value),
-        ) else {
-            continue;
-        };
-        let new_key = StorageKey::builder()
-            .start_key(&netflow_raw_event.sensor().expect("Netflow source field is always populated during processing, ensuring sensor value exists."))
-            .end_key(timestamp)
-            .build();
-        store.append(&new_key.key(), &value)?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_lines)]
-fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open_with_old_cfs(db_path, db_opts)?;
-
-    // migration ntlm raw event
-    info!("Starting migration for ntlm");
-    let store = db.ntlm_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<NtlmBeforeV21>(&val)?;
-        let convert_new: NtlmFromV21 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for ntlm");
-
-    // migration http raw event
-    info!("Starting migration for http");
-    let store = db.http_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<HttpFromV12BeforeV21>(&val)?;
-        let convert_new: HttpFromV21BeforeV26 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for http");
-
-    // migration ssh raw event
-    info!("Starting migration for ssh");
-    let store = db.ssh_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<SshBeforeV21>(&val)?;
-        let convert_new: SshFromV21 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for ssh");
-
-    // migration tls raw event
-    info!("Starting migration for tls");
-    let store = db.tls_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<TlsBeforeV21>(&val)?;
-        let convert_new: TlsFromV21 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for tls");
-
-    // migration smtp raw event
-    info!("Starting migration for smtp");
-    let store = db.smtp_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<SmtpBeforeV21>(&val)?;
-        let convert_new: SmtpFromV21 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for smtp");
-
-    // migration conn raw event
-    info!("Starting migration for conn");
-    let store = db.conn_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::deserialize::<ConnBeforeV21>(&val)?;
-        let convert_new: ConnFromV21BeforeV26 = old.into();
-        let new = bincode::serialize(&convert_new)?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for conn");
-
-    Ok(())
 }
 
 fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
@@ -519,13 +368,10 @@ mod tests {
     use crate::storage::migration::migration_structures::{ConnFromV21BeforeV26, OpLogBeforeV24};
     use crate::storage::{
         Conn as ConnFromV26, Database, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
-        SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
-        Tls as TlsFromV21, data_dir_to_db_path, migrate_data_dir,
+        Netflow9 as Netflow9FromV23, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, StorageKey,
+        data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
-            ConnBeforeV21, HttpFromV12BeforeV21, HttpFromV21BeforeV26, Netflow5BeforeV23,
-            Netflow9BeforeV23, NtlmBeforeV21, SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21,
-            TlsBeforeV21,
+            HttpFromV21BeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, SecuLogBeforeV23,
         },
     };
 
@@ -557,504 +403,6 @@ mod tests {
         };
 
         assert!(!compatible.matches(&breaking));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn migrate_0_13_to_0_19() {
-        const OLD_NETFLOW5_PREFIX_KEY: &str = "netflow5";
-        const OLD_NETFLOW9_PREFIX_KEY: &str = "netflow9";
-        const TEST_SENSOR: &str = "src1";
-        const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
-        const TEST_TIMESTAMP: i64 = 1000;
-
-        // open temp db
-        let db_dir = tempfile::tempdir().unwrap();
-        let db_path = data_dir_to_db_path(db_dir.path());
-
-        let netflow5_old_key = StorageKey::builder()
-            .start_key(OLD_NETFLOW5_PREFIX_KEY)
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-        let netflow5_body = Netflow5BeforeV23 {
-            source: TEST_SENSOR.to_string(),
-            src_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            dst_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            next_hop: "192.168.4.78".parse::<IpAddr>().unwrap(),
-            input: 65535,
-            output: 1,
-            d_pkts: 1,
-            d_octets: 464,
-            first: 3_477_280_180,
-            last: 3_477_280_180,
-            src_port: 9,
-            dst_port: 771,
-            tcp_flags: 0,
-            prot: 1,
-            tos: 192,
-            src_as: 0,
-            dst_as: 0,
-            src_mask: 0,
-            dst_mask: 0,
-            sequence: 64,
-            engine_type: 0,
-            engine_id: 0,
-            sampling_mode: 0,
-            sampling_rate: 0,
-        };
-        let serialized_netflow5 = bincode::serialize(&netflow5_body).unwrap();
-
-        let netflow9_old_key = StorageKey::builder()
-            .start_key(OLD_NETFLOW9_PREFIX_KEY)
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-        let netflow9_body = Netflow9BeforeV23 {
-            source: TEST_SENSOR.to_string(),
-            sequence: 3_282_250_832,
-            source_id: 17,
-            template_id: 260,
-            orig_addr: "192.168.4.75".parse::<IpAddr>().unwrap(),
-            orig_port: 5000,
-            resp_addr: "192.168.4.80".parse::<IpAddr>().unwrap(),
-            resp_port: 6000,
-            proto: 6,
-            contents: format!("netflow5_contents {TEST_TIMESTAMP}").to_string(),
-        };
-        let serialized_netflow9 = bincode::serialize(&netflow9_body).unwrap();
-
-        let secu_log_old_key = StorageKey::builder()
-            .start_key(TEST_KIND)
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-        let secu_log_body = SecuLogBeforeV23 {
-            source: TEST_SENSOR.to_string(),
-            kind: TEST_KIND.to_string(),
-            log_type: TEST_KIND.to_string(),
-            version: "V3".to_string(),
-            orig_addr: None,
-            orig_port: None,
-            resp_addr: None,
-            resp_port: None,
-            proto: None,
-            contents: format!("secu_log_contents {TEST_TIMESTAMP}").to_string(),
-        };
-        let serialized_secu_log = bincode::serialize(&secu_log_body).unwrap();
-
-        {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-            // insert netflow5 data using the old key.
-            let netflow5_store = db.netflow5_store().unwrap();
-            netflow5_store
-                .append(&netflow5_old_key, &serialized_netflow5)
-                .unwrap();
-
-            // insert netflow9 data using the old key.
-            let netflow9_store = db.netflow9_store().unwrap();
-            netflow9_store
-                .append(&netflow9_old_key, &serialized_netflow9)
-                .unwrap();
-
-            // insert secuLog data using the old key.
-            let secu_log_store = db.secu_log_store().unwrap();
-
-            secu_log_store
-                .append(&secu_log_old_key, &serialized_secu_log)
-                .unwrap();
-        }
-
-        // migration 0.13.0 to 0.19.0
-        super::migrate_0_13_to_0_19_0(&db_path, &DbOptions::default()).unwrap();
-
-        // check netflow5/9 migration
-
-        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-        let netflow_new_key = StorageKey::builder()
-            .start_key(TEST_SENSOR)
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-
-        let netflow5_store = db.netflow5_store().unwrap();
-        let mut result_iter = netflow5_store.iter_forward();
-        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
-
-        assert_ne!(netflow5_old_key, result_key.to_vec());
-        assert_eq!(netflow_new_key, result_key.to_vec());
-        assert_eq!(serialized_netflow5, result_value.to_vec());
-
-        let netflow9_store = db.netflow9_store().unwrap();
-
-        let mut result_iter = netflow9_store.iter_forward();
-        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
-
-        assert_ne!(netflow9_old_key, result_key.to_vec());
-        assert_eq!(netflow_new_key, result_key.to_vec());
-        assert_eq!(serialized_netflow9, result_value.to_vec());
-
-        //check secuLog migration
-        let secu_log_new_key = StorageKey::builder()
-            .start_key(TEST_SENSOR)
-            .mid_key(Some(TEST_KIND.as_bytes().to_vec()))
-            .end_key(TEST_TIMESTAMP)
-            .build()
-            .key();
-
-        let secu_log_store = db.secu_log_store().unwrap();
-
-        let mut result_iter = secu_log_store.iter_forward();
-        let (result_key, result_value) = result_iter.next().unwrap().unwrap();
-
-        assert_ne!(secu_log_old_key, result_key.to_vec());
-        assert_eq!(secu_log_new_key, result_key.to_vec());
-        assert_eq!(serialized_secu_log, result_value.to_vec());
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn migrate_0_19_to_0_21_0() {
-        // open temp db & store
-        let db_dir = tempfile::tempdir().unwrap();
-        let db_path = data_dir_to_db_path(db_dir.path());
-
-        // generate key
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let sensor = "src1";
-        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
-        key.extend_from_slice(sensor.as_bytes());
-        key.push(0);
-        key.extend(timestamp.to_be_bytes());
-
-        // prepare old conn raw data
-        let old_conn = ConnBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 6,
-            duration: 1,
-            service: "-".to_string(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-        };
-        let ser_old_conn = bincode::serialize(&old_conn).unwrap();
-
-        // prepare old http raw data
-        let old_http = HttpFromV12BeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            method: "POST".to_string(),
-            host: "cluml".to_string(),
-            uri: "/cluml.gif".to_string(),
-            referer: "cluml.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-        };
-        let ser_old_http = bincode::serialize(&old_http).unwrap();
-
-        // prepare old smtp raw data
-        let old_smtp = SmtpBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            mailfrom: "mailfrom".to_string(),
-            date: "date".to_string(),
-            from: "from".to_string(),
-            to: "to".to_string(),
-            subject: "subject".to_string(),
-            agent: "agent".to_string(),
-        };
-        let ser_old_smtp = bincode::serialize(&old_smtp).unwrap();
-
-        // prepare old ntlm raw data
-        let old_ntlm = NtlmBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            username: "bly".to_string(),
-            hostname: "host".to_string(),
-            domainname: "domain".to_string(),
-            server_nb_computer_name: "NB".to_string(),
-            server_dns_computer_name: "dns".to_string(),
-            server_tree_name: "tree".to_string(),
-            success: "tf".to_string(),
-        };
-        let ser_old_ntlm = bincode::serialize(&old_ntlm).unwrap();
-
-        // prepare old ssh raw data
-        let old_ssh = SshBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            version: 1,
-            auth_success: "auth_success".to_string(),
-            auth_attempts: 3,
-            direction: "direction".to_string(),
-            client: "client".to_string(),
-            server: "server".to_string(),
-            cipher_alg: "cipher_alg".to_string(),
-            mac_alg: "mac_alg".to_string(),
-            compression_alg: "compression_alg".to_string(),
-            kex_alg: "kex_alg".to_string(),
-            host_key_alg: "host_key_alg".to_string(),
-            host_key: "host_key".to_string(),
-        };
-        let ser_old_ssh = bincode::serialize(&old_ssh).unwrap();
-
-        // prepare old tls raw data
-        let old_tls = TlsBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            server_name: "server_name".to_string(),
-            alpn_protocol: "alpn_protocol".to_string(),
-            ja3: "ja3".to_string(),
-            version: "version".to_string(),
-            cipher: 10,
-            ja3s: "ja3s".to_string(),
-            serial: "serial".to_string(),
-            subject_country: "sub_country".to_string(),
-            subject_org_name: "sub_org".to_string(),
-            subject_common_name: "sub_comm".to_string(),
-            validity_not_before: 11,
-            validity_not_after: 12,
-            subject_alt_name: "sub_alt".to_string(),
-            issuer_country: "issuer_country".to_string(),
-            issuer_org_name: "issuer_org".to_string(),
-            issuer_org_unit_name: "issuer_org_unit".to_string(),
-            issuer_common_name: "issuer_comm".to_string(),
-            last_alert: 13,
-        };
-        let ser_old_tls = bincode::serialize(&old_tls).unwrap();
-
-        {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-            let conn_store = db.conn_store().unwrap();
-            conn_store.append(&key, &ser_old_conn).unwrap();
-
-            let http_store = db.http_store().unwrap();
-            http_store.append(&key, &ser_old_http).unwrap();
-
-            let smtp_store = db.smtp_store().unwrap();
-            smtp_store.append(&key, &ser_old_smtp).unwrap();
-
-            let ntlm_store = db.ntlm_store().unwrap();
-            ntlm_store.append(&key, &ser_old_ntlm).unwrap();
-
-            let ssh_store = db.ssh_store().unwrap();
-            ssh_store.append(&key, &ser_old_ssh).unwrap();
-
-            let tls_store = db.tls_store().unwrap();
-            tls_store.append(&key, &ser_old_tls).unwrap();
-        }
-
-        // migration 0.19.0 to 0.21.0
-        super::migrate_0_19_to_0_21_0(&db_path, &DbOptions::default()).unwrap();
-
-        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-        // check conn migration
-        let conn_store = db.conn_store().unwrap();
-        let raw_event = conn_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::deserialize::<ConnFromV21BeforeV26>(&val).unwrap();
-        let new_conn = ConnFromV21BeforeV26 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 6,
-            conn_state: String::new(),
-            duration: 1,
-            service: "-".to_string(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-            orig_l2_bytes: 0,
-            resp_l2_bytes: 0,
-        };
-        assert_eq!(new_conn, store_conn);
-
-        // check http migration
-        let http_store = db.http_store().unwrap();
-        let raw_event = http_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_http = bincode::deserialize::<HttpFromV21BeforeV26>(&val).unwrap();
-        let new_http = HttpFromV21BeforeV26 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            method: "POST".to_string(),
-            host: "cluml".to_string(),
-            uri: "/cluml.gif".to_string(),
-            referer: "cluml.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-            post_body: Vec::new(),
-            state: String::new(),
-        };
-        assert_eq!(new_http, store_http);
-
-        // check smtp migration
-        let smtp_store = db.smtp_store().unwrap();
-        let raw_event = smtp_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_smtp = bincode::deserialize::<SmtpFromV21>(&val).unwrap();
-        let new_smtp = SmtpFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            mailfrom: "mailfrom".to_string(),
-            date: "date".to_string(),
-            from: "from".to_string(),
-            to: "to".to_string(),
-            subject: "subject".to_string(),
-            agent: "agent".to_string(),
-            state: String::new(),
-        };
-        assert_eq!(new_smtp, store_smtp);
-
-        // check ntlm migration
-        let ntlm_store = db.ntlm_store().unwrap();
-        let raw_event = ntlm_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_ntlm = bincode::deserialize::<NtlmFromV21>(&val).unwrap();
-        let new_ntlm = NtlmFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            protocol: String::new(),
-            username: "bly".to_string(),
-            hostname: "host".to_string(),
-            domainname: "domain".to_string(),
-            success: "tf".to_string(),
-        };
-        assert_eq!(new_ntlm, store_ntlm);
-
-        // check ssh migration
-        let ssh_store = db.ssh_store().unwrap();
-        let raw_event = ssh_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_ssh = bincode::deserialize::<SshFromV21>(&val).unwrap();
-        let new_ssh = SshFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            client: "client".to_string(),
-            server: "server".to_string(),
-            cipher_alg: "cipher_alg".to_string(),
-            mac_alg: "mac_alg".to_string(),
-            compression_alg: "compression_alg".to_string(),
-            kex_alg: "kex_alg".to_string(),
-            host_key_alg: "host_key_alg".to_string(),
-            hassh_algorithms: String::new(),
-            hassh: String::new(),
-            hassh_server_algorithms: String::new(),
-            hassh_server: String::new(),
-            client_shka: String::new(),
-            server_shka: String::new(),
-        };
-        assert_eq!(new_ssh, store_ssh);
-
-        // check tls migration
-        let tls_store = db.tls_store().unwrap();
-        let raw_event = tls_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_tls = bincode::deserialize::<TlsFromV21>(&val).unwrap();
-        let new_tls = TlsFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            server_name: "server_name".to_string(),
-            alpn_protocol: "alpn_protocol".to_string(),
-            ja3: "ja3".to_string(),
-            version: "version".to_string(),
-            client_cipher_suites: Vec::new(),
-            client_extensions: Vec::new(),
-            cipher: 10,
-            extensions: Vec::new(),
-            ja3s: "ja3s".to_string(),
-            serial: "serial".to_string(),
-            subject_country: "sub_country".to_string(),
-            subject_org_name: "sub_org".to_string(),
-            subject_common_name: "sub_comm".to_string(),
-            validity_not_before: 11,
-            validity_not_after: 12,
-            subject_alt_name: "sub_alt".to_string(),
-            issuer_country: "issuer_country".to_string(),
-            issuer_org_name: "issuer_org".to_string(),
-            issuer_org_unit_name: "issuer_org_unit".to_string(),
-            issuer_common_name: "issuer_comm".to_string(),
-            last_alert: 13,
-        };
-        assert_eq!(new_tls, store_tls);
     }
 
     #[test]
@@ -1441,12 +789,10 @@ mod tests {
 
     #[test]
     fn migrate_data_dir_version_test() {
+        // Test successful migration from a supported version (0.21.0)
         let version_dir = tempfile::tempdir().unwrap();
-
-        mock_version_file(&version_dir, "0.13.0");
-
+        mock_version_file(&version_dir, "0.21.0");
         let db_options = DbOptions::new(8000, 512, 8, 2);
-
         let result = migrate_data_dir(version_dir.path(), &db_options);
         assert!(result.is_ok());
 
@@ -1455,5 +801,21 @@ mod tests {
             let diff = Version::parse(&updated_version).expect("valid semver");
             assert_eq!(current, diff);
         }
+    }
+
+    #[test]
+    fn migrate_data_dir_unsupported_version_test() {
+        // Test that migration from unsupported version (< 0.21.0) fails
+        let version_dir = tempfile::tempdir().unwrap();
+        mock_version_file(&version_dir, "0.13.0");
+        let db_options = DbOptions::new(8000, 512, 8, 2);
+        let result = migrate_data_dir(version_dir.path(), &db_options);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Only versions 0.21.0 and above are supported")
+        );
     }
 }
