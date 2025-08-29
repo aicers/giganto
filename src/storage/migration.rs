@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use rocksdb::{DB, WriteBatch};
+use rocksdb::{ColumnFamilyDescriptor, DB, WriteBatch};
 use semver::{Version, VersionReq};
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::info;
@@ -23,15 +23,16 @@ use crate::storage::migration::migration_structures::{
     TlsBeforeV26,
 };
 use crate::{
+    comm::ingest::implement::EventFilter,
     graphql::TIMESTAMP_SIZE,
     storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV26,
         Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
-        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
-        Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, StorageKey, Tls as TlsFromV26,
-        rocksdb_options,
+        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
+        Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
+        Ssh as SshFromV26, StorageKey, Tls as TlsFromV26, rocksdb_options,
     },
 };
 
@@ -210,98 +211,6 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
-fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open_with_old_cfs(db_path, db_opts)?;
-
-    // migration ntlm raw event
-    info!("Starting migration for ntlm");
-    let store = db.ntlm_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old =
-            bincode::serde::decode_from_slice::<NtlmBeforeV21, _>(&val, bincode::config::legacy())?
-                .0;
-        let convert_new: NtlmFromV21 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for ntlm");
-
-    // migration http raw event
-    info!("Starting migration for http");
-    let store = db.http_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old = bincode::serde::decode_from_slice::<HttpFromV12BeforeV21, _>(
-            &val,
-            bincode::config::legacy(),
-        )?
-        .0;
-        let convert_new: HttpFromV21BeforeV26 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for http");
-
-    // migration ssh raw event
-    info!("Starting migration for ssh");
-    let store = db.ssh_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old =
-            bincode::serde::decode_from_slice::<SshBeforeV21, _>(&val, bincode::config::legacy())?
-                .0;
-        let convert_new: SshFromV21 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for ssh");
-
-    // migration tls raw event
-    info!("Starting migration for tls");
-    let store = db.tls_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old =
-            bincode::serde::decode_from_slice::<TlsBeforeV21, _>(&val, bincode::config::legacy())?
-                .0;
-        let convert_new: TlsFromV21 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for tls");
-
-    // migration smtp raw event
-    info!("Starting migration for smtp");
-    let store = db.smtp_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old =
-            bincode::serde::decode_from_slice::<SmtpBeforeV21, _>(&val, bincode::config::legacy())?
-                .0;
-        let convert_new: SmtpFromV21 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for smtp");
-
-    // migration conn raw event
-    info!("Starting migration for conn");
-    let store = db.conn_store()?;
-    for raw_event in store.iter_forward() {
-        let (key, val) = raw_event.context("Failed to read Database")?;
-        let old =
-            bincode::serde::decode_from_slice::<ConnBeforeV21, _>(&val, bincode::config::legacy())?
-                .0;
-        let convert_new: ConnFromV21BeforeV26 = old.into();
-        let new = bincode::serde::encode_to_vec(&convert_new, bincode::config::legacy())?;
-        store.append(&key, &new)?;
-    }
-    info!("Completed migration for conn");
-
-    Ok(())
-}
 fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     rename_sources_to_sensors(db_path, db_opts)?;
 
@@ -860,377 +769,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn migrate_0_19_to_0_21_0() {
-        // open temp db & store
-        let db_dir = tempfile::tempdir().unwrap();
-        let db_path = data_dir_to_db_path(db_dir.path());
-
-        // generate key
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let sensor = "src1";
-        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
-        key.extend_from_slice(sensor.as_bytes());
-        key.push(0);
-        key.extend(timestamp.to_be_bytes());
-
-        // prepare old conn raw data
-        let old_conn = ConnBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 6,
-            duration: 1,
-            service: "-".to_string(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-        };
-        let ser_old_conn =
-            bincode::serde::encode_to_vec(&old_conn, bincode::config::legacy()).unwrap();
-
-        // prepare old http raw data
-        let old_http = HttpFromV12BeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            method: "POST".to_string(),
-            host: "cluml".to_string(),
-            uri: "/cluml.gif".to_string(),
-            referer: "cluml.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-        };
-        let ser_old_http =
-            bincode::serde::encode_to_vec(&old_http, bincode::config::legacy()).unwrap();
-
-        // prepare old smtp raw data
-        let old_smtp = SmtpBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            mailfrom: "mailfrom".to_string(),
-            date: "date".to_string(),
-            from: "from".to_string(),
-            to: "to".to_string(),
-            subject: "subject".to_string(),
-            agent: "agent".to_string(),
-        };
-        let ser_old_smtp =
-            bincode::serde::encode_to_vec(&old_smtp, bincode::config::legacy()).unwrap();
-
-        // prepare old ntlm raw data
-        let old_ntlm = NtlmBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            username: "bly".to_string(),
-            hostname: "host".to_string(),
-            domainname: "domain".to_string(),
-            server_nb_computer_name: "NB".to_string(),
-            server_dns_computer_name: "dns".to_string(),
-            server_tree_name: "tree".to_string(),
-            success: "tf".to_string(),
-        };
-        let ser_old_ntlm =
-            bincode::serde::encode_to_vec(&old_ntlm, bincode::config::legacy()).unwrap();
-
-        // prepare old ssh raw data
-        let old_ssh = SshBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            version: 1,
-            auth_success: "auth_success".to_string(),
-            auth_attempts: 3,
-            direction: "direction".to_string(),
-            client: "client".to_string(),
-            server: "server".to_string(),
-            cipher_alg: "cipher_alg".to_string(),
-            mac_alg: "mac_alg".to_string(),
-            compression_alg: "compression_alg".to_string(),
-            kex_alg: "kex_alg".to_string(),
-            host_key_alg: "host_key_alg".to_string(),
-            host_key: "host_key".to_string(),
-        };
-        let ser_old_ssh =
-            bincode::serde::encode_to_vec(&old_ssh, bincode::config::legacy()).unwrap();
-
-        // prepare old tls raw data
-        let old_tls = TlsBeforeV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            last_time: 1,
-            server_name: "server_name".to_string(),
-            alpn_protocol: "alpn_protocol".to_string(),
-            ja3: "ja3".to_string(),
-            version: "version".to_string(),
-            cipher: 10,
-            ja3s: "ja3s".to_string(),
-            serial: "serial".to_string(),
-            subject_country: "sub_country".to_string(),
-            subject_org_name: "sub_org".to_string(),
-            subject_common_name: "sub_comm".to_string(),
-            validity_not_before: 11,
-            validity_not_after: 12,
-            subject_alt_name: "sub_alt".to_string(),
-            issuer_country: "issuer_country".to_string(),
-            issuer_org_name: "issuer_org".to_string(),
-            issuer_org_unit_name: "issuer_org_unit".to_string(),
-            issuer_common_name: "issuer_comm".to_string(),
-            last_alert: 13,
-        };
-        let ser_old_tls =
-            bincode::serde::encode_to_vec(&old_tls, bincode::config::legacy()).unwrap();
-
-        {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-            let conn_store = db.conn_store().unwrap();
-            conn_store.append(&key, &ser_old_conn).unwrap();
-
-            let http_store = db.http_store().unwrap();
-            http_store.append(&key, &ser_old_http).unwrap();
-
-            let smtp_store = db.smtp_store().unwrap();
-            smtp_store.append(&key, &ser_old_smtp).unwrap();
-
-            let ntlm_store = db.ntlm_store().unwrap();
-            ntlm_store.append(&key, &ser_old_ntlm).unwrap();
-
-            let ssh_store = db.ssh_store().unwrap();
-            ssh_store.append(&key, &ser_old_ssh).unwrap();
-
-            let tls_store = db.tls_store().unwrap();
-            tls_store.append(&key, &ser_old_tls).unwrap();
-        }
-
-        // migration 0.19.0 to 0.21.0
-        super::migrate_0_19_to_0_21_0(&db_path, &DbOptions::default()).unwrap();
-
-        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
-
-        // check conn migration
-        let conn_store = db.conn_store().unwrap();
-        let raw_event = conn_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::serde::decode_from_slice::<ConnFromV21BeforeV26, _>(
-            &val,
-            bincode::config::legacy(),
-        )
-        .unwrap()
-        .0;
-        let new_conn = ConnFromV21BeforeV26 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 6,
-            conn_state: String::new(),
-            duration: 1,
-            service: "-".to_string(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-            orig_l2_bytes: 0,
-            resp_l2_bytes: 0,
-        };
-        assert_eq!(new_conn, store_conn);
-
-        // check http migration
-        let http_store = db.http_store().unwrap();
-        let raw_event = http_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_http = bincode::serde::decode_from_slice::<HttpFromV21BeforeV26, _>(
-            &val,
-            bincode::config::legacy(),
-        )
-        .unwrap()
-        .0;
-        let new_http = HttpFromV21BeforeV26 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            method: "POST".to_string(),
-            host: "cluml".to_string(),
-            uri: "/cluml.gif".to_string(),
-            referer: "cluml.com".to_string(),
-            version: String::new(),
-            user_agent: "giganto".to_string(),
-            request_len: 0,
-            response_len: 0,
-            status_code: 200,
-            status_msg: String::new(),
-            username: String::new(),
-            password: String::new(),
-            cookie: String::new(),
-            content_encoding: String::new(),
-            content_type: String::new(),
-            cache_control: String::new(),
-            orig_filenames: vec!["-".to_string()],
-            orig_mime_types: vec!["-".to_string()],
-            resp_filenames: vec!["-".to_string()],
-            resp_mime_types: vec!["-".to_string()],
-            post_body: Vec::new(),
-            state: String::new(),
-        };
-        assert_eq!(new_http, store_http);
-
-        // check smtp migration
-        let smtp_store = db.smtp_store().unwrap();
-        let raw_event = smtp_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_smtp =
-            bincode::serde::decode_from_slice::<SmtpFromV21, _>(&val, bincode::config::legacy())
-                .unwrap()
-                .0;
-        let new_smtp = SmtpFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            mailfrom: "mailfrom".to_string(),
-            date: "date".to_string(),
-            from: "from".to_string(),
-            to: "to".to_string(),
-            subject: "subject".to_string(),
-            agent: "agent".to_string(),
-            state: String::new(),
-        };
-        assert_eq!(new_smtp, store_smtp);
-
-        // check ntlm migration
-        let ntlm_store = db.ntlm_store().unwrap();
-        let raw_event = ntlm_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_ntlm =
-            bincode::serde::decode_from_slice::<NtlmFromV21, _>(&val, bincode::config::legacy())
-                .unwrap()
-                .0;
-        let new_ntlm = NtlmFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            protocol: String::new(),
-            username: "bly".to_string(),
-            hostname: "host".to_string(),
-            domainname: "domain".to_string(),
-            success: "tf".to_string(),
-        };
-        assert_eq!(new_ntlm, store_ntlm);
-
-        // check ssh migration
-        let ssh_store = db.ssh_store().unwrap();
-        let raw_event = ssh_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_ssh =
-            bincode::serde::decode_from_slice::<SshFromV21, _>(&val, bincode::config::legacy())
-                .unwrap()
-                .0;
-        let new_ssh = SshFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            client: "client".to_string(),
-            server: "server".to_string(),
-            cipher_alg: "cipher_alg".to_string(),
-            mac_alg: "mac_alg".to_string(),
-            compression_alg: "compression_alg".to_string(),
-            kex_alg: "kex_alg".to_string(),
-            host_key_alg: "host_key_alg".to_string(),
-            hassh_algorithms: String::new(),
-            hassh: String::new(),
-            hassh_server_algorithms: String::new(),
-            hassh_server: String::new(),
-            client_shka: String::new(),
-            server_shka: String::new(),
-        };
-        assert_eq!(new_ssh, store_ssh);
-
-        // check tls migration
-        let tls_store = db.tls_store().unwrap();
-        let raw_event = tls_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_tls =
-            bincode::serde::decode_from_slice::<TlsFromV21, _>(&val, bincode::config::legacy())
-                .unwrap()
-                .0;
-        let new_tls = TlsFromV21 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 17,
-            end_time: 1,
-            server_name: "server_name".to_string(),
-            alpn_protocol: "alpn_protocol".to_string(),
-            ja3: "ja3".to_string(),
-            version: "version".to_string(),
-            client_cipher_suites: Vec::new(),
-            client_extensions: Vec::new(),
-            cipher: 10,
-            extensions: Vec::new(),
-            ja3s: "ja3s".to_string(),
-            serial: "serial".to_string(),
-            subject_country: "sub_country".to_string(),
-            subject_org_name: "sub_org".to_string(),
-            subject_common_name: "sub_comm".to_string(),
-            validity_not_before: 11,
-            validity_not_after: 12,
-            subject_alt_name: "sub_alt".to_string(),
-            issuer_country: "issuer_country".to_string(),
-            issuer_org_name: "issuer_org".to_string(),
-            issuer_org_unit_name: "issuer_org_unit".to_string(),
-            issuer_common_name: "issuer_comm".to_string(),
-            last_alert: 13,
-        };
-        assert_eq!(new_tls, store_tls);
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
     fn migrate_0_21_to_0_23() {
         const TEST_SENSOR: &str = "src1";
         const TEST_KIND: &str = "kind1"; //Used as prefix key in seculog's old key.
@@ -1483,9 +1021,6 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn migrate_0_24_to_0_26_0_raw_event() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let sensor = "src1";
-
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
@@ -1526,7 +1061,10 @@ mod tests {
         // check conn migration
         let raw_event = conn_store.iter_forward().next().unwrap();
         let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::serde::decode_from_slice::<ConnFromV26, _>(&val, bincode::config::legacy()).unwrap().0;
+        let store_conn =
+            bincode::serde::decode_from_slice::<ConnFromV26, _>(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_conn = ConnFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -1675,7 +1213,8 @@ mod tests {
             ra_flag: false,
             ttl: vec![1; 5],
         };
-        let ser_dns_old = bincode::serde::encode_to_vec(&dns_old, bincode::config::legacy()).unwrap();
+        let ser_dns_old =
+            bincode::serde::encode_to_vec(&dns_old, bincode::config::legacy()).unwrap();
         let dns_old_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1689,7 +1228,10 @@ mod tests {
 
         // check dns migration
         let (_, val) = dns_store.iter_forward().next().unwrap().unwrap();
-        let store_dns: DnsFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_dns: DnsFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_dns = DnsFromV26 {
             orig_addr: "192.168.4.76".parse().unwrap(),
             orig_port: 46378,
@@ -1723,7 +1265,8 @@ mod tests {
             end_time: 123,
             cookie: "cookie_val".to_string(),
         };
-        let ser_rdp_old = bincode::serde::encode_to_vec(&rdp_old, bincode::config::legacy()).unwrap();
+        let ser_rdp_old =
+            bincode::serde::encode_to_vec(&rdp_old, bincode::config::legacy()).unwrap();
         let rdp_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1737,7 +1280,10 @@ mod tests {
 
         // check rdp migration
         let (_, val) = rdp_store.iter_forward().next().unwrap().unwrap();
-        let store_rdp: RdpFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_rdp: RdpFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_rdp = RdpFromV26 {
             orig_addr: rdp_old.orig_addr,
             orig_port: rdp_old.orig_port,
@@ -1766,7 +1312,8 @@ mod tests {
             agent: "agent".to_string(),
             state: String::new(),
         };
-        let ser_smtp_old = bincode::serde::encode_to_vec(&smtp_old, bincode::config::legacy()).unwrap();
+        let ser_smtp_old =
+            bincode::serde::encode_to_vec(&smtp_old, bincode::config::legacy()).unwrap();
         let smtp_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1780,7 +1327,10 @@ mod tests {
 
         // check smtp migration
         let (_, val) = smtp_store.iter_forward().next().unwrap().unwrap();
-        let store_smtp: SmtpFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_smtp: SmtpFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_smtp = SmtpFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -1813,7 +1363,8 @@ mod tests {
             success: "tf".to_string(),
             protocol: "protocol".to_string(),
         };
-        let ser_ntlm_old = bincode::serde::encode_to_vec(&ntlm_old, bincode::config::legacy()).unwrap();
+        let ser_ntlm_old =
+            bincode::serde::encode_to_vec(&ntlm_old, bincode::config::legacy()).unwrap();
         let ntlm_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1827,7 +1378,10 @@ mod tests {
 
         // check ntlm migration
         let (_, val) = ntlm_store.iter_forward().next().unwrap().unwrap();
-        let store_ntlm: NtlmFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_ntlm: NtlmFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_ntlm = NtlmFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -1862,7 +1416,8 @@ mod tests {
             sname_type: 1,
             service_name: vec!["service_name".to_string()],
         };
-        let ser_kerberos_old = bincode::serde::encode_to_vec(&kerberos_old, bincode::config::legacy()).unwrap();
+        let ser_kerberos_old =
+            bincode::serde::encode_to_vec(&kerberos_old, bincode::config::legacy()).unwrap();
         let kerberos_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1881,7 +1436,10 @@ mod tests {
 
         // check kerberos migration
         let (_, val) = kerberos_store.iter_forward().next().unwrap().unwrap();
-        let store_kerberos: KerberosFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_kerberos: KerberosFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_kerberos = KerberosFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -1924,7 +1482,8 @@ mod tests {
             client_shka: "client_shka".to_string(),
             server_shka: "server_shka".to_string(),
         };
-        let ser_ssh_old = bincode::serde::encode_to_vec(&ssh_old, bincode::config::legacy()).unwrap();
+        let ser_ssh_old =
+            bincode::serde::encode_to_vec(&ssh_old, bincode::config::legacy()).unwrap();
         let ssh_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1938,7 +1497,10 @@ mod tests {
 
         // check ssh migration
         let (_, val) = ssh_store.iter_forward().next().unwrap().unwrap();
-        let store_ssh: SshFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_ssh: SshFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_ssh = SshFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -1976,7 +1538,8 @@ mod tests {
             endpoint: "endpoint".to_string(),
             operation: "operation".to_string(),
         };
-        let ser_dcerpc_old = bincode::serde::encode_to_vec(&dcerpc_old, bincode::config::legacy()).unwrap();
+        let ser_dcerpc_old =
+            bincode::serde::encode_to_vec(&dcerpc_old, bincode::config::legacy()).unwrap();
         let dcerpc_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -1989,7 +1552,10 @@ mod tests {
         super::migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(&dcerpc_store)
             .unwrap();
         let (_, val) = dcerpc_store.iter_forward().next().unwrap().unwrap();
-        let store_dcerpc: DceRpcFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_dcerpc: DceRpcFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
 
         // check dcerpc migration
         let new_dcerpc = DceRpcFromV26 {
@@ -2028,7 +1594,8 @@ mod tests {
             file_size: 100,
             file_id: "1".to_string(),
         };
-        let ser_ftp_old = bincode::serde::encode_to_vec(&ftp_old, bincode::config::legacy()).unwrap();
+        let ser_ftp_old =
+            bincode::serde::encode_to_vec(&ftp_old, bincode::config::legacy()).unwrap();
         let ftp_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2042,7 +1609,10 @@ mod tests {
 
         // check ftp migration
         let (_, val) = ftp_store.iter_forward().next().unwrap().unwrap();
-        let store_ftp: FtpFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_ftp: FtpFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_ftp = FtpFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2081,7 +1651,8 @@ mod tests {
             subscribe: vec!["subscribe".to_string()],
             suback_reason: vec![1],
         };
-        let ser_mqtt_old = bincode::serde::encode_to_vec(&mqtt_old, bincode::config::legacy()).unwrap();
+        let ser_mqtt_old =
+            bincode::serde::encode_to_vec(&mqtt_old, bincode::config::legacy()).unwrap();
         let mqtt_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2095,7 +1666,10 @@ mod tests {
 
         // check mqtt migration
         let (_, val) = mqtt_store.iter_forward().next().unwrap().unwrap();
-        let store_mqtt: MqttFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_mqtt: MqttFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_mqtt = MqttFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2129,7 +1703,8 @@ mod tests {
             object: Vec::new(),
             argument: Vec::new(),
         };
-        let ser_ldap_old = bincode::serde::encode_to_vec(&ldap_old, bincode::config::legacy()).unwrap();
+        let ser_ldap_old =
+            bincode::serde::encode_to_vec(&ldap_old, bincode::config::legacy()).unwrap();
         let ldap_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2143,7 +1718,10 @@ mod tests {
 
         // check ldap migration
         let (_, val) = ldap_store.iter_forward().next().unwrap().unwrap();
-        let store_ldap: LdapFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_ldap: LdapFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_ldap = LdapFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2192,7 +1770,8 @@ mod tests {
             issuer_common_name: "issuer_comm".to_string(),
             last_alert: 13,
         };
-        let ser_tls_old = bincode::serde::encode_to_vec(&tls_old, bincode::config::legacy()).unwrap();
+        let ser_tls_old =
+            bincode::serde::encode_to_vec(&tls_old, bincode::config::legacy()).unwrap();
         let tls_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2206,7 +1785,10 @@ mod tests {
 
         // check tls migration
         let (_, val) = tls_store.iter_forward().next().unwrap().unwrap();
-        let store_tls: TlsFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_tls: TlsFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_tls = TlsFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2259,7 +1841,8 @@ mod tests {
             write_time: 10_000_000,
             change_time: 20_000_000,
         };
-        let ser_smb_old = bincode::serde::encode_to_vec(&smb_old, bincode::config::legacy()).unwrap();
+        let ser_smb_old =
+            bincode::serde::encode_to_vec(&smb_old, bincode::config::legacy()).unwrap();
         let smb_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2273,7 +1856,10 @@ mod tests {
 
         // check smb migration
         let (_, val) = smb_store.iter_forward().next().unwrap().unwrap();
-        let store_smb: SmbFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_smb: SmbFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_smb = SmbFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2307,7 +1893,8 @@ mod tests {
             read_files: vec![],
             write_files: vec![],
         };
-        let ser_nfs_old = bincode::serde::encode_to_vec(&nfs_old, bincode::config::legacy()).unwrap();
+        let ser_nfs_old =
+            bincode::serde::encode_to_vec(&nfs_old, bincode::config::legacy()).unwrap();
         let nfs_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2321,7 +1908,10 @@ mod tests {
 
         // check nfs migration
         let (_, val) = nfs_store.iter_forward().next().unwrap().unwrap();
-        let store_nfs: NfsFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_nfs: NfsFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_nfs = NfsFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2355,7 +1945,8 @@ mod tests {
             sname: "sname".to_string(),
             file: "file".to_string(),
         };
-        let ser_bootp_old = bincode::serde::encode_to_vec(&bootp_old, bincode::config::legacy()).unwrap();
+        let ser_bootp_old =
+            bincode::serde::encode_to_vec(&bootp_old, bincode::config::legacy()).unwrap();
         let bootp_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2370,7 +1961,10 @@ mod tests {
 
         // check bootp migration
         let (_, val) = bootp_store.iter_forward().next().unwrap().unwrap();
-        let store_bootp: BootpFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_bootp: BootpFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_bootp = BootpFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2426,7 +2020,8 @@ mod tests {
             client_id_type: 1,
             client_id: vec![0, 1, 2],
         };
-        let ser_dhcp_old = bincode::serde::encode_to_vec(&dhcp_old, bincode::config::legacy()).unwrap();
+        let ser_dhcp_old =
+            bincode::serde::encode_to_vec(&dhcp_old, bincode::config::legacy()).unwrap();
         let dhcp_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
@@ -2440,7 +2035,10 @@ mod tests {
 
         // check dhcp migration
         let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
-        let store_dhcp: DhcpFromV26 = bincode::serde::decode_from_slice(&val, bincode::config::legacy()).unwrap().0;
+        let store_dhcp: DhcpFromV26 =
+            bincode::serde::decode_from_slice(&val, bincode::config::legacy())
+                .unwrap()
+                .0;
         let new_dhcp = DhcpFromV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
