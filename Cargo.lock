@@ -2648,8 +2648,8 @@ dependencies = [
 
 [[package]]
 name = "roxy"
-version = "0.4.0"
-source = "git+https://github.com/aicers/roxy.git?tag=0.4.0#bbda4533cd0d91706df8b6260206339922bf26e9"
+version = "0.5.0"
+source = "git+https://github.com/aicers/roxy.git?tag=0.5.0#77ee3f2a44ca6d92732457d210ec9420deb8aaf7"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
@@ -2658,7 +2658,6 @@ dependencies = [
  "gethostname",
  "hostname",
  "ipnet",
- "log",
  "nix",
  "pnet",
  "regex",
@@ -2671,6 +2670,9 @@ dependencies = [
  "systemctl",
  "thiserror 2.0.16",
  "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "uptime_lib",
 ]
 
@@ -3231,9 +3233,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.35.2"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c3ffa3e4ff2b324a57f7aeb3c349656c7b127c3c189520251a648102a92496e"
+checksum = "07cec4dc2d2e357ca1e610cfb07de2fa7a10fc3e9fe89f72545f3d244ea87753"
 dependencies = [
  "libc",
  "memchr",

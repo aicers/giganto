@@ -1052,7 +1052,8 @@ pub async fn retain_periodically(
 /// Returns the boolean of the disk usages over `USAGE_THRESHOLD` and `USAGE_LOW`.
 async fn check_db_usage() -> (bool, bool) {
     let resource_usage = roxy::resource_usage().await;
-    let usage = (resource_usage.used_disk_space * 100) / resource_usage.total_disk_space;
+    let total_disk_space = resource_usage.disk_used_bytes + resource_usage.disk_available_bytes;
+    let usage = (resource_usage.disk_used_bytes * 100) / total_disk_space;
     debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
 }
