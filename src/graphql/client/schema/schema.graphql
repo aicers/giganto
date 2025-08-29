@@ -2834,8 +2834,8 @@ type Status {
 	cpuUsage: Float!
 	totalMemory: Int!
 	usedMemory: Int!
-	totalDiskSpace: Int!
-	usedDiskSpace: Int!
+	diskUsedBytes: Int!
+	diskAvailableBytes: Int!
 }
 
 scalar StringNumberI64
