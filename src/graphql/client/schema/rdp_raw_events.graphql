@@ -1,23 +1,36 @@
-query RdpRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    rdpRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                cookie
-            }
-        }
+query RdpRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  rdpRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        cookie
+      }
+    }
+  }
 }

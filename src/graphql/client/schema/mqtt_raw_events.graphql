@@ -1,28 +1,41 @@
-query MqttRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    mqttRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                protocol
-                version
-                clientId
-                connackReason
-                subscribe
-                subackReason
-            }
-        }
+query MqttRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  mqttRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        protocol
+        version
+        clientId
+        connackReason
+        subscribe
+        subackReason
+      }
+    }
+  }
 }

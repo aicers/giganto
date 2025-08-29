@@ -1,54 +1,55 @@
 query HttpRawEvents(
-    $filter: NetworkFilter!
-    $after: String
-    $before: String
-    $first: Int
-    $last: Int
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
 ) {
-    httpRawEvents(
-        filter: $filter
-        after: $after
-        before: $before
-        first: $first
-        last: $last
-    ) {
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                method
-                host
-                uri
-                referer
-                version
-                userAgent
-                requestLen
-                responseLen
-                statusCode
-                statusMsg
-                username
-                password
-                cookie
-                contentEncoding
-                contentType
-                cacheControl
-                filenames
-                mimeTypes
-                body
-                state
-            }
-        }
+  httpRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        method
+        host
+        uri
+        referer
+        version
+        userAgent
+        requestLen
+        responseLen
+        statusCode
+        statusMsg
+        username
+        password
+        cookie
+        contentEncoding
+        contentType
+        cacheControl
+        filenames
+        mimeTypes
+        body
+        state
+      }
+    }
+  }
 }

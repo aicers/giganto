@@ -1,31 +1,44 @@
-query KerberosRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    kerberosRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                clientTime
-                serverTime
-                errorCode
-                clientRealm
-                cnameType
-                clientName
-                realm
-                snameType
-                serviceName
-            }
-        }
+query KerberosRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  kerberosRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        clientTime
+        serverTime
+        errorCode
+        clientRealm
+        cnameType
+        clientName
+        realm
+        snameType
+        serviceName
+      }
+    }
+  }
 }

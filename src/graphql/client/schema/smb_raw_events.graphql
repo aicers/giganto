@@ -1,33 +1,46 @@
-query SmbRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    smbRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                command
-                path
-                service
-                fileName
-                fileSize
-                resourceType
-                fid
-                createTime
-                accessTime
-                writeTime
-                changeTime
-            }
-        }
+query SmbRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  smbRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        command
+        path
+        service
+        fileName
+        fileSize
+        resourceType
+        fid
+        createTime
+        accessTime
+        writeTime
+        changeTime
+      }
+    }
+  }
 }

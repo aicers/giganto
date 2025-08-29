@@ -9,26 +9,33 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use rocksdb::{ColumnFamilyDescriptor, DB, WriteBatch};
+use rocksdb::{DB, WriteBatch};
 use semver::{Version, VersionReq};
+use serde::{Serialize, de::DeserializeOwned};
 use tracing::info;
 
-use self::migration_structures::{
-    ConnFromV21BeforeV26, HttpFromV21BeforeV26, Netflow5BeforeV23, Netflow9BeforeV23,
-    SecuLogBeforeV23,
+use super::{Database, data_dir_to_db_path};
+use crate::storage::migration::migration_structures::{
+    BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DhcpBeforeV26, DnsBeforeV26,
+    FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MigrationNew,
+    MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
+    OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26, SshBeforeV26,
+    TlsBeforeV26,
 };
-use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
-use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
     graphql::TIMESTAMP_SIZE,
     storage::{
-        Conn as ConnFromV26, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, StorageKey,
+        Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV26,
+        Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
+        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
+        Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, StorageKey, Tls as TlsFromV26,
         rocksdb_options,
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.2,<0.26.0-alpha.3";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.3,<0.26.0-alpha.4";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -56,8 +63,8 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             migrate_0_23_to_0_24,
         ),
         (
-            VersionReq::parse(">=0.24.0,<0.26.0-alpha.2").expect("valid version requirement"),
-            Version::parse("0.26.0-alpha.2").expect("valid version"),
+            VersionReq::parse(">=0.24.0,<0.26.0-alpha.3").expect("valid version requirement"),
+            Version::parse("0.26.0-alpha.3").expect("valid version"),
             migrate_0_24_to_0_26,
         ),
     ];
@@ -117,27 +124,6 @@ fn read_version_file(path: &Path) -> Result<Version> {
     Version::parse(&ver).context("cannot parse VERSION")
 }
 
-const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
-impl Database {
-    fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Result<Self> {
-        let (db_opts, cf_opts) = rocksdb_options(db_opts);
-        let mut cfs_name: Vec<&str> = Vec::with_capacity(
-            RAW_DATA_COLUMN_FAMILY_NAMES.len() + OLD_META_DATA_COLUMN_FAMILY_NAMES.len(),
-        );
-        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
-        cfs_name.extend(OLD_META_DATA_COLUMN_FAMILY_NAMES);
-
-        let cfs = cfs_name
-            .into_iter()
-            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
-
-        let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).context("cannot open database")?;
-        Ok(Database {
-            db: std::sync::Arc::new(db),
-        })
-    }
-}
-
 fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     rename_sources_to_sensors(db_path, db_opts)?;
 
@@ -158,6 +144,7 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
     migrate_0_24_to_0_26_http(&db)?;
+    migration_0_24_to_0_26_other_protocols(&db)?;
     Ok(())
 }
 
@@ -292,8 +279,51 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
+fn migration_0_24_to_0_26_other_protocols(db: &Database) -> Result<()> {
+    info!("Starting migration for other raw event");
+    migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(&db.dns_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<RdpBeforeV26, RdpFromV26>(&db.rdp_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<SmtpBeforeV26, SmtpFromV26>(&db.smtp_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<NtlmBeforeV26, NtlmFromV26>(&db.ntlm_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<KerberosBeforeV26, KerberosFromV26>(&db.kerberos_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<SshBeforeV26, SshFromV26>(&db.ssh_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(&db.dce_rpc_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<FtpBeforeV26, FtpFromV26>(&db.ftp_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<MqttBeforeV26, MqttFromV26>(&db.mqtt_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<LdapBeforeV26, LdapFromV26>(&db.ldap_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<TlsBeforeV26, TlsFromV26>(&db.tls_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<SmbBeforeV26, SmbFromV26>(&db.smb_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(&db.nfs_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(&db.bootp_store()?)?;
+    migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(&db.dhcp_store()?)?;
+    info!("Completed migration for other raw event");
+    Ok(())
+}
+
+fn migrate_raw_event_0_24_to_0_26<OldT, NewT>(
+    store: &crate::storage::RawEventStore<'_, NewT>,
+) -> Result<()>
+where
+    OldT: DeserializeOwned + Sized,
+    NewT: Serialize + DeserializeOwned + MigrationNew<OldT>,
+{
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+
+        let old = bincode::deserialize::<OldT>(&val)?;
+
+        let session_start_time = get_timestamp_from_key(&key)?;
+
+        let new_data = NewT::new(old, session_start_time);
+
+        let new = bincode::serialize(&new_data)?;
+        store.append(&key, &new)?;
+    }
+    Ok(())
+}
+
 fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
-    info!("start migration for conn duration to end_time");
+    info!("Starting migration for conn");
     let store = db.conn_store()?;
 
     for raw_event in store.iter_forward() {
@@ -316,6 +346,7 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
             resp_port: old.resp_port,
             proto: old.proto,
             conn_state: old.conn_state,
+            start_time: session_start_time,
             end_time,
             service: old.service,
             orig_bytes: old.orig_bytes,
@@ -330,7 +361,7 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
         store.append(&key, &new)?;
     }
 
-    info!("conn migration complete");
+    info!("Completed migration for conn");
     Ok(())
 }
 
@@ -341,8 +372,46 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<HttpFromV21BeforeV26>(&val)?;
-        let convert_new: HttpFromV26 = old.into();
-        let new = bincode::serialize(&convert_new)?;
+
+        let mut filenames = old.orig_filenames;
+        filenames.extend(old.resp_filenames);
+
+        let mut mime_types = old.orig_mime_types;
+        mime_types.extend(old.resp_mime_types);
+
+        // Extract session start time from the key
+        let start_time = get_timestamp_from_key(&key)?;
+
+        let new_http = HttpFromV26 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time,
+            end_time: old.end_time,
+            method: old.method,
+            host: old.host,
+            uri: old.uri,
+            referer: old.referer,
+            version: old.version,
+            user_agent: old.user_agent,
+            request_len: old.request_len,
+            response_len: old.response_len,
+            status_code: old.status_code,
+            status_msg: old.status_msg,
+            username: old.username,
+            password: old.password,
+            cookie: old.cookie,
+            content_encoding: old.content_encoding,
+            content_type: old.content_type,
+            cache_control: old.cache_control,
+            filenames,
+            mime_types,
+            body: old.post_body,
+            state: old.state,
+        };
+        let new = bincode::serialize(&new_http)?;
         store.append(&key, &new)?;
     }
 
@@ -352,28 +421,52 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::fs::File;
-    use std::io::Write;
-    use std::net::IpAddr;
-    use std::path::PathBuf;
+    use std::{fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
     use chrono::Utc;
     use giganto_client::ingest::log::OpLogLevel;
-    use rocksdb::{DB, Options, WriteBatch};
+    use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
-    use crate::storage::migration::migration_structures::{ConnFromV21BeforeV26, OpLogBeforeV24};
     use crate::storage::{
-        Conn as ConnFromV26, Database, DbOptions, Http as HttpFromV26, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, OpLog as OpLogFromV24, SecuLog as SecuLogFromV23, StorageKey,
-        data_dir_to_db_path, migrate_data_dir,
+        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV26,
+        Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
+        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES,
+        Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
+        Ssh as SshFromV26, StorageKey, Tls as TlsFromV26, data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
-            HttpFromV21BeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, SecuLogBeforeV23,
+            BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DhcpBeforeV26, DnsBeforeV26,
+            FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MqttBeforeV26,
+            Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26, OpLogBeforeV24,
+            RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26, SshBeforeV26,
+            TlsBeforeV26,
         },
+        rocksdb_options,
     };
+
+    fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Database {
+        const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+
+        let (db_opts, cf_opts) = rocksdb_options(db_opts);
+        let mut cfs_name: Vec<&str> = Vec::with_capacity(
+            RAW_DATA_COLUMN_FAMILY_NAMES.len() + OLD_META_DATA_COLUMN_FAMILY_NAMES.len(),
+        );
+        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(OLD_META_DATA_COLUMN_FAMILY_NAMES);
+
+        let cfs = cfs_name
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+
+        let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
+        Database {
+            db: std::sync::Arc::new(db),
+        }
+    }
 
     fn mock_version_file(dir: &TempDir, version_content: &str) -> PathBuf {
         let version_path = dir.path().join("VERSION");
@@ -490,7 +583,7 @@ mod tests {
         let serialized_secu_log_old = bincode::serialize(&secu_log_old).unwrap();
 
         {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+            let db = open_with_old_cfs(&db_path, &DbOptions::default());
 
             // insert netflow5 data using the old key.
             let netflow5_store = db.netflow5_store().unwrap();
@@ -651,7 +744,10 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn migrate_0_24_to_0_26_0() {
+    fn migrate_0_24_to_0_26_0_raw_event() {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let sensor = "src1";
+
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
@@ -674,15 +770,41 @@ mod tests {
             resp_l2_bytes: 0,
         };
         let ser_old_conn = bincode::serialize(&old_conn).unwrap();
-
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-        let sensor = "src1";
         let conn_old_key = StorageKey::builder()
             .start_key(sensor)
             .end_key(timestamp)
             .build()
             .key();
+        let conn_store = db.conn_store().unwrap();
+        conn_store.append(&conn_old_key, &ser_old_conn).unwrap();
 
+        // migration conn raw events
+        super::migrate_0_24_to_0_26_conn(&db).unwrap();
+
+        // check conn migration
+        let raw_event = conn_store.iter_forward().next().unwrap();
+        let (_, val) = raw_event.expect("Failed to read Database");
+        let store_conn = bincode::deserialize::<ConnFromV26>(&val).unwrap();
+        let new_conn = ConnFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: String::new(),
+            start_time: timestamp,
+            end_time: timestamp + 100,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+            orig_l2_bytes: 0,
+            resp_l2_bytes: 0,
+        };
+        assert_eq!(new_conn, store_conn);
+
+        // prepare old http raw data
         let old_http = HttpFromV21BeforeV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -719,38 +841,11 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-
-        let conn_store = db.conn_store().unwrap();
-        conn_store.append(&conn_old_key, &ser_old_conn).unwrap();
-
         let http_store = db.http_store().unwrap();
         http_store.append(&http_old_key, &ser_old_http).unwrap();
 
-        // migration 0.24.0 to 0.26.0
-        super::migrate_0_24_to_0_26_conn(&db).unwrap();
+        // migration http raw events
         super::migrate_0_24_to_0_26_http(&db).unwrap();
-
-        // check conn migration
-        let raw_event = conn_store.iter_forward().next().unwrap();
-        let (_, val) = raw_event.expect("Failed to read Database");
-        let store_conn = bincode::deserialize::<ConnFromV26>(&val).unwrap();
-        let new_conn = ConnFromV26 {
-            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            orig_port: 46378,
-            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            resp_port: 80,
-            proto: 6,
-            conn_state: String::new(),
-            end_time: timestamp + 100,
-            service: "-".to_string(),
-            orig_bytes: 77,
-            resp_bytes: 295,
-            orig_pkts: 397,
-            resp_pkts: 511,
-            orig_l2_bytes: 0,
-            resp_l2_bytes: 0,
-        };
-        assert_eq!(new_conn, store_conn);
 
         // check http migration
         let raw_event = http_store.iter_forward().next().unwrap();
@@ -762,6 +857,7 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
+            start_time: timestamp,
             end_time: 1,
             method: "POST".to_string(),
             host: "cluml".to_string(),
@@ -785,6 +881,828 @@ mod tests {
             state: String::new(),
         };
         assert_eq!(new_http, store_http);
+
+        // prepare old dns raw data
+        let dns_old = DnsBeforeV26 {
+            orig_addr: "192.168.4.76".parse().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            query: "Hello Server".to_string(),
+            answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
+            trans_id: 1,
+            rtt: 1,
+            qclass: 0,
+            qtype: 0,
+            rcode: 0,
+            aa_flag: false,
+            tc_flag: false,
+            rd_flag: false,
+            ra_flag: false,
+            ttl: vec![1; 5],
+        };
+        let ser_dns_old = bincode::serialize(&dns_old).unwrap();
+        let dns_old_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let dns_store = db.dns_store().unwrap();
+        dns_store.append(&dns_old_key, &ser_dns_old).unwrap();
+
+        // migration dns raw events
+        super::migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(&dns_store).unwrap();
+
+        // check dns migration
+        let (_, val) = dns_store.iter_forward().next().unwrap().unwrap();
+        let store_dns: DnsFromV26 = bincode::deserialize(&val).unwrap();
+        let new_dns = DnsFromV26 {
+            orig_addr: "192.168.4.76".parse().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            query: "Hello Server".to_string(),
+            answer: vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()],
+            trans_id: 1,
+            rtt: 1,
+            qclass: 0,
+            qtype: 0,
+            rcode: 0,
+            aa_flag: false,
+            tc_flag: false,
+            rd_flag: false,
+            ra_flag: false,
+            ttl: vec![1; 5],
+        };
+        assert_eq!(store_dns, new_dns);
+
+        // prepare old rdp raw data
+        let rdp_old = RdpBeforeV26 {
+            orig_addr: "10.0.0.1".parse().unwrap(),
+            orig_port: 3389,
+            resp_addr: "10.0.0.2".parse().unwrap(),
+            resp_port: 3390,
+            proto: 6,
+            end_time: 123,
+            cookie: "cookie_val".to_string(),
+        };
+        let ser_rdp_old = bincode::serialize(&rdp_old).unwrap();
+        let rdp_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let rdp_store = db.rdp_store().unwrap();
+        rdp_store.append(&rdp_key, &ser_rdp_old).unwrap();
+
+        // migration rdp raw events
+        super::migrate_raw_event_0_24_to_0_26::<RdpBeforeV26, RdpFromV26>(&rdp_store).unwrap();
+
+        // check rdp migration
+        let (_, val) = rdp_store.iter_forward().next().unwrap().unwrap();
+        let store_rdp: RdpFromV26 = bincode::deserialize(&val).unwrap();
+        let new_rdp = RdpFromV26 {
+            orig_addr: rdp_old.orig_addr,
+            orig_port: rdp_old.orig_port,
+            resp_addr: rdp_old.resp_addr,
+            resp_port: rdp_old.resp_port,
+            proto: rdp_old.proto,
+            start_time: timestamp,
+            end_time: rdp_old.end_time,
+            cookie: rdp_old.cookie.clone(),
+        };
+        assert_eq!(store_rdp, new_rdp);
+
+        // prepare old smtp raw data
+        let smtp_old = SmtpBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            mailfrom: "mailfrom".to_string(),
+            date: "date".to_string(),
+            from: "from".to_string(),
+            to: "to".to_string(),
+            subject: "subject".to_string(),
+            agent: "agent".to_string(),
+            state: String::new(),
+        };
+        let ser_smtp_old = bincode::serialize(&smtp_old).unwrap();
+        let smtp_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let smtp_store = db.smtp_store().unwrap();
+        smtp_store.append(&smtp_key, &ser_smtp_old).unwrap();
+
+        // migration smtp raw events
+        super::migrate_raw_event_0_24_to_0_26::<SmtpBeforeV26, SmtpFromV26>(&smtp_store).unwrap();
+
+        // check smtp migration
+        let (_, val) = smtp_store.iter_forward().next().unwrap().unwrap();
+        let store_smtp: SmtpFromV26 = bincode::deserialize(&val).unwrap();
+        let new_smtp = SmtpFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            mailfrom: "mailfrom".to_string(),
+            date: "date".to_string(),
+            from: "from".to_string(),
+            to: "to".to_string(),
+            subject: "subject".to_string(),
+            agent: "agent".to_string(),
+            state: String::new(),
+        };
+        assert_eq!(store_smtp, new_smtp);
+
+        // prepare old ntlm raw data
+        let ntlm_old = NtlmBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            username: "bly".to_string(),
+            hostname: "host".to_string(),
+            domainname: "domain".to_string(),
+            success: "tf".to_string(),
+            protocol: "protocol".to_string(),
+        };
+        let ser_ntlm_old = bincode::serialize(&ntlm_old).unwrap();
+        let ntlm_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let ntlm_store = db.ntlm_store().unwrap();
+        ntlm_store.append(&ntlm_key, &ser_ntlm_old).unwrap();
+
+        // migration ntlm raw events
+        super::migrate_raw_event_0_24_to_0_26::<NtlmBeforeV26, NtlmFromV26>(&ntlm_store).unwrap();
+
+        // check ntlm migration
+        let (_, val) = ntlm_store.iter_forward().next().unwrap().unwrap();
+        let store_ntlm: NtlmFromV26 = bincode::deserialize(&val).unwrap();
+        let new_ntlm = NtlmFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            username: "bly".to_string(),
+            hostname: "host".to_string(),
+            domainname: "domain".to_string(),
+            success: "tf".to_string(),
+            protocol: "protocol".to_string(),
+        };
+        assert_eq!(store_ntlm, new_ntlm);
+
+        // prepare old kerberos raw data
+        let kerberos_old = KerberosBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            client_time: 1,
+            server_time: 1,
+            error_code: 1,
+            client_realm: "client_realm".to_string(),
+            cname_type: 1,
+            client_name: vec!["client_name".to_string()],
+            realm: "realm".to_string(),
+            sname_type: 1,
+            service_name: vec!["service_name".to_string()],
+        };
+        let ser_kerberos_old = bincode::serialize(&kerberos_old).unwrap();
+        let kerberos_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let kerberos_store = db.kerberos_store().unwrap();
+        kerberos_store
+            .append(&kerberos_key, &ser_kerberos_old)
+            .unwrap();
+
+        // migration kerberos raw events
+        super::migrate_raw_event_0_24_to_0_26::<KerberosBeforeV26, KerberosFromV26>(
+            &kerberos_store,
+        )
+        .unwrap();
+
+        // check kerberos migration
+        let (_, val) = kerberos_store.iter_forward().next().unwrap().unwrap();
+        let store_kerberos: KerberosFromV26 = bincode::deserialize(&val).unwrap();
+        let new_kerberos = KerberosFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            client_time: 1,
+            server_time: 1,
+            error_code: 1,
+            client_realm: "client_realm".to_string(),
+            cname_type: 1,
+            client_name: vec!["client_name".to_string()],
+            realm: "realm".to_string(),
+            sname_type: 1,
+            service_name: vec!["service_name".to_string()],
+        };
+        assert_eq!(store_kerberos, new_kerberos);
+
+        // prepare old ssh raw data
+        let ssh_old = SshBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            client: "client".to_string(),
+            server: "server".to_string(),
+            cipher_alg: "cipher_alg".to_string(),
+            mac_alg: "mac_alg".to_string(),
+            compression_alg: "compression_alg".to_string(),
+            kex_alg: "kex_alg".to_string(),
+            host_key_alg: "host_key_alg".to_string(),
+            hassh_algorithms: "hassh_algorithms".to_string(),
+            hassh: "hassh".to_string(),
+            hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+            hassh_server: "hassh_server".to_string(),
+            client_shka: "client_shka".to_string(),
+            server_shka: "server_shka".to_string(),
+        };
+        let ser_ssh_old = bincode::serialize(&ssh_old).unwrap();
+        let ssh_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let ssh_store = db.ssh_store().unwrap();
+        ssh_store.append(&ssh_key, &ser_ssh_old).unwrap();
+
+        // migration ssh raw events
+        super::migrate_raw_event_0_24_to_0_26::<SshBeforeV26, SshFromV26>(&ssh_store).unwrap();
+
+        // check ssh migration
+        let (_, val) = ssh_store.iter_forward().next().unwrap().unwrap();
+        let store_ssh: SshFromV26 = bincode::deserialize(&val).unwrap();
+        let new_ssh = SshFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            client: "client".to_string(),
+            server: "server".to_string(),
+            cipher_alg: "cipher_alg".to_string(),
+            mac_alg: "mac_alg".to_string(),
+            compression_alg: "compression_alg".to_string(),
+            kex_alg: "kex_alg".to_string(),
+            host_key_alg: "host_key_alg".to_string(),
+            hassh_algorithms: "hassh_algorithms".to_string(),
+            hassh: "hassh".to_string(),
+            hassh_server_algorithms: "hassh_server_algorithms".to_string(),
+            hassh_server: "hassh_server".to_string(),
+            client_shka: "client_shka".to_string(),
+            server_shka: "server_shka".to_string(),
+        };
+        assert_eq!(store_ssh, new_ssh);
+
+        // prepare old dcerpc raw data
+        let dcerpc_old = DceRpcBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            rtt: 3,
+            named_pipe: "named_pipe".to_string(),
+            endpoint: "endpoint".to_string(),
+            operation: "operation".to_string(),
+        };
+        let ser_dcerpc_old = bincode::serialize(&dcerpc_old).unwrap();
+        let dcerpc_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let dcerpc_store = db.dce_rpc_store().unwrap();
+        dcerpc_store.append(&dcerpc_key, &ser_dcerpc_old).unwrap();
+
+        // migration dcerpc raw events
+        super::migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(&dcerpc_store)
+            .unwrap();
+        let (_, val) = dcerpc_store.iter_forward().next().unwrap().unwrap();
+        let store_dcerpc: DceRpcFromV26 = bincode::deserialize(&val).unwrap();
+
+        // check dcerpc migration
+        let new_dcerpc = DceRpcFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            rtt: 3,
+            named_pipe: "named_pipe".to_string(),
+            endpoint: "endpoint".to_string(),
+            operation: "operation".to_string(),
+        };
+        assert_eq!(store_dcerpc, new_dcerpc);
+
+        // prepare old ftp raw data
+        let ftp_old = FtpBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            user: "cluml".to_string(),
+            password: "aice".to_string(),
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "ftp_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        };
+        let ser_ftp_old = bincode::serialize(&ftp_old).unwrap();
+        let ftp_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let ftp_store = db.ftp_store().unwrap();
+        ftp_store.append(&ftp_key, &ser_ftp_old).unwrap();
+
+        // migration ftp raw events
+        super::migrate_raw_event_0_24_to_0_26::<FtpBeforeV26, FtpFromV26>(&ftp_store).unwrap();
+
+        // check ftp migration
+        let (_, val) = ftp_store.iter_forward().next().unwrap().unwrap();
+        let store_ftp: FtpFromV26 = bincode::deserialize(&val).unwrap();
+        let new_ftp = FtpFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            user: "cluml".to_string(),
+            password: "aice".to_string(),
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "ftp_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        };
+        assert_eq!(store_ftp, new_ftp);
+
+        // prepare old mqtt raw data
+        let mqtt_old = MqttBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            protocol: "protocol".to_string(),
+            version: 1,
+            client_id: "1".to_string(),
+            connack_reason: 1,
+            subscribe: vec!["subscribe".to_string()],
+            suback_reason: vec![1],
+        };
+        let ser_mqtt_old = bincode::serialize(&mqtt_old).unwrap();
+        let mqtt_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let mqtt_store = db.mqtt_store().unwrap();
+        mqtt_store.append(&mqtt_key, &ser_mqtt_old).unwrap();
+
+        // migration mqtt raw events
+        super::migrate_raw_event_0_24_to_0_26::<MqttBeforeV26, MqttFromV26>(&mqtt_store).unwrap();
+
+        // check mqtt migration
+        let (_, val) = mqtt_store.iter_forward().next().unwrap().unwrap();
+        let store_mqtt: MqttFromV26 = bincode::deserialize(&val).unwrap();
+        let new_mqtt = MqttFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            protocol: "protocol".to_string(),
+            version: 1,
+            client_id: "1".to_string(),
+            connack_reason: 1,
+            subscribe: vec!["subscribe".to_string()],
+            suback_reason: vec![1],
+        };
+        assert_eq!(store_mqtt, new_mqtt);
+
+        // prepare old ldap raw data
+        let ldap_old = LdapBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            message_id: 1,
+            version: 1,
+            opcode: vec!["opcode".to_string()],
+            result: vec!["result".to_string()],
+            diagnostic_message: Vec::new(),
+            object: Vec::new(),
+            argument: Vec::new(),
+        };
+        let ser_ldap_old = bincode::serialize(&ldap_old).unwrap();
+        let ldap_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let ldap_store = db.ldap_store().unwrap();
+        ldap_store.append(&ldap_key, &ser_ldap_old).unwrap();
+
+        // migration ldap raw events
+        super::migrate_raw_event_0_24_to_0_26::<LdapBeforeV26, LdapFromV26>(&ldap_store).unwrap();
+
+        // check ldap migration
+        let (_, val) = ldap_store.iter_forward().next().unwrap().unwrap();
+        let store_ldap: LdapFromV26 = bincode::deserialize(&val).unwrap();
+        let new_ldap = LdapFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            message_id: 1,
+            version: 1,
+            opcode: vec!["opcode".to_string()],
+            result: vec!["result".to_string()],
+            diagnostic_message: Vec::new(),
+            object: Vec::new(),
+            argument: Vec::new(),
+        };
+        assert_eq!(store_ldap, new_ldap);
+
+        // prepare old tls raw data
+        let tls_old = TlsBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            server_name: "server_name".to_string(),
+            alpn_protocol: "alpn_protocol".to_string(),
+            ja3: "ja3".to_string(),
+            version: "version".to_string(),
+            client_cipher_suites: vec![771, 769, 770],
+            client_extensions: vec![0, 1, 2],
+            cipher: 10,
+            extensions: vec![0, 1],
+            ja3s: "ja3s".to_string(),
+            serial: "serial".to_string(),
+            subject_country: "sub_country".to_string(),
+            subject_org_name: "sub_org".to_string(),
+            subject_common_name: "sub_comm".to_string(),
+            validity_not_before: 11,
+            validity_not_after: 12,
+            subject_alt_name: "sub_alt".to_string(),
+            issuer_country: "issuer_country".to_string(),
+            issuer_org_name: "issuer_org".to_string(),
+            issuer_org_unit_name: "issuer_org_unit".to_string(),
+            issuer_common_name: "issuer_comm".to_string(),
+            last_alert: 13,
+        };
+        let ser_tls_old = bincode::serialize(&tls_old).unwrap();
+        let tls_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let tls_store = db.tls_store().unwrap();
+        tls_store.append(&tls_key, &ser_tls_old).unwrap();
+
+        // migration tls raw events
+        super::migrate_raw_event_0_24_to_0_26::<TlsBeforeV26, TlsFromV26>(&tls_store).unwrap();
+
+        // check tls migration
+        let (_, val) = tls_store.iter_forward().next().unwrap().unwrap();
+        let store_tls: TlsFromV26 = bincode::deserialize(&val).unwrap();
+        let new_tls = TlsFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            server_name: "server_name".to_string(),
+            alpn_protocol: "alpn_protocol".to_string(),
+            ja3: "ja3".to_string(),
+            version: "version".to_string(),
+            client_cipher_suites: vec![771, 769, 770],
+            client_extensions: vec![0, 1, 2],
+            cipher: 10,
+            extensions: vec![0, 1],
+            ja3s: "ja3s".to_string(),
+            serial: "serial".to_string(),
+            subject_country: "sub_country".to_string(),
+            subject_org_name: "sub_org".to_string(),
+            subject_common_name: "sub_comm".to_string(),
+            validity_not_before: 11,
+            validity_not_after: 12,
+            subject_alt_name: "sub_alt".to_string(),
+            issuer_country: "issuer_country".to_string(),
+            issuer_org_name: "issuer_org".to_string(),
+            issuer_org_unit_name: "issuer_org_unit".to_string(),
+            issuer_common_name: "issuer_comm".to_string(),
+            last_alert: 13,
+        };
+        assert_eq!(store_tls, new_tls);
+
+        // prepare old smb raw data
+        let smb_old = SmbBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            command: 0,
+            path: "something/path".to_string(),
+            service: "service".to_string(),
+            file_name: "fine_name".to_string(),
+            file_size: 10,
+            resource_type: 20,
+            fid: 30,
+            create_time: 10_000_000,
+            access_time: 20_000_000,
+            write_time: 10_000_000,
+            change_time: 20_000_000,
+        };
+        let ser_smb_old = bincode::serialize(&smb_old).unwrap();
+        let smb_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let smb_store = db.smb_store().unwrap();
+        smb_store.append(&smb_key, &ser_smb_old).unwrap();
+
+        // migration smb raw events
+        super::migrate_raw_event_0_24_to_0_26::<SmbBeforeV26, SmbFromV26>(&smb_store).unwrap();
+
+        // check smb migration
+        let (_, val) = smb_store.iter_forward().next().unwrap().unwrap();
+        let store_smb: SmbFromV26 = bincode::deserialize(&val).unwrap();
+        let new_smb = SmbFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            command: 0,
+            path: "something/path".to_string(),
+            service: "service".to_string(),
+            file_name: "fine_name".to_string(),
+            file_size: 10,
+            resource_type: 20,
+            fid: 30,
+            create_time: 10_000_000,
+            access_time: 20_000_000,
+            write_time: 10_000_000,
+            change_time: 20_000_000,
+        };
+        assert_eq!(store_smb, new_smb);
+
+        // prepare old nfs raw data
+        let nfs_old = NfsBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            read_files: vec![],
+            write_files: vec![],
+        };
+        let ser_nfs_old = bincode::serialize(&nfs_old).unwrap();
+        let nfs_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let nfs_store = db.nfs_store().unwrap();
+        nfs_store.append(&nfs_key, &ser_nfs_old).unwrap();
+
+        // migration nfs raw events
+        super::migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(&nfs_store).unwrap();
+
+        // check nfs migration
+        let (_, val) = nfs_store.iter_forward().next().unwrap().unwrap();
+        let store_nfs: NfsFromV26 = bincode::deserialize(&val).unwrap();
+        let new_nfs = NfsFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            read_files: vec![],
+            write_files: vec![],
+        };
+        assert_eq!(store_nfs, new_nfs);
+
+        // prepare old bootp raw data
+        let bootp_old = BootpBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            op: 0,
+            htype: 0,
+            hops: 0,
+            xid: 0,
+            ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+            yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+            siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+            giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+            chaddr: vec![0, 1, 2],
+            sname: "sname".to_string(),
+            file: "file".to_string(),
+        };
+        let ser_bootp_old = bincode::serialize(&bootp_old).unwrap();
+        let bootp_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let bootp_store = db.bootp_store().unwrap();
+        bootp_store.append(&bootp_key, &ser_bootp_old).unwrap();
+
+        // migration bootp raw events
+        super::migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(&bootp_store)
+            .unwrap();
+
+        // check bootp migration
+        let (_, val) = bootp_store.iter_forward().next().unwrap().unwrap();
+        let store_bootp: BootpFromV26 = bincode::deserialize(&val).unwrap();
+        let new_bootp = BootpFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            op: 0,
+            htype: 0,
+            hops: 0,
+            xid: 0,
+            ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+            yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+            siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+            giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+            chaddr: vec![0, 1, 2],
+            sname: "sname".to_string(),
+            file: "file".to_string(),
+        };
+        assert_eq!(store_bootp, new_bootp);
+
+        // prepare old dhcp raw data
+        let dhcp_old = DhcpBeforeV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            end_time: 1,
+            msg_type: 0,
+            ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+            yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+            siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+            giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+            subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
+            router: vec![
+                "192.168.1.11".parse::<IpAddr>().unwrap(),
+                "192.168.1.22".parse::<IpAddr>().unwrap(),
+            ],
+            domain_name_server: vec![
+                "192.168.1.33".parse::<IpAddr>().unwrap(),
+                "192.168.1.44".parse::<IpAddr>().unwrap(),
+            ],
+            req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+            lease_time: 1,
+            server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+            param_req_list: vec![0, 1, 2],
+            message: "message".to_string(),
+            renewal_time: 1,
+            rebinding_time: 1,
+            class_id: vec![0, 1, 2],
+            client_id_type: 1,
+            client_id: vec![0, 1, 2],
+        };
+        let ser_dhcp_old = bincode::serialize(&dhcp_old).unwrap();
+        let dhcp_key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        let dhcp_store = db.dhcp_store().unwrap();
+        dhcp_store.append(&dhcp_key, &ser_dhcp_old).unwrap();
+
+        // migration dhcp raw events
+        super::migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(&dhcp_store).unwrap();
+
+        // check dhcp migration
+        let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
+        let store_dhcp: DhcpFromV26 = bincode::deserialize(&val).unwrap();
+        let new_dhcp = DhcpFromV26 {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            end_time: 1,
+            msg_type: 0,
+            ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
+            yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
+            siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
+            giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+            subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
+            router: vec![
+                "192.168.1.11".parse::<IpAddr>().unwrap(),
+                "192.168.1.22".parse::<IpAddr>().unwrap(),
+            ],
+            domain_name_server: vec![
+                "192.168.1.33".parse::<IpAddr>().unwrap(),
+                "192.168.1.44".parse::<IpAddr>().unwrap(),
+            ],
+            req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+            lease_time: 1,
+            server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+            param_req_list: vec![0, 1, 2],
+            message: "message".to_string(),
+            renewal_time: 1,
+            rebinding_time: 1,
+            class_id: vec![0, 1, 2],
+            client_id_type: 1,
+            client_id: vec![0, 1, 2],
+        };
+        assert_eq!(store_dhcp, new_dhcp);
     }
 
     #[test]

@@ -1,43 +1,56 @@
-query TlsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    tlsRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                serverName
-                alpnProtocol
-                ja3
-                version
-                clientCipherSuites
-                clientExtensions
-                cipher
-                extensions
-                ja3S
-                serial
-                subjectCountry
-                subjectOrgName
-                subjectCommonName
-                validityNotBefore
-                validityNotAfter
-                subjectAltName
-                issuerCountry
-                issuerOrgName
-                issuerOrgUnitName
-                issuerCommonName
-                lastAlert
-            }
-        }
+query TlsRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  tlsRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        serverName
+        alpnProtocol
+        ja3
+        version
+        clientCipherSuites
+        clientExtensions
+        cipher
+        extensions
+        ja3S
+        serial
+        subjectCountry
+        subjectOrgName
+        subjectCommonName
+        validityNotBefore
+        validityNotAfter
+        subjectAltName
+        issuerCountry
+        issuerOrgName
+        issuerOrgUnitName
+        issuerCommonName
+        lastAlert
+      }
+    }
+  }
 }

@@ -21,6 +21,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   build process.
 - Added client certificate support for GraphQL API to enable mutual TLS (mTLS)
   authentication when communicating with other Giganto instances in a cluster.
+- Added `start_time` field to all protocol event structures for improved
+  temporal tracking and consistency.
+  - The `start_time` field represents the session start time and complements
+    the existing `end_time` field.
+  - Raw event keys, which previously used the session start time, now use the
+    actual raw event creation timestamp provided by the sensor application.
 
 ### Changed
 

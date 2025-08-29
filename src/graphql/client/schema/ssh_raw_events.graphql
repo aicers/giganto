@@ -1,35 +1,48 @@
-query SshRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    sshRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                client
-                server
-                cipherAlg
-                macAlg
-                compressionAlg
-                kexAlg
-                hostKeyAlg
-                hasshAlgorithms
-                hassh
-                hasshServerAlgorithms
-                hasshServer
-                clientShka
-                serverShka
-            }
-        }
+query SshRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  sshRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        client
+        server
+        cipherAlg
+        macAlg
+        compressionAlg
+        kexAlg
+        hostKeyAlg
+        hasshAlgorithms
+        hassh
+        hasshServerAlgorithms
+        hasshServer
+        clientShka
+        serverShka
+      }
+    }
+  }
 }
