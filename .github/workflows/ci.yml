@@ -15,7 +15,7 @@ jobs:
         uses: hecrj/setup-rust-action@v1
         with:
           rust-version: stable
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
@@ -40,7 +40,7 @@ jobs:
         uses: hecrj/setup-rust-action@v1
         with:
           rust-version: stable
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
       - name: Install libcap on Ubuntu
         if: matrix.os == 'ubuntu-latest'
@@ -58,7 +58,7 @@ jobs:
         run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
       - name: Install libcap on Ubuntu
         run: |
