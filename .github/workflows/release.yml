@@ -3,13 +3,13 @@ name: Release with Assets Triggered by a Tag
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
+      - "[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'tag name'
+        description: "tag name"
         required: true
-        default: '0.1.0'
+        default: "0.1.0"
 
 env:
   TITLE: Giganto
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
       - name: Update to the Latest Version of Rust
