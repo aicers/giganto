@@ -1,34 +1,47 @@
-query DnsRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    dnsRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                endTime
-                proto
-                query
-                answer
-                transId
-                rtt
-                qclass
-                qtype
-                rcode
-                aaFlag
-                tcFlag
-                rdFlag
-                raFlag
-                ttl
-            }
-        }
+query DnsRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  dnsRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        startTime
+        endTime
+        proto
+        query
+        answer
+        transId
+        rtt
+        qclass
+        qtype
+        rcode
+        aaFlag
+        tcFlag
+        rdFlag
+        raFlag
+        ttl
+      }
+    }
+  }
 }

@@ -1,26 +1,39 @@
-query DceRpcRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    dceRpcRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                rtt
-                namedPipe
-                endpoint
-                operation
-            }
-        }
+query DceRpcRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  dceRpcRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        rtt
+        namedPipe
+        endpoint
+        operation
+      }
+    }
+  }
 }

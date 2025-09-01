@@ -178,6 +178,10 @@ struct ConnRawEvent {
     ///
     /// For example, `ShDdAaFf` indicates a session without packet loss.
     conn_state: String,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -221,6 +225,10 @@ struct DnsRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -273,6 +281,10 @@ struct HttpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -341,6 +353,10 @@ struct RdpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -371,6 +387,10 @@ struct SmtpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -413,6 +433,10 @@ struct NtlmRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -451,6 +475,10 @@ struct KerberosRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -497,6 +525,10 @@ struct SshRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -551,6 +583,10 @@ struct DceRpcRawEvent {
     ///
     /// TCP is 6, UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -587,6 +623,10 @@ struct FtpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -639,6 +679,10 @@ struct MqttRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -679,6 +723,10 @@ struct LdapRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -721,6 +769,10 @@ struct TlsRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -792,6 +844,10 @@ struct SmbRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -842,6 +898,10 @@ struct NfsRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -874,6 +934,10 @@ struct BootpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -948,6 +1012,10 @@ struct DhcpRawEvent {
     ///
     /// TCP is 6, and UDP is 17.
     proto: u8,
+    /// Start Time
+    ///
+    /// It is measured in nanoseconds.
+    start_time: StringNumberI64,
     /// End Time
     ///
     /// It is measured in nanoseconds.
@@ -1106,6 +1174,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
+            start_time: val.start_time.into(),
             end_time: val.end_time.into(),
             method: val.method,
             host: val.host,
@@ -1141,6 +1210,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
+            start_time: val.start_time.into(),
             end_time: val.end_time.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
@@ -1162,6 +1232,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
+            start_time: val.start_time.into(),
             end_time: val.end_time.into(),
             user: val.user,
             password: val.password,
@@ -1188,6 +1259,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
+            start_time: val.start_time.into(),
             end_time: val.end_time.into(),
             op: val.op,
             htype: val.htype,
@@ -1213,6 +1285,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
+            start_time: val.start_time.into(),
             end_time: val.end_time.into(),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
@@ -1240,7 +1313,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
     }
 }
 
-from_key_value!(RdpRawEvent, Rdp, cookie; end_time);
+from_key_value!(RdpRawEvent, Rdp, cookie; start_time, end_time);
 
 from_key_value!(
     DnsRawEvent,
@@ -1256,6 +1329,7 @@ from_key_value!(
     rd_flag,
     ra_flag,
     ttl;
+    start_time,
     end_time,
     rtt
 );
@@ -1270,6 +1344,7 @@ from_key_value!(
     subject,
     agent,
     state;
+    start_time,
     end_time
 );
 
@@ -1281,6 +1356,7 @@ from_key_value!(
     domainname,
     success,
     protocol;
+    start_time,
     end_time
 );
 
@@ -1293,6 +1369,7 @@ from_key_value!(
     realm,
     sname_type,
     service_name;
+    start_time,
     end_time,
     client_time,
     server_time,
@@ -1315,6 +1392,7 @@ from_key_value!(
     hassh_server,
     client_shka,
     server_shka;
+    start_time,
     end_time
 );
 
@@ -1324,6 +1402,7 @@ from_key_value!(
     named_pipe,
     endpoint,
     operation;
+    start_time,
     end_time,
     rtt
 );
@@ -1337,6 +1416,7 @@ from_key_value!(
     connack_reason,
     subscribe,
     suback_reason;
+    start_time,
     end_time
 );
 
@@ -1349,6 +1429,7 @@ from_key_value!(
     diagnostic_message,
     object,
     argument;
+    start_time,
     end_time,
     message_id
 );
@@ -1375,6 +1456,7 @@ from_key_value!(
     issuer_org_unit_name,
     issuer_common_name,
     last_alert;
+    start_time,
     end_time,
     validity_not_before,
     validity_not_after
@@ -1389,6 +1471,7 @@ from_key_value!(
     file_name,
     resource_type,
     fid;
+    start_time,
     end_time,
     file_size,
     create_time,
@@ -1397,7 +1480,7 @@ from_key_value!(
     change_time
 );
 
-from_key_value!(NfsRawEvent, Nfs, read_files, write_files; end_time);
+from_key_value!(NfsRawEvent, Nfs, read_files, write_files; start_time, end_time);
 
 async fn handle_paged_conn_raw_events(
     ctx: &Context<'_>,

@@ -1,29 +1,42 @@
-query LdapRawEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    ldapRawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                origAddr
-                respAddr
-                origPort
-                respPort
-                proto
-                endTime
-                messageId
-                version
-                opcode
-                result
-                diagnosticMessage
-                object
-                argument
-            }
-        }
+query LdapRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  ldapRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        messageId
+        version
+        opcode
+        result
+        diagnosticMessage
+        object
+        argument
+      }
+    }
+  }
 }
