@@ -28,8 +28,8 @@ struct Status {
     cpu_usage: f32,
     total_memory: u64,
     used_memory: u64,
-    total_disk_space: u64,
-    used_disk_space: u64,
+    disk_used_bytes: u64,
+    disk_available_bytes: u64,
 }
 
 #[derive(InputObject)]
@@ -125,8 +125,8 @@ impl StatusQuery {
             cpu_usage: usg.cpu_usage,
             total_memory: usg.total_memory,
             used_memory: usg.used_memory,
-            total_disk_space: usg.total_disk_space,
-            used_disk_space: usg.used_disk_space,
+            disk_used_bytes: usg.disk_used_bytes,
+            disk_available_bytes: usg.disk_available_bytes,
         };
         Ok(usg)
     }
@@ -325,8 +325,8 @@ mod tests {
                 cpuUsage
                 totalMemory
                 usedMemory
-                totalDiskSpace
-                usedDiskSpace
+                diskUsedBytes
+                diskAvailableBytes
             }
         }
         ";
