@@ -650,7 +650,7 @@ fn insert_log_raw_event(
         kind: kind.to_string(),
         log: body.to_vec(),
     };
-    let value = bincode::serialize(&log_body).unwrap();
+    let value = bincode::serde::encode_to_vec(&log_body, bincode::config::legacy()).unwrap();
     store.append(&key, &value).unwrap();
 }
 
@@ -676,7 +676,7 @@ fn insert_oplog_raw_event(
         contents: "oplog".to_string(),
     };
 
-    let value = bincode::serialize(&oplog_body).unwrap();
+    let value = bincode::serde::encode_to_vec(&oplog_body, bincode::config::legacy()).unwrap();
     store.append(&key, &value).unwrap();
     key
 }

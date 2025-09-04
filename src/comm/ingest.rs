@@ -859,7 +859,11 @@ async fn handle_data<T>(
         buf.clear();
         match recv_raw(&mut recv, &mut buf).await {
             Ok(()) => {
-                let Ok(recv_buf) = bincode::deserialize::<Vec<(i64, Vec<u8>)>>(&buf) else {
+                let Ok(recv_buf) = bincode::serde::decode_from_slice::<Vec<(i64, Vec<u8>)>, _>(
+                    &buf,
+                    bincode::config::legacy(),
+                )
+                .map(|(v, _)| v) else {
                     err_msg = Some("Failed to deserialize received message".to_string());
                     break;
                 };
@@ -885,7 +889,11 @@ async fn handle_data<T>(
                     }
                     let storage_key = match raw_event_kind {
                         RawEventKind::Log => {
-                            let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
+                            let Ok(log) = bincode::serde::decode_from_slice::<Log, _>(
+                                &raw_event,
+                                bincode::config::legacy(),
+                            )
+                            .map(|(v, _)| v) else {
                                 err_msg = Some("Failed to deserialize Log".to_string());
                                 break;
                             };
@@ -897,7 +905,11 @@ async fn handle_data<T>(
                         }
                         RawEventKind::PeriodicTimeSeries => {
                             let Ok(time_series) =
-                                bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
+                                bincode::serde::decode_from_slice::<PeriodicTimeSeries, _>(
+                                    &raw_event,
+                                    bincode::config::legacy(),
+                                )
+                                .map(|(v, _)| v)
                             else {
                                 err_msg =
                                     Some("Failed to deserialize PeriodicTimeSeries".to_string());
@@ -909,12 +921,18 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::OpLog => {
-                            let Ok(mut op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
+                            let Ok(mut op_log) = bincode::serde::decode_from_slice::<OpLog, _>(
+                                &raw_event,
+                                bincode::config::legacy(),
+                            )
+                            .map(|(v, _)| v) else {
                                 err_msg = Some("Failed to deserialize OpLog".to_string());
                                 break;
                             };
                             op_log.sensor.clone_from(&sensor);
-                            let Ok(op_log) = bincode::serialize(&op_log) else {
+                            let Ok(op_log) =
+                                bincode::serde::encode_to_vec(&op_log, bincode::config::legacy())
+                            else {
                                 err_msg = Some("Failed to serialize OpLog".to_string());
                                 break;
                             };
@@ -929,7 +947,11 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::Packet => {
-                            let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
+                            let Ok(packet) = bincode::serde::decode_from_slice::<Packet, _>(
+                                &raw_event,
+                                bincode::config::legacy(),
+                            )
+                            .map(|(v, _)| v) else {
                                 err_msg = Some("Failed to deserialize Packet".to_string());
                                 break;
                             };
@@ -940,7 +962,12 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::Statistics => {
-                            let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event)
+                            let Ok(statistics) =
+                                bincode::serde::decode_from_slice::<Statistics, _>(
+                                    &raw_event,
+                                    bincode::config::legacy(),
+                                )
+                                .map(|(v, _)| v)
                             else {
                                 err_msg = Some("Failed to deserialize Statistics".to_string());
                                 break;
@@ -961,7 +988,11 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::SecuLog => {
-                            let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
+                            let Ok(secu_log) = bincode::serde::decode_from_slice::<SecuLog, _>(
+                                &raw_event,
+                                bincode::config::legacy(),
+                            )
+                            .map(|(v, _)| v) else {
                                 err_msg = Some("Failed to deserialize SecuLog".to_string());
                                 break;
                             };

@@ -487,7 +487,8 @@ mod tests {
             packet_timestamp: pk_timestamp,
             packet: vec![0, 1, 2, 3],
         };
-        let ser_packet_body = bincode::serialize(&packet_body).unwrap();
+        let ser_packet_body =
+            bincode::serde::encode_to_vec(&packet_body, bincode::config::legacy()).unwrap();
 
         store.append(&key, &ser_packet_body).unwrap();
     }
