@@ -90,15 +90,14 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 
 // Not a `sensor`+`time` event.
-const NON_STANDARD_CFS: [&str; 8] = [
+const NON_STANDARD_CFS: [&str; 6] = [
     "log",
-    "periodic time series",
+    // "periodic time series", // Temporarily excluded until the retention logic for time series is clearly defined.
     "statistics",
-    "oplog",
     "packet",
     "seculog",
-    "netflow5", // netflow5 + time
-    "netflow9", // netflow9 + time
+    "netflow5", // netflow5 + timestamp
+    "netflow9", // netflow9 + timestamp
 ];
 const USAGE_THRESHOLD: u64 = 95;
 const USAGE_LOW: u64 = 85;
@@ -106,14 +105,16 @@ const USAGE_LOW: u64 = 85;
 pub struct RetentionStores<'db, T> {
     pub standard_cfs: Vec<RawEventStore<'db, T>>,
     pub non_standard_cfs: Vec<RawEventStore<'db, T>>,
+    pub op_log_cf: RawEventStore<'db, OpLog>,
 }
 
-impl<T> RetentionStores<'_, T> {
-    fn new() -> Self {
-        RetentionStores {
+impl<'db, T> RetentionStores<'db, T> {
+    fn new(db: &'db Database) -> Result<Self> {
+        Ok(RetentionStores {
             standard_cfs: Vec::new(),
             non_standard_cfs: Vec::new(),
-        }
+            op_log_cf: db.op_log_store()?,
+        })
     }
 }
 
@@ -222,9 +223,9 @@ impl Database {
         })
     }
 
-    /// Returns the raw event store for all type.
+    /// Returns the raw event store for all types.
     pub fn retain_period_store(&self) -> Result<RetentionStores<'_, ()>> {
-        let mut stores = RetentionStores::new();
+        let mut stores = RetentionStores::new(self)?;
 
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
             if NON_STANDARD_CFS.contains(&store) {
@@ -1025,6 +1026,29 @@ pub async fn retain_periodically(
                             }
                             store.flush()?;
                         }
+                    }
+
+                    // Handle oplog deletion with timestamp-based range deletion
+                    let mut from: Vec<u8> = from_timestamp.to_vec();
+                    from.push(0x00);
+                    from.extend_from_slice(&1_usize.to_be_bytes());
+
+                    let mut to: Vec<u8> = retention_timestamp_vec.to_vec();
+                    to.push(0x00);
+                    to.extend_from_slice(&usize::MAX.to_be_bytes());
+
+                    let store = &all_store.op_log_cf;
+                    if store
+                        .db
+                        .delete_file_in_range_cf(store.cf, &from, &to)
+                        .is_ok()
+                    {
+                        store.flush()?;
+                        if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
+                            store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
+                        }
+                    } else {
+                        warn!("Failed to delete file in range for operation log");
                     }
                     if check_db_usage().await.1 && usage_flag {
                         retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;

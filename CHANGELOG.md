@@ -73,6 +73,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Modified `retain_periodically` function to stop further delete operations on a
   column family when a delete operation fails, preventing cascading failures
   and reducing excessive error logs.
+- Fixed the database retention logic for `oplog` and `periodic time series` with
+  non-standard key formats. `oplog` now uses timestamp-based range deletion
+  instead of sensor-based iteration. `periodic time series` retention is
+  temporarily disabled until proper policy-based retention logic is implemented.
 
 ## [0.25.1] - 2025-07-08
 
