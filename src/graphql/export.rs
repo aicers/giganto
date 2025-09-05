@@ -293,6 +293,20 @@ struct DceRpcJsonOutput {
 }
 
 #[derive(Serialize, Debug)]
+struct FtpCommandJsonOutput {
+    command: String,
+    reply_code: String,
+    reply_msg: String,
+    data_passive: bool,
+    data_orig_addr: String,
+    data_resp_addr: String,
+    data_resp_port: u16,
+    file: String,
+    file_size: u64,
+    file_id: String,
+}
+
+#[derive(Serialize, Debug)]
 struct FtpJsonOutput {
     time: String,
     sensor: String,
@@ -305,16 +319,7 @@ struct FtpJsonOutput {
     end_time: i64,
     user: String,
     password: String,
-    command: String,
-    reply_code: String,
-    reply_msg: String,
-    data_passive: bool,
-    data_orig_addr: String,
-    data_resp_addr: String,
-    data_resp_port: u16,
-    file: String,
-    file_size: u64,
-    file_id: String,
+    commands: Vec<FtpCommandJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1082,6 +1087,23 @@ impl JsonOutput<SecuLogJsonOutput> for SecuLog {
 
 impl JsonOutput<FtpJsonOutput> for Ftp {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<FtpJsonOutput> {
+        let commands = self
+            .commands
+            .iter()
+            .map(|cmd| FtpCommandJsonOutput {
+                command: cmd.command.clone(),
+                reply_code: cmd.reply_code.clone(),
+                reply_msg: cmd.reply_msg.clone(),
+                data_passive: cmd.data_passive,
+                data_orig_addr: cmd.data_orig_addr.to_string(),
+                data_resp_addr: cmd.data_resp_addr.to_string(),
+                data_resp_port: cmd.data_resp_port,
+                file: cmd.file.clone(),
+                file_size: cmd.file_size,
+                file_id: cmd.file_id.clone(),
+            })
+            .collect();
+
         Ok(FtpJsonOutput {
             time,
             sensor,
@@ -1094,16 +1116,7 @@ impl JsonOutput<FtpJsonOutput> for Ftp {
             end_time: self.end_time,
             user: self.user.clone(),
             password: self.password.clone(),
-            command: self.command.clone(),
-            reply_code: self.reply_code.clone(),
-            reply_msg: self.reply_msg.clone(),
-            data_passive: self.data_passive,
-            data_orig_addr: self.data_orig_addr.to_string(),
-            data_resp_addr: self.data_resp_addr.to_string(),
-            data_resp_port: self.data_resp_port,
-            file: self.file.clone(),
-            file_size: self.file_size,
-            file_id: self.file_id.clone(),
+            commands,
         })
     }
 }

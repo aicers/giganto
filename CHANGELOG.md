@@ -30,6 +30,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Modified FTP event structure to store multiple commands as `Vec<FtpCommand>`
+  instead of single command fields. This change preserves the complete command
+  history of FTP sessions, enabling better threat analysis and session tracking.
+  The FTP GraphQL API now returns a `commands` array containing all commands
+  and their responses from a session.
 - Refactored Publish API to use request type-driven processing. The Publish
   API now processes requests based on their specific request type rather than
   the client's `NodeType`. This change decouples request handling from client
