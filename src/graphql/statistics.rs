@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use async_graphql::{Context, Error, Object, Result, SimpleObject};
+use async_graphql::{Context, Enum, Error, Object, Result, SimpleObject};
 use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
@@ -113,6 +113,16 @@ async fn handle_statistics(
     Ok(total_stats)
 }
 
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Protocol {
+    /// Session(connection) events
+    Session,
+    /// DNS events
+    Dns,
+    /// HTTP events
+    Http,
+}
+
 #[Object]
 impl StatisticsQuery {
     async fn statistics(
@@ -140,6 +150,41 @@ impl StatisticsQuery {
             with_extra_query_args (time := time.clone().map(Into::into), protocols := protocols.clone() )
         )
     }
+
+    /// Returns the exact number of events stored for the given protocol.
+    ///
+    /// Only `Session`, `Dns`, and `Http` are supported as protocol types.
+    /// If you specify a protocol type other than these, an error will occur.
+    #[allow(clippy::unused_async)]
+    async fn count_by_protocol(&self, ctx: &Context<'_>, protocol: Protocol) -> Result<i32> {
+        tracing::info!("Counting events for protocol: {protocol:?}");
+        let db = ctx.data::<Database>()?;
+        let n = count_cf_snapshot(db, protocol)?;
+        Ok(n)
+    }
+}
+// Counts the exact number of keys in a CF using a snapshot.
+pub fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
+    let cf_name = match protocol {
+        Protocol::Session => "conn",
+        Protocol::Dns => "dns",
+        Protocol::Http => "http",
+    };
+
+    let snap = db.db.snapshot();
+    let cf = db
+        .db
+        .cf_handle(cf_name)
+        .ok_or_else(|| anyhow!("CF not found: {cf_name}"))?;
+
+    let mut ro = rocksdb::ReadOptions::default();
+    ro.set_total_order_seek(true);
+    let iter = snap.iterator_cf_opt(cf, ro, rocksdb::IteratorMode::Start);
+    let mut n: i32 = 0;
+    for _ in iter {
+        n += 1;
+    }
+    Ok(n)
 }
 
 impl_from_giganto_time_range_struct_for_graphql_client!(stats);
@@ -296,6 +341,9 @@ mod tests {
     use chrono::Utc;
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
+    use crate::graphql::network::tests::{
+        insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
+    };
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
@@ -539,5 +587,131 @@ mod tests {
         );
 
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_count_by_protocol_empty_db() {
+        let schema = TestSchema::new();
+
+        let query = r"
+            query {
+                countByProtocol(protocol: SESSION)
+            }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+
+        assert_eq!(count_result, 0, "SESSION on empty DB must be 0");
+
+        let query = r"
+            query {
+                countByProtocol(protocol: DNS)
+            }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+
+        assert_eq!(count_result, 0, "DNS on empty DB must be 0");
+
+        let query = r"
+            query {
+                countByProtocol(protocol: HTTP)
+            }
+        ";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+
+        assert_eq!(count_result, 0, "HTTP on empty DB must be 0");
+    }
+
+    #[tokio::test]
+    async fn test_count_by_protocol_basic() {
+        let schema = TestSchema::new();
+
+        let conn_store = schema.db.conn_store().unwrap();
+        let dns_store = schema.db.dns_store().unwrap();
+        let http_store = schema.db.http_store().unwrap();
+
+        let now = Utc::now().timestamp_nanos_opt().unwrap();
+
+        // Insert into each CF:
+        //   SESSION -> 5 events
+        //   DNS     -> 7 events
+        //   HTTP    -> 9 events
+        for i in 0..5 {
+            let sensor = format!("sensor{i}");
+            insert_conn_raw_event(&conn_store, &sensor, now + i);
+        }
+
+        for i in 0..7 {
+            let sensor = format!("sensor{i}");
+            insert_dns_raw_event(&dns_store, &sensor, now + i);
+        }
+
+        for i in 0..9 {
+            let sensor = format!("sensor{i}");
+            insert_http_raw_event(&http_store, &sensor, now + i);
+        }
+
+        let query = r"
+            query {
+                countByProtocol(protocol: SESSION)
+            }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+        assert_eq!(count_result, 5, "SESSION count must be 5");
+
+        let query = r"
+            query {
+                countByProtocol(protocol: DNS)
+            }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+        assert_eq!(count_result, 7, "DNS count must be 7");
+
+        let query = r"
+            query {
+                countByProtocol(protocol: HTTP)
+            }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_i64)
+            .expect("countByProtocol should be an integer");
+        assert_eq!(count_result, 9, "HTTP count must be 9");
     }
 }
