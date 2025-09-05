@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use giganto_client::ingest::log::OpLogLevel;
+use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -735,16 +735,18 @@ impl MigrationNew<FtpBeforeV26> for FtpFromV26 {
             end_time: old_data.end_time,
             user: old_data.user,
             password: old_data.password,
-            command: old_data.command,
-            reply_code: old_data.reply_code,
-            reply_msg: old_data.reply_msg,
-            data_passive: old_data.data_passive,
-            data_orig_addr: old_data.data_orig_addr,
-            data_resp_addr: old_data.data_resp_addr,
-            data_resp_port: old_data.data_resp_port,
-            file: old_data.file,
-            file_size: old_data.file_size,
-            file_id: old_data.file_id,
+            commands: vec![FtpCommand {
+                command: old_data.command,
+                reply_code: old_data.reply_code,
+                reply_msg: old_data.reply_msg,
+                data_passive: old_data.data_passive,
+                data_orig_addr: old_data.data_orig_addr,
+                data_resp_addr: old_data.data_resp_addr,
+                data_resp_port: old_data.data_resp_port,
+                file: old_data.file,
+                file_size: old_data.file_size,
+                file_id: old_data.file_id,
+            }],
         }
     }
 }

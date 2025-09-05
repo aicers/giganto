@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.3,<0.26.0-alpha.4";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.5";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -63,8 +63,8 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             migrate_0_23_to_0_24,
         ),
         (
-            VersionReq::parse(">=0.24.0,<0.26.0-alpha.3").expect("valid version requirement"),
-            Version::parse("0.26.0-alpha.3").expect("valid version"),
+            VersionReq::parse(">=0.24.0,<0.26.0-alpha.4").expect("valid version requirement"),
+            Version::parse("0.26.0-alpha.4").expect("valid version"),
             migrate_0_24_to_0_26,
         ),
     ];
@@ -424,7 +424,7 @@ mod tests {
     use std::{fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
     use chrono::Utc;
-    use giganto_client::ingest::log::OpLogLevel;
+    use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
     use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
@@ -1281,16 +1281,18 @@ mod tests {
             end_time: 1,
             user: "cluml".to_string(),
             password: "aice".to_string(),
-            command: "command".to_string(),
-            reply_code: "500".to_string(),
-            reply_msg: "reply_message".to_string(),
-            data_passive: false,
-            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-            data_resp_port: 80,
-            file: "ftp_file".to_string(),
-            file_size: 100,
-            file_id: "1".to_string(),
+            commands: vec![FtpCommand {
+                command: "command".to_string(),
+                reply_code: "500".to_string(),
+                reply_msg: "reply_message".to_string(),
+                data_passive: false,
+                data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+                data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+                data_resp_port: 80,
+                file: "ftp_file".to_string(),
+                file_size: 100,
+                file_id: "1".to_string(),
+            }],
         };
         assert_eq!(store_ftp, new_ftp);
 

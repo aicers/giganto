@@ -601,6 +601,36 @@ struct DceRpcRawEvent {
     operation: String,
 }
 
+/// Represents an individual FTP command with its response and associated data.
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    ftp_raw_events::FtpRawEventsFtpRawEventsEdgesNodeCommands,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnFtpRawEventCommands
+]))]
+struct FtpCommandRawEvent {
+    /// Command
+    command: String,
+    /// Reply Code
+    reply_code: String,
+    /// Reply Message
+    reply_msg: String,
+    /// Passive Mode Flag
+    data_passive: bool,
+    /// Data Channel Source IP Address
+    data_orig_addr: String,
+    /// Data Channel Destination IP Address
+    data_resp_addr: String,
+    /// Data Channel Destination Port Number
+    data_resp_port: u16,
+    /// Filename
+    file: String,
+    /// File Size
+    file_size: StringNumberU64,
+    /// File ID
+    file_id: String,
+}
+
 /// Represents an event extracted from the FTP protocol.
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
@@ -635,26 +665,9 @@ struct FtpRawEvent {
     user: String,
     /// Password
     password: String,
-    /// Command
-    command: String,
-    /// Reply Code
-    reply_code: String,
-    /// Reply Message
-    reply_msg: String,
-    /// Passive Mode Flag
-    data_passive: bool,
-    /// Data Channel Source IP Address
-    data_orig_addr: String,
-    /// Data Channel Destination IP Address
-    data_resp_addr: String,
-    /// Data Channel Destination Port Number
-    data_resp_port: u16,
-    /// Filename
-    file: String,
-    /// File Size
-    file_size: StringNumberU64,
-    /// File ID
-    file_id: String,
+    /// Commands and their responses
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    commands: Vec<FtpCommandRawEvent>,
 }
 
 /// Represents an event extracted from the MQTT protocol.
@@ -1236,16 +1249,22 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             end_time: val.end_time.into(),
             user: val.user,
             password: val.password,
-            command: val.command,
-            reply_code: val.reply_code,
-            reply_msg: val.reply_msg,
-            data_passive: val.data_passive,
-            data_orig_addr: val.data_orig_addr.to_string(),
-            data_resp_addr: val.data_resp_addr.to_string(),
-            data_resp_port: val.data_resp_port,
-            file: val.file,
-            file_size: val.file_size.into(),
-            file_id: val.file_id,
+            commands: val
+                .commands
+                .into_iter()
+                .map(|cmd| FtpCommandRawEvent {
+                    command: cmd.command,
+                    reply_code: cmd.reply_code,
+                    reply_msg: cmd.reply_msg,
+                    data_passive: cmd.data_passive,
+                    data_orig_addr: cmd.data_orig_addr.to_string(),
+                    data_resp_addr: cmd.data_resp_addr.to_string(),
+                    data_resp_port: cmd.data_resp_port,
+                    file: cmd.file,
+                    file_size: cmd.file_size.into(),
+                    file_id: cmd.file_id,
+                })
+                .collect(),
         })
     }
 }
