@@ -15,8 +15,8 @@ use giganto_client::{
     ingest::{
         log::Log,
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
-            Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
+            Rdp, Smb, Smtp, Ssh, Tls,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -63,7 +63,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.3";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.4";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -426,16 +426,18 @@ fn gen_ftp_raw_event() -> Vec<u8> {
         end_time: 1,
         user: "cluml".to_string(),
         password: "aice".to_string(),
-        command: "command".to_string(),
-        reply_code: "500".to_string(),
-        reply_msg: "reply_message".to_string(),
-        data_passive: false,
-        data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-        data_resp_port: 80,
-        file: "ftp_file".to_string(),
-        file_size: 100,
-        file_id: "1".to_string(),
+        commands: vec![FtpCommand {
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "ftp_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        }],
     };
 
     bincode::serialize(&ftp_body).unwrap()

@@ -59,7 +59,7 @@ use crate::server::{
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.26.0-alpha.3,<0.26.0-alpha.4";
+const PUBLISH_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.5";
 
 pub struct Server {
     server_config: ServerConfig,

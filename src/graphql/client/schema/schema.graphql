@@ -883,6 +883,52 @@ type FileDeleteEventEdge {
 }
 
 """
+Represents an individual FTP command with its response and associated data.
+"""
+type FtpCommandRawEvent {
+	"""
+	Command
+	"""
+	command: String!
+	"""
+	Reply Code
+	"""
+	replyCode: String!
+	"""
+	Reply Message
+	"""
+	replyMsg: String!
+	"""
+	Passive Mode Flag
+	"""
+	dataPassive: Boolean!
+	"""
+	Data Channel Source IP Address
+	"""
+	dataOrigAddr: String!
+	"""
+	Data Channel Destination IP Address
+	"""
+	dataRespAddr: String!
+	"""
+	Data Channel Destination Port Number
+	"""
+	dataRespPort: Int!
+	"""
+	Filename
+	"""
+	file: String!
+	"""
+	File Size
+	"""
+	fileSize: StringNumberU64!
+	"""
+	File ID
+	"""
+	fileId: String!
+}
+
+"""
 Represents an event extracted from the FTP protocol.
 """
 type FtpRawEvent {
@@ -933,45 +979,9 @@ type FtpRawEvent {
 	"""
 	password: String!
 	"""
-	Command
+	Commands and their responses
 	"""
-	command: String!
-	"""
-	Reply Code
-	"""
-	replyCode: String!
-	"""
-	Reply Message
-	"""
-	replyMsg: String!
-	"""
-	Passive Mode Flag
-	"""
-	dataPassive: Boolean!
-	"""
-	Data Channel Source IP Address
-	"""
-	dataOrigAddr: String!
-	"""
-	Data Channel Destination IP Address
-	"""
-	dataRespAddr: String!
-	"""
-	Data Channel Destination Port Number
-	"""
-	dataRespPort: Int!
-	"""
-	Filename
-	"""
-	file: String!
-	"""
-	File Size
-	"""
-	fileSize: StringNumberU64!
-	"""
-	File ID
-	"""
-	fileId: String!
+	commands: [FtpCommandRawEvent!]!
 }
 
 type FtpRawEventConnection {
