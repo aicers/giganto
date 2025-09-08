@@ -17,8 +17,8 @@ use giganto_client::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
-            Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
+            Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
@@ -63,7 +63,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.3";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.4";
 
 struct TestClient {
     conn: Connection,
@@ -742,16 +742,18 @@ async fn ftp() {
         end_time: 1,
         user: "cluml".to_string(),
         password: "aice".to_string(),
-        command: "command".to_string(),
-        reply_code: "500".to_string(),
-        reply_msg: "reply_message".to_string(),
-        data_passive: false,
-        data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-        data_resp_port: 80,
-        file: "ftp_file".to_string(),
-        file_size: 100,
-        file_id: "1".to_string(),
+        commands: vec![FtpCommand {
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "ftp_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        }],
     };
 
     send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)

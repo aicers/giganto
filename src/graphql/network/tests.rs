@@ -3,8 +3,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{Duration, TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
-    Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp,
+    Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 
@@ -1812,16 +1812,18 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         end_time: 1,
         user: "cluml".to_string(),
         password: "aice".to_string(),
-        command: "command".to_string(),
-        reply_code: "500".to_string(),
-        reply_msg: "reply_message".to_string(),
-        data_passive: false,
-        data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
-        data_resp_port: 80,
-        file: "ftp_file".to_string(),
-        file_size: 100,
-        file_id: "1".to_string(),
+        commands: vec![FtpCommand {
+            command: "command".to_string(),
+            reply_code: "500".to_string(),
+            reply_msg: "reply_message".to_string(),
+            data_passive: false,
+            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_resp_port: 80,
+            file: "ftp_file".to_string(),
+            file_size: 100,
+            file_id: "1".to_string(),
+        }],
     };
     let ser_ftp_body = bincode::serialize(&ftp_body).unwrap();
 
@@ -1842,7 +1844,9 @@ async fn ftp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
-                    fileSize,
+                    commands {
+                        fileSize,
+                    }
                 }
             }
         }
@@ -1871,16 +1875,20 @@ async fn ftp_with_data_giganto_cluster() {
                             "endTime": "987654321",
                             "user": "example_user",
                             "password": "example_password",
-                            "command": "example_command",
-                            "replyCode": "200",
-                            "replyMsg": "Command OK",
-                            "dataPassive": true,
-                            "dataOrigAddr": "192.168.4.76",
-                            "dataRespAddr": "192.168.4.76",
-                            "dataRespPort": 54321,
-                            "file": "example_file.txt",
-                            "fileSize": "1024",
-                            "fileId": "123456789"
+                            "commands": [
+                                {
+                                    "command": "example_command",
+                                    "replyCode": "200",
+                                    "replyMsg": "Command OK",
+                                    "dataPassive": true,
+                                    "dataOrigAddr": "192.168.4.76",
+                                    "dataRespAddr": "192.168.4.76",
+                                    "dataRespPort": 54321,
+                                    "file": "example_file.txt",
+                                    "fileSize": "1024",
+                                    "fileId": "123456789"
+                                }
+                            ]
                         }
                     }
                 ]
@@ -1908,7 +1916,7 @@ async fn ftp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"1024\"}}]}}"
+        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", commands: [{fileSize: \"1024\"}]}}]}}"
     );
 
     mock.assert_async().await;

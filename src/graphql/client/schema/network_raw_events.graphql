@@ -185,16 +185,18 @@ query NetworkRawEvents(
           endTime
           user
           password
-          command
-          replyCode
-          replyMsg
-          dataPassive
-          dataOrigAddr
-          dataRespAddr
-          dataRespPort
-          file
-          fileSize
-          fileId
+          commands {
+            command
+            replyCode
+            replyMsg
+            dataPassive
+            dataOrigAddr
+            dataRespAddr
+            dataRespPort
+            file
+            fileSize
+            fileId
+          }
         }
         ... on MqttRawEvent {
           time
