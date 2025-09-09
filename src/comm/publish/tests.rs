@@ -16,7 +16,7 @@ use giganto_client::{
         log::Log,
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-            Rdp, Smb, Smtp, Ssh, Tls,
+            Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -63,7 +63,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.4";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.5";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -623,6 +623,34 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
     bincode::serialize(&dhcp_body).unwrap()
 }
 
+fn gen_radius_raw_event() -> Vec<u8> {
+    let radius_body = Radius {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 1812,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 1813,
+        proto: 17,
+        start_time: 1,
+        end_time: 2,
+        id: 123,
+        code: 1,
+        resp_code: 2,
+        auth: "00112233445566778899aabbccddeeff".to_string(),
+        resp_auth: "ffeeddccbbaa99887766554433221100".to_string(),
+        user_name: "test_user".to_string().into_bytes(),
+        user_passwd: "test_password".to_string().into_bytes(),
+        chap_passwd: vec![2u8; 16],
+        nas_ip: "192.168.1.1".parse::<IpAddr>().unwrap(),
+        nas_port: 12345,
+        state: vec![3u8; 8],
+        nas_id: "test_nas".to_string().into_bytes(),
+        nas_port_type: 15,
+        message: "test_message".to_string(),
+    };
+
+    bincode::serialize(&radius_body).unwrap()
+}
+
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
@@ -773,6 +801,13 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
     ser_dhcp_body
 }
 
+fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_radius_body = gen_radius_raw_event();
+    store.append(&key, &ser_radius_body).unwrap();
+    ser_radius_body
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_range_data_with_protocol() {
@@ -796,6 +831,7 @@ async fn request_range_data_with_protocol() {
     const NFS_KIND: &str = "nfs";
     const BOOTP_KIND: &str = "bootp";
     const DHCP_KIND: &str = "dhcp";
+    const RADIUS_KIND: &str = "radius";
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
@@ -1905,6 +1941,70 @@ async fn request_range_data_with_protocol() {
         );
     }
 
+    // radius test
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let radius_store = db.radius_store().unwrap();
+        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let radius_data = bincode::deserialize::<Radius>(&insert_radius_raw_event(
+            &radius_store,
+            SENSOR,
+            send_radius_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("valid date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            sensor: String::from(SENSOR),
+            kind: String::from(RADIUS_KIND),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            Radius::response_done().unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            radius_data.response_data(send_radius_time, SENSOR).unwrap(),
+            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
+                .unwrap()
+        );
+    }
+
     publish.conn.close(0u32.into(), b"publish_protocol_done");
     publish.endpoint.wait_idle().await;
 }
@@ -2150,6 +2250,7 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_NFS: RequestStreamRecord = RequestStreamRecord::Nfs;
     const NETWORK_STREAM_BOOTP: RequestStreamRecord = RequestStreamRecord::Bootp;
     const NETWORK_STREAM_DHCP: RequestStreamRecord = RequestStreamRecord::Dhcp;
+    const NETWORK_STREAM_RADIUS: RequestStreamRecord = RequestStreamRecord::Radius;
 
     const SENSOR_SEMI_SUPERVISED_ONE: &str = "src1";
     const SENSOR_SEMI_SUPERVISED_TWO: &str = "src2";
@@ -4111,6 +4212,121 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(send_dhcp_time, recv_timestamp);
         assert_eq!(dhcp_data, recv_data);
+    }
+
+    {
+        let radius_store = db.radius_store().unwrap();
+
+        // direct radius network event for the Semi-supervised Engine (src1,src2)
+        send_stream_request(
+            &mut publish.send,
+            StreamRequestPayload::SemiSupervised {
+                record_type: NETWORK_STREAM_RADIUS,
+                request: semi_supervised_msg.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut send_radius_stream = publish.conn.accept_uni().await.unwrap();
+
+        let radius_start_msg =
+            receive_semi_supervised_stream_start_message(&mut send_radius_stream)
+                .await
+                .unwrap();
+        assert_eq!(radius_start_msg, NETWORK_STREAM_RADIUS);
+
+        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "radius");
+        let radius_data = gen_radius_raw_event();
+
+        send_direct_stream(
+            &key,
+            &radius_data,
+            send_radius_time,
+            SENSOR_SEMI_SUPERVISED_ONE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_semi_supervised_data(&mut send_radius_stream)
+            .await
+            .unwrap();
+        assert_eq!(radius_data, recv_data[20..]);
+
+        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "radius");
+        let radius_data = gen_radius_raw_event();
+
+        send_direct_stream(
+            &key,
+            &radius_data,
+            send_radius_time,
+            SENSOR_SEMI_SUPERVISED_TWO,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_semi_supervised_data(&mut send_radius_stream)
+            .await
+            .unwrap();
+        assert_eq!(radius_data, recv_data[20..]);
+
+        // database radius network event for the Time Series Generator
+        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let radius_data = insert_radius_raw_event(
+            &radius_store,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            send_radius_time,
+        );
+
+        send_stream_request(
+            &mut publish.send,
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: NETWORK_STREAM_RADIUS,
+                request: time_series_generator_msg.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut send_radius_stream = publish.conn.accept_uni().await.unwrap();
+
+        let radius_start_msg =
+            receive_time_series_generator_stream_start_message(&mut send_radius_stream)
+                .await
+                .unwrap();
+        assert_eq!(radius_start_msg, POLICY_ID);
+
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_radius_stream)
+                .await
+                .unwrap();
+        assert_eq!(send_radius_time, recv_timestamp);
+        assert_eq!(radius_data, recv_data);
+
+        // direct radius network event for the Time Series Generator
+        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "radius");
+        let radius_data = gen_radius_raw_event();
+        send_direct_stream(
+            &key,
+            &radius_data,
+            send_radius_time,
+            SENSOR_TIME_SERIES_GENERATOR_THREE,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let (recv_data, recv_timestamp) =
+            receive_time_series_generator_data(&mut send_radius_stream)
+                .await
+                .unwrap();
+        assert_eq!(send_radius_time, recv_timestamp);
+        assert_eq!(radius_data, recv_data);
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");

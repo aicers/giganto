@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.5";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.6";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -63,8 +63,8 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             migrate_0_23_to_0_24,
         ),
         (
-            VersionReq::parse(">=0.24.0,<0.26.0-alpha.4").expect("valid version requirement"),
-            Version::parse("0.26.0-alpha.4").expect("valid version"),
+            VersionReq::parse(">=0.24.0,<0.26.0-alpha.5").expect("valid version requirement"),
+            Version::parse("0.26.0-alpha.5").expect("valid version"),
             migrate_0_24_to_0_26,
         ),
     ];

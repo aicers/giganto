@@ -21,7 +21,7 @@ use giganto_client::ingest::{
     Packet,
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
-    network::{Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Rdp, Smb},
+    network::{Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Radius, Rdp, Smb},
     statistics::Statistics,
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -46,7 +46,7 @@ use crate::{
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
 };
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 40] = [
     "conn",
     "dns",
     "log",
@@ -69,6 +69,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 39] = [
     "nfs",
     "bootp",
     "dhcp",
+    "radius",
     "process create",
     "file create time",
     "network connect",
@@ -382,6 +383,12 @@ impl Database {
     /// Returns the store for dhcp
     pub fn dhcp_store(&self) -> Result<RawEventStore<'_, Dhcp>> {
         let cf = self.get_cf_handle("dhcp")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for radius
+    pub fn radius_store(&self) -> Result<RawEventStore<'_, Radius>> {
+        let cf = self.get_cf_handle("radius")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 

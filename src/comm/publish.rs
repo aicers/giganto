@@ -15,8 +15,8 @@ use giganto_client::frame::send_raw;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
-    Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb,
+    Smtp, Ssh, Tls,
 };
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -59,7 +59,7 @@ use crate::server::{
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.5";
+const PUBLISH_VERSION_REQ: &str = ">=0.26.0-alpha.4,<0.26.0-alpha.6";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -454,6 +454,7 @@ where
         RequestStreamRecord::Nfs => handle_store!(nfs_store, "nfs"),
         RequestStreamRecord::Bootp => handle_store!(bootp_store, "bootp"),
         RequestStreamRecord::Dhcp => handle_store!(dhcp_store, "dhcp"),
+        RequestStreamRecord::Radius => handle_store!(radius_store, "radius"),
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
         RequestStreamRecord::Pcap => {}
@@ -887,6 +888,19 @@ async fn handle_request(
                     process_range_data::<Dhcp, u8>(
                         &mut send,
                         db.dhcp_store().context("Failed to open dhcp store")?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                        false,
+                    )
+                    .await?;
+                }
+                RawEventKind::Radius => {
+                    process_range_data::<Radius, u8>(
+                        &mut send,
+                        db.radius_store().context("Failed to open radius store")?,
                         msg,
                         ingest_sensors,
                         peers,
@@ -1348,6 +1362,18 @@ async fn handle_request(
                     process_raw_events::<Dhcp, u8>(
                         &mut send,
                         db.dhcp_store()?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                    )
+                    .await?;
+                }
+                RawEventKind::Radius => {
+                    process_raw_events::<Radius, u8>(
+                        &mut send,
+                        db.radius_store()?,
                         msg,
                         ingest_sensors,
                         peers,

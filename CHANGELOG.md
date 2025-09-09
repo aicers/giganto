@@ -27,6 +27,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     the existing `end_time` field.
   - Raw event keys, which previously used the session start time, now use the
     actual raw event creation timestamp provided by the sensor application.
+- Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
+  APIs (`radiusRawEvents`, `searchRadiusRawEvents`).
 
 ### Changed
 

@@ -1757,7 +1757,7 @@ input NetworkFilter {
 	agentId: String
 }
 
-union NetworkRawEvents = ConnRawEvent | DnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent
+union NetworkRawEvents = ConnRawEvent | DnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent
 
 type NetworkRawEventsConnection {
 	"""
@@ -2286,6 +2286,7 @@ type Query {
 	nfsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NfsRawEventConnection!
 	bootpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): BootpRawEventConnection!
 	dhcpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DhcpRawEventConnection!
+	radiusRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RadiusRawEventConnection!
 	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
 	searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
@@ -2304,6 +2305,7 @@ type Query {
 	searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchRadiusRawEvents(filter: SearchFilter!): [DateTime!]!
 	export(exportType: String!, filter: ExportFilter!): String!
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!
@@ -2346,6 +2348,135 @@ type Query {
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
 	netflow9RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow9RawEventConnection!
+}
+
+"""
+Represents an event extracted from the RADIUS protocol.
+"""
+type RadiusRawEvent {
+	"""
+	Time the event started transmitting from a sensor
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	Start Time
+	
+	It is measured in nanoseconds.
+	"""
+	startTime: StringNumberI64!
+	"""
+	End Time
+	
+	It is measured in nanoseconds.
+	"""
+	endTime: StringNumberI64!
+	"""
+	Identifier
+	"""
+	id: Int!
+	"""
+	Code
+	"""
+	code: Int!
+	"""
+	Response Code
+	"""
+	respCode: Int!
+	"""
+	Authenticator
+	"""
+	auth: String!
+	"""
+	Response Authenticator
+	"""
+	respAuth: String!
+	"""
+	User Name
+	"""
+	userName: [Int!]!
+	"""
+	User Password
+	"""
+	userPasswd: [Int!]!
+	"""
+	CHAP Password
+	"""
+	chapPasswd: [Int!]!
+	"""
+	NAS IP Address
+	"""
+	nasIp: String!
+	"""
+	NAS Port
+	"""
+	nasPort: StringNumberU32!
+	"""
+	State
+	"""
+	state: [Int!]!
+	"""
+	NAS Identifier
+	"""
+	nasId: [Int!]!
+	"""
+	NAS Port Type
+	"""
+	nasPortType: StringNumberU32!
+	"""
+	Message
+	"""
+	message: String!
+}
+
+type RadiusRawEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RadiusRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RadiusRawEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type RadiusRawEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: RadiusRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
 }
 
 """
