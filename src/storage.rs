@@ -162,7 +162,7 @@ impl DbOptions {
 
 #[derive(Clone)]
 pub struct Database {
-    db: Arc<DB>,
+    pub(crate) db: Arc<DB>,
 }
 
 impl Database {
