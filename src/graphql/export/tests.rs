@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, Utc};
 use giganto_client::ingest::{
+    Packet,
     log::{Log, OpLog, OpLogLevel},
     network::{
         Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
@@ -1620,4 +1621,70 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
     let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
 
     store.append(&key, &ser_dhcp_body).unwrap();
+}
+
+#[tokio::test]
+async fn export_pcap() {
+    let schema = TestSchema::new();
+    let store = schema.db.packet_store().unwrap();
+
+    let dt1 = Utc::now();
+    let dt2 = dt1 + chrono::Duration::milliseconds(100);
+    let req_time = dt1;
+
+    insert_packet_raw_event(
+        &store,
+        "src1",
+        req_time.timestamp_nanos_opt().unwrap(),
+        dt1.timestamp_nanos_opt().unwrap(),
+    );
+    insert_packet_raw_event(
+        &store,
+        "src1",
+        req_time.timestamp_nanos_opt().unwrap(),
+        dt2.timestamp_nanos_opt().unwrap(),
+    );
+
+    // export pcap file
+    let query = format!(
+        r#"
+    {{
+        exportPcap(
+            filter:{{
+                sensor: "src1",
+                requestTime: "{}",
+                packetTime: {{ start: "{}", end: "{}" }}
+            }}
+        )
+    }}"#,
+        req_time.to_rfc3339(),
+        dt1.to_rfc3339(),
+        (dt2 + chrono::Duration::seconds(1)).to_rfc3339()
+    );
+
+    let res = schema.execute(&query).await;
+    assert!(res.data.to_string().contains("packets_src1_"));
+}
+
+fn insert_packet_raw_event(
+    store: &RawEventStore<Packet>,
+    sensor: &str,
+    req_timestamp: i64,
+    pk_timestamp: i64,
+) {
+    let mut key =
+        Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(req_timestamp.to_be_bytes());
+    key.push(0);
+    key.extend(pk_timestamp.to_be_bytes());
+
+    let packet_body = Packet {
+        packet_timestamp: pk_timestamp,
+        packet: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], // Simple test packet data
+    };
+    let ser_packet_body = bincode::serialize(&packet_body).unwrap();
+
+    store.append(&key, &ser_packet_body).unwrap();
 }

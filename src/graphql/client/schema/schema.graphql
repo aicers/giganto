@@ -2042,6 +2042,12 @@ type PacketEdge {
 	cursor: String!
 }
 
+input PacketExportFilter {
+	sensor: String!
+	requestTime: DateTime!
+	packetTime: TimeRange
+}
+
 input PacketFilter {
 	sensor: String!
 	requestTime: DateTime!
@@ -2307,6 +2313,7 @@ type Query {
 	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchRadiusRawEvents(filter: SearchFilter!): [DateTime!]!
 	export(exportType: String!, filter: ExportFilter!): String!
+	exportPcap(filter: PacketExportFilter!): String!
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!
 	periodicTimeSeries(filter: TimeSeriesFilter!, after: String, before: String, first: Int, last: Int): TimeSeriesConnection!

@@ -17,6 +17,7 @@ use chrono::{DateTime, Local, Utc};
 use giganto_client::{
     RawEventKind,
     ingest::{
+        Packet,
         log::{Log, OpLog, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
@@ -34,6 +35,8 @@ use giganto_client::{
 };
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use libc::timeval;
+use pcap::{Capture, Linktype, Packet as PcapPacket, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
@@ -1710,6 +1713,54 @@ impl RawEventFilter for ExportFilter {
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject, Serialize, Clone)]
+pub struct PacketExportFilter {
+    sensor: String,
+    request_time: DateTime<Utc>,
+    packet_time: Option<TimeRange>,
+}
+
+impl KeyExtractor for PacketExportFilter {
+    fn get_start_key(&self) -> &str {
+        &self.sensor
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        Some(
+            self.request_time
+                .timestamp_nanos_opt()?
+                .to_be_bytes()
+                .to_vec(),
+        )
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.packet_time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+}
+
+impl RawEventFilter for PacketExportFilter {
+    fn check(
+        &self,
+        _orig_addr: Option<IpAddr>,
+        _resp_addr: Option<IpAddr>,
+        _orig_port: Option<u16>,
+        _resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
+        _text: Option<String>,
+        _sensor: Option<String>,
+        _agent_id: Option<String>,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+}
+
 fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
     let db = ctx.data::<Database>()?;
     let path = ctx.data::<PathBuf>()?;
@@ -1744,6 +1795,44 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         export_done_path,
         export_progress_path,
     )?;
+
+    Ok(download_path)
+}
+
+fn handle_packet_export(
+    ctx: &Context<'_>,
+    filter: &PacketExportFilter,
+    export_type: String,
+) -> Result<String> {
+    let db = ctx.data::<Database>()?;
+    let path = ctx.data::<PathBuf>()?;
+    let node_name = ctx.data::<NodeName>()?;
+
+    // set export filename & file path
+    if !path.exists() {
+        fs::create_dir_all(path)?;
+    }
+
+    info!(
+        "Packet export request received. Sensor: {}, Format: {export_type}",
+        filter.sensor
+    );
+    let filename = format!(
+        "packets_{}_{}.{export_type}",
+        filter.sensor,
+        Local::now().format("%Y%m%d_%H%M%S"),
+    );
+    let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
+    let export_done_path = path.join(filename.replace(' ', ""));
+    let download_path = format!("{}@{}", export_done_path.display(), node_name.0);
+
+    export_packets(
+        db.clone(),
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    );
 
     Ok(download_path)
 }
@@ -1801,6 +1890,44 @@ impl ExportQuery {
             with_extra_query_args (export_type := export_type)
         )
     }
+
+    async fn export_pcap(&self, ctx: &Context<'_>, filter: PacketExportFilter) -> Result<String> {
+        let export_type = "pcap".to_string();
+        let handler = handle_packet_export;
+
+        // For cluster support, we would need to add similar macro usage here
+        // For now, handle directly for standalone mode
+        #[cfg(not(feature = "cluster"))]
+        {
+            handler(ctx, &filter, export_type)
+        }
+        #[cfg(feature = "cluster")]
+        {
+            // TODO: Add cluster support for packet export when needed
+            handler(ctx, &filter, export_type)
+        }
+    }
+}
+
+fn export_packets(
+    db: Database,
+    filter: &PacketExportFilter,
+    _export_type: String,
+    export_done_path: PathBuf,
+    export_progress_path: PathBuf,
+) {
+    let filter = filter.clone();
+
+    tokio::spawn(async move {
+        if let Ok(store) = db.packet_store() {
+            match process_packet_export(&store, &filter, &export_done_path, &export_progress_path) {
+                Ok(result) => info!("{}", result),
+                Err(e) => error!("Failed to export PCAP file: {:?}", e),
+            }
+        } else {
+            error!("Failed to open packet store");
+        }
+    });
 }
 
 fn export_by_protocol(
@@ -2104,6 +2231,71 @@ where
         }
     }
     Ok(())
+}
+
+fn process_packet_export(
+    store: &RawEventStore<'_, Packet>,
+    filter: &PacketExportFilter,
+    done_path: &Path,
+    progress_path: &Path,
+) -> Result<String> {
+    const A_BILLION: i64 = 1_000_000_000;
+
+    // generate storage search key
+    let key_builder = StorageKey::builder()
+        .start_key(filter.get_start_key())
+        .mid_key(filter.get_mid_key());
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_end_key(filter.get_range_end_key().0)
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_end_key(filter.get_range_end_key().1)
+        .build();
+
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+
+    // Create PCAP file
+    let capture = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
+    let mut file = capture.savefile(progress_path)?;
+    let mut invalid_data_cnt: u32 = 0;
+
+    // Process each packet from storage
+    for item in iter {
+        if item.is_err() {
+            invalid_data_cnt += 1;
+            continue;
+        }
+        let (_, packet) = item.expect("not error value");
+
+        // Write packet to PCAP file
+        let len = u32::try_from(packet.packet.len()).unwrap_or_default();
+        let header = PacketHeader {
+            ts: timeval {
+                tv_sec: packet.packet_timestamp / A_BILLION,
+                #[cfg(target_os = "macos")]
+                tv_usec: i32::try_from(packet.packet_timestamp % A_BILLION).unwrap_or_default(),
+                #[cfg(target_os = "linux")]
+                tv_usec: packet.packet_timestamp % A_BILLION,
+            },
+            caplen: len,
+            len,
+        };
+        let pcap_packet = PcapPacket {
+            header: &header,
+            data: &packet.packet,
+        };
+        file.write(&pcap_packet);
+    }
+
+    file.flush()?;
+
+    if invalid_data_cnt > 0 {
+        warn!("Failed to read database or invalid packet data #{invalid_data_cnt}");
+    }
+
+    fs::rename(progress_path, done_path)?;
+    Ok(format!("export PCAP file success: {}", done_path.display()))
 }
 
 fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
