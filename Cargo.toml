@@ -76,6 +76,7 @@ url = "2"
 default = ["benchmark", "cluster"]
 benchmark = []
 cluster = []
+count_events = []
 
 [lints.clippy]
 pedantic = "warn"
