@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     mem,
-    net::{SocketAddr, ToSocketAddrs},
+    net::SocketAddr,
     sync::Arc,
     time::Duration,
 };
@@ -24,19 +24,15 @@ use tokio::{
     },
     time::sleep,
 };
-use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 use crate::{
     comm::IngestSensors,
-    graphql::status::{
-        CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR, TomlPeers, insert_toml_peers,
-        parse_toml_element_to_string, read_toml_file, write_toml_file,
-    },
     server::{
         Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_client, config_server,
         extract_cert_from_conn, subject_from_cert, subject_from_cert_verbose,
     },
+    settings::Settings,
 };
 
 // The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
@@ -79,16 +75,6 @@ pub struct PeerIdentity {
     pub hostname: String,
 }
 
-impl TomlPeers for PeerIdentity {
-    fn get_hostname(&self) -> String {
-        self.hostname.clone()
-    }
-
-    fn get_addr(&self) -> String {
-        self.addr.to_string()
-    }
-}
-
 #[allow(clippy::module_name_repetitions, clippy::struct_field_names)]
 #[derive(Clone, Debug)]
 pub struct PeerConns {
@@ -105,8 +91,7 @@ pub struct PeerConns {
     peer_sender: Sender<PeerIdentity>,
     local_address: SocketAddr,
     notify_sensor: Arc<Notify>,
-    config_doc: DocumentMut,
-    config_path: String,
+    settings: Settings,
 }
 
 pub struct Peer {
@@ -141,7 +126,7 @@ impl Peer {
         peer_idents: PeerIdents,
         notify_sensor: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
-        config_path: String,
+        settings: Settings,
     ) -> Result<()> {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
@@ -161,10 +146,6 @@ impl Peer {
 
         let (sender, mut receiver): (Sender<PeerIdentity>, Receiver<PeerIdentity>) = channel(100);
 
-        let Ok(config_doc) = read_toml_file(&config_path) else {
-            bail!("Failed to open/read config's toml file");
-        };
-
         // A structure of values common to peer connections.
         let peer_conn_info = PeerConns {
             peer_conns: Arc::new(RwLock::new(HashMap::new())),
@@ -174,8 +155,7 @@ impl Peer {
             peer_sender: sender,
             local_address: self.local_address,
             notify_sensor,
-            config_doc,
-            config_path,
+            settings,
         };
 
         tokio::spawn(client_run(
@@ -252,23 +232,14 @@ async fn connect(
     Ok((connection, send, recv))
 }
 
-fn get_peer_ports(config_doc: &DocumentMut) -> (Option<u16>, Option<u16>) {
+fn get_peer_ports(settings: &Settings) -> (Option<u16>, Option<u16>) {
     (
-        get_port_from_config(CONFIG_GRAPHQL_SRV_ADDR, config_doc),
-        get_port_from_config(CONFIG_PUBLISH_SRV_ADDR, config_doc),
+        Some(settings.config.visible.graphql_srv_addr.port()),
+        Some(settings.config.visible.publish_srv_addr.port()),
     )
 }
 
-fn get_port_from_config(config_key: &str, config_doc: &DocumentMut) -> Option<u16> {
-    parse_toml_element_to_string(config_key, config_doc)
-        .ok()
-        .and_then(|address_str| address_str.to_socket_addrs().ok())
-        .and_then(|mut addr| match addr.next() {
-            Some(SocketAddr::V4(v4_addr)) => Some(v4_addr.port()),
-            Some(SocketAddr::V6(v6_addr)) => Some(v6_addr.port()),
-            _ => None,
-        })
-}
+// This function is no longer needed as we get ports directly from Settings
 
 #[allow(clippy::too_many_lines)]
 async fn client_connection(
@@ -278,7 +249,7 @@ async fn client_connection(
     local_hostname: String,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
-    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
+    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.settings);
     'connection: loop {
         match connect(&client_endpoint, &peer_info).await {
             Ok((connection, mut send, mut recv)) => {
@@ -339,8 +310,7 @@ async fn client_connection(
                     peer_conn_info.local_address,
                     peer_conn_info.peer_identities.clone(),
                     peer_conn_info.peer_sender.clone(),
-                    peer_conn_info.config_doc.clone(),
-                    &peer_conn_info.config_path,
+                    &peer_conn_info.settings,
                 )
                 .await?;
 
@@ -380,10 +350,9 @@ async fn client_connection(
                             let sender = peer_conn_info.peer_sender.clone();
                             let remote_addr = remote_addr.clone();
                             let peers = peer_conn_info.peers.clone();
-                            let doc = peer_conn_info.config_doc.clone();
-                            let path= peer_conn_info.config_path.clone();
+                            let settings = peer_conn_info.settings.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
+                                if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, &settings).await {
                                     error!("Failed: {e}");
                                 }
                             });
@@ -466,7 +435,7 @@ async fn server_connection(
     let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
 
     // Exchange peer list/sensor list.
-    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
+    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.settings);
     let (recv_peer_list, recv_sensor_list) =
         response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
             &mut send,
@@ -497,8 +466,7 @@ async fn server_connection(
         peer_conn_info.local_address,
         peer_conn_info.peer_identities.clone(),
         peer_conn_info.peer_sender.clone(),
-        peer_conn_info.config_doc.clone(),
-        &peer_conn_info.config_path,
+        &peer_conn_info.settings,
     )
     .await?;
 
@@ -538,10 +506,9 @@ async fn server_connection(
                 let sender = peer_conn_info.peer_sender.clone();
                 let remote_addr = remote_addr.clone();
                 let peers = peer_conn_info.peers.clone();
-                let doc = peer_conn_info.config_doc.clone();
-                let path = peer_conn_info.config_path.clone();
+                let settings = peer_conn_info.settings.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
+                    if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, &settings).await {
                         error!("Failed: {}", e);
                     }
                 });
@@ -578,15 +545,14 @@ async fn handle_request(
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     peers: Peers,
     sender: Sender<PeerIdentity>,
-    doc: DocumentMut,
-    path: &str,
+    settings: &Settings,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
     match msg_type {
         PeerCode::UpdatePeerList => {
             let update_peer_list = bincode::deserialize::<HashSet<PeerIdentity>>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize peer list: {e}"))?;
-            update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, path)
+            update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, settings)
                 .await?;
         }
         PeerCode::UpdateSensorList => {
@@ -690,8 +656,7 @@ async fn update_to_new_peer_list(
     local_address: SocketAddr,
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     sender: Sender<PeerIdentity>,
-    mut doc: DocumentMut,
-    path: &str,
+    _settings: &Settings,
 ) -> Result<()> {
     let mut is_change = false;
     for recv_peer_info in recv_peer_list {
@@ -711,13 +676,8 @@ async fn update_to_new_peer_list(
     }
 
     if is_change {
-        let data: Vec<PeerIdentity> = peer_list.read().await.iter().cloned().collect();
-        if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
-            error!("Unable to generate TOML content: {e:?}");
-        }
-        if let Err(e) = write_toml_file(&doc, path) {
-            error!("Failed to write TOML content to file: {e:?}");
-        }
+        // In remote configuration mode, we only maintain the in-memory peer list
+        // and do not write to configuration files since the configuration is managed remotely
         info!("Peer list updated - {peer_list:?}");
     }
 
@@ -764,6 +724,7 @@ pub mod tests {
             to_cert_chain, to_private_key, to_root_cert,
         },
         server::Certs,
+        settings::{Config, ConfigVisible, Settings},
     };
 
     fn get_token() -> &'static Mutex<u32> {
@@ -848,6 +809,30 @@ pub mod tests {
         endpoint
     }
 
+    fn test_settings() -> Settings {
+        use std::time::Duration;
+        Settings {
+            config: Config {
+                addr_to_peers: None,
+                peers: None,
+                visible: ConfigVisible {
+                    graphql_srv_addr: "[::]:8443".parse().unwrap(),
+                    ingest_srv_addr: "[::]:38370".parse().unwrap(),
+                    publish_srv_addr: "[::]:38371".parse().unwrap(),
+                    retention: Duration::from_secs(100 * 24 * 60 * 60), // 100 days
+                    export_dir: "tests".into(),
+                    data_dir: "tests".into(),
+                    max_open_files: 8000,
+                    max_mb_of_level_base: 512,
+                    num_of_thread: 8,
+                    max_sub_compactions: 2,
+                    ack_transmission: 1024,
+                },
+            },
+            cfg_path: "test.toml".to_string(),
+        }
+    }
+
     fn peer_init() -> Peer {
         let cert_pem = fs::read(CERT_PATH).unwrap();
         let cert = to_cert_chain(&cert_pem).unwrap();
@@ -905,7 +890,7 @@ pub mod tests {
             peer_idents,
             notify_sensor.clone(),
             Arc::new(Notify::new()),
-            file_path.to_string_lossy().to_string(),
+            test_settings(),
         ));
 
         // run peer client

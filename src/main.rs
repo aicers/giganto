@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
 
     settings.config.validate()?;
 
-    let cfg_path = settings.cfg_path.clone();
+    let _cfg_path = settings.cfg_path.clone();
 
     let _guard = init_tracing(args.log_path.as_deref())?;
 
@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
                 peer_idents.clone(),
                 notify_sensor.clone(),
                 notify_shutdown.clone(),
-                cfg_path.clone(),
+                settings.clone(),
             )));
             notify_sensor_change = Some(notify_sensor);
         } else {
