@@ -218,20 +218,7 @@ pub fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
         Protocol::Http => "http",
     };
 
-    let snap = db.db.snapshot();
-    let cf = db
-        .db
-        .cf_handle(cf_name)
-        .ok_or_else(|| anyhow!("CF not found: {cf_name}"))?;
-
-    let mut ro = rocksdb::ReadOptions::default();
-    ro.set_total_order_seek(true);
-    let iter = snap.iterator_cf_opt(cf, ro, rocksdb::IteratorMode::Start);
-    let mut n: i32 = 0;
-    for _ in iter {
-        n += 1;
-    }
-    Ok(n)
+    Ok(db.count_cf_entries(cf_name)?)
 }
 
 fn get_statistics_iter<'c, T>(

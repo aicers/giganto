@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "count_events")]
+use anyhow::anyhow;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
@@ -162,7 +164,7 @@ impl DbOptions {
 
 #[derive(Clone)]
 pub struct Database {
-    pub(crate) db: Arc<DB>,
+    db: Arc<DB>,
 }
 
 impl Database {
@@ -246,6 +248,28 @@ impl Database {
         self.db
             .cf_handle(cf_name)
             .context("cannot access {cf_name} column family")
+    }
+
+    /// Creates a snapshot-based iterator for counting entries in a column family.
+    /// This is intended for precise counting operations that require consistency.
+    #[cfg(feature = "count_events")]
+    pub fn count_cf_entries(&self, cf_name: &str) -> Result<i32> {
+        let cf = self.get_cf_handle(cf_name)?;
+        let snap = self.db.snapshot();
+
+        let mut ro = rocksdb::ReadOptions::default();
+        ro.set_total_order_seek(true);
+        let iter = snap.iterator_cf_opt(cf, ro, rocksdb::IteratorMode::Start);
+
+        let mut count = 0i32;
+        for item in iter {
+            item.context("failed to read from database")?;
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("count overflow"))?;
+        }
+
+        Ok(count)
     }
 
     /// Returns the raw event store for connections.
