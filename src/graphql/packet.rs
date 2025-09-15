@@ -237,7 +237,7 @@ mod tests {
     use chrono::{NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn packets_empty() {
@@ -487,7 +487,7 @@ mod tests {
             packet_timestamp: pk_timestamp,
             packet: vec![0, 1, 2, 3],
         };
-        let ser_packet_body = bincode::serialize(&packet_body).unwrap();
+        let ser_packet_body = bincode_utils::encode_legacy(&packet_body).unwrap();
 
         store.append(&key, &ser_packet_body).unwrap();
     }

@@ -43,6 +43,7 @@ use serde::de::DeserializeOwned;
 use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
 
+use crate::bincode_utils::decode_legacy;
 use crate::{
     comm::ingest::implement::EventFilter,
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
@@ -939,7 +940,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|item| match item {
-            Ok((key, value)) => bincode::deserialize::<T>(&value)
+            Ok((key, value)) => decode_legacy::<T>(&value)
                 .map(|value| (key, value))
                 .map_err(Into::into),
 

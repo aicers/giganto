@@ -27,6 +27,7 @@ use tokio::{
 use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
+use crate::bincode_utils::decode_legacy;
 use crate::{
     comm::IngestSensors,
     graphql::status::{
@@ -584,13 +585,13 @@ async fn handle_request(
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
     match msg_type {
         PeerCode::UpdatePeerList => {
-            let update_peer_list = bincode::deserialize::<HashSet<PeerIdentity>>(&msg_buf)
+            let update_peer_list: HashSet<PeerIdentity> = decode_legacy(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize peer list: {e}"))?;
             update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, path)
                 .await?;
         }
         PeerCode::UpdateSensorList => {
-            let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf)
+            let update_sensor_list: PeerInfo = decode_legacy(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize sensor list: {e}"))?;
             update_to_new_sensor_list(update_sensor_list, remote_addr, peers).await;
         }
@@ -635,7 +636,7 @@ where
 {
     send_peer_data::<T>(send, init_type, init_data).await?;
     let (_, recv_data) = receive_peer_data(recv).await?;
-    let recv_init_data = bincode::deserialize::<T>(&recv_data)?;
+    let recv_init_data: T = decode_legacy(&recv_data)?;
     Ok(recv_init_data)
 }
 
@@ -649,7 +650,7 @@ where
     T: Serialize + DeserializeOwned,
 {
     let (_, recv_data) = receive_peer_data(recv).await?;
-    let recv_init_data = bincode::deserialize::<T>(&recv_data)?;
+    let recv_init_data: T = decode_legacy(&recv_data)?;
     send_peer_data::<T>(send, init_type, init_data).await?;
     Ok(recv_init_data)
 }
@@ -759,6 +760,7 @@ pub mod tests {
 
     use super::Peer;
     use crate::{
+        bincode_utils::decode_legacy,
         comm::{
             peer::{PeerCode, PeerIdentity, PeerInfo, receive_peer_data, request_init_info},
             to_cert_chain, to_private_key, to_root_cert,
@@ -939,7 +941,7 @@ pub mod tests {
             .await
             .expect("failed to open stream");
         let (msg_type, msg_buf) = receive_peer_data(&mut recv_pub_resp).await.unwrap();
-        let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf).unwrap();
+        let update_sensor_list: PeerInfo = decode_legacy(&msg_buf).unwrap();
 
         // compare server's sensor list
         assert_eq!(msg_type, PeerCode::UpdateSensorList);
