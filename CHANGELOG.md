@@ -29,6 +29,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     actual raw event creation timestamp provided by the sensor application.
 - Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
   APIs (`radiusRawEvents`, `searchRadiusRawEvents`).
+- Added PCAP export functionality for packets stored in specific sessions.
+  - Introduced `exportPcap` GraphQL API that creates binary PCAP files for
+    download, complementing the existing parsed PCAP functionality.
+  - Enables users to export packet data as standard PCAP files, providing
+    consistency with other data export formats (CSV/JSON) and addressing
+    performance concerns with large packet transfers.
 
 ### Changed
 
