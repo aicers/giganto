@@ -211,7 +211,7 @@ impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 /// * The column family for the specified protocol is not found
 /// * Database access fails during snapshot creation or iteration
 #[cfg(feature = "count_events")]
-pub fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
+fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
     let cf_name = match protocol {
         Protocol::Session => "conn",
         Protocol::Dns => "dns",
