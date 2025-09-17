@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs, path::Path};
+#[cfg(test)]
+use std::collections::HashMap;
+use std::{fs, path::Path};
 
 use anyhow::Result;
 use async_graphql::{Context, Object, SimpleObject};

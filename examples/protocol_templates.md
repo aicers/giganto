@@ -1,6 +1,7 @@
 # Protocol Templates GraphQL API Usage Examples
 
-This document provides examples of how to use the new protocol template GraphQL queries to retrieve field format information for protocols.
+This document provides examples of how to use the new protocol template
+GraphQL queries to retrieve field format information for protocols.
 
 ## Query: Get All Protocol Templates
 
@@ -16,6 +17,7 @@ query GetAllProtocolTemplates {
 ```
 
 Example response:
+
 ```json
 {
   "data": {
@@ -55,6 +57,7 @@ query GetConnTemplate {
 ```
 
 Example response:
+
 ```json
 {
   "data": {
@@ -89,6 +92,7 @@ mutation ExportConnTemplateAsCSV {
 ```
 
 Example response:
+
 ```json
 {
   "data": {
@@ -152,6 +156,7 @@ mutation ExportCSV {
 ```
 
 The CSV format provides:
+
 - `protocol`: Protocol name
 - `field_index`: Field position in the template
 - `field_name`: Name of the field
@@ -163,16 +168,25 @@ This enables easy review and manual modification of field formats when needed.
 The API supports templates for all protocols available in Giganto:
 
 ### Network Protocols
-- conn, dns, http, rdp, smtp, ntlm, kerberos, ssh, dce rpc, ftp, mqtt, ldap, tls, smb, nfs, bootp, dhcp, radius
+
+- conn, dns, http, rdp, smtp, ntlm, kerberos, ssh, dce rpc, ftp, mqtt,
+  ldap, tls, smb, nfs, bootp, dhcp, radius
 
 ### Log Protocols
+
 - log, secu log, op_log
 
 ### Netflow Protocols
+
 - netflow5, netflow9
 
 ### Sysmon Events
-- process create, file create time, network connect, process terminate, image load, file create, registry value set, registry key rename, file create stream hash, pipe event, dns query, file delete, process tamper, file delete detected
+
+- process create, file create time, network connect, process terminate,
+  image load, file create, registry value set, registry key rename,
+  file create stream hash, pipe event, dns query, file delete,
+  process tamper, file delete detected
 
 ### Time Series & Statistics
+
 - periodic time series, statistics
