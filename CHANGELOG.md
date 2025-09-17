@@ -34,6 +34,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   flag and is intended for quality checks and testing. The API iterates over all
   keys in the database to provide exact counts, which may be expensive on large
   datasets.
+- Added protocol template GraphQL queries (`protocolTemplates`,
+  `exportProtocolTemplates`) to return field format information for all
+  supported protocols. This enables dynamic query generation in Web UI and
+  simplifies field format configuration for REconverge by providing structured
+  metadata about each protocol's field schema.
 
 ### Changed
 

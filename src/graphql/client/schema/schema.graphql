@@ -2266,6 +2266,20 @@ input PropertyFilter {
 	recordType: String!
 }
 
+"""
+Represents a protocol template with field format information
+"""
+type ProtocolTemplate {
+	"""
+	Protocol name
+	"""
+	protocol: String!
+	"""
+	List of field names for this protocol
+	"""
+	fields: [String!]!
+}
+
 type Query {
 	logRawEvents(filter: LogFilter!, after: String, before: String, first: Int, last: Int): LogRawEventConnection!
 	opLogRawEvents(filter: OpLogFilter!, after: String, before: String, first: Int, last: Int): OpLogRawEventConnection!
@@ -2348,6 +2362,39 @@ type Query {
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
 	netflow9RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow9RawEventConnection!
+	"""
+	Returns protocol templates for field format
+	
+	# Arguments
+	
+	* `protocol` - Optional protocol name filter. If provided, returns only the template for that protocol.
+	If None, returns templates for all protocols.
+	
+	# Returns
+	
+	Returns a vector of `ProtocolTemplate` objects containing field format information.
+	"""
+	protocolTemplates(protocol: String): [ProtocolTemplate!]!
+	"""
+	Exports protocol templates to a file
+	
+	# Arguments
+	
+	* `export_type` - Export format: "json" or "csv"
+	* `protocol` - Optional protocol name filter. If provided, exports only that protocol.
+	
+	# Returns
+	
+	Returns the path to the exported file.
+	
+	# Errors
+	
+	This function will return an error if:
+	* The export format is not supported ("json" or "csv")
+	* File creation or writing fails
+	* The export directory is not accessible
+	"""
+	exportProtocolTemplates(exportType: String!, protocol: String): String!
 }
 
 """
