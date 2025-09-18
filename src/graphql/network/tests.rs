@@ -1,7 +1,7 @@
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
     Rdp, Smb, Smtp, Ssh, Tls,
@@ -146,7 +146,8 @@ async fn conn_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"12345\", endTime: \"12345\", origBytes: \"77\", respBytes: \"295\", origPkts: \
+         origPort: 46378, startTime: \"2023-01-20T00:00:00+00:00\", \
+         endTime: \"2023-01-20T00:00:00+00:00\", origBytes: \"77\", respBytes: \"295\", origPkts: \
          \"397\", respPkts: \"511\", origL2Bytes: \"21515\", respL2Bytes: \"27889\"}}]}}"
     );
 }
@@ -168,7 +169,7 @@ fn create_conn_body(
     resp_addr: Option<IpAddr>,
     resp_port: Option<u16>,
 ) -> Conn {
-    let tmp_dur = Duration::nanoseconds(12345);
+    let time = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
     Conn {
         orig_addr: orig_addr.unwrap_or("192.168.4.76".parse::<IpAddr>().unwrap()),
         orig_port: orig_port.unwrap_or(46378),
@@ -176,8 +177,9 @@ fn create_conn_body(
         resp_port: resp_port.unwrap_or(80),
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: tmp_dur.num_nanoseconds().unwrap(),
-        end_time: tmp_dur.num_nanoseconds().unwrap(),
+        start_time: time,
+        end_time: time,
+        duration: 1_000_000_000,
         service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,
@@ -243,8 +245,9 @@ async fn conn_with_data_giganto_cluster() {
                             "proto": 6,
                             "connState": "-",
                             "service": "-",
-                            "startTime": "324234",
-                            "endTime": "324234",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
                             "origBytes": "0",
                             "respBytes": "0",
                             "origPkts": "6",
@@ -278,8 +281,9 @@ async fn conn_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"324234\", endTime: \"324234\", origBytes: \"0\", respBytes: \"0\", origPkts: \
-         \"6\", respPkts: \"0\", origL2Bytes: \"0\", respL2Bytes: \"0\"}}]}}"
+         origPort: 46378, startTime: \"2023-11-16T15:03:45.291779203+00:00\", \
+         endTime: \"2023-11-16T15:03:45.291779203+00:00\", origBytes: \"0\", respBytes: \"0\", \
+         origPkts: \"6\", respPkts: \"0\", origL2Bytes: \"0\", respL2Bytes: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -438,8 +442,13 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         query: "Hello Server Hello Server Hello Server".to_string(),
         answer: vec!["1.1.1.1".to_string()],
         trans_id: 1,
@@ -502,8 +511,13 @@ async fn dns_with_data_giganto_cluster() {
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
                             "respPort": 443,
-                            "startTime": "123456789",
-                            "endTime": "123456789",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "proto": 6,
                             "query": "example.com",
                             "answer": [
@@ -700,6 +714,7 @@ async fn http_with_data() {
 }
 
 pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+    let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -711,8 +726,13 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 704_068_800_000_000_000, // 1992-06-05T12:00:00Z in nanoseconds
-        end_time: 704_068_800_000_000_000,
+        start_time: time,
+        end_time: time + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         method: "POST".to_string(),
         host: "cluml".to_string(),
         uri: "/cluml.gif".to_string(),
@@ -787,8 +807,13 @@ async fn http_with_data_giganto_cluster() {
                             "origPort": 46378,
                             "respPort": 443,
                             "proto": 6,
-                            "startTime": "123456789",
-                            "endTime": "123456789",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "method": "GET",
                             "host": "example.com",
                             "uri": "/path/to/resource",
@@ -995,6 +1020,7 @@ async fn rdp_with_data() {
 }
 
 fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+    let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1006,8 +1032,13 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 704_068_800_000_000_000, // 1992-06-05T12:00:00Z in nanoseconds
-        end_time: 704_068_800_000_000_000,
+        start_time: time,
+        end_time: time + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         cookie: "rdp_test".to_string(),
     };
     let ser_rdp_body = encode_legacy(&rdp_body).unwrap();
@@ -1059,8 +1090,13 @@ async fn rdp_with_data_giganto_cluster() {
                             "origPort": 46378,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "cookie": "session=xyz789"
                         }
                     }
@@ -1137,8 +1173,13 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         mailfrom: "mailfrom".to_string(),
         date: "date".to_string(),
         from: "from".to_string(),
@@ -1190,8 +1231,13 @@ async fn smtp_with_data_giganto_cluster() {
                             "origPort": 25,
                             "respPort": 587,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "mailfrom": "sender@example.com",
                             "date": "2023-11-16T15:03:45+00:00",
                             "from": "sender@example.com",
@@ -1274,8 +1320,13 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         username: "bly".to_string(),
         hostname: "host".to_string(),
         domainname: "domain".to_string(),
@@ -1325,8 +1376,13 @@ async fn ntlm_with_data_giganto_cluster() {
                             "origPort": 12345,
                             "respPort": 6789,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "username": "john_doe",
                             "hostname": "client_machine",
                             "domainname": "example.com",
@@ -1407,8 +1463,13 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         client_time: 1,
         server_time: 1,
         error_code: 1,
@@ -1465,8 +1526,13 @@ async fn kerberos_with_data_giganto_cluster() {
                             "origPort": 12345,
                             "respPort": 6789,
                             "proto": 17,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "clientTime": "123456789",
                             "serverTime": "987654321",
                             "errorCode": "0",
@@ -1557,8 +1623,13 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         client: "client".to_string(),
         server: "server".to_string(),
         cipher_alg: "cipher_alg".to_string(),
@@ -1616,8 +1687,13 @@ async fn ssh_with_data_giganto_cluster() {
                             "origPort": 22,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "client": "ssh_client",
                             "server": "ssh_server",
                             "cipherAlg": "aes256-ctr",
@@ -1706,8 +1782,13 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         rtt: 3,
         named_pipe: "named_pipe".to_string(),
         endpoint: "endpoint".to_string(),
@@ -1757,8 +1838,13 @@ async fn dce_rpc_with_data_giganto_cluster() {
                             "origPort": 135,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "rtt": "123456",
                             "namedPipe": "example_pipe",
                             "endpoint": "rpc_endpoint",
@@ -1837,8 +1923,13 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         user: "cluml".to_string(),
         password: "aice".to_string(),
         commands: vec![FtpCommand {
@@ -1900,8 +1991,13 @@ async fn ftp_with_data_giganto_cluster() {
                             "origPort": 21,
                             "respPort": 12345,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "user": "example_user",
                             "password": "example_password",
                             "commands": [
@@ -1993,8 +2089,13 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         protocol: "protocol".to_string(),
         version: 1,
         client_id: "1".to_string(),
@@ -2046,8 +2147,13 @@ async fn mqtt_with_data_giganto_cluster() {
                             "origPort": 1883,
                             "respPort": 5678,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "protocol": "MQTT",
                             "version": 4,
                             "clientId": "example_client_id",
@@ -2133,8 +2239,13 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         message_id: 1,
         version: 1,
         opcode: vec!["opcode".to_string()],
@@ -2187,8 +2298,13 @@ async fn ldap_with_data_giganto_cluster() {
                             "origPort": 389,
                             "respPort": 636,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "messageId": "123",
                             "version": 3,
                             "opcode": [
@@ -2286,8 +2402,13 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         server_name: "server_name".to_string(),
         alpn_protocol: "alpn_protocol".to_string(),
         ja3: "ja3".to_string(),
@@ -2355,8 +2476,13 @@ async fn tls_with_data_giganto_cluster() {
                             "origPort": 443,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "serverName": "example.com",
                             "alpnProtocol": "h2",
                             "ja3": "aabbccddeeff",
@@ -2472,8 +2598,13 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         command: 0,
         path: "something/path".to_string(),
         service: "service".to_string(),
@@ -2533,8 +2664,13 @@ async fn smb_with_data_giganto_cluster() {
                             "origPort": 445,
                             "respPort": 12345,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "command": 1,
                             "path": "\\share\\folder\\file.txt",
                             "service": "IPC",
@@ -2623,8 +2759,13 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         read_files: vec![],
         write_files: vec![],
     };
@@ -2670,8 +2811,13 @@ async fn nfs_with_data_giganto_cluster() {
                             "origPort": 2049,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "987654321",
-                            "endTime": "987654321",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "readFiles": [
                                 "file1.txt",
                                 "file2.txt"
@@ -2755,8 +2901,13 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         op: 0,
         htype: 0,
         hops: 0,
@@ -2788,11 +2939,12 @@ async fn bootp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
-                    xid
+                    xid,
                 }
             }
         }
     }"#;
+
     let mut peer_server = mockito::Server::new_async().await;
     let peer_response_mock_data = r#"
     {
@@ -2812,8 +2964,13 @@ async fn bootp_with_data_giganto_cluster() {
                             "origPort": 46378,
                             "respPort": 80,
                             "proto": 17,
-                            "startTime": "1",
-                            "endTime": "1",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "op": 0,
                             "htype": 0,
                             "hops": 0,
@@ -2854,6 +3011,7 @@ async fn bootp_with_data_giganto_cluster() {
         res.data.to_string(),
         "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", xid: \"0\"}}]}}"
     );
+
     mock.assert_async().await;
 }
 
@@ -2903,8 +3061,13 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         msg_type: 0,
         ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
         yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
@@ -2956,6 +3119,7 @@ async fn dhcp_with_data_giganto_cluster() {
             }
         }
     }"#;
+
     let mut peer_server = mockito::Server::new_async().await;
     let peer_response_mock_data = r#"
     {
@@ -2975,8 +3139,13 @@ async fn dhcp_with_data_giganto_cluster() {
                             "origPort": 46378,
                             "respPort": 80,
                             "proto": 17,
-                            "startTime": "1",
-                            "endTime": "1",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "msgType": 0,
                             "ciaddr": "192.168.4.1",
                             "yiaddr": "192.168.4.2",
@@ -3022,9 +3191,9 @@ async fn dhcp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", \
-        renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
     );
+
     mock.assert_async().await;
 }
 
@@ -3075,8 +3244,13 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: 1,
-        end_time: 2,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
         id: 123,
         code: 1,
         resp_code: 2,
@@ -3138,8 +3312,13 @@ async fn radius_with_data_giganto_cluster() {
                             "origPort": 1812,
                             "respPort": 1813,
                             "proto": 17,
-                            "startTime": "1",
-                            "endTime": "2",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
                             "id": 123,
                             "code": 1,
                             "respCode": 2,

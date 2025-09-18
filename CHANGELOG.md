@@ -8,6 +8,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Enhanced raw event structures with packet count and size information:
+  - Added `orig_pkts`, `resp_pkts`, `orig_l2_bytes`, `resp_l2_bytes` fields to
+    all raw event structures.
+  - Added `duration` field to all raw event structures to store session
+    duration.
+  - Unified time field types to `DateTime<Utc>` for consistent temporal
+    handling.
+  - Updated migration functions to handle new event structure fields.
 - Introduced a new feature flag, `cluster`, to enable or disable Giganto's
   cluster functionality.
   - When `cluster` is enabled (default), Giganto connects to other instances in

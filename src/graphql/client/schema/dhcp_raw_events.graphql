@@ -29,6 +29,11 @@ query DhcpRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         msgType
         ciaddr
         yiaddr

@@ -29,6 +29,11 @@ query SmbRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         command
         path
         service

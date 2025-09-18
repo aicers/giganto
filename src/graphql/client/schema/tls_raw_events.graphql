@@ -29,6 +29,11 @@ query TlsRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         serverName
         alpnProtocol
         ja3

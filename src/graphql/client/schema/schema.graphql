@@ -30,16 +30,34 @@ type BootpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Operation Code
 	"""
@@ -185,16 +203,18 @@ type ConnRawEvent {
 	connState: String!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
 	"""
 	Service Name
 	"""
@@ -293,16 +313,34 @@ type DceRpcRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Round-Trip Time
 	"""
@@ -382,16 +420,34 @@ type DhcpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Message Type
 	"""
@@ -569,16 +625,34 @@ type DnsRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Query
 	"""
@@ -679,7 +753,7 @@ type FileCreateEvent {
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: StringNumberI64!
+	creationUtcTime: DateTime!
 	user: String!
 }
 
@@ -720,7 +794,7 @@ type FileCreateStreamHashEvent {
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: StringNumberI64!
+	creationUtcTime: DateTime!
 	hash: [String!]!
 	contents: String!
 	user: String!
@@ -763,8 +837,8 @@ type FileCreationTimeChangedEvent {
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: StringNumberI64!
-	previousCreationUtcTime: StringNumberI64!
+	creationUtcTime: DateTime!
+	previousCreationUtcTime: DateTime!
 	user: String!
 }
 
@@ -960,16 +1034,34 @@ type FtpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Username
 	"""
@@ -1045,16 +1137,34 @@ type HttpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	HTTP Method
 	"""
@@ -1252,16 +1362,34 @@ type KerberosRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Client Time
 	"""
@@ -1361,16 +1489,34 @@ type LdapRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Message ID
 	"""
@@ -1502,16 +1648,34 @@ type MqttRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	MQTT Protocol
 	"""
@@ -1820,16 +1984,34 @@ type NfsRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Read Files
 	"""
@@ -1901,16 +2083,34 @@ type NtlmRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Username
 	"""
@@ -2382,16 +2582,34 @@ type RadiusRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Identifier
 	"""
@@ -2511,16 +2729,34 @@ type RdpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Cookie
 	"""
@@ -2738,16 +2974,34 @@ type SmbRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Command
 	"""
@@ -2855,16 +3109,34 @@ type SmtpRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Mail From
 	"""
@@ -2956,16 +3228,34 @@ type SshRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Client
 	"""
@@ -3191,16 +3481,34 @@ type TlsRawEvent {
 	proto: Int!
 	"""
 	Start Time
-	
-	It is measured in nanoseconds.
 	"""
-	startTime: StringNumberI64!
+	startTime: DateTime!
 	"""
 	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
 	
 	It is measured in nanoseconds.
 	"""
-	endTime: StringNumberI64!
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Server Name
 	"""
