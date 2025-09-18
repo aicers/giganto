@@ -401,9 +401,7 @@ macro_rules! from_key_value {
                         $plain_field: val.$plain_field,
                     )*
                      $(
-                        $str_num_field: {
-                            val.$str_num_field.into()
-                        },
+                        $str_num_field: val.$str_num_field.into(),
                     )*
                 })
             }
@@ -436,16 +434,30 @@ from_key_value!(
     parent_process_id
 );
 
-from_key_value!(
-    FileCreationTimeChangedEvent,
-    FileCreationTimeChanged,
-    image,
-    target_filename,
-    user;
-    process_id,
-    creation_utc_time,
-    previous_creation_utc_time
-);
+impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
+    fn from_key_value(key: &[u8], val: FileCreationTimeChanged) -> Result<Self> {
+        Ok(FileCreationTimeChangedEvent {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            process_guid: val.process_guid,
+            image: val.image,
+            target_filename: val.target_filename,
+            user: val.user,
+            process_id: val.process_id.into(),
+            creation_utc_time: val
+                .creation_utc_time
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .into(),
+            previous_creation_utc_time: val
+                .previous_creation_utc_time
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .into(),
+        })
+    }
+}
 
 from_key_value!(ProcessTerminatedEvent, ProcessTerminated, image, user; process_id);
 
@@ -467,15 +479,25 @@ from_key_value!(
     process_id
 );
 
-from_key_value!(
-    FileCreateEvent,
-    FileCreate,
-    image,
-    target_filename,
-    user;
-    process_id,
-    creation_utc_time
-);
+impl FromKeyValue<FileCreate> for FileCreateEvent {
+    fn from_key_value(key: &[u8], val: FileCreate) -> Result<Self> {
+        Ok(FileCreateEvent {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            process_guid: val.process_guid,
+            image: val.image,
+            target_filename: val.target_filename,
+            user: val.user,
+            process_id: val.process_id.into(),
+            creation_utc_time: val
+                .creation_utc_time
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .into(),
+        })
+    }
+}
 
 from_key_value!(
     RegistryValueSetEvent,
@@ -499,17 +521,27 @@ from_key_value!(
     process_id
 );
 
-from_key_value!(
-    FileCreateStreamHashEvent,
-    FileCreateStreamHash,
-    image,
-    target_filename,
-    hash,
-    contents,
-    user;
-    process_id,
-    creation_utc_time
-);
+impl FromKeyValue<FileCreateStreamHash> for FileCreateStreamHashEvent {
+    fn from_key_value(key: &[u8], val: FileCreateStreamHash) -> Result<Self> {
+        Ok(FileCreateStreamHashEvent {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            process_guid: val.process_guid,
+            image: val.image,
+            target_filename: val.target_filename,
+            hash: val.hash,
+            contents: val.contents,
+            user: val.user,
+            process_id: val.process_id.into(),
+            creation_utc_time: val
+                .creation_utc_time
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .into(),
+        })
+    }
+}
 
 from_key_value!(
     PipeEventEvent,

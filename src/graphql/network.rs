@@ -1216,32 +1216,6 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
     }
 }
 
-macro_rules! from_key_value {
-    ($to:ty, $from:ty,$( $plain_field:ident ),* ; $( $str_num_field:ident ),* ) => {
-        impl FromKeyValue<$from> for $to {
-            fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let time = get_time_from_key(key)?;
-                Ok(Self {
-                    time,
-                    orig_addr: val.orig_addr.to_string(),
-                    resp_addr: val.resp_addr.to_string(),
-                    orig_port: val.orig_port,
-                    resp_port: val.resp_port,
-                    proto: val.proto,
-                    $(
-                        $plain_field: val.$plain_field,
-                    )*
-                    $(
-                        $str_num_field: {
-                            val.$str_num_field.into()
-                        },
-                    )*
-                })
-            }
-        }
-    };
-}
-
 impl FromKeyValue<Http> for HttpRawEvent {
     fn from_key_value(key: &[u8], val: Http) -> Result<Self> {
         Ok(HttpRawEvent {
@@ -1251,8 +1225,8 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             method: val.method,
             host: val.host,
             uri: val.uri,
@@ -1287,8 +1261,8 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
             resp_bytes: val.resp_bytes.into(),
@@ -1309,8 +1283,8 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             user: val.user,
             password: val.password,
             commands: val
@@ -1342,8 +1316,8 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             op: val.op,
             htype: val.htype,
             hops: val.hops,
@@ -1368,8 +1342,8 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
@@ -1405,8 +1379,8 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
             id: val.id,
             code: val.code,
             resp_code: val.resp_code,
@@ -1425,174 +1399,283 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
     }
 }
 
-from_key_value!(RdpRawEvent, Rdp, cookie; start_time, end_time);
+impl FromKeyValue<Rdp> for RdpRawEvent {
+    fn from_key_value(key: &[u8], val: Rdp) -> Result<Self> {
+        Ok(RdpRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            cookie: val.cookie,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
-from_key_value!(
-    DnsRawEvent,
-    Dns,
-    query,
-    answer,
-    trans_id,
-    qclass,
-    qtype,
-    rcode,
-    aa_flag,
-    tc_flag,
-    rd_flag,
-    ra_flag,
-    ttl;
-    start_time,
-    end_time,
-    rtt
-);
+impl FromKeyValue<Dns> for DnsRawEvent {
+    fn from_key_value(key: &[u8], val: Dns) -> Result<Self> {
+        Ok(DnsRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            query: val.query,
+            answer: val.answer,
+            trans_id: val.trans_id,
+            qclass: val.qclass,
+            qtype: val.qtype,
+            rcode: val.rcode,
+            aa_flag: val.aa_flag,
+            tc_flag: val.tc_flag,
+            rd_flag: val.rd_flag,
+            ra_flag: val.ra_flag,
+            ttl: val.ttl,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            rtt: val.rtt.into(),
+        })
+    }
+}
 
-from_key_value!(
-    SmtpRawEvent,
-    Smtp,
-    mailfrom,
-    date,
-    from,
-    to,
-    subject,
-    agent,
-    state;
-    start_time,
-    end_time
-);
+impl FromKeyValue<Smtp> for SmtpRawEvent {
+    fn from_key_value(key: &[u8], val: Smtp) -> Result<Self> {
+        Ok(SmtpRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            mailfrom: val.mailfrom,
+            date: val.date,
+            from: val.from,
+            to: val.to,
+            subject: val.subject,
+            agent: val.agent,
+            state: val.state,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
-from_key_value!(
-    NtlmRawEvent,
-    Ntlm,
-    username,
-    hostname,
-    domainname,
-    success,
-    protocol;
-    start_time,
-    end_time
-);
+impl FromKeyValue<Ntlm> for NtlmRawEvent {
+    fn from_key_value(key: &[u8], val: Ntlm) -> Result<Self> {
+        Ok(NtlmRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            username: val.username,
+            hostname: val.hostname,
+            domainname: val.domainname,
+            success: val.success,
+            protocol: val.protocol,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
-from_key_value!(
-    KerberosRawEvent,
-    Kerberos,
-    client_realm,
-    cname_type,
-    client_name,
-    realm,
-    sname_type,
-    service_name;
-    start_time,
-    end_time,
-    client_time,
-    server_time,
-    error_code
-);
+impl FromKeyValue<Kerberos> for KerberosRawEvent {
+    fn from_key_value(key: &[u8], val: Kerberos) -> Result<Self> {
+        Ok(KerberosRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            client_realm: val.client_realm,
+            cname_type: val.cname_type,
+            client_name: val.client_name,
+            realm: val.realm,
+            sname_type: val.sname_type,
+            service_name: val.service_name,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            client_time: val.client_time.into(),
+            server_time: val.server_time.into(),
+            error_code: val.error_code.into(),
+        })
+    }
+}
 
-from_key_value!(
-    SshRawEvent,
-    Ssh,
-    client,
-    server,
-    cipher_alg,
-    mac_alg,
-    compression_alg,
-    kex_alg,
-    host_key_alg,
-    hassh_algorithms,
-    hassh,
-    hassh_server_algorithms,
-    hassh_server,
-    client_shka,
-    server_shka;
-    start_time,
-    end_time
-);
+impl FromKeyValue<Ssh> for SshRawEvent {
+    fn from_key_value(key: &[u8], val: Ssh) -> Result<Self> {
+        Ok(SshRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            client: val.client,
+            server: val.server,
+            cipher_alg: val.cipher_alg,
+            mac_alg: val.mac_alg,
+            compression_alg: val.compression_alg,
+            kex_alg: val.kex_alg,
+            host_key_alg: val.host_key_alg,
+            hassh_algorithms: val.hassh_algorithms,
+            hassh: val.hassh,
+            hassh_server_algorithms: val.hassh_server_algorithms,
+            hassh_server: val.hassh_server,
+            client_shka: val.client_shka,
+            server_shka: val.server_shka,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
-from_key_value!(
-    DceRpcRawEvent,
-    DceRpc,
-    named_pipe,
-    endpoint,
-    operation;
-    start_time,
-    end_time,
-    rtt
-);
+impl FromKeyValue<DceRpc> for DceRpcRawEvent {
+    fn from_key_value(key: &[u8], val: DceRpc) -> Result<Self> {
+        Ok(DceRpcRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            named_pipe: val.named_pipe,
+            endpoint: val.endpoint,
+            operation: val.operation,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            rtt: val.rtt.into(),
+        })
+    }
+}
 
-from_key_value!(
-    MqttRawEvent,
-    Mqtt,
-    protocol,
-    version,
-    client_id,
-    connack_reason,
-    subscribe,
-    suback_reason;
-    start_time,
-    end_time
-);
+impl FromKeyValue<Mqtt> for MqttRawEvent {
+    fn from_key_value(key: &[u8], val: Mqtt) -> Result<Self> {
+        Ok(MqttRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            protocol: val.protocol,
+            version: val.version,
+            client_id: val.client_id,
+            connack_reason: val.connack_reason,
+            subscribe: val.subscribe,
+            suback_reason: val.suback_reason,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
-from_key_value!(
-    LdapRawEvent,
-    Ldap,
-    version,
-    opcode,
-    result,
-    diagnostic_message,
-    object,
-    argument;
-    start_time,
-    end_time,
-    message_id
-);
+impl FromKeyValue<Ldap> for LdapRawEvent {
+    fn from_key_value(key: &[u8], val: Ldap) -> Result<Self> {
+        Ok(LdapRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            version: val.version,
+            opcode: val.opcode,
+            result: val.result,
+            diagnostic_message: val.diagnostic_message,
+            object: val.object,
+            argument: val.argument,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            message_id: val.message_id.into(),
+        })
+    }
+}
 
-from_key_value!(
-    TlsRawEvent,
-    Tls,
-    server_name,
-    alpn_protocol,
-    ja3,
-    version,
-    client_cipher_suites,
-    client_extensions,
-    cipher,
-    extensions,
-    ja3s,
-    serial,
-    subject_country,
-    subject_org_name,
-    subject_common_name,
-    subject_alt_name,
-    issuer_country,
-    issuer_org_name,
-    issuer_org_unit_name,
-    issuer_common_name,
-    last_alert;
-    start_time,
-    end_time,
-    validity_not_before,
-    validity_not_after
-);
+impl FromKeyValue<Tls> for TlsRawEvent {
+    fn from_key_value(key: &[u8], val: Tls) -> Result<Self> {
+        Ok(TlsRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            server_name: val.server_name,
+            alpn_protocol: val.alpn_protocol,
+            ja3: val.ja3,
+            version: val.version,
+            client_cipher_suites: val.client_cipher_suites,
+            client_extensions: val.client_extensions,
+            cipher: val.cipher,
+            extensions: val.extensions,
+            ja3s: val.ja3s,
+            serial: val.serial,
+            subject_country: val.subject_country,
+            subject_org_name: val.subject_org_name,
+            subject_common_name: val.subject_common_name,
+            subject_alt_name: val.subject_alt_name,
+            issuer_country: val.issuer_country,
+            issuer_org_name: val.issuer_org_name,
+            issuer_org_unit_name: val.issuer_org_unit_name,
+            issuer_common_name: val.issuer_common_name,
+            last_alert: val.last_alert,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            validity_not_before: val.validity_not_before.into(),
+            validity_not_after: val.validity_not_after.into(),
+        })
+    }
+}
 
-from_key_value!(
-    SmbRawEvent,
-    Smb,
-    command,
-    path,
-    service,
-    file_name,
-    resource_type,
-    fid;
-    start_time,
-    end_time,
-    file_size,
-    create_time,
-    access_time,
-    write_time,
-    change_time
-);
+impl FromKeyValue<Smb> for SmbRawEvent {
+    fn from_key_value(key: &[u8], val: Smb) -> Result<Self> {
+        Ok(SmbRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            command: val.command,
+            path: val.path,
+            service: val.service,
+            file_name: val.file_name,
+            resource_type: val.resource_type,
+            fid: val.fid,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            file_size: val.file_size.into(),
+            create_time: val.create_time.into(),
+            access_time: val.access_time.into(),
+            write_time: val.write_time.into(),
+            change_time: val.change_time.into(),
+        })
+    }
+}
 
-from_key_value!(NfsRawEvent, Nfs, read_files, write_files; start_time, end_time);
+impl FromKeyValue<Nfs> for NfsRawEvent {
+    fn from_key_value(key: &[u8], val: Nfs) -> Result<Self> {
+        Ok(NfsRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            read_files: val.read_files,
+            write_files: val.write_files,
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+        })
+    }
+}
 
 async fn handle_paged_conn_raw_events(
     ctx: &Context<'_>,

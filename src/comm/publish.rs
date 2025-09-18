@@ -24,9 +24,7 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
-use giganto_client::publish::{
-    PublishError, receive_range_data, recv_ack_response, send_range_data_request,
-};
+use giganto_client::publish::{receive_range_data, recv_ack_response, send_range_data_request};
 use giganto_client::{
     RawEventKind,
     connection::server_handshake,
@@ -1718,8 +1716,7 @@ where
         let event: Option<(i64, String, Vec<I>)> = receive_range_data(&mut peer_recv).await?;
         if let Some(event_data) = event {
             let event_data_again: Option<(i64, String, Vec<I>)> = Some(event_data);
-            let send_buf =
-                encode_legacy(&event_data_again).map_err(PublishError::SerializationError)?;
+            let send_buf = bincode::serialize(&event_data_again)?;
             send_raw(send, &send_buf).await?;
         } else {
             break;
@@ -1861,8 +1858,7 @@ where
             while let Some(event) =
                 receive_range_data::<Option<(i64, String, Vec<I>)>>(&mut peer_recv).await?
             {
-                let send_buf =
-                    encode_legacy(&Some(event)).map_err(PublishError::SerializationError)?;
+                let send_buf = bincode::serialize(&Some(event))?;
                 send_raw(send, &send_buf).await?;
             }
         }
