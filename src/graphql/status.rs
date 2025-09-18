@@ -89,8 +89,8 @@ impl ConfigVisible {
         self.num_of_thread
     }
 
-    async fn max_sub_compactions(&self) -> StringNumberU32 {
-        self.max_sub_compactions.into()
+    async fn max_subcompactions(&self) -> StringNumberU32 {
+        self.max_subcompactions.into()
     }
 
     async fn ack_transmission(&self) -> u16 {
@@ -373,7 +373,7 @@ mod tests {
                     maxOpenFiles
                     maxMbOfLevelBase
                     numOfThread
-                    maxSubCompactions
+                    maxSubcompactions
                 }
             }
         ";
@@ -382,7 +382,7 @@ mod tests {
 
         let data = res.data.to_string();
         assert!(
-            data.contains("ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubCompactions: \"2\"")
+            data.contains("ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 8, maxSubcompactions: \"2\"")
         );
 
         let old_config = old_config();
@@ -397,7 +397,7 @@ mod tests {
             max_open_files = 8000
             max_mb_of_level_base = 512
             num_of_thread = 10
-            max_sub_compactions = 2
+            max_subcompactions = 2
         )
         .to_string();
 
@@ -416,7 +416,7 @@ mod tests {
                     maxOpenFiles
                     maxMbOfLevelBase
                     numOfThread
-                    maxSubCompactions
+                    maxSubcompactions
                 }}
             }}
             "
@@ -425,7 +425,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubCompactions: \"2\"}}"
+            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
         );
     }
 
@@ -442,7 +442,7 @@ mod tests {
             max_open_files = 8000
             max_mb_of_level_base = 512
             num_of_thread = 8
-            max_sub_compactions = 2
+            max_subcompactions = 2
         )
         .to_string()
     }

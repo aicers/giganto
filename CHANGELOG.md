@@ -38,6 +38,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Renamed configuration field `max_sub_compactions` to `max_subcompactions` to
+  align with RocksDB naming conventions.
 - Modified FTP event structure to store multiple commands as `Vec<FtpCommand>`
   instead of single command fields. This change preserves the complete command
   history of FTP sessions, enabling better threat analysis and session tracking.
@@ -373,7 +375,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added rocksdb's `increase_parallelism` option. This option is set by reading
   the value from `number_of_thread` in config file.
 - Added rocksdb's `set_max_subcompactions` option. This option is set by reading
-  the value from `max_sub_compactions` in config file.
+  the value from `max_subcompactions` in config file.
 
 ### Changed
 

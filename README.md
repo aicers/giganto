@@ -77,7 +77,7 @@ In the config file, you can specify the following options:
 | `max_open_files`       | Max open files for database          | No       | 8000                  |
 | `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                   |
 | `num_of_thread`        | Number of background threads for DB  | No       | 8                     |
-| `max_sub_compactions`  | Number of sub-compactions allowed    | No       | 2                     |
+| `max_subcompactions`   | Number of sub-compactions allowed    | No       | 2                     |
 | `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
 | `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
@@ -96,7 +96,7 @@ export_dir = "/opt/clumit/var/giganto/export"
 max_open_files = 8000
 max_mb_of_level_base = 512
 num_of_thread = 8
-max_sub_compactions = 2
+max_subcompactions = 2
 ack_transmission = 1024
 addr_to_peers = "10.10.11.1:38383"
 peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
