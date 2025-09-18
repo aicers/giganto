@@ -41,6 +41,28 @@ type BootpRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Operation Code
 	"""
 	op: Int!
@@ -196,6 +218,12 @@ type ConnRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
 	Service Name
 	"""
 	service: String!
@@ -304,6 +332,28 @@ type DceRpcRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Round-Trip Time
 	"""
 	rtt: StringNumberI64!
@@ -392,6 +442,28 @@ type DhcpRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Message Type
 	"""
@@ -579,6 +651,28 @@ type DnsRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Query
 	"""
@@ -971,6 +1065,28 @@ type FtpRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Username
 	"""
 	user: String!
@@ -1055,6 +1171,28 @@ type HttpRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	HTTP Method
 	"""
@@ -1263,6 +1401,28 @@ type KerberosRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Client Time
 	"""
 	clientTime: StringNumberI64!
@@ -1371,6 +1531,28 @@ type LdapRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Message ID
 	"""
@@ -1512,6 +1694,28 @@ type MqttRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	MQTT Protocol
 	"""
@@ -1831,6 +2035,28 @@ type NfsRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Read Files
 	"""
 	readFiles: [String!]!
@@ -1911,6 +2137,28 @@ type NtlmRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Username
 	"""
@@ -2393,6 +2641,28 @@ type RadiusRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Identifier
 	"""
 	id: Int!
@@ -2521,6 +2791,28 @@ type RdpRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Cookie
 	"""
@@ -2749,6 +3041,28 @@ type SmbRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Command
 	"""
 	command: Int!
@@ -2866,6 +3180,28 @@ type SmtpRawEvent {
 	"""
 	endTime: StringNumberI64!
 	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
 	Mail From
 	"""
 	mailfrom: String!
@@ -2966,6 +3302,28 @@ type SshRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Client
 	"""
@@ -3201,6 +3559,28 @@ type TlsRawEvent {
 	It is measured in nanoseconds.
 	"""
 	endTime: StringNumberI64!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
 	"""
 	Server Name
 	"""

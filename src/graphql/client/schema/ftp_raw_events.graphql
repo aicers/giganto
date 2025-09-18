@@ -29,6 +29,11 @@ query FtpRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         user
         password
         commands {

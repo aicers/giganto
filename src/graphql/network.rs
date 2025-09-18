@@ -186,6 +186,10 @@ struct ConnRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
     /// Service Name
     service: String,
     /// Bytes Sent by Source
@@ -233,6 +237,18 @@ struct DnsRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Query
     query: String,
     /// Answer
@@ -289,6 +305,18 @@ struct HttpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// HTTP Method
     method: String,
     /// Host
@@ -361,6 +389,18 @@ struct RdpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Cookie
     cookie: String,
 }
@@ -395,6 +435,18 @@ struct SmtpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Mail From
     mailfrom: String,
     /// Date
@@ -441,6 +493,18 @@ struct NtlmRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Username
     username: String,
     /// Hostname
@@ -483,6 +547,18 @@ struct KerberosRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Client Time
     client_time: StringNumberI64,
     /// Server Time
@@ -533,6 +609,18 @@ struct SshRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Client
     client: String,
     /// Server
@@ -591,6 +679,18 @@ struct DceRpcRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Round-Trip Time
     rtt: StringNumberI64,
     /// Named Pipe
@@ -661,6 +761,18 @@ struct FtpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Username
     user: String,
     /// Password
@@ -700,6 +812,18 @@ struct MqttRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// MQTT Protocol
     protocol: String,
     /// Version
@@ -744,6 +868,18 @@ struct LdapRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Message ID
     message_id: StringNumberU32,
     /// Version
@@ -790,6 +926,18 @@ struct TlsRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Server Name
     server_name: String,
     /// ALPN Protocol
@@ -865,6 +1013,18 @@ struct SmbRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Command
     command: u8,
     /// Path
@@ -919,6 +1079,18 @@ struct NfsRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Read Files
     read_files: Vec<String>,
     /// Write Files
@@ -955,6 +1127,18 @@ struct BootpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Operation Code
     op: u8,
     /// Hardware Type
@@ -1033,6 +1217,18 @@ struct DhcpRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Message Type
     msg_type: u8,
     /// Client IP Address
@@ -1101,6 +1297,18 @@ struct RadiusRawEvent {
     ///
     /// It is measured in nanoseconds.
     end_time: StringNumberI64,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
     /// Identifier
     id: u8,
     /// Code
@@ -1228,6 +1436,13 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
+                    start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+                    end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+                    duration: val.duration.into(),
+                    orig_pkts: val.orig_pkts.into(),
+                    resp_pkts: val.resp_pkts.into(),
+                    orig_l2_bytes: val.orig_l2_bytes.into(),
+                    resp_l2_bytes: val.resp_l2_bytes.into(),
                     $(
                         $plain_field: val.$plain_field,
                     )*
@@ -1251,8 +1466,13 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
             method: val.method,
             host: val.host,
             uri: val.uri,
@@ -1287,8 +1507,9 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
             resp_bytes: val.resp_bytes.into(),
@@ -1309,8 +1530,13 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
             user: val.user,
             password: val.password,
             commands: val
@@ -1342,8 +1568,13 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
             op: val.op,
             htype: val.htype,
             hops: val.hops,
@@ -1368,8 +1599,13 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
             msg_type: val.msg_type,
             ciaddr: val.ciaddr.to_string(),
             yiaddr: val.yiaddr.to_string(),
@@ -1405,8 +1641,13 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time.into(),
-            end_time: val.end_time.into(),
+            start_time: val.start_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            end_time: val.end_time.timestamp_nanos_opt().unwrap_or(0).into(),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
             id: val.id,
             code: val.code,
             resp_code: val.resp_code,
@@ -1425,7 +1666,7 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
     }
 }
 
-from_key_value!(RdpRawEvent, Rdp, cookie; start_time, end_time);
+from_key_value!(RdpRawEvent, Rdp, cookie;);
 
 from_key_value!(
     DnsRawEvent,
@@ -1441,8 +1682,6 @@ from_key_value!(
     rd_flag,
     ra_flag,
     ttl;
-    start_time,
-    end_time,
     rtt
 );
 
@@ -1456,8 +1695,6 @@ from_key_value!(
     subject,
     agent,
     state;
-    start_time,
-    end_time
 );
 
 from_key_value!(
@@ -1468,8 +1705,6 @@ from_key_value!(
     domainname,
     success,
     protocol;
-    start_time,
-    end_time
 );
 
 from_key_value!(
@@ -1481,8 +1716,6 @@ from_key_value!(
     realm,
     sname_type,
     service_name;
-    start_time,
-    end_time,
     client_time,
     server_time,
     error_code
@@ -1504,8 +1737,6 @@ from_key_value!(
     hassh_server,
     client_shka,
     server_shka;
-    start_time,
-    end_time
 );
 
 from_key_value!(
@@ -1514,8 +1745,6 @@ from_key_value!(
     named_pipe,
     endpoint,
     operation;
-    start_time,
-    end_time,
     rtt
 );
 
@@ -1528,8 +1757,6 @@ from_key_value!(
     connack_reason,
     subscribe,
     suback_reason;
-    start_time,
-    end_time
 );
 
 from_key_value!(
@@ -1541,8 +1768,6 @@ from_key_value!(
     diagnostic_message,
     object,
     argument;
-    start_time,
-    end_time,
     message_id
 );
 
@@ -1568,8 +1793,6 @@ from_key_value!(
     issuer_org_unit_name,
     issuer_common_name,
     last_alert;
-    start_time,
-    end_time,
     validity_not_before,
     validity_not_after
 );
@@ -1583,8 +1806,6 @@ from_key_value!(
     file_name,
     resource_type,
     fid;
-    start_time,
-    end_time,
     file_size,
     create_time,
     access_time,
@@ -1592,7 +1813,7 @@ from_key_value!(
     change_time
 );
 
-from_key_value!(NfsRawEvent, Nfs, read_files, write_files; start_time, end_time);
+from_key_value!(NfsRawEvent, Nfs, read_files, write_files;);
 
 async fn handle_paged_conn_raw_events(
     ctx: &Context<'_>,
