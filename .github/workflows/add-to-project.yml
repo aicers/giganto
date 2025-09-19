@@ -1,0 +1,19 @@
+name: Add newly opened issues/PRs to the aicers project board
+
+on:
+  issues:
+    types:
+      - opened
+  pull_request_target:
+    types:
+      - opened
+
+jobs:
+  add-to-project:
+    name: Add issue/PR to the aicers project board
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/aicers/projects/4
+          github-token: ${{ secrets.PROJECT_AUTOMATION_TOKEN }}
