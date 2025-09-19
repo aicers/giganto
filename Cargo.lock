@@ -345,15 +345,6 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "bincode"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
@@ -1073,7 +1064,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-poem",
  "base64",
- "bincode 1.3.3",
+ "bincode",
  "chrono",
  "clap",
  "config",
@@ -1120,10 +1111,10 @@ dependencies = [
 [[package]]
 name = "giganto-client"
 version = "0.23.0"
-source = "git+https://github.com/aicers/giganto-client.git?rev=a6ad837#a6ad837907d153ff93ff555eafdb5c28ee0b2130"
+source = "git+https://github.com/aicers/giganto-client.git?rev=47815ca#47815ca2ebdba920731f764ff413dbf7ad9a247a"
 dependencies = [
  "anyhow",
- "bincode 1.3.3",
+ "bincode",
  "chrono",
  "num_enum",
  "quinn",
@@ -2587,7 +2578,7 @@ version = "0.5.0"
 source = "git+https://github.com/aicers/roxy.git?tag=0.5.0#77ee3f2a44ca6d92732457d210ec9420deb8aaf7"
 dependencies = [
  "anyhow",
- "bincode 2.0.1",
+ "bincode",
  "chrono",
  "data-encoding",
  "gethostname",

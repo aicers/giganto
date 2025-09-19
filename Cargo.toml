@@ -19,7 +19,7 @@ path = "src/gen_schema.rs"
 anyhow = "1"
 async-graphql = { version = "7", features = ["chrono", "string_number"] }
 base64 = "0.22"
-bincode = "1"
+bincode = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
@@ -27,7 +27,7 @@ ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "a6ad837" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "47815ca" }
 graphql_client = "0.14"
 humantime = "2"
 humantime-serde = "1"

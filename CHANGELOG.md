@@ -34,6 +34,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   flag and is intended for quality checks and testing. The API iterates over all
   keys in the database to provide exact counts, which may be expensive on large
   datasets.
+- Bump bincode crate to 2.0 and modified the related code.
 
 ### Changed
 

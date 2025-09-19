@@ -47,6 +47,7 @@ fn init_crypto() {
 
 use super::Server;
 use crate::{
+    bincode_utils::{decode_legacy, encode_legacy},
     comm::{
         new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         peer::{PeerIdentity, PeerInfo},
@@ -211,7 +212,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
         resp_l2_bytes: 27889,
     };
 
-    bincode::serialize(&conn_body).unwrap()
+    encode_legacy(&conn_body).unwrap()
 }
 
 fn gen_dns_raw_event() -> Vec<u8> {
@@ -237,7 +238,7 @@ fn gen_dns_raw_event() -> Vec<u8> {
         ttl: vec![1; 5],
     };
 
-    bincode::serialize(&dns_body).unwrap()
+    encode_legacy(&dns_body).unwrap()
 }
 
 fn gen_rdp_raw_event() -> Vec<u8> {
@@ -252,7 +253,7 @@ fn gen_rdp_raw_event() -> Vec<u8> {
         cookie: "rdp_test".to_string(),
     };
 
-    bincode::serialize(&rdp_body).unwrap()
+    encode_legacy(&rdp_body).unwrap()
 }
 
 fn gen_http_raw_event() -> Vec<u8> {
@@ -286,7 +287,7 @@ fn gen_http_raw_event() -> Vec<u8> {
         state: String::new(),
     };
 
-    bincode::serialize(&http_body).unwrap()
+    encode_legacy(&http_body).unwrap()
 }
 
 fn gen_smtp_raw_event() -> Vec<u8> {
@@ -307,7 +308,7 @@ fn gen_smtp_raw_event() -> Vec<u8> {
         state: String::new(),
     };
 
-    bincode::serialize(&smtp_body).unwrap()
+    encode_legacy(&smtp_body).unwrap()
 }
 
 fn gen_ntlm_raw_event() -> Vec<u8> {
@@ -326,7 +327,7 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
         protocol: "protocol".to_string(),
     };
 
-    bincode::serialize(&ntlm_body).unwrap()
+    encode_legacy(&ntlm_body).unwrap()
 }
 
 fn gen_kerberos_raw_event() -> Vec<u8> {
@@ -349,7 +350,7 @@ fn gen_kerberos_raw_event() -> Vec<u8> {
         service_name: vec!["service_name".to_string()],
     };
 
-    bincode::serialize(&kerberos_body).unwrap()
+    encode_legacy(&kerberos_body).unwrap()
 }
 
 fn gen_ssh_raw_event() -> Vec<u8> {
@@ -376,7 +377,7 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         server_shka: "server_shka".to_string(),
     };
 
-    bincode::serialize(&ssh_body).unwrap()
+    encode_legacy(&ssh_body).unwrap()
 }
 
 fn gen_dce_rpc_raw_event() -> Vec<u8> {
@@ -394,7 +395,7 @@ fn gen_dce_rpc_raw_event() -> Vec<u8> {
         operation: "operation".to_string(),
     };
 
-    bincode::serialize(&dce_rpc_body).unwrap()
+    encode_legacy(&dce_rpc_body).unwrap()
 }
 
 fn gen_log_raw_event() -> Vec<u8> {
@@ -403,7 +404,7 @@ fn gen_log_raw_event() -> Vec<u8> {
         log: base64_engine.decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
 
-    bincode::serialize(&log_body).unwrap()
+    encode_legacy(&log_body).unwrap()
 }
 
 fn gen_periodic_time_series_raw_event() -> Vec<u8> {
@@ -412,7 +413,7 @@ fn gen_periodic_time_series_raw_event() -> Vec<u8> {
         data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
     };
 
-    bincode::serialize(&periodic_time_series_body).unwrap()
+    encode_legacy(&periodic_time_series_body).unwrap()
 }
 
 fn gen_ftp_raw_event() -> Vec<u8> {
@@ -440,7 +441,7 @@ fn gen_ftp_raw_event() -> Vec<u8> {
         }],
     };
 
-    bincode::serialize(&ftp_body).unwrap()
+    encode_legacy(&ftp_body).unwrap()
 }
 
 fn gen_mqtt_raw_event() -> Vec<u8> {
@@ -460,7 +461,7 @@ fn gen_mqtt_raw_event() -> Vec<u8> {
         suback_reason: vec![1],
     };
 
-    bincode::serialize(&mqtt_body).unwrap()
+    encode_legacy(&mqtt_body).unwrap()
 }
 
 fn gen_ldap_raw_event() -> Vec<u8> {
@@ -481,7 +482,7 @@ fn gen_ldap_raw_event() -> Vec<u8> {
         argument: Vec::new(),
     };
 
-    bincode::serialize(&ldap_body).unwrap()
+    encode_legacy(&ldap_body).unwrap()
 }
 
 fn gen_tls_raw_event() -> Vec<u8> {
@@ -516,7 +517,7 @@ fn gen_tls_raw_event() -> Vec<u8> {
         last_alert: 13,
     };
 
-    bincode::serialize(&tls_body).unwrap()
+    encode_legacy(&tls_body).unwrap()
 }
 
 fn gen_smb_raw_event() -> Vec<u8> {
@@ -541,7 +542,7 @@ fn gen_smb_raw_event() -> Vec<u8> {
         change_time: 20_000_000,
     };
 
-    bincode::serialize(&smb_body).unwrap()
+    encode_legacy(&smb_body).unwrap()
 }
 
 fn gen_nfs_raw_event() -> Vec<u8> {
@@ -557,7 +558,7 @@ fn gen_nfs_raw_event() -> Vec<u8> {
         write_files: vec![],
     };
 
-    bincode::serialize(&nfs_body).unwrap()
+    encode_legacy(&nfs_body).unwrap()
 }
 
 fn gen_bootp_raw_event() -> Vec<u8> {
@@ -582,7 +583,7 @@ fn gen_bootp_raw_event() -> Vec<u8> {
         file: "file".to_string(),
     };
 
-    bincode::serialize(&bootp_body).unwrap()
+    encode_legacy(&bootp_body).unwrap()
 }
 
 fn gen_dhcp_raw_event() -> Vec<u8> {
@@ -620,7 +621,7 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
         client_id: vec![0, 1, 2],
     };
 
-    bincode::serialize(&dhcp_body).unwrap()
+    encode_legacy(&dhcp_body).unwrap()
 }
 
 fn gen_radius_raw_event() -> Vec<u8> {
@@ -648,7 +649,7 @@ fn gen_radius_raw_event() -> Vec<u8> {
         message: "test_message".to_string(),
     };
 
-    bincode::serialize(&radius_body).unwrap()
+    encode_legacy(&radius_body).unwrap()
 }
 
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) -> Vec<u8> {
@@ -877,12 +878,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let conn_store = db.conn_store().unwrap();
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
-            &conn_store,
-            SENSOR,
-            send_conn_time,
-        ))
-        .unwrap();
+        let conn_data: Conn =
+            decode_legacy(&insert_conn_raw_event(&conn_store, SENSOR, send_conn_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -925,13 +922,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             conn_data.response_data(send_conn_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -941,9 +936,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let dns_store = db.dns_store().unwrap();
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dns_data =
-            bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time))
-                .unwrap();
+        let dns_data: Dns =
+            decode_legacy(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -986,13 +980,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Dns::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             dns_data.response_data(send_dns_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1002,12 +994,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let http_store = db.http_store().unwrap();
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
-            &http_store,
-            SENSOR,
-            send_http_time,
-        ))
-        .unwrap();
+        let http_data: Http =
+            decode_legacy(&insert_http_raw_event(&http_store, SENSOR, send_http_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1050,13 +1038,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Http::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             http_data.response_data(send_http_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1066,9 +1052,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let rdp_store = db.rdp_store().unwrap();
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let rdp_data =
-            bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time))
-                .unwrap();
+        let rdp_data: Rdp =
+            decode_legacy(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1111,13 +1096,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Rdp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             rdp_data.response_data(send_rdp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1127,12 +1110,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let smtp_store = db.smtp_store().unwrap();
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
-            &smtp_store,
-            SENSOR,
-            send_smtp_time,
-        ))
-        .unwrap();
+        let smtp_data: Smtp =
+            decode_legacy(&insert_smtp_raw_event(&smtp_store, SENSOR, send_smtp_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1175,13 +1154,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             smtp_data.response_data(send_smtp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1191,12 +1168,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let ntlm_store = db.ntlm_store().unwrap();
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
-            &ntlm_store,
-            SENSOR,
-            send_ntlm_time,
-        ))
-        .unwrap();
+        let ntlm_data: Ntlm =
+            decode_legacy(&insert_ntlm_raw_event(&ntlm_store, SENSOR, send_ntlm_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1239,13 +1212,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ntlm::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             ntlm_data.response_data(send_ntlm_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1255,7 +1226,7 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let kerberos_store = db.kerberos_store().unwrap();
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
+        let kerberos_data: Kerberos = decode_legacy(&insert_kerberos_raw_event(
             &kerberos_store,
             SENSOR,
             send_kerberos_time,
@@ -1302,15 +1273,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Kerberos::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             kerberos_data
                 .response_data(send_kerberos_time, SENSOR)
                 .unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1320,9 +1289,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let ssh_store = db.ssh_store().unwrap();
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ssh_data =
-            bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time))
-                .unwrap();
+        let ssh_data: Ssh =
+            decode_legacy(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1365,13 +1333,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ssh::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             ssh_data.response_data(send_ssh_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1381,7 +1347,7 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let dce_rpc_store = db.dce_rpc_store().unwrap();
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
+        let dce_rpc_data: DceRpc = decode_legacy(&insert_dce_rpc_raw_event(
             &dce_rpc_store,
             SENSOR,
             send_dce_rpc_time,
@@ -1429,15 +1395,13 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             DceRpc::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             dce_rpc_data
                 .response_data(send_dce_rpc_time, SENSOR)
                 .unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1447,9 +1411,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let ftp_store = db.ftp_store().unwrap();
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ftp_data =
-            bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time))
-                .unwrap();
+        let ftp_data: Ftp =
+            decode_legacy(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1492,13 +1455,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ftp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             ftp_data.response_data(send_ftp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1508,12 +1469,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let mqtt_store = db.mqtt_store().unwrap();
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
-            &mqtt_store,
-            SENSOR,
-            send_mqtt_time,
-        ))
-        .unwrap();
+        let mqtt_data: Mqtt =
+            decode_legacy(&insert_mqtt_raw_event(&mqtt_store, SENSOR, send_mqtt_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1556,13 +1513,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Mqtt::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             mqtt_data.response_data(send_mqtt_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1572,12 +1527,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let ldap_store = db.ldap_store().unwrap();
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ldap_data = bincode::deserialize::<Ldap>(&insert_ldap_raw_event(
-            &ldap_store,
-            SENSOR,
-            send_ldap_time,
-        ))
-        .unwrap();
+        let ldap_data: Ldap =
+            decode_legacy(&insert_ldap_raw_event(&ldap_store, SENSOR, send_ldap_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1620,13 +1571,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Ldap::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             ldap_data.response_data(send_ldap_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1636,9 +1585,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let tls_store = db.tls_store().unwrap();
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let tls_data =
-            bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time))
-                .unwrap();
+        let tls_data: Tls =
+            decode_legacy(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1681,13 +1629,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Tls::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             tls_data.response_data(send_tls_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1697,9 +1643,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let smb_store = db.smb_store().unwrap();
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smb_data =
-            bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time))
-                .unwrap();
+        let smb_data: Smb =
+            decode_legacy(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1742,13 +1687,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Smb::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             smb_data.response_data(send_smb_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1758,9 +1701,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let nfs_store = db.nfs_store().unwrap();
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let nfs_data =
-            bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time))
-                .unwrap();
+        let nfs_data: Nfs =
+            decode_legacy(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1803,13 +1745,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Nfs::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             nfs_data.response_data(send_nfs_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1819,7 +1759,7 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let bootp_store = db.bootp_store().unwrap();
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let bootp_data = bincode::deserialize::<Bootp>(&insert_bootp_raw_event(
+        let bootp_data: Bootp = decode_legacy(&insert_bootp_raw_event(
             &bootp_store,
             SENSOR,
             send_bootp_time,
@@ -1867,13 +1807,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Bootp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             bootp_data.response_data(send_bootp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1883,12 +1821,8 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let dhcp_store = db.dhcp_store().unwrap();
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dhcp_data = bincode::deserialize::<Dhcp>(&insert_dhcp_raw_event(
-            &dhcp_store,
-            SENSOR,
-            send_dhcp_time,
-        ))
-        .unwrap();
+        let dhcp_data: Dhcp =
+            decode_legacy(&insert_dhcp_raw_event(&dhcp_store, SENSOR, send_dhcp_time)).unwrap();
 
         let start = DateTime::<Utc>::from_naive_utc_and_offset(
             NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -1931,13 +1865,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Dhcp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             dhcp_data.response_data(send_dhcp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -1947,7 +1879,7 @@ async fn request_range_data_with_protocol() {
             publish.conn.open_bi().await.expect("failed to open stream");
         let radius_store = db.radius_store().unwrap();
         let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let radius_data = bincode::deserialize::<Radius>(&insert_radius_raw_event(
+        let radius_data: Radius = decode_legacy(&insert_radius_raw_event(
             &radius_store,
             SENSOR,
             send_radius_time,
@@ -1995,13 +1927,11 @@ async fn request_range_data_with_protocol() {
 
         assert_eq!(
             Radius::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
         assert_eq!(
             radius_data.response_data(send_radius_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
 
@@ -2058,7 +1988,7 @@ async fn request_range_data_with_log() {
 
     let log_store = db.log_store().unwrap();
     let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
-    let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
+    let log_data: Log = decode_legacy(&insert_log_raw_event(
         &log_store,
         SENSOR,
         KIND,
@@ -2106,11 +2036,11 @@ async fn request_range_data_with_log() {
 
     assert_eq!(
         Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         log_data.response_data(send_log_time, SENSOR).unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -2166,8 +2096,8 @@ async fn request_range_data_with_period_time_series() {
 
     let time_series_store = db.periodic_time_series_store().unwrap();
     let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
-    let time_series_data =
-        bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
+    let time_series_data: PeriodicTimeSeries =
+        decode_legacy(&insert_periodic_time_series_raw_event(
             &time_series_store,
             SAMPLING_POLICY_ID_AS_SENSOR,
             send_time_series_time,
@@ -2214,13 +2144,13 @@ async fn request_range_data_with_period_time_series() {
 
     assert_eq!(
         PeriodicTimeSeries::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         time_series_data
             .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
             .unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -4384,7 +4314,7 @@ async fn request_raw_events() {
     let conn_store = db.conn_store().unwrap();
     let send_conn_time = TIMESTAMP;
     let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
-    let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
+    let conn_data: Conn = decode_legacy(&conn_raw_data).unwrap();
     let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
     let message = RequestRawData {
@@ -4411,10 +4341,7 @@ async fn request_raw_events() {
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
     assert_eq!(&result_data[0].1, SENSOR);
-    assert_eq!(
-        raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()
-    );
+    assert_eq!(raw_data, encode_legacy(&result_data.pop()).unwrap());
 }
 
 #[tokio::test]
@@ -4476,12 +4403,8 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         // prepare data in node2 database
         let conn_store = db.conn_store().unwrap();
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
-            &conn_store,
-            SENSOR,
-            send_conn_time,
-        ))
-        .unwrap();
+        let conn_data: Conn =
+            decode_legacy(&insert_conn_raw_event(&conn_store, SENSOR, send_conn_time)).unwrap();
 
         if oneshot_send
             .send(conn_data.response_data(send_conn_time, SENSOR).unwrap())
@@ -4615,11 +4538,11 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
     assert_eq!(
         Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -4685,7 +4608,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         // prepare data in node2 database
         let log_store = db.log_store().unwrap();
         let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
+        let log_data: Log = decode_legacy(&insert_log_raw_event(
             &log_store,
             SENSOR,
             KIND,
@@ -4823,11 +4746,11 @@ async fn request_range_data_with_log_giganto_cluster() {
 
     assert_eq!(
         Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -4893,8 +4816,8 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         // prepare data in node2 database
         let time_series_store = db.periodic_time_series_store().unwrap();
         let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let time_series_data =
-            bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
+        let time_series_data: PeriodicTimeSeries =
+            decode_legacy(&insert_periodic_time_series_raw_event(
                 &time_series_store,
                 SAMPLING_POLICY_ID_AS_SENSOR,
                 send_time_series_time,
@@ -5036,11 +4959,11 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 
     assert_eq!(
         PeriodicTimeSeries::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
     assert_eq!(
         raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+        encode_legacy(&result_data.pop().unwrap()).unwrap()
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -5107,7 +5030,7 @@ async fn request_raw_events_giganto_cluster() {
         let conn_store = db.conn_store().unwrap();
         let send_conn_time = TIMESTAMP;
         let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
-        let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
+        let conn_data: Conn = decode_legacy(&conn_raw_data).unwrap();
         let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
         if oneshot_send.send(raw_data).is_err() {
@@ -5224,8 +5147,5 @@ async fn request_raw_events_giganto_cluster() {
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
     assert_eq!(&result_data[0].1, SENSOR);
-    assert_eq!(
-        raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop()).unwrap()
-    );
+    assert_eq!(raw_data, encode_legacy(&result_data.pop()).unwrap());
 }
