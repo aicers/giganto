@@ -1,9 +1,8 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
-use anyhow::{Context as AnyhowContext, anyhow};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
-use toml_edit::{DocumentMut, InlineTable};
+use toml_edit::DocumentMut;
 use tracing::{error, info};
 
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
@@ -14,13 +13,6 @@ use crate::storage::Database;
 use crate::{comm::peer::PeerIdentity, settings::Settings};
 
 const GRAPHQL_REBOOT_DELAY: u64 = 100;
-pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
-pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
-
-pub trait TomlPeers {
-    fn get_hostname(&self) -> String;
-    fn get_addr(&self) -> String;
-}
 
 #[derive(SimpleObject, Debug)]
 struct Status {
@@ -253,12 +245,6 @@ impl ConfigMutation {
     }
 }
 
-pub fn read_toml_file(path: &str) -> anyhow::Result<DocumentMut> {
-    let toml = std::fs::read_to_string(path).context("toml not found")?;
-    let doc = toml.parse::<DocumentMut>()?;
-    Ok(doc)
-}
-
 pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
     let output = doc.to_string();
     let mut config_file = OpenOptions::new()
@@ -267,35 +253,6 @@ pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
         .create(true)
         .open(path)?;
     writeln!(config_file, "{output}")?;
-    Ok(())
-}
-
-pub fn parse_toml_element_to_string(key: &str, doc: &DocumentMut) -> Result<String> {
-    let Some(item) = doc.get(key) else {
-        return Err(anyhow!("{} not found.", key).into());
-    };
-    let Some(value) = item.as_str() else {
-        return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
-    };
-    Ok(value.to_string())
-}
-
-pub fn insert_toml_peers<T>(doc: &mut DocumentMut, input: Option<Vec<T>>) -> Result<()>
-where
-    T: TomlPeers,
-{
-    if let Some(peer_list) = input {
-        let Some(array) = doc["peers"].as_array_mut() else {
-            return Err(anyhow!("insert failed: peers option not found").into());
-        };
-        array.clear();
-        for peer in peer_list {
-            let mut table = InlineTable::new();
-            table.insert("addr", peer.get_addr().into());
-            table.insert("hostname", peer.get_hostname().into());
-            array.push(table);
-        }
-    }
     Ok(())
 }
 
