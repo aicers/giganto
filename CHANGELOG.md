@@ -375,7 +375,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added rocksdb's `increase_parallelism` option. This option is set by reading
   the value from `number_of_thread` in config file.
 - Added rocksdb's `set_max_subcompactions` option. This option is set by reading
-  the value from `max_subcompactions` in config file.
+  the value from `max_sub_compactions` in config file.
 
 ### Changed
 
