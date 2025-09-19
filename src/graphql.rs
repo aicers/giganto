@@ -12,6 +12,7 @@ mod standalone;
 pub mod statistics;
 pub mod status;
 mod sysmon;
+mod template;
 mod timeseries;
 
 use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
@@ -69,6 +70,7 @@ pub struct Query(
     sysmon::SysmonQuery,
     security::SecurityLogQuery,
     netflow::NetflowQuery,
+    template::TemplateQuery,
 );
 
 #[derive(Default, MergedObject)]
