@@ -1114,7 +1114,7 @@ version = "0.23.0"
 source = "git+https://github.com/aicers/giganto-client.git?rev=d6edbd2#d6edbd214abf12aa27e5354222791f7501e00b79"
 dependencies = [
  "anyhow",
- "bincode 2.0.1",
+ "bincode",
  "chrono",
  "num_enum",
  "quinn",
