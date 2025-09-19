@@ -61,10 +61,10 @@ impl ConfigVisible {
     async fn retention(&self) -> String {
         let retention_secs = self.retention.as_secs();
         let days = retention_secs / 86400;
-        let days = if retention_secs % 86400 > 0 {
-            days + 1
-        } else {
+        let days = if retention_secs.is_multiple_of(86400) {
             days
+        } else {
+            days + 1
         };
         format!("{days}d")
     }
