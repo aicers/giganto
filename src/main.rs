@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
             settings.config.visible.max_open_files,
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
-            settings.config.visible.max_sub_compactions,
+            settings.config.visible.max_subcompactions,
         );
         exit(0);
     }
@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
             settings.config.visible.max_open_files,
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
-            settings.config.visible.max_sub_compactions,
+            settings.config.visible.max_subcompactions,
         );
 
         if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {

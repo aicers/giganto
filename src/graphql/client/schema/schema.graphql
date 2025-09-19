@@ -125,7 +125,7 @@ type Config {
 	maxOpenFiles: Int!
 	maxMbOfLevelBase: StringNumberU64!
 	numOfThread: Int!
-	maxSubCompactions: StringNumberU32!
+	maxSubcompactions: StringNumberU32!
 	ackTransmission: Int!
 }
 
