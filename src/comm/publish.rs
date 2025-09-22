@@ -525,10 +525,7 @@ where
         send_semi_supervised_stream_start_message(&mut sender, record_type)
             .await
             .map_err(|e| {
-                anyhow!(
-                    "Failed to write the semi-supervised engine start message: {}",
-                    e
-                )
+                anyhow!("Failed to write the semi-supervised engine start message: {e}")
             })?;
         info!(
             "Start the semi-supervised engine's publish stream : {:?}",
@@ -538,12 +535,7 @@ where
         let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
         send_time_series_generator_stream_start_message(&mut sender, id)
             .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to write the time series generator start message: {}",
-                    e
-                )
-            })?;
+            .map_err(|e| anyhow!("Failed to write the time series generator start message: {e}"))?;
         info!(
             "Start time series generator's publish stream : {:?}",
             record_type

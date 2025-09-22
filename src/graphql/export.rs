@@ -1874,7 +1874,7 @@ fn export_by_protocol(
         "netflow5" => spawn_export!(netflow5_store, process_export),
         "netflow9" => spawn_export!(netflow9_store, process_export),
         "secu log" => spawn_export!(secu_log_store, process_export),
-        none => return Err(anyhow!("{}: Unknown protocol", none).into()),
+        none => return Err(anyhow!("{none}: Unknown protocol").into()),
     };
 
     Ok(())

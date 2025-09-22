@@ -272,10 +272,10 @@ pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
 
 pub fn parse_toml_element_to_string(key: &str, doc: &DocumentMut) -> Result<String> {
     let Some(item) = doc.get(key) else {
-        return Err(anyhow!("{} not found.", key).into());
+        return Err(anyhow!("{key} not found.").into());
     };
     let Some(value) = item.as_str() else {
-        return Err(anyhow!("parse failed: {}'s item format is not available.", key).into());
+        return Err(anyhow!("parse failed: {key}'s item format is not available.").into());
     };
     Ok(value.to_string())
 }
