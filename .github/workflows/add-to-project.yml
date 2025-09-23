@@ -1,0 +1,20 @@
+# Adds new issues and internal PRs to the 'to-do list' project.
+name: Auto-add
+
+on:
+  issues:
+    types:
+      - opened
+  pull_request:
+    types:
+      - opened
+
+jobs:
+  add-to-project:
+    name: Add to to-do list
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/aicers/projects/4
+          github-token: ${{ secrets.PROJECT_AUTOMATION_TOKEN }}
