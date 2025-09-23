@@ -651,8 +651,22 @@ async fn http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
+    insert_http_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
 
     let query = r#"
     {
@@ -935,8 +949,22 @@ async fn rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
+    insert_rdp_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
 
     let query = r#"
     {
