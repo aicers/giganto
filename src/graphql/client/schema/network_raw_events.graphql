@@ -68,6 +68,33 @@ query NetworkRawEvents(
           raFlag
           ttl
         }
+        ... on MalformedDnsRawEvent {
+          time
+          origAddr
+          respAddr
+          origPort
+          respPort
+          proto
+          startTime
+          endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
+          transId
+          flags
+          questionCount
+          answerCount
+          authorityCount
+          additionalCount
+          queryCount
+          respCount
+          queryBytes
+          respBytes
+          queryBody
+          respBody
+        }
         ... on HttpRawEvent {
           time
           origAddr

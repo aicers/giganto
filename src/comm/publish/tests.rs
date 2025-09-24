@@ -15,8 +15,8 @@ use giganto_client::{
     ingest::{
         log::Log,
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-            Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
+            Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -246,6 +246,37 @@ fn gen_dns_raw_event() -> Vec<u8> {
     };
 
     encode_legacy(&dns_body).unwrap()
+}
+
+fn gen_malformed_dns_raw_event() -> Vec<u8> {
+    let malformed_dns_body = MalformedDns {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1,
+        orig_pkts: 1,
+        resp_pkts: 2,
+        orig_l2_bytes: 32,
+        resp_l2_bytes: 64,
+        trans_id: 1,
+        flags: 42,
+        question_count: 1,
+        answer_count: 2,
+        authority_count: 3,
+        additional_count: 4,
+        query_count: 5,
+        resp_count: 6,
+        query_bytes: 32,
+        resp_bytes: 64,
+        query_body: vec![b"malformed query".to_vec()],
+        resp_body: vec![b"malformed response".to_vec()],
+    };
+
+    encode_legacy(&malformed_dns_body).unwrap()
 }
 
 fn gen_rdp_raw_event() -> Vec<u8> {
@@ -753,6 +784,17 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
     ser_dns_body
 }
 
+fn insert_malformed_dns_raw_event(
+    store: &RawEventStore<MalformedDns>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_malformed_dns_body = gen_malformed_dns_raw_event();
+    store.append(&key, &ser_malformed_dns_body).unwrap();
+    ser_malformed_dns_body
+}
+
 fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_rdp_body = gen_rdp_raw_event();
@@ -904,6 +946,7 @@ async fn request_range_data_with_protocol() {
     const SENSOR: &str = "ingest src 1";
     const CONN_KIND: &str = "conn";
     const DNS_KIND: &str = "dns";
+    const MALFORMED_DNS_KIND: &str = "malformed_dns";
     const HTTP_KIND: &str = "http";
     const RDP_KIND: &str = "rdp";
     const SMTP_KIND: &str = "smtp";
@@ -1071,6 +1114,70 @@ async fn request_range_data_with_protocol() {
         );
         assert_eq!(
             dns_data.response_data(send_dns_time, SENSOR).unwrap(),
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
+        );
+    }
+
+    // malformed_dns protocol
+    {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            publish.conn.open_bi().await.expect("failed to open stream");
+        let malformed_dns_store = db.malformed_dns_store().unwrap();
+        let send_malformed_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let malformed_dns_data: MalformedDns = decode_legacy(&insert_malformed_dns_raw_event(
+            &malformed_dns_store,
+            SENSOR,
+            send_malformed_dns_time,
+        ))
+        .unwrap();
+
+        let start = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("valid date")
+                .and_hms_opt(00, 00, 00)
+                .expect("valid time"),
+            Utc,
+        );
+        let end = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2050, 12, 31)
+                .expect("valid date")
+                .and_hms_opt(23, 59, 59)
+                .expect("valid time"),
+            Utc,
+        );
+        let message = RequestRange {
+            sensor: String::from(SENSOR),
+            kind: String::from(MALFORMED_DNS_KIND),
+            start: start.timestamp_nanos_opt().unwrap(),
+            end: end.timestamp_nanos_opt().unwrap(),
+            count: 5,
+        };
+
+        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data =
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+                    .await
+                    .unwrap();
+
+            result_data.push(resp_data.clone());
+            if resp_data.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            MalformedDns::response_done().unwrap(),
+            encode_legacy(&result_data.pop().unwrap()).unwrap()
+        );
+        assert_eq!(
+            malformed_dns_data
+                .response_data(send_malformed_dns_time, SENSOR)
+                .unwrap(),
             encode_legacy(&result_data.pop().unwrap()).unwrap()
         );
     }
@@ -4403,6 +4510,88 @@ async fn request_raw_events() {
     let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
     let conn_data: Conn = decode_legacy(&conn_raw_data).unwrap();
     let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
+
+    let message = RequestRawData {
+        kind: String::from(KIND),
+        input: vec![(String::from(SENSOR), vec![TIMESTAMP])],
+    };
+
+    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
+        .await
+        .unwrap();
+
+    let mut result_data = vec![];
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        if let Some(data) = resp_data {
+            result_data.push(data);
+        } else {
+            break;
+        }
+    }
+    assert_eq!(result_data.len(), 1);
+    assert_eq!(result_data[0].0, TIMESTAMP);
+    assert_eq!(&result_data[0].1, SENSOR);
+    assert_eq!(raw_data, encode_legacy(&result_data.pop()).unwrap());
+}
+
+#[tokio::test]
+async fn request_malformed_dns_raw_events() {
+    init_crypto();
+    const SENSOR: &str = "src 1";
+    const KIND: &str = "malformed_dns";
+    const TIMESTAMP: i64 = 200;
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let pcap_sensors = new_pcap_sensors();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+        NODE1_GIGANTO_INGEST_SENSORS
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<String>>(),
+    ));
+    let (peers, peer_idents) = new_peers_data(None);
+
+    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
+
+    let certs = Arc::new(Certs {
+        certs: cert,
+        key,
+        root,
+    });
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sensors,
+        stream_direct_channels,
+        ingest_sensors,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+    let publish = TestClient::new().await;
+
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let malformed_dns_store = db.malformed_dns_store().unwrap();
+    let send_malformed_dns_time = TIMESTAMP;
+    let malformed_dns_raw =
+        insert_malformed_dns_raw_event(&malformed_dns_store, SENSOR, send_malformed_dns_time);
+    let malformed_dns_data: MalformedDns = decode_legacy(&malformed_dns_raw).unwrap();
+    let raw_data = malformed_dns_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
     let message = RequestRawData {
         kind: String::from(KIND),

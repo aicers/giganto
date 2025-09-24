@@ -1,0 +1,52 @@
+query MalformedDnsRawEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  malformedDnsRawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        origAddr
+        respAddr
+        origPort
+        respPort
+        proto
+        startTime
+        endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
+        transId
+        flags
+        questionCount
+        answerCount
+        authorityCount
+        additionalCount
+        queryCount
+        respCount
+        queryBytes
+        respBytes
+        queryBody
+        respBody
+      }
+    }
+  }
+}
