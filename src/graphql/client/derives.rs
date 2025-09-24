@@ -42,6 +42,14 @@ pub struct DnsRawEvents;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/malformed_dns_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct MalformedDnsRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
     query_path = "src/graphql/client/schema/dce_rpc_raw_events.graphql",
     response_derives = "Clone, Default, PartialEq"
 )]
@@ -321,6 +329,14 @@ pub struct SearchConnRawEvents;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct SearchDnsRawEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_malformed_dns_raw_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchMalformedDnsRawEvents;
 
 #[derive(GraphQLQuery)]
 #[graphql(
