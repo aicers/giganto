@@ -44,8 +44,6 @@ jobs:
         run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
       - name: Install libcap on Ubuntu
@@ -64,8 +62,6 @@ jobs:
         run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
       - name: Install libcap on Ubuntu
