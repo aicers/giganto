@@ -729,9 +729,12 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let file_path = temp_file.path();
     let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
     let mut file = new_pcap.savefile(file_path)?;
-    let file_path_str = file_path
-        .to_str()
-        .ok_or_else(|| anyhow!("failed to convert file path to string: {file_path:?}"))?;
+    let file_path_str = file_path.to_str().ok_or_else(|| {
+        anyhow!(
+            "failed to convert file path to string: {}",
+            file_path.display()
+        )
+    })?;
 
     for packet in packets {
         let len = u32::try_from(packet.packet.len()).unwrap_or_default();

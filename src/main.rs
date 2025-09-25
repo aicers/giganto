@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
     let notify_terminate = Arc::new(Notify::new());
     let r = notify_terminate.clone();
     if let Err(ctrlc::Error::System(e)) = ctrlc::set_handler(move || r.notify_one()) {
-        return Err(anyhow!("failed to set signal handler: {}", e));
+        return Err(anyhow!("failed to set signal handler: {e}"));
     }
 
     let request_client_pool =

@@ -672,7 +672,7 @@ async fn http_with_data() {
     {
         httpRawEvents(
             filter: {
-                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                time: { start: "1992-06-05T00:00:00Z", end: "2030-09-22T00:00:00Z" }
                 sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
@@ -711,8 +711,8 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: 704_068_800_000_000_000, // 1992-06-05T12:00:00Z in nanoseconds
+        end_time: 704_068_800_000_000_000,
         method: "POST".to_string(),
         host: "cluml".to_string(),
         uri: "/cluml.gif".to_string(),
@@ -970,7 +970,7 @@ async fn rdp_with_data() {
     {
         rdpRawEvents(
             filter: {
-                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                time: { start: "1992-06-05T00:00:00Z", end: "2030-09-22T00:00:00Z" }
                 sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
@@ -1006,8 +1006,8 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1,
-        end_time: 1,
+        start_time: 704_068_800_000_000_000, // 1992-06-05T12:00:00Z in nanoseconds
+        end_time: 704_068_800_000_000_000,
         cookie: "rdp_test".to_string(),
     };
     let ser_rdp_body = encode_legacy(&rdp_body).unwrap();

@@ -349,7 +349,7 @@ fn convert_to_stats_allowed_type(input: &str) -> Result<RawEventKind> {
     if STATS_ALLOWED_KINDS.contains(&raw_event_kind) {
         Ok(raw_event_kind)
     } else {
-        Err(anyhow!("not allowed RawEventKind string: {}", input).into())
+        Err(anyhow!("not allowed RawEventKind string: {input}").into())
     }
 }
 
