@@ -11,6 +11,7 @@ on:
 
 jobs:
   add-to-project:
+    if: github.actor != 'dependabot[bot]'
     name: Add to to-do list
     runs-on: ubuntu-latest
     steps:
