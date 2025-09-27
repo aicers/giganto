@@ -33,6 +33,7 @@ query NetworkRawEvents(
           service
           startTime
           endTime
+          duration
           origBytes
           respBytes
           origPkts
@@ -48,6 +49,11 @@ query NetworkRawEvents(
           respPort
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           proto
           query
           answer
@@ -71,6 +77,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           method
           host
           uri
@@ -101,6 +112,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           cookie
         }
         ... on NtlmRawEvent {
@@ -112,6 +128,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           username
           hostname
           domainname
@@ -127,6 +148,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           clientTime
           serverTime
           errorCode
@@ -146,6 +172,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           client
           server
           cipherAlg
@@ -169,6 +200,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           rtt
           namedPipe
           endpoint
@@ -183,6 +219,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           user
           password
           commands {
@@ -207,6 +248,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           protocol
           version
           clientId
@@ -223,6 +269,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           messageId
           version
           opcode
@@ -240,6 +291,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           serverName
           alpnProtocol
           ja3
@@ -271,6 +327,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           command
           path
           service
@@ -292,6 +353,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           readFiles
           writeFiles
         }
@@ -304,6 +370,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           mailfrom
           date
           from
@@ -321,6 +392,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           op
           htype
           hops
@@ -342,6 +418,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           msgType
           ciaddr
           yiaddr
@@ -370,6 +451,11 @@ query NetworkRawEvents(
           proto
           startTime
           endTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
           id
           code
           respCode
