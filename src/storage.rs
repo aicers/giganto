@@ -170,34 +170,22 @@ pub struct Database {
 
 impl Database {
     /// Opens the database at the given path.
-    pub fn open(path: &Path, db_options: &DbOptions) -> Result<Database> {
-        let (db_opts, cf_opts) = rocksdb_options(db_options);
-        let mut cfs_name: Vec<&str> = Vec::with_capacity(
-            RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
-        );
-        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
-        cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
-
-        let cfs = cfs_name
-            .into_iter()
-            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
-
-        let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database { db: Arc::new(db) })
-    }
-
-    /// Opens the database at the given path in read-only mode.
     ///
-    /// Read-only instances are optimized for query workloads and do not affect
-    /// write performance of the primary instance.
+    /// # Arguments
+    ///
+    /// * `path` - The path to the database directory
+    /// * `db_options` - Database configuration options
+    /// * `read_only` - If true, opens the database in read-only mode. Read-only instances
+    ///   are optimized for query workloads and do not affect write performance of the
+    ///   primary instance.
     ///
     /// # Errors
     ///
     /// This function will return an error if:
     /// * The database path does not exist or is not accessible
-    /// * The database cannot be opened in read-only mode
+    /// * The database cannot be opened
     /// * Column families cannot be accessed
-    pub fn open_read_only(path: &Path, db_options: &DbOptions) -> Result<Database> {
+    pub fn open(path: &Path, db_options: &DbOptions, read_only: bool) -> Result<Database> {
         let (db_opts, cf_opts) = rocksdb_options(db_options);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
@@ -209,8 +197,12 @@ impl Database {
             .into_iter()
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
-        let db = DB::open_cf_descriptors_read_only(&db_opts, path, cfs, false)
-            .context("cannot open database in read-only mode")?;
+        let db = if read_only {
+            DB::open_cf_descriptors_read_only(&db_opts, path, cfs, false)
+                .context("cannot open database in read-only mode")?
+        } else {
+            DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?
+        };
         Ok(Database { db: Arc::new(db) })
     }
 

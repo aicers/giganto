@@ -184,10 +184,10 @@ async fn main() -> Result<()> {
         }
 
         // Open primary database instance for write operations (Ingest)
-        let database = storage::Database::open(&db_path, &db_options)?;
+        let database = storage::Database::open(&db_path, &db_options, false)?;
 
         // Open read-only database instance for query operations (GraphQL, Publish)
-        let database_readonly = storage::Database::open_read_only(&db_path, &db_options)?;
+        let database_readonly = storage::Database::open(&db_path, &db_options, true)?;
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());

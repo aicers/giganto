@@ -1238,7 +1238,7 @@ async fn one_short_reproduce_channel_close() {
 }
 
 fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
