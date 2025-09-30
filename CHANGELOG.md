@@ -38,6 +38,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Changed GraphQL API response sorting to use timestamp-based ordering instead
+  of database key-based ordering. Responses are now sorted by timestamp first,
+  then by key prefix when timestamps are equal. This ensures consistent
+  chronological ordering across all data sources in both standalone and cluster
+  environments.
 - Renamed configuration field `max_sub_compactions` to `max_subcompactions` to
   align with RocksDB naming conventions.
 - Modified FTP event structure to store multiple commands as `Vec<FtpCommand>`

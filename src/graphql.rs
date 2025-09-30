@@ -278,8 +278,8 @@ where
         {
             iter.next();
         }
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
+        let (records, has_previous) = collect_records(iter, last, filter);
+        // No need to reverse since collect_records now sorts by timestamp ascending
         (records, has_previous, false)
     } else if let Some(after) = after {
         if before.is_some() {
@@ -335,8 +335,8 @@ where
             .build();
 
         let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
+        let (records, has_previous) = collect_records(iter, last, filter);
+        // No need to reverse since collect_records now sorts by timestamp ascending
         (records, has_previous, false)
     } else {
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
@@ -403,8 +403,8 @@ where
         {
             iter.next();
         }
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
+        let (records, has_previous) = collect_records(iter, last, filter);
+        // No need to reverse since collect_records now sorts by timestamp ascending
         (records, has_previous, false)
     } else if let Some(after) = after {
         if before.is_some() {
@@ -456,8 +456,8 @@ where
             .build();
 
         let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
+        let (records, has_previous) = collect_records(iter, last, filter);
+        // No need to reverse since collect_records now sorts by timestamp ascending
         (records, has_previous, false)
     } else {
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
@@ -537,6 +537,40 @@ where
     Ok(connection)
 }
 
+/// Compares two database keys by timestamp first, then by key prefix (excluding timestamp).
+/// This ensures consistent ordering when multiple sources have events with the same timestamp.
+///
+/// # Arguments
+///
+/// * `a` - First key to compare
+/// * `b` - Second key to compare
+///
+/// # Returns
+///
+/// Returns `Ordering` result of the comparison
+fn compare_keys_by_timestamp(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    // Extract timestamps from the end of keys (last 8 bytes)
+    if a.len() > TIMESTAMP_SIZE && b.len() > TIMESTAMP_SIZE {
+        let a_timestamp = &a[(a.len() - TIMESTAMP_SIZE)..];
+        let b_timestamp = &b[(b.len() - TIMESTAMP_SIZE)..];
+
+        // Compare timestamps first
+        match a_timestamp.cmp(b_timestamp) {
+            std::cmp::Ordering::Equal => {
+                // If timestamps are equal, compare the key prefix (everything except timestamp)
+                // This handles the case where multiple piglets send data with the same timestamp
+                let a_prefix = &a[..(a.len() - TIMESTAMP_SIZE)];
+                let b_prefix = &b[..(b.len() - TIMESTAMP_SIZE)];
+                a_prefix.cmp(b_prefix)
+            }
+            other => other,
+        }
+    } else {
+        // Fallback to full key comparison if keys are too short
+        a.cmp(b)
+    }
+}
+
 fn collect_records<I, T>(
     mut iter: I,
     size: usize,
@@ -581,6 +615,10 @@ where
             break;
         }
     }
+
+    // Sort records by timestamp, then by key prefix
+    records.sort_unstable_by(|a, b| compare_keys_by_timestamp(&a.0, &b.0));
+
     (records, has_more)
 }
 

@@ -4,6 +4,7 @@ use async_graphql::{
     Context, Error, OutputType, Result,
     connection::{Connection, Edge, EmptyFields},
 };
+use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use graphql_client::Response as GraphQlResponse;
 use num_traits::AsPrimitive;
 use serde::Deserialize;
@@ -11,18 +12,57 @@ use serde::Serialize;
 
 use crate::{
     comm::{IngestSensors, peer::Peers},
-    graphql::MAXIMUM_PAGE_SIZE,
+    graphql::{MAXIMUM_PAGE_SIZE, TIMESTAMP_SIZE},
 };
-
-pub trait ClusterSortKey {
-    fn secondary(&self) -> Option<&str>;
-}
 
 #[allow(unused)]
 #[derive(PartialEq)]
 enum TakeDirection {
     First,
     Last,
+}
+
+/// Compares two cursors (base64-encoded keys) by timestamp first, then by key prefix.
+/// Cursors are base64-encoded database keys where timestamp is in the last 8 bytes.
+///
+/// # Arguments
+///
+/// * `a` - First cursor (base64-encoded key)
+/// * `b` - Second cursor (base64-encoded key)
+///
+/// # Returns
+///
+/// Returns `Ordering` result of the comparison, or `Equal` if decoding fails
+fn compare_cursors_by_timestamp(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_decoded = base64_engine.decode(a).ok();
+    let b_decoded = base64_engine.decode(b).ok();
+
+    match (a_decoded, b_decoded) {
+        (Some(a_key), Some(b_key)) => {
+            if a_key.len() > TIMESTAMP_SIZE && b_key.len() > TIMESTAMP_SIZE {
+                let a_timestamp = &a_key[(a_key.len() - TIMESTAMP_SIZE)..];
+                let b_timestamp = &b_key[(b_key.len() - TIMESTAMP_SIZE)..];
+
+                // Compare timestamps first
+                match a_timestamp.cmp(b_timestamp) {
+                    std::cmp::Ordering::Equal => {
+                        // If timestamps are equal, compare the key prefix (everything except timestamp)
+                        let a_prefix = &a_key[..(a_key.len() - TIMESTAMP_SIZE)];
+                        let b_prefix = &b_key[..(b_key.len() - TIMESTAMP_SIZE)];
+                        a_prefix.cmp(b_prefix)
+                    }
+                    other => other,
+                }
+            } else {
+                // Fallback to full key comparison if keys are too short
+                a_key.cmp(&b_key)
+            }
+        }
+        _ => {
+            // Fallback to string comparison if decoding fails
+            a.cmp(b)
+        }
+    }
 }
 
 #[allow(unused)]
@@ -33,7 +73,7 @@ fn sort_and_trunk_edges<N>(
     last: Option<i32>,
 ) -> Vec<Edge<String, N, EmptyFields>>
 where
-    N: OutputType + ClusterSortKey,
+    N: OutputType,
 {
     let (take_direction, get_len) = if before.is_some() || last.is_some() {
         (
@@ -47,16 +87,10 @@ where
         )
     };
 
-    // Sort by `cursor`, and then `sensor`. Since each node in giganto may have
-    // conflicting `cursor` values, we need a secondary sort key.
-    edges.sort_unstable_by(|a, b| {
-        a.cursor.cmp(&b.cursor).then_with(|| {
-            a.node
-                .secondary()
-                .unwrap_or_default()
-                .cmp(b.node.secondary().unwrap_or_default())
-        })
-    });
+    // Sort by timestamp extracted from cursor, then by key prefix.
+    // Since each node in giganto may have conflicting timestamp values,
+    // we use the key prefix as a secondary sort criterion.
+    edges.sort_unstable_by(|a, b| compare_cursors_by_timestamp(&a.cursor, &b.cursor));
 
     if take_direction == TakeDirection::First {
         edges.truncate(get_len);
@@ -77,7 +111,7 @@ fn combine_results<N>(
     last: Option<i32>,
 ) -> Connection<String, N>
 where
-    N: OutputType + ClusterSortKey,
+    N: OutputType,
 {
     let (has_next_page_combined, has_prev_page_combined) = peer_results.iter().fold(
         (
@@ -894,17 +928,11 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
 
-    use super::{ClusterSortKey, sort_and_trunk_edges};
+    use super::sort_and_trunk_edges;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
         time: DateTime<Utc>,
-    }
-
-    impl ClusterSortKey for TestNode {
-        fn secondary(&self) -> Option<&str> {
-            None
-        }
     }
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
