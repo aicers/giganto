@@ -79,6 +79,7 @@ In the config file, you can specify the following options:
 | `num_of_thread`        | Number of background threads for DB  | No       | 8                     |
 | `max_subcompactions`   | Number of sub-compactions allowed    | No       | 2                     |
 | `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
+| `compression`          | Enable RocksDB compression           | No       | true                  |
 | `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
 
@@ -113,6 +114,22 @@ less than 512 MB, it's recommended to set default value of 512 MB.
 
 If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
+
+### Database Compression Metadata
+
+Giganto stores the compression setting in a metadata file named `COMPRESSION`
+within the database directory (specified by `data_dir`). This file tracks
+whether RocksDB compression is enabled or disabled for the database.
+
+On startup, Giganto validates that the current `compression` configuration
+matches the setting stored in the `COMPRESSION` metadata file. If there is a
+mismatch, Giganto will report an error and refuse to start. This prevents data
+corruption or access issues that could result from changing the compression
+scheme of an existing database.
+
+**Important**: Once a database is created with a specific compression setting,
+changing the `compression` configuration option is not supported. If you need to
+change the compression setting, you must recreate the database.
 
 ## Test
 
