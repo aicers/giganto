@@ -458,9 +458,6 @@ where
         RequestStreamRecord::Radius => handle_store!(radius_store, "radius"),
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
-        RequestStreamRecord::MalformedDns => {
-            handle_store!(malformed_dns_store, "malformed dns");
-        }
         RequestStreamRecord::Pcap => {}
     }
     Ok(())
