@@ -804,6 +804,20 @@ async fn handle_request(
             )
             .await?;
         }
+        RawEventKind::MalformedDns => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::MalformedDns,
+                Some(NetworkKey::new(&sensor, "malformed dns")),
+                sensor,
+                db.malformed_dns_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
         _ => {
             error!("The record type message could not be processed.");
         }

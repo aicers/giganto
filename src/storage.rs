@@ -23,7 +23,9 @@ use giganto_client::ingest::{
     Packet,
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
-    network::{Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Radius, Rdp, Smb},
+    network::{
+        Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Radius, Rdp, Smb,
+    },
     statistics::Statistics,
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -49,7 +51,7 @@ use crate::{
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
 };
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 40] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 41] = [
     "conn",
     "dns",
     "log",
@@ -90,6 +92,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 40] = [
     "netflow5",
     "netflow9",
     "seculog",
+    "malformed dns",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 
@@ -516,6 +519,12 @@ impl Database {
     /// Returns the store for security log.
     pub fn secu_log_store(&self) -> Result<RawEventStore<'_, SecuLog>> {
         let cf = self.get_cf_handle("seculog")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the raw event store for malformed dns.
+    pub fn malformed_dns_store(&self) -> Result<RawEventStore<'_, MalformedDns>> {
+        let cf = self.get_cf_handle("malformed dns")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 }

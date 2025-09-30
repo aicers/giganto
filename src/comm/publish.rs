@@ -15,8 +15,8 @@ use giganto_client::frame::send_raw;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb,
-    Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -458,6 +458,9 @@ where
         RequestStreamRecord::Radius => handle_store!(radius_store, "radius"),
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
+        RequestStreamRecord::MalformedDns => {
+            handle_store!(malformed_dns_store, "malformed dns");
+        }
         RequestStreamRecord::Pcap => {}
     }
     Ok(())
@@ -1127,6 +1130,20 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                RawEventKind::MalformedDns => {
+                    process_range_data::<MalformedDns, u8>(
+                        &mut send,
+                        db.malformed_dns_store()
+                            .context("Failed to open malformed dns store")?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                        false,
+                    )
+                    .await?;
+                }
                 _ => {
                     // do nothing
                     warn!("Not expected to reach here");
@@ -1585,6 +1602,18 @@ async fn handle_request(
                     process_raw_events::<Netflow9, u8>(
                         &mut send,
                         db.netflow9_store()?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                    )
+                    .await?;
+                }
+                RawEventKind::MalformedDns => {
+                    process_raw_events::<MalformedDns, u8>(
+                        &mut send,
+                        db.malformed_dns_store()?,
                         msg,
                         ingest_sensors,
                         peers,

@@ -388,6 +388,48 @@ impl From<sysmon_events_module::SysmonEventsSysmonEventsEdgesNode> for SysmonEve
 }
 
 macro_rules! from_key_value {
+    // Specific case: process_id, creation_utc_time, previous_creation_utc_time
+    ($to:ty, $from:ty, $($plain_field:ident),* ; process_id, creation_utc_time, previous_creation_utc_time) => {
+        impl FromKeyValue<$from> for $to {
+            #[allow(clippy::cast_possible_truncation)]
+            fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
+                let time = get_time_from_key(key)?;
+                Ok(Self {
+                    time,
+                    agent_name: val.agent_name,
+                    agent_id: val.agent_id,
+                    process_guid: val.process_guid,
+                    $(
+                        $plain_field: val.$plain_field,
+                    )*
+                    process_id: val.process_id.into(),
+                    creation_utc_time: (val.creation_utc_time.as_nanosecond() as i64).into(),
+                    previous_creation_utc_time: (val.previous_creation_utc_time.as_nanosecond() as i64).into(),
+                })
+            }
+        }
+    };
+    // Specific case: process_id, creation_utc_time
+    ($to:ty, $from:ty, $($plain_field:ident),* ; process_id, creation_utc_time) => {
+        impl FromKeyValue<$from> for $to {
+            #[allow(clippy::cast_possible_truncation)]
+            fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
+                let time = get_time_from_key(key)?;
+                Ok(Self {
+                    time,
+                    agent_name: val.agent_name,
+                    agent_id: val.agent_id,
+                    process_guid: val.process_guid,
+                    $(
+                        $plain_field: val.$plain_field,
+                    )*
+                    process_id: val.process_id.into(),
+                    creation_utc_time: (val.creation_utc_time.as_nanosecond() as i64).into(),
+                })
+            }
+        }
+    };
+    // Original version for fields without timestamps
     ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
