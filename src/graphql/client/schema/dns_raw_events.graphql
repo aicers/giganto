@@ -28,6 +28,11 @@ query DnsRawEvents(
         respPort
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         proto
         query
         answer

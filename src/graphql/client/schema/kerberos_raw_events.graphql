@@ -29,6 +29,11 @@ query KerberosRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         clientTime
         serverTime
         errorCode

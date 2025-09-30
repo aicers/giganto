@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "giganto"
-version = "0.26.0-alpha.5"
+version = "0.26.0-alpha.6"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -1147,7 +1147,7 @@ dependencies = [
 [[package]]
 name = "giganto-client"
 version = "0.23.0"
-source = "git+https://github.com/aicers/giganto-client.git?rev=47815ca#47815ca2ebdba920731f764ff413dbf7ad9a247a"
+source = "git+https://github.com/aicers/giganto-client.git?rev=d6edbd2#d6edbd214abf12aa27e5354222791f7501e00b79"
 dependencies = [
  "anyhow",
  "bincode",

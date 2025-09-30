@@ -29,6 +29,11 @@ query DceRpcRawEvents(
         proto
         startTime
         endTime
+        duration
+        origPkts
+        respPkts
+        origL2Bytes
+        respL2Bytes
         rtt
         namedPipe
         endpoint
