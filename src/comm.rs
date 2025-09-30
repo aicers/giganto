@@ -1,6 +1,7 @@
 pub(crate) mod ingest;
 pub(crate) mod peer;
 pub(crate) mod publish;
+pub(crate) mod transfer;
 
 use std::{
     collections::{HashMap, HashSet},

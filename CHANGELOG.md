@@ -8,6 +8,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Implemented data transfer functionality between remote Giganto instances,
+  enabling local (edge) Giganto instances to forward events to cloud (central)
+  Giganto instances.
+  - Added new `transfer` module with `TransferClient` for QUIC-based data
+    transfer.
+  - Added optional `cloud_srv_addr` configuration parameter to specify the
+    cloud Giganto endpoint address.
+  - Transfer client automatically connects and forwards events when configured,
+    with automatic retry on connection failure.
 - Enhanced raw event structures with packet count and size information:
   - Added `orig_pkts`, `resp_pkts`, `orig_l2_bytes`, `resp_l2_bytes` fields to
     all raw event structures.

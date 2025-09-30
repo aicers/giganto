@@ -22,7 +22,7 @@ use clap::Parser;
 use comm::{
     ingest,
     peer::{self},
-    publish,
+    publish, transfer,
 };
 use settings::{ConfigVisible, Settings};
 use storage::{db_path_and_option, repair_db};
@@ -286,13 +286,37 @@ async fn main() -> Result<()> {
             ack_transmission_cnt,
         ));
 
+        // Initialize transfer client if cloud address is configured
+        let transfer_task_handle: Option<JoinHandle<Result<()>>> =
+            if let Some(cloud_addr) = settings.config.visible.cloud_srv_addr {
+                let transfer_config = transfer::TransferConfig {
+                    cloud_address: cloud_addr,
+                    local_address: settings.config.visible.ingest_srv_addr,
+                };
+
+                match transfer::TransferClient::new(&transfer_config, &certs.clone()) {
+                    Ok((client, event_receiver)) => {
+                        info!("Transfer client enabled for cloud address: {}", cloud_addr);
+                        Some(task::spawn(
+                            client.run(event_receiver, notify_shutdown.clone()),
+                        ))
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize transfer client: {:#}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
         loop {
             select! {
                 Some(new_config) = reload_rx.recv() => {
                     match settings.update_config_file(&new_config) {
                         Ok(()) => {
                             notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, transfer_task_handle, retain_task_handle).await;
                             break;
                         }
                         Err(e) => {
@@ -303,21 +327,21 @@ async fn main() -> Result<()> {
                 () = notify_terminate.notified() => {
                     info!("Termination signal: daemon exit");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, transfer_task_handle, retain_task_handle).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
                 () = notify_reboot.notified() => {
                     info!("Restarting the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, transfer_task_handle, retain_task_handle).await;
                     is_reboot = true;
                     break;
                 }
                 () = notify_power_off.notified() => {
                     info!("Power off the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, transfer_task_handle, retain_task_handle).await;
                     is_power_off = true;
                     break;
                 }
@@ -408,12 +432,27 @@ async fn wait_for_task_shutdown(
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
+    transfer_task_handle: Option<JoinHandle<Result<()>>>,
     retain_task_handle: std::thread::JoinHandle<()>,
 ) {
-    if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
-    } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+    match (peer_task_handle, transfer_task_handle) {
+        (Some(handle_peers), Some(handle_transfer)) => {
+            let _ = tokio::join!(
+                ingest_task_handle,
+                publish_task_handle,
+                handle_peers,
+                handle_transfer
+            );
+        }
+        (Some(handle_peers), None) => {
+            let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        }
+        (None, Some(handle_transfer)) => {
+            let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_transfer);
+        }
+        (None, None) => {
+            let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+        }
     }
     let _ = retain_task_handle.join();
 }

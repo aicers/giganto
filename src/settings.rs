@@ -98,6 +98,10 @@ pub struct ConfigVisible {
 
     // ack transmission interval
     pub ack_transmission: u16,
+
+    // Optional cloud transfer configuration
+    #[serde(default, deserialize_with = "deserialize_optional_socket_addr")]
+    pub cloud_srv_addr: Option<SocketAddr>, // IP address & port of cloud Giganto for data transfer
 }
 
 impl Settings {
@@ -213,6 +217,28 @@ where
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
         // Cluster mode is only available if there is a value for 'Peer Address' in the configuration file.
         if addr == DEFAULT_INVALID_ADDR_TO_PEERS || addr.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
+                D::Error::custom(format!("invalid address \"{addr}\": {e}"))
+            })?))
+        }
+    })
+}
+
+/// Deserializes an optional socket address.
+///
+/// `Ok(None)` is returned if the address is an empty string or not provided.
+///
+/// # Errors
+///
+/// Returns an error if the address is invalid.
+fn deserialize_optional_socket_addr<'de, D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
+        if addr.is_empty() {
             Ok(None)
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {

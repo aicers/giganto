@@ -81,6 +81,7 @@ In the config file, you can specify the following options:
 | `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
 | `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
+| `cloud_srv_addr`       | Cloud Giganto address for transfer   | No       | -                     |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -113,6 +114,12 @@ less than 512 MB, it's recommended to set default value of 512 MB.
 
 If there is no `addr_to_peers` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
+
+The `cloud_srv_addr` option enables data transfer from local (edge) Giganto
+instances to a cloud (central) Giganto instance. When configured, raw events
+are automatically forwarded to the specified cloud endpoint using QUIC protocol.
+This is useful for aggregating data from distributed edge deployments to a
+centralized cloud storage.
 
 ## Test
 
