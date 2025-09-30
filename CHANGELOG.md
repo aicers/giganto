@@ -16,6 +16,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - Unified time field types to `DateTime<Utc>` for consistent temporal
     handling.
   - Updated migration functions to handle new event structure fields.
+- Added `compression` configuration option to enable or disable RocksDB
+  compression. Defaults to `true` (enabled). Giganto validates the compression
+  setting on startup and reports an error if it doesn't match the database's
+  compression scheme. Changing compression settings is not supported for
+  existing databases.
 - Introduced a new feature flag, `cluster`, to enable or disable Giganto's
   cluster functionality.
   - When `cluster` is enabled (default), Giganto connects to other instances in
@@ -37,11 +42,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     actual raw event creation timestamp provided by the sensor application.
 - Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
   APIs (`radiusRawEvents`, `searchRadiusRawEvents`).
-- Added `countByProtocol` GraphQL API for precise event counting by protocol type
-  (Session, DNS, HTTP). This feature is gated behind the `count_events` feature
-  flag and is intended for quality checks and testing. The API iterates over all
-  keys in the database to provide exact counts, which may be expensive on large
-  datasets.
+- Added `countByProtocol` GraphQL API for precise event counting by protocol
+  type (Session, DNS, HTTP). This feature is gated behind the `count_events`
+  feature flag and is intended for quality checks and testing. The API iterates
+  over all keys in the database to provide exact counts, which may be expensive
+  on large datasets.
 - Bump bincode crate to 2.0 and modified the related code.
 
 ### Changed

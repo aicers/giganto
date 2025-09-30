@@ -14,9 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "count_events")]
-use anyhow::anyhow;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
@@ -134,6 +132,7 @@ pub struct DbOptions {
     max_mb_of_level_base: u64,
     num_of_thread: i32,
     max_subcompactions: u32,
+    compression: bool,
 }
 
 impl Default for DbOptions {
@@ -143,6 +142,7 @@ impl Default for DbOptions {
             max_mb_of_level_base: 512,
             num_of_thread: 8,
             max_subcompactions: 2,
+            compression: true,
         }
     }
 }
@@ -153,12 +153,14 @@ impl DbOptions {
         max_mb_of_level_base: u64,
         num_of_thread: i32,
         max_subcompactions: u32,
+        compression: bool,
     ) -> Self {
         DbOptions {
             max_open_files,
             max_mb_of_level_base,
             num_of_thread,
             max_subcompactions,
+            compression,
         }
     }
 }
@@ -1138,9 +1140,15 @@ pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
     cf_opts.set_max_bytes_for_level_base(max_bytes);
     cf_opts.set_target_file_size_base(max_bytes / 10);
     cf_opts.set_target_file_size_multiplier(10);
-    cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
-    cf_opts.set_bottommost_compression_type(rocksdb::DBCompressionType::Zstd);
-    cf_opts.set_bottommost_zstd_max_train_bytes(0, true);
+
+    if db_options.compression {
+        cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
+        cf_opts.set_bottommost_compression_type(rocksdb::DBCompressionType::Zstd);
+        cf_opts.set_bottommost_zstd_max_train_bytes(0, true);
+    } else {
+        cf_opts.set_compression_type(rocksdb::DBCompressionType::None);
+        cf_opts.set_bottommost_compression_type(rocksdb::DBCompressionType::None);
+    }
 
     (db_opts, cf_opts)
 }
@@ -1149,12 +1157,82 @@ pub(crate) fn data_dir_to_db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("db")
 }
 
+/// Stores the compression setting to a metadata file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be created or written to.
+fn store_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
+    let metadata_path = data_dir.join("COMPRESSION");
+    let content = if compression { "enabled" } else { "disabled" };
+    std::fs::write(metadata_path, content).context("failed to write compression metadata")?;
+    Ok(())
+}
+
+/// Reads the compression setting from the metadata file.
+///
+/// Returns `None` if the file doesn't exist (first run).
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be read or contains invalid data.
+fn read_compression_metadata(data_dir: &Path) -> Result<Option<bool>> {
+    let metadata_path = data_dir.join("COMPRESSION");
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+
+    let content =
+        std::fs::read_to_string(&metadata_path).context("failed to read compression metadata")?;
+    match content.trim() {
+        "enabled" => Ok(Some(true)),
+        "disabled" => Ok(Some(false)),
+        other => Err(anyhow!("invalid compression metadata: {other}")),
+    }
+}
+
+/// Validates that the compression setting matches the stored metadata.
+///
+/// If this is the first run (no metadata file), the setting is stored.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The metadata file cannot be read
+/// - The compression setting doesn't match the stored metadata
+pub fn validate_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
+    if let Some(stored_compression) = read_compression_metadata(data_dir)? {
+        if stored_compression != compression {
+            let stored_str = if stored_compression {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            let current_str = if compression { "enabled" } else { "disabled" };
+            bail!(
+                "Compression scheme mismatch: database was created with compression {stored_str}, \
+                 but current configuration has compression {current_str}. \
+                 Changing compression settings is not supported for existing databases. \
+                 Please restore the original compression setting or create a new database."
+            );
+        }
+        Ok(())
+    } else {
+        info!(
+            "First run: storing compression metadata (compression: {})",
+            compression
+        );
+        store_compression_metadata(data_dir, compression)
+    }
+}
+
 pub fn db_path_and_option(
     data_dir: &Path,
     max_open_files: i32,
     max_mb_of_level_base: u64,
     num_of_thread: i32,
     max_subcompactions: u32,
+    compression: bool,
 ) -> (PathBuf, DbOptions) {
     let db_path = data_dir_to_db_path(data_dir);
     let db_options = DbOptions::new(
@@ -1162,6 +1240,7 @@ pub fn db_path_and_option(
         max_mb_of_level_base,
         num_of_thread,
         max_subcompactions,
+        compression,
     );
     (db_path, db_options)
 }
@@ -1181,6 +1260,7 @@ pub fn repair_db(
     max_mb_of_level_base: u64,
     num_of_thread: i32,
     max_subcompactions: u32,
+    compression: bool,
 ) {
     let (db_path, db_options) = db_path_and_option(
         data_dir,
@@ -1188,6 +1268,7 @@ pub fn repair_db(
         max_mb_of_level_base,
         num_of_thread,
         max_subcompactions,
+        compression,
     );
     let start = Instant::now();
     let (db_opts, _) = rocksdb_options(&db_options);

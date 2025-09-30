@@ -98,6 +98,14 @@ pub struct ConfigVisible {
 
     // ack transmission interval
     pub ack_transmission: u16,
+
+    // RocksDB compression
+    #[serde(default = "default_compression")]
+    pub compression: bool,
+}
+
+fn default_compression() -> bool {
+    true
 }
 
 impl Settings {

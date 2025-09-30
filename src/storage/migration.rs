@@ -1795,7 +1795,7 @@ mod tests {
         // Test successful migration from a supported version (0.21.0)
         let version_dir = tempfile::tempdir().unwrap();
         mock_version_file(&version_dir, "0.21.0");
-        let db_options = DbOptions::new(8000, 512, 8, 2);
+        let db_options = DbOptions::new(8000, 512, 8, 2, true);
         let result = migrate_data_dir(version_dir.path(), &db_options);
         assert!(result.is_ok());
 
@@ -1811,7 +1811,7 @@ mod tests {
         // Test that migration from unsupported version (< 0.21.0) fails
         let version_dir = tempfile::tempdir().unwrap();
         mock_version_file(&version_dir, "0.13.0");
-        let db_options = DbOptions::new(8000, 512, 8, 2);
+        let db_options = DbOptions::new(8000, 512, 8, 2, true);
         let result = migrate_data_dir(version_dir.path(), &db_options);
         assert!(result.is_err());
         assert!(

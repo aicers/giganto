@@ -49,7 +49,7 @@ use crate::{
     graphql::NodeName,
     server::{Certs, SERVER_REBOOT_DELAY, subject_from_cert},
     settings::Args,
-    storage::migrate_data_dir,
+    storage::{migrate_data_dir, validate_compression_metadata},
 };
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
@@ -137,6 +137,7 @@ async fn main() -> Result<()> {
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
             settings.config.visible.max_subcompactions,
+            settings.config.visible.compression,
         );
         exit(0);
     }
@@ -176,7 +177,17 @@ async fn main() -> Result<()> {
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
             settings.config.visible.max_subcompactions,
+            settings.config.visible.compression,
         );
+
+        // Validate compression metadata before migration
+        if let Err(e) = validate_compression_metadata(
+            &settings.config.visible.data_dir,
+            settings.config.visible.compression,
+        ) {
+            error!("Compression validation failed: {e}");
+            bail!("compression validation failed")
+        }
 
         if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {
             error!("Migration failed: {e}");
