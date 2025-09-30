@@ -183,7 +183,11 @@ async fn main() -> Result<()> {
             bail!("migration failed")
         }
 
+        // Open primary database instance for write operations (Ingest)
         let database = storage::Database::open(&db_path, &db_options)?;
+
+        // Open read-only database instance for query operations (GraphQL, Publish)
+        let database_readonly = storage::Database::open_read_only(&db_path, &db_options)?;
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());
@@ -201,7 +205,7 @@ async fn main() -> Result<()> {
 
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
-            database.clone(),
+            database_readonly.clone(),
             pcap_sensors.clone(),
             ingest_sensors.clone(),
             peers.clone(),
@@ -263,7 +267,7 @@ async fn main() -> Result<()> {
         let publish_server =
             publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
         let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
-            database.clone(),
+            database_readonly.clone(),
             pcap_sensors.clone(),
             stream_direct_channels.clone(),
             ingest_sensors.clone(),
