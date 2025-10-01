@@ -4,10 +4,10 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
+use jiff::Timestamp;
 
-use super::{FromKeyValue, get_time_from_key, load_connection};
+use super::{FromKeyValue, GigantoTimestamp, get_time_from_key, load_connection};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -33,9 +33,9 @@ impl KeyExtractor for TimeSeriesFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -61,7 +61,7 @@ impl RawEventFilter for TimeSeriesFilter {
 
 #[derive(SimpleObject, Debug)]
 struct TimeSeries {
-    start: DateTime<Utc>,
+    start: GigantoTimestamp,
     id: String,
     data: Vec<f64>,
 }
@@ -69,7 +69,7 @@ struct TimeSeries {
 impl FromKeyValue<PeriodicTimeSeries> for TimeSeries {
     fn from_key_value(key: &[u8], p: PeriodicTimeSeries) -> Result<Self> {
         Ok(TimeSeries {
-            start: get_time_from_key(key)?,
+            start: get_time_from_key(key)?.into(),
             id: p.id,
             data: p.data,
         })

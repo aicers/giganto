@@ -233,7 +233,7 @@ where
     T: DeserializeOwned,
 {
     let (start, end) = if let Some(time) = &time {
-        (time.start, time.end)
+        (time.start.map(|t| t.0), time.end.map(|t| t.0))
     } else {
         (None, None)
     };
@@ -372,8 +372,8 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::Utc;
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
+    use jiff::Timestamp;
 
     #[cfg(feature = "count_events")]
     use crate::graphql::network::tests::{
@@ -385,10 +385,34 @@ mod tests {
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
+        let now = Timestamp::now().as_nanosecond();
+        insert_statistics_raw_event(
+            &store,
+            now.try_into().unwrap(),
+            "src 1",
+            0,
+            600,
+            1_000_000,
+            300_000_000,
+        );
+        insert_statistics_raw_event(
+            &store,
+            now.try_into().unwrap(),
+            "src 1",
+            1,
+            600,
+            2_000_000,
+            600_000_000,
+        );
+        insert_statistics_raw_event(
+            &store,
+            now.try_into().unwrap(),
+            "src 1",
+            2,
+            600,
+            3_000_000,
+            900_000_000,
+        );
 
         let query = r#"
     {
@@ -688,7 +712,7 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
 
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now: i64 = Timestamp::now().as_nanosecond().try_into().unwrap();
 
         // Insert into each CF:
         //   SESSION -> 5 events

@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use chrono::TimeZone;
 use rocksdb::{DB, WriteBatch};
 use semver::{Version, VersionReq};
 use serde::{Serialize, de::DeserializeOwned};
@@ -315,7 +316,7 @@ where
 
         let session_start_time = get_timestamp_from_key(&key)?;
 
-        let new_data = NewT::new(old, session_start_time);
+        let new_data = NewT::new(old, session_start_time)?;
 
         let new = encode_legacy(&new_data)?;
         store.append(&key, &new)?;
@@ -347,8 +348,8 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
             resp_port: old.resp_port,
             proto: old.proto,
             conn_state: old.conn_state,
-            start_time: chrono::DateTime::from_timestamp_nanos(session_start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(end_time),
+            start_time: chrono::Utc.timestamp_nanos(session_start_time),
+            end_time: chrono::Utc.timestamp_nanos(end_time),
             duration: old.duration,
             service: old.service,
             orig_bytes: old.orig_bytes,
@@ -390,8 +391,8 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
             resp_addr: old.resp_addr,
             resp_port: old.resp_port,
             proto: old.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old.end_time),
+            start_time: chrono::Utc.timestamp_nanos(start_time),
+            end_time: chrono::Utc.timestamp_nanos(old.end_time),
             duration: old.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -430,8 +431,9 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 mod tests {
     use std::{fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
+    use jiff::Timestamp;
     use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
@@ -747,7 +749,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn migrate_0_24_to_0_26_0_raw_event() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = Timestamp::now().as_nanosecond();
         let sensor = "src1";
 
         // open temp db & store
@@ -774,7 +776,7 @@ mod tests {
         let ser_old_conn = encode_legacy(&old_conn).unwrap();
         let conn_old_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let conn_store = db.conn_store().unwrap();
@@ -794,8 +796,8 @@ mod tests {
             resp_port: 80,
             proto: 6,
             conn_state: String::new(),
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(timestamp + 100),
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos((timestamp + 100).try_into().unwrap()),
             duration: 100,
             service: "-".to_string(),
             orig_bytes: 77,
@@ -841,7 +843,7 @@ mod tests {
         let ser_old_http = encode_legacy(&old_http).unwrap();
         let http_old_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let http_store = db.http_store().unwrap();
@@ -860,9 +862,9 @@ mod tests {
             resp_addr: old_http.resp_addr,
             resp_port: old_http.resp_port,
             proto: old_http.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_http.end_time),
-            duration: old_http.end_time - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(old_http.end_time),
+            duration: old_http.end_time - timestamp.try_into().unwrap_or(i64::MAX),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -914,7 +916,7 @@ mod tests {
         let ser_dns_old = encode_legacy(&dns_old).unwrap();
         let dns_old_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let dns_store = db.dns_store().unwrap();
@@ -932,9 +934,9 @@ mod tests {
             resp_addr: dns_old.resp_addr,
             resp_port: dns_old.resp_port,
             proto: dns_old.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(dns_old.end_time),
-            duration: dns_old.end_time - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(dns_old.end_time),
+            duration: dns_old.end_time - timestamp.try_into().unwrap_or(i64::MAX),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -967,7 +969,7 @@ mod tests {
         let ser_rdp_old = encode_legacy(&rdp_old).unwrap();
         let rdp_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let rdp_store = db.rdp_store().unwrap();
@@ -985,9 +987,9 @@ mod tests {
             resp_addr: rdp_old.resp_addr,
             resp_port: rdp_old.resp_port,
             proto: rdp_old.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(rdp_old.end_time),
-            duration: rdp_old.end_time - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(rdp_old.end_time),
+            duration: rdp_old.end_time - timestamp.try_into().unwrap_or(i64::MAX),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1015,7 +1017,7 @@ mod tests {
         let ser_smtp_old = encode_legacy(&smtp_old).unwrap();
         let smtp_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let smtp_store = db.smtp_store().unwrap();
@@ -1033,9 +1035,9 @@ mod tests {
             resp_addr: smtp_old.resp_addr,
             resp_port: smtp_old.resp_port,
             proto: smtp_old.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(smtp_old.end_time),
-            duration: smtp_old.end_time - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(smtp_old.end_time),
+            duration: smtp_old.end_time - timestamp.try_into().unwrap_or(i64::MAX),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1067,7 +1069,7 @@ mod tests {
         let ser_ntlm_old = encode_legacy(&ntlm_old).unwrap();
         let ntlm_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let ntlm_store = db.ntlm_store().unwrap();
@@ -1085,9 +1087,9 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1121,7 +1123,7 @@ mod tests {
         let ser_kerberos_old = encode_legacy(&kerberos_old).unwrap();
         let kerberos_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let kerberos_store = db.kerberos_store().unwrap();
@@ -1144,9 +1146,9 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1188,7 +1190,7 @@ mod tests {
         let ser_ssh_old = encode_legacy(&ssh_old).unwrap();
         let ssh_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let ssh_store = db.ssh_store().unwrap();
@@ -1206,9 +1208,9 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1245,7 +1247,7 @@ mod tests {
         let ser_dcerpc_old = encode_legacy(&dcerpc_old).unwrap();
         let dcerpc_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let dcerpc_store = db.dce_rpc_store().unwrap();
@@ -1264,9 +1266,9 @@ mod tests {
             resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1302,7 +1304,7 @@ mod tests {
         let ser_ftp_old = encode_legacy(&ftp_old).unwrap();
         let ftp_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let ftp_store = db.ftp_store().unwrap();
@@ -1320,9 +1322,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1362,7 +1364,7 @@ mod tests {
         let ser_mqtt_old = encode_legacy(&mqtt_old).unwrap();
         let mqtt_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let mqtt_store = db.mqtt_store().unwrap();
@@ -1380,9 +1382,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1415,7 +1417,7 @@ mod tests {
         let ser_ldap_old = encode_legacy(&ldap_old).unwrap();
         let ldap_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let ldap_store = db.ldap_store().unwrap();
@@ -1433,9 +1435,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1483,7 +1485,7 @@ mod tests {
         let ser_tls_old = encode_legacy(&tls_old).unwrap();
         let tls_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let tls_store = db.tls_store().unwrap();
@@ -1501,9 +1503,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1555,7 +1557,7 @@ mod tests {
         let ser_smb_old = encode_legacy(&smb_old).unwrap();
         let smb_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let smb_store = db.smb_store().unwrap();
@@ -1573,9 +1575,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1608,7 +1610,7 @@ mod tests {
         let ser_nfs_old = encode_legacy(&nfs_old).unwrap();
         let nfs_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let nfs_store = db.nfs_store().unwrap();
@@ -1626,9 +1628,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1661,7 +1663,7 @@ mod tests {
         let ser_bootp_old = encode_legacy(&bootp_old).unwrap();
         let bootp_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let bootp_store = db.bootp_store().unwrap();
@@ -1680,9 +1682,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
@@ -1737,7 +1739,7 @@ mod tests {
         let ser_dhcp_old = encode_legacy(&dhcp_old).unwrap();
         let dhcp_key = StorageKey::builder()
             .start_key(sensor)
-            .end_key(timestamp)
+            .end_key(timestamp.try_into().unwrap())
             .build()
             .key();
         let dhcp_store = db.dhcp_store().unwrap();
@@ -1755,9 +1757,9 @@ mod tests {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: chrono::DateTime::from_timestamp_nanos(timestamp),
-            end_time: chrono::DateTime::from_timestamp_nanos(1),
-            duration: 1 - timestamp,
+            start_time: Utc.timestamp_nanos(timestamp.try_into().unwrap()),
+            end_time: Utc.timestamp_nanos(1),
+            duration: (1_i64).saturating_sub(timestamp.try_into().unwrap_or(i64::MAX)),
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,

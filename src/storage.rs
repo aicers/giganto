@@ -15,7 +15,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
+#[cfg(feature = "count_events")]
+use anyhow::anyhow;
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     Packet,
@@ -33,6 +34,7 @@ use giganto_client::ingest::{
     },
     timeseries::PeriodicTimeSeries,
 };
+use jiff::Timestamp;
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
 #[cfg(debug_assertions)]
@@ -569,8 +571,8 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn batched_multi_get_from_ts(
         &self,
         sensor: &str,
-        times: &[DateTime<Utc>],
-    ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
+        times: &[Timestamp],
+    ) -> Vec<(Timestamp, Vec<u8>)> {
         let mut times = times.to_vec();
         times.sort_unstable();
         let keys = times
@@ -578,14 +580,14 @@ impl<'db, T> RawEventStore<'db, T> {
             .map(|time| {
                 StorageKey::builder()
                     .start_key(sensor)
-                    .end_key(time.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                    .end_key(time.as_nanosecond().try_into().unwrap_or(i64::MAX))
                     .build()
                     .key()
             })
             .collect::<Vec<Vec<u8>>>();
         let keys = keys.iter().map(std::vec::Vec::as_slice);
 
-        let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = times
+        let result_vector: Vec<(Timestamp, Vec<u8>)> = times
             .iter()
             .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
             .filter_map(|(time, result_value)| {
@@ -668,15 +670,9 @@ impl SensorStore<'_> {
     /// Inserts a sensor name and its last active time.
     ///
     /// If the sensor already exists, its last active time is updated.
-    pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
-        self.db.put_cf(
-            self.cf,
-            name,
-            last_active
-                .timestamp_nanos_opt()
-                .unwrap_or(i64::MAX)
-                .to_be_bytes(),
-        )?;
+    pub fn insert(&self, name: &str, last_active: Timestamp) -> Result<()> {
+        self.db
+            .put_cf(self.cf, name, last_active.as_nanosecond().to_be_bytes())?;
         Ok(())
     }
 
@@ -725,11 +721,11 @@ impl StorageKey {
 pub trait KeyExtractor {
     fn get_start_key(&self) -> &str;
     fn get_mid_key(&self) -> Option<Vec<u8>>;
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>);
 }
 
 pub trait TimestampKeyExtractor {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+    fn get_range_start_key(&self) -> (Option<Timestamp>, Option<Timestamp>);
 }
 
 #[allow(clippy::module_name_repetitions)]
@@ -762,10 +758,10 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn lower_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        let ns: i64 = if let Some(time) = time {
+            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
         } else {
             0
         };
@@ -773,10 +769,10 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_open_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        let ns: i64 = if let Some(time) = time {
+            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
         } else {
             i64::MAX
         };
@@ -784,14 +780,15 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
-            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
+            let ns = time.as_nanosecond();
             if let Some(ns) = ns.checked_sub(1)
                 && ns >= 0
             {
-                self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                let ns_i64: i64 = ns.try_into().unwrap_or(i64::MAX);
+                self.pre_key.extend_from_slice(&ns_i64.to_be_bytes());
                 return self;
             }
         }
@@ -824,10 +821,10 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn lower_closed_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        let ns: i64 = if let Some(time) = time {
+            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
         } else {
             0
         };
@@ -835,10 +832,10 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn upper_open_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_open_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+        let ns: i64 = if let Some(time) = time {
+            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
         } else {
             i64::MAX
         };
@@ -846,14 +843,14 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn upper_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_closed_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
-            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
-            if let Some(ns) = ns.checked_sub(1)
-                && ns >= 0
+            let ns: i64 = time.as_nanosecond().try_into().unwrap_or(i64::MAX);
+            if let Some(ns_minus_1) = ns.checked_sub(1)
+                && ns_minus_1 >= 0
             {
-                self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                self.pre_key.extend_from_slice(&ns_minus_1.to_be_bytes());
                 return self;
             }
         }
@@ -1003,11 +1000,10 @@ pub async fn retain_periodically(
                 info!("Begin to cleanup the database based on retention period.");
                 running_flag.store(true, Ordering::Relaxed);
 
-                let now = Utc::now();
+                let now = Timestamp::now();
                 let mut retention_timestamp = now
-                    .timestamp_nanos_opt()
-                    .unwrap_or(retention_duration)
-                    - retention_duration;
+                    .as_nanosecond()
+                    - i128::from(retention_duration);
                 let mut usage_flag = false;
 
                 if check_db_usage().await.0 {
@@ -1015,7 +1011,7 @@ pub async fn retain_periodically(
                         "Disk usage is over {USAGE_THRESHOLD}%. \
                         Retention period is temporarily reduced."
                     );
-                    retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+                    retention_timestamp += i128::from(ONE_DAY_TIMESTAMP_NANOS);
                     usage_flag = true;
                 }
 
@@ -1059,7 +1055,7 @@ pub async fn retain_periodically(
                                 let data_timestamp =
                                     i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
 
-                                if retention_timestamp > data_timestamp {
+                                if retention_timestamp > i128::from(data_timestamp) {
                                     if store.delete(&key).is_err() {
                                         warn!("Failed to delete data");
                                         break;
@@ -1095,8 +1091,8 @@ pub async fn retain_periodically(
                         warn!("Failed to delete file in range for operation log");
                     }
                     if check_db_usage().await.1 && usage_flag {
-                        retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-                        if retention_timestamp > now.timestamp_nanos_opt().unwrap_or(0) {
+                        retention_timestamp += i128::from(ONE_DAY_TIMESTAMP_NANOS);
+                        if retention_timestamp > now.as_nanosecond() {
                             warn!("cannot delete data to usage under {USAGE_LOW}");
                             break;
                         }

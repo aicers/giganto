@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 
+use anyhow::Result;
+use chrono::{TimeZone, Utc};
 use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
 use serde::{Deserialize, Serialize};
 
@@ -571,19 +573,21 @@ pub struct DhcpBeforeV26 {
 }
 
 pub trait MigrationNew<OldT> {
-    fn new(old_data: OldT, start_time: i64) -> Self;
+    fn new(old_data: OldT, start_time: i64) -> Result<Self>
+    where
+        Self: Sized;
 }
 
 impl MigrationNew<DnsBeforeV26> for DnsFromV26 {
-    fn new(old_data: DnsBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: DnsBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -601,40 +605,40 @@ impl MigrationNew<DnsBeforeV26> for DnsFromV26 {
             rd_flag: old_data.rd_flag,
             ra_flag: old_data.ra_flag,
             ttl: old_data.ttl,
-        }
+        })
     }
 }
 
 impl MigrationNew<RdpBeforeV26> for RdpFromV26 {
-    fn new(old_data: RdpBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: RdpBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
             orig_l2_bytes: 0,
             resp_l2_bytes: 0,
             cookie: old_data.cookie,
-        }
+        })
     }
 }
 
 impl MigrationNew<SmtpBeforeV26> for SmtpFromV26 {
-    fn new(old_data: SmtpBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: SmtpBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -647,20 +651,20 @@ impl MigrationNew<SmtpBeforeV26> for SmtpFromV26 {
             subject: old_data.subject,
             agent: old_data.agent,
             state: old_data.state,
-        }
+        })
     }
 }
 
 impl MigrationNew<NtlmBeforeV26> for NtlmFromV26 {
-    fn new(old_data: NtlmBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: NtlmBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -671,20 +675,20 @@ impl MigrationNew<NtlmBeforeV26> for NtlmFromV26 {
             hostname: old_data.hostname,
             domainname: old_data.domainname,
             success: old_data.success,
-        }
+        })
     }
 }
 
 impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
-    fn new(old_data: KerberosBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: KerberosBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -699,20 +703,20 @@ impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
             realm: old_data.realm,
             sname_type: old_data.sname_type,
             service_name: old_data.service_name,
-        }
+        })
     }
 }
 
 impl MigrationNew<SshBeforeV26> for SshFromV26 {
-    fn new(old_data: SshBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: SshBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -731,20 +735,20 @@ impl MigrationNew<SshBeforeV26> for SshFromV26 {
             hassh_server: old_data.hassh_server,
             client_shka: old_data.client_shka,
             server_shka: old_data.server_shka,
-        }
+        })
     }
 }
 
 impl MigrationNew<DceRpcBeforeV26> for DceRpcFromV26 {
-    fn new(old_data: DceRpcBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: DceRpcBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -754,20 +758,20 @@ impl MigrationNew<DceRpcBeforeV26> for DceRpcFromV26 {
             named_pipe: old_data.named_pipe,
             endpoint: old_data.endpoint,
             operation: old_data.operation,
-        }
+        })
     }
 }
 
 impl MigrationNew<FtpBeforeV26> for FtpFromV26 {
-    fn new(old_data: FtpBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: FtpBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -787,20 +791,20 @@ impl MigrationNew<FtpBeforeV26> for FtpFromV26 {
                 file_size: old_data.file_size,
                 file_id: old_data.file_id,
             }],
-        }
+        })
     }
 }
 
 impl MigrationNew<MqttBeforeV26> for MqttFromV26 {
-    fn new(old_data: MqttBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: MqttBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -812,20 +816,20 @@ impl MigrationNew<MqttBeforeV26> for MqttFromV26 {
             connack_reason: old_data.connack_reason,
             subscribe: old_data.subscribe,
             suback_reason: old_data.suback_reason,
-        }
+        })
     }
 }
 
 impl MigrationNew<LdapBeforeV26> for LdapFromV26 {
-    fn new(old_data: LdapBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: LdapBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -838,20 +842,20 @@ impl MigrationNew<LdapBeforeV26> for LdapFromV26 {
             diagnostic_message: old_data.diagnostic_message,
             object: old_data.object,
             argument: old_data.argument,
-        }
+        })
     }
 }
 
 impl MigrationNew<TlsBeforeV26> for TlsFromV26 {
-    fn new(old_data: TlsBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: TlsBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -878,20 +882,20 @@ impl MigrationNew<TlsBeforeV26> for TlsFromV26 {
             issuer_org_unit_name: old_data.issuer_org_unit_name,
             issuer_common_name: old_data.issuer_common_name,
             last_alert: old_data.last_alert,
-        }
+        })
     }
 }
 
 impl MigrationNew<SmbBeforeV26> for SmbFromV26 {
-    fn new(old_data: SmbBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: SmbBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -908,20 +912,20 @@ impl MigrationNew<SmbBeforeV26> for SmbFromV26 {
             access_time: old_data.access_time,
             write_time: old_data.write_time,
             change_time: old_data.change_time,
-        }
+        })
     }
 }
 
 impl MigrationNew<NfsBeforeV26> for NfsFromV26 {
-    fn new(old_data: NfsBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: NfsBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -929,20 +933,20 @@ impl MigrationNew<NfsBeforeV26> for NfsFromV26 {
             resp_l2_bytes: 0,
             read_files: old_data.read_files,
             write_files: old_data.write_files,
-        }
+        })
     }
 }
 
 impl MigrationNew<BootpBeforeV26> for BootpFromV26 {
-    fn new(old_data: BootpBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: BootpBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -959,20 +963,20 @@ impl MigrationNew<BootpBeforeV26> for BootpFromV26 {
             chaddr: old_data.chaddr,
             sname: old_data.sname,
             file: old_data.file,
-        }
+        })
     }
 }
 
 impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
-    fn new(old_data: DhcpBeforeV26, start_time: i64) -> Self {
-        Self {
+    fn new(old_data: DhcpBeforeV26, start_time: i64) -> Result<Self> {
+        Ok(Self {
             orig_addr: old_data.orig_addr,
             orig_port: old_data.orig_port,
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(start_time),
-            end_time: chrono::DateTime::from_timestamp_nanos(old_data.end_time),
+            start_time: Utc.timestamp_nanos(start_time),
+            end_time: Utc.timestamp_nanos(old_data.end_time),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -996,6 +1000,6 @@ impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
             class_id: old_data.class_id,
             client_id_type: old_data.client_id_type,
             client_id: old_data.client_id,
-        }
+        })
     }
 }

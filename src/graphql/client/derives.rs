@@ -1,11 +1,10 @@
 #![allow(clippy::enum_variant_names)]
 
-use chrono::{DateTime as ChronoDateTime, Utc};
 use graphql_client::GraphQLQuery;
 
-type DateTime = ChronoDateTime<Utc>;
-
-use crate::graphql::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize};
+use crate::graphql::{
+    GigantoTimestamp, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize,
+};
 
 #[derive(GraphQLQuery)]
 #[graphql(

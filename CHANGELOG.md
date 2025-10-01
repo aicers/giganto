@@ -87,6 +87,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - Merged `orig_mime_types` and `resp_mime_types` into single `mime_types` field
   - Renamed `post_body` field to `body` for consistency
   - Updated migration functionality to handle field consolidation from older versions
+- Migrated from `chrono` to `jiff` crate for datetime handling. This change
+  improves time handling with better timezone support and more robust APIs.
+  The GraphQL API timestamp format remains unchanged, maintaining backward
+  compatibility with existing clients.
 
 ### Removed
 

@@ -1,18 +1,18 @@
 use std::net::IpAddr;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 use tracing::info;
 
 use super::{
-    Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
-    get_time_from_key, handle_paged_events, write_run_tcpdump,
+    Direction, FromKeyValue, GigantoTimestamp, RawEventFilter, TIMESTAMP_SIZE, TimeRange,
+    collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: DateTime<Utc>,
+    request_time: GigantoTimestamp,
     packet_time: Option<TimeRange>,
 }
 
@@ -41,17 +41,18 @@ impl KeyExtractor for PacketFilter {
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        Some(
-            self.request_time
-                .timestamp_nanos_opt()?
-                .to_be_bytes()
-                .to_vec(),
-        )
+        let ns: i64 = self
+            .request_time
+            .0
+            .as_nanosecond()
+            .try_into()
+            .unwrap_or(i64::MAX);
+        Some(ns.to_be_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.packet_time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -82,8 +83,8 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: DateTime<Utc>,
-    packet_time: DateTime<Utc>,
+    request_time: GigantoTimestamp,
+    packet_time: GigantoTimestamp,
     packet: String,
 }
 
@@ -93,7 +94,7 @@ struct Packet {
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: DateTime<Utc>,
+    request_time: GigantoTimestamp,
     parsed_pcap: String,
 }
 
@@ -107,8 +108,8 @@ impl Pcap {
 impl FromKeyValue<pk> for Packet {
     fn from_key_value(key: &[u8], pk: pk) -> Result<Self> {
         Ok(Packet {
-            request_time: get_time_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
-            packet_time: get_time_from_key(key)?,
+            request_time: get_time_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?.into(),
+            packet_time: get_time_from_key(key)?.into(),
             packet: BASE64.encode(&pk.packet),
         })
     }
@@ -234,8 +235,9 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Utc};
+    use chrono::{NaiveDateTime, TimeZone};
     use giganto_client::ingest::Packet as pk;
+    use jiff::Timestamp;
 
     use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
 
@@ -268,22 +270,52 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = "2023-01-20T00:00:00Z".parse::<Timestamp>().unwrap();
+        let dt2 = "2023-01-20T00:00:01Z".parse::<Timestamp>().unwrap();
+        let dt3 = "2023-01-20T00:00:02Z".parse::<Timestamp>().unwrap();
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.as_nanosecond();
+        let ts2 = dt2.as_nanosecond();
+        let ts3 = dt3.as_nanosecond();
 
-        insert_packet(&store, "src 1", ts1, ts1);
-        insert_packet(&store, "src 1", ts1, ts2);
+        insert_packet(
+            &store,
+            "src 1",
+            ts1.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "src 1",
+            ts1.try_into().unwrap(),
+            ts2.try_into().unwrap(),
+        );
 
-        insert_packet(&store, "ingest src 1", ts1, ts1);
-        insert_packet(&store, "ingest src 1", ts1, ts3);
+        insert_packet(
+            &store,
+            "ingest src 1",
+            ts1.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "ingest src 1",
+            ts1.try_into().unwrap(),
+            ts3.try_into().unwrap(),
+        );
 
-        insert_packet(&store, "src 1", ts2, ts1);
-        insert_packet(&store, "src 1", ts2, ts3);
+        insert_packet(
+            &store,
+            "src 1",
+            ts2.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "src 1",
+            ts2.try_into().unwrap(),
+            ts3.try_into().unwrap(),
+        );
 
         let query = r#"
         {
@@ -362,22 +394,52 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = "2023-01-20T00:00:00Z".parse::<Timestamp>().unwrap();
+        let dt2 = "2023-01-20T00:00:01Z".parse::<Timestamp>().unwrap();
+        let dt3 = "2023-01-20T00:00:02Z".parse::<Timestamp>().unwrap();
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.as_nanosecond();
+        let ts2 = dt2.as_nanosecond();
+        let ts3 = dt3.as_nanosecond();
 
-        insert_packet(&store, "src 1", ts1, ts1);
-        insert_packet(&store, "src 1", ts1, ts2);
+        insert_packet(
+            &store,
+            "src 1",
+            ts1.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "src 1",
+            ts1.try_into().unwrap(),
+            ts2.try_into().unwrap(),
+        );
 
-        insert_packet(&store, "ingest src 1", ts1, ts1);
-        insert_packet(&store, "ingest src 1", ts1, ts3);
+        insert_packet(
+            &store,
+            "ingest src 1",
+            ts1.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "ingest src 1",
+            ts1.try_into().unwrap(),
+            ts3.try_into().unwrap(),
+        );
 
-        insert_packet(&store, "src 1", ts2, ts1);
-        insert_packet(&store, "src 1", ts2, ts3);
+        insert_packet(
+            &store,
+            "src 1",
+            ts2.try_into().unwrap(),
+            ts1.try_into().unwrap(),
+        );
+        insert_packet(
+            &store,
+            "src 1",
+            ts2.try_into().unwrap(),
+            ts3.try_into().unwrap(),
+        );
 
         let query = r#"
         {
