@@ -92,7 +92,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 41] = [
     "netflow5",
     "netflow9",
     "seculog",
-    "malformed dns",
+    "malformed_dns",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 
