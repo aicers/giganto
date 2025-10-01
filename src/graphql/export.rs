@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, Utc};
+use chrono::Local;
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -34,6 +34,7 @@ use giganto_client::{
 };
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
@@ -1862,9 +1863,9 @@ impl KeyExtractor for ExportFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -2274,9 +2275,9 @@ where
         value.agent_id(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
-            .to_string();
+        let ts = Timestamp::from_nanosecond(timestamp.into())?;
+        // Format timestamp as seconds.nanoseconds
+        let time = format!("{}.{:09}", ts.as_second(), ts.subsec_nanosecond());
 
         match export_type {
             "csv" => {

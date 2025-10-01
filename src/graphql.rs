@@ -23,8 +23,8 @@ use async_graphql::{
     connection::{Connection, Edge, query},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
+use jiff::Timestamp;
 use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
@@ -77,8 +77,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    start: Option<GigantoTimestamp>,
+    end: Option<GigantoTimestamp>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -118,7 +118,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<DateTime<Utc>>,
+    pub times: Vec<GigantoTimestamp>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -188,9 +188,9 @@ const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
 fn collect_exist_times<T>(
-    target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
+    target_data: &BTreeSet<(Timestamp, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<DateTime<Utc>>
+) -> Vec<GigantoTimestamp>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -212,7 +212,7 @@ where
                             raw_event.sensor(),
                             raw_event.agent_id(),
                         )
-                        .map_or(None, |c| c.then_some(*time))
+                        .map_or(None, |c| c.then_some((*time).into()))
                 } else {
                     None
                 }
@@ -221,14 +221,14 @@ where
         .collect::<Vec<_>>()
 }
 
-fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn time_range(time_range: Option<&TimeRange>) -> (Timestamp, Timestamp) {
     let (start, end) = if let Some(time) = time_range {
-        (time.start, time.end)
+        (time.start.map(|t| t.0), time.end.map(|t| t.0))
     } else {
         (None, None)
     };
-    let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
-    let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
+    let start = start.unwrap_or(Timestamp::MIN);
+    let end = end.unwrap_or(Timestamp::MAX);
     (start, end)
 }
 
@@ -584,18 +584,18 @@ where
     (records, has_more)
 }
 
-pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
-        return Ok(Utc.timestamp_nanos(timestamp));
+        return Ok(Timestamp::from_nanosecond(timestamp.into())?);
     }
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        return Ok(Utc.timestamp_nanos(nanos));
+        return Ok(Timestamp::from_nanosecond(nanos.into())?);
     }
     Err(anyhow!("invalid database key length"))
 }
@@ -822,11 +822,11 @@ fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     })
 }
 
-fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+fn min_max_time(is_forward: bool) -> Timestamp {
     if is_forward {
-        DateTime::<Utc>::MAX_UTC
+        Timestamp::MAX
     } else {
-        DateTime::<Utc>::MIN_UTC
+        Timestamp::MIN
     }
 }
 
@@ -904,6 +904,50 @@ impl_string_number!(StringNumberUsize, usize);
 impl_string_number!(StringNumberU64, u64);
 impl_string_number!(StringNumberU32, u32);
 impl_string_number!(StringNumberI64, i64);
+
+// Newtype wrapper for Timestamp to implement ScalarType
+#[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, Default, PartialEq)]
+#[serde(transparent)]
+pub struct GigantoTimestamp(pub Timestamp);
+
+impl From<Timestamp> for GigantoTimestamp {
+    fn from(ts: Timestamp) -> Self {
+        Self(ts)
+    }
+}
+
+impl From<GigantoTimestamp> for Timestamp {
+    fn from(gts: GigantoTimestamp) -> Self {
+        gts.0
+    }
+}
+
+#[Scalar]
+impl ScalarType for GigantoTimestamp {
+    fn parse(value: Value) -> InputValueResult<Self> {
+        if let Value::String(value) = &value {
+            value
+                .parse::<Timestamp>()
+                .map(GigantoTimestamp)
+                .map_err(|e| InputValueError::custom(format!("Invalid timestamp: {e}")))
+        } else {
+            Err(InputValueError::expected_type(value))
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        // Format timestamp to match chrono's format with +00:00 instead of Z
+        // jiff's default format uses 'Z', but chrono uses '+00:00', so we need to convert
+        let s = self.0.to_string();
+        // Replace 'Z' suffix with '+00:00' to match chrono format
+        let formatted = if s.ends_with('Z') {
+            format!("{}+00:00", &s[..s.len() - 1])
+        } else {
+            s
+        };
+        Value::String(formatted)
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -5,7 +5,7 @@ type BootpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -31,11 +31,11 @@ type BootpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -154,7 +154,7 @@ type ConnRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -204,11 +204,11 @@ type ConnRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -275,20 +275,13 @@ type ConnRawEventEdge {
 }
 
 """
-Implement the DateTime<Utc> scalar
-
-The input/output is a string in RFC3339 format.
-"""
-scalar DateTime
-
-"""
 Represents an event extracted from the DCE-RPC protocol.
 """
 type DceRpcRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -314,11 +307,11 @@ type DceRpcRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -395,7 +388,7 @@ type DhcpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -421,11 +414,11 @@ type DhcpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -552,7 +545,7 @@ type DhcpRawEventEdge {
 }
 
 type DnsEventEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -600,7 +593,7 @@ type DnsRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP address
 	"""
@@ -626,11 +619,11 @@ type DnsRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -746,14 +739,14 @@ input ExportFilter {
 }
 
 type FileCreateEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: DateTime!
+	creationUtcTime: GigantoTimestamp!
 	user: String!
 }
 
@@ -787,14 +780,14 @@ type FileCreateEventEdge {
 }
 
 type FileCreateStreamHashEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: DateTime!
+	creationUtcTime: GigantoTimestamp!
 	hash: [String!]!
 	contents: String!
 	user: String!
@@ -830,15 +823,15 @@ type FileCreateStreamHashEventEdge {
 }
 
 type FileCreationTimeChangedEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
 	processId: StringNumberU32!
 	image: String!
 	targetFilename: String!
-	creationUtcTime: DateTime!
-	previousCreationUtcTime: DateTime!
+	creationUtcTime: GigantoTimestamp!
+	previousCreationUtcTime: GigantoTimestamp!
 	user: String!
 }
 
@@ -872,7 +865,7 @@ type FileCreationTimeChangedEventEdge {
 }
 
 type FileDeleteDetectedEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -914,7 +907,7 @@ type FileDeleteDetectedEventEdge {
 }
 
 type FileDeleteEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -1009,7 +1002,7 @@ type FtpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -1035,11 +1028,11 @@ type FtpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -1105,6 +1098,8 @@ type FtpRawEventEdge {
 	cursor: String!
 }
 
+scalar GigantoTimestamp
+
 """
 Represents an event extracted from the HTTP protocol.
 """
@@ -1112,7 +1107,7 @@ type HttpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -1138,11 +1133,11 @@ type HttpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -1277,7 +1272,7 @@ type HttpRawEventEdge {
 }
 
 type ImageLoadedEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -1337,7 +1332,7 @@ type KerberosRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -1363,11 +1358,11 @@ type KerberosRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -1464,7 +1459,7 @@ type LdapRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -1490,11 +1485,11 @@ type LdapRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -1583,7 +1578,7 @@ input LogFilter {
 }
 
 type LogRawEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	log: String!
 }
 
@@ -1642,7 +1637,7 @@ type MalformedDnsRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-	
+
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
@@ -1656,7 +1651,7 @@ type MalformedDnsRawEvent {
 	endTime: DateTime!
 	"""
 	Duration
-	
+
 	It is measured in nanoseconds.
 	"""
 	duration: StringNumberI64!
@@ -1762,7 +1757,7 @@ type MqttRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -1788,11 +1783,11 @@ type MqttRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -1890,7 +1885,7 @@ type Mutation {
 }
 
 type Netflow5RawEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	srcAddr: String!
 	dstAddr: String!
 	nextHop: String!
@@ -1946,7 +1941,7 @@ type Netflow5RawEventEdge {
 }
 
 type Netflow9RawEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	sequence: StringNumberU32!
 	sourceId: StringNumberU32!
 	templateId: Int!
@@ -1998,7 +1993,7 @@ input NetflowFilter {
 }
 
 type NetworkConnectionEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -2098,7 +2093,7 @@ type NfsRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -2124,11 +2119,11 @@ type NfsRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -2197,7 +2192,7 @@ type NtlmRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -2223,11 +2218,11 @@ type NtlmRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -2310,7 +2305,7 @@ input OpLogFilter {
 }
 
 type OpLogRawEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	level: String!
 	contents: String!
 	agentName: String!
@@ -2347,8 +2342,8 @@ type OpLogRawEventEdge {
 }
 
 type Packet {
-	requestTime: DateTime!
-	packetTime: DateTime!
+	requestTime: GigantoTimestamp!
+	packetTime: GigantoTimestamp!
 	packet: String!
 }
 
@@ -2383,7 +2378,7 @@ type PacketEdge {
 
 input PacketFilter {
 	sensor: String!
-	requestTime: DateTime!
+	requestTime: GigantoTimestamp!
 	packetTime: TimeRange
 }
 
@@ -2410,12 +2405,12 @@ type PageInfo {
 }
 
 type Pcap {
-	requestTime: DateTime!
+	requestTime: GigantoTimestamp!
 	parsedPcap: String!
 }
 
 type PipeEventEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	eventType: String!
@@ -2461,7 +2456,7 @@ input PortRange {
 }
 
 type ProcessCreateEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -2517,7 +2512,7 @@ type ProcessCreateEventEdge {
 }
 
 type ProcessTamperingEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -2557,7 +2552,7 @@ type ProcessTamperingEventEdge {
 }
 
 type ProcessTerminatedEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	processGuid: String!
@@ -2628,25 +2623,25 @@ type Query {
 	dhcpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DhcpRawEventConnection!
 	radiusRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RadiusRawEventConnection!
 	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
-	searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchMalformedDnsRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchHttpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchRdpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchSmtpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchNtlmRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchKerberosRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchSshRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchDceRpcRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchFtpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchMqttRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchLdapRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchTlsRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchSmbRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchNfsRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
-	searchRadiusRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchConnRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchDnsRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+    searchMalformedDnsRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchHttpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchRdpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchSmtpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchNtlmRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchKerberosRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchSshRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchDceRpcRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFtpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchMqttRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchLdapRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchTlsRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchSmbRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchNfsRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchBootpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchDhcpRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchRadiusRawEvents(filter: SearchFilter!): [GigantoTimestamp!]!
 	export(exportType: String!, filter: ExportFilter!): String!
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!
@@ -2671,20 +2666,20 @@ type Query {
 	fileDeleteEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteEventConnection!
 	processTamperEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessTamperingEventConnection!
 	fileDeleteDetectedEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteDetectedEventConnection!
-	searchProcessCreateEvents(filter: SearchFilter!): [DateTime!]!
-	searchFileCreateTimeEvents(filter: SearchFilter!): [DateTime!]!
-	searchNetworkConnectEvents(filter: SearchFilter!): [DateTime!]!
-	searchProcessTerminateEvents(filter: SearchFilter!): [DateTime!]!
-	searchImageLoadEvents(filter: SearchFilter!): [DateTime!]!
-	searchFileCreateEvents(filter: SearchFilter!): [DateTime!]!
-	searchRegistryValueSetEvents(filter: SearchFilter!): [DateTime!]!
-	searchRegistryKeyRenameEvents(filter: SearchFilter!): [DateTime!]!
-	searchFileCreateStreamHashEvents(filter: SearchFilter!): [DateTime!]!
-	searchPipeEventEvents(filter: SearchFilter!): [DateTime!]!
-	searchDnsQueryEvents(filter: SearchFilter!): [DateTime!]!
-	searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
-	searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
-	searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
+	searchProcessCreateEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFileCreateTimeEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchNetworkConnectEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchProcessTerminateEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchImageLoadEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFileCreateEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchRegistryValueSetEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchRegistryKeyRenameEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFileCreateStreamHashEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchPipeEventEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchDnsQueryEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFileDeleteEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchProcessTamperEvents(filter: SearchFilter!): [GigantoTimestamp!]!
+	searchFileDeleteDetectedEvents(filter: SearchFilter!): [GigantoTimestamp!]!
 	sysmonEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SysmonEventsConnection!
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
@@ -2698,7 +2693,7 @@ type RadiusRawEvent {
 	"""
 	Time the event started transmitting from a sensor
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -2724,11 +2719,11 @@ type RadiusRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -2845,7 +2840,7 @@ type RdpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -2871,11 +2866,11 @@ type RdpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -2934,7 +2929,7 @@ type RdpRawEventEdge {
 }
 
 type RegistryKeyValueRenameEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	eventType: String!
@@ -2976,7 +2971,7 @@ type RegistryKeyValueRenameEventEdge {
 }
 
 type RegistryValueSetEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	agentName: String!
 	agentId: String!
 	eventType: String!
@@ -3026,7 +3021,7 @@ input SearchFilter {
 	respPort: PortRange
 	logLevel: String
 	logContents: String
-	times: [DateTime!]!
+	times: [GigantoTimestamp!]!
 	keyword: String
 	agentId: String
 }
@@ -3043,7 +3038,7 @@ input SecuLogFilter {
 }
 
 type SecuLogRawEvent {
-	time: DateTime!
+	time: GigantoTimestamp!
 	logType: String!
 	version: String!
 	origAddr: String
@@ -3090,7 +3085,7 @@ type SmbRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -3116,11 +3111,11 @@ type SmbRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -3225,7 +3220,7 @@ type SmtpRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -3251,11 +3246,11 @@ type SmtpRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -3344,7 +3339,7 @@ type SshRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -3370,11 +3365,11 @@ type SshRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -3546,12 +3541,12 @@ type SysmonEventsEdge {
 }
 
 input TimeRange {
-	start: DateTime
-	end: DateTime
+	start: GigantoTimestamp
+	end: GigantoTimestamp
 }
 
 type TimeSeries {
-	start: DateTime!
+	start: GigantoTimestamp!
 	id: String!
 	data: [Float!]!
 }
@@ -3597,7 +3592,7 @@ type TlsRawEvent {
 	"""
 	Start Time
 	"""
-	time: DateTime!
+	time: GigantoTimestamp!
 	"""
 	Source IP Address
 	"""
@@ -3623,11 +3618,11 @@ type TlsRawEvent {
 	"""
 	Start Time
 	"""
-	startTime: DateTime!
+	startTime: GigantoTimestamp!
 	"""
 	End Time
 	"""
-	endTime: DateTime!
+	endTime: GigantoTimestamp!
 	"""
 	Duration
 	
@@ -3773,10 +3768,6 @@ directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 Directs the executor to skip this field or fragment when the `if` argument is true.
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
-"""
-Provides a scalar specification URL for specifying the behavior of custom scalar types.
-"""
-directive @specifiedBy(url: String!) on SCALAR
 schema {
 	query: Query
 	mutation: Mutation

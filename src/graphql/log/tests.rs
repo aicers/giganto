@@ -1,11 +1,11 @@
 use std::sync::{Arc, OnceLock};
 
-use chrono::DateTime;
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
+use jiff::Timestamp;
 
 use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
 use crate::comm::ingest::generation::SequenceGenerator;
-use crate::graphql::load_connection;
+use crate::graphql::{GigantoTimestamp, load_connection};
 use crate::{
     bincode_utils::encode_legacy,
     graphql::{TimeRange, tests::TestSchema},
@@ -29,8 +29,12 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -56,7 +60,9 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(3)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
                 end: None,
             }),
             sensor: "src1".to_string(),
@@ -88,7 +94,9 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::from_timestamp_nanos(4)),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -118,8 +126,12 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -145,7 +157,9 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(3)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
                 end: None,
             }),
             sensor: "src1".to_string(),
@@ -177,7 +191,9 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::from_timestamp_nanos(3)),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -203,8 +219,12 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -230,7 +250,9 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(2)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(2_i64.into()).unwrap(),
+                )),
                 end: None,
             }),
             sensor: "src1".to_string(),
@@ -258,7 +280,9 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::from_timestamp_nanos(5)),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(5_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -288,8 +312,12 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(4)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -315,7 +343,9 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(2)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(2_i64.into()).unwrap(),
+                )),
                 end: None,
             }),
             sensor: "src1".to_string(),
@@ -343,7 +373,9 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(DateTime::from_timestamp_nanos(4)),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                )),
             }),
             sensor: "src1".to_string(),
             kind: Some("kind1".to_string()),
@@ -503,8 +535,12 @@ async fn load_oplog() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(5)),
-                end: Some(DateTime::from_timestamp_nanos(7)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(5_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(7_i64.into()).unwrap(),
+                )),
             }),
             agent_id: None,
             log_level: Some("Info".to_string()),
@@ -545,8 +581,12 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                )),
             }),
             agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
@@ -569,8 +609,12 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                )),
             }),
             agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
@@ -593,8 +637,12 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                )),
             }),
             agent_id: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
@@ -615,8 +663,12 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
+                start: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                )),
+                end: Some(GigantoTimestamp(
+                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                )),
             }),
             agent_id: Some("sensor".to_string()),
             log_level: Some("Info".to_string()),
