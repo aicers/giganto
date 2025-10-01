@@ -4,7 +4,6 @@ use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
@@ -14,11 +13,12 @@ use giganto_client::ingest::sysmon::{
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 
 use super::{
-    Engine, FromKeyValue, NetworkFilter, SearchFilter, base64_engine, collect_exist_times,
-    events_vec_in_cluster, get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
-    paged_events_in_cluster,
+    Engine, FromKeyValue, GigantoTimestamp, NetworkFilter, SearchFilter, base64_engine,
+    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
+    handle_paged_events, min_max_time, paged_events_in_cluster,
 };
 use crate::graphql::StringNumberU32;
 #[cfg(feature = "cluster")]
@@ -62,7 +62,7 @@ pub(super) struct SysmonQuery;
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent
 ]))]
 struct ProcessCreateEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -95,15 +95,15 @@ struct ProcessCreateEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent
 ]))]
 struct FileCreationTimeChangedEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: DateTime<Utc>,
-    previous_creation_utc_time: DateTime<Utc>,
+    creation_utc_time: GigantoTimestamp,
+    previous_creation_utc_time: GigantoTimestamp,
     user: String,
 }
 
@@ -114,7 +114,7 @@ struct FileCreationTimeChangedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent
 ]))]
 struct NetworkConnectionEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -142,7 +142,7 @@ struct NetworkConnectionEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent
 ]))]
 struct ProcessTerminatedEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -158,7 +158,7 @@ struct ProcessTerminatedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent
 ]))]
 struct ImageLoadedEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -184,14 +184,14 @@ struct ImageLoadedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent
 ]))]
 struct FileCreateEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: DateTime<Utc>,
+    creation_utc_time: GigantoTimestamp,
     user: String,
 }
 
@@ -202,7 +202,7 @@ struct FileCreateEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent
 ]))]
 struct RegistryValueSetEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -221,7 +221,7 @@ struct RegistryValueSetEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent
 ]))]
 struct RegistryKeyValueRenameEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -240,14 +240,14 @@ struct RegistryKeyValueRenameEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent
 ]))]
 struct FileCreateStreamHashEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: DateTime<Utc>,
+    creation_utc_time: GigantoTimestamp,
     hash: Vec<String>,
     contents: String,
     user: String,
@@ -260,7 +260,7 @@ struct FileCreateStreamHashEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent
 ]))]
 struct PipeEventEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -278,7 +278,7 @@ struct PipeEventEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent
 ]))]
 struct DnsEventEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -297,7 +297,7 @@ struct DnsEventEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent
 ]))]
 struct FileDeleteEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -317,7 +317,7 @@ struct FileDeleteEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent
 ]))]
 struct ProcessTamperingEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -334,7 +334,7 @@ struct ProcessTamperingEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent
 ]))]
 struct FileDeleteDetectedEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -391,7 +391,7 @@ macro_rules! from_key_value {
     ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
-                let time = get_time_from_key(key)?;
+                let time = get_time_from_key(key)?.into();
                 Ok(Self {
                     time,
                     agent_name: val.agent_name,
@@ -437,7 +437,7 @@ from_key_value!(
 impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
     fn from_key_value(key: &[u8], val: FileCreationTimeChanged) -> Result<Self> {
         Ok(FileCreationTimeChangedEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             agent_name: val.agent_name,
             agent_id: val.agent_id,
             process_guid: val.process_guid,
@@ -445,8 +445,22 @@ impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
             target_filename: val.target_filename,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
-            previous_creation_utc_time: val.previous_creation_utc_time,
+            creation_utc_time: Timestamp::from_nanosecond(
+                val.creation_utc_time
+                    .timestamp_nanos_opt()
+                    .unwrap_or(0)
+                    .into(),
+            )
+            .ok()
+            .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            previous_creation_utc_time: Timestamp::from_nanosecond(
+                val.previous_creation_utc_time
+                    .timestamp_nanos_opt()
+                    .unwrap_or(0)
+                    .into(),
+            )
+            .ok()
+            .map_or_else(|| Timestamp::MIN.into(), Into::into),
         })
     }
 }
@@ -474,7 +488,7 @@ from_key_value!(
 impl FromKeyValue<FileCreate> for FileCreateEvent {
     fn from_key_value(key: &[u8], val: FileCreate) -> Result<Self> {
         Ok(FileCreateEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             agent_name: val.agent_name,
             agent_id: val.agent_id,
             process_guid: val.process_guid,
@@ -482,7 +496,14 @@ impl FromKeyValue<FileCreate> for FileCreateEvent {
             target_filename: val.target_filename,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
+            creation_utc_time: Timestamp::from_nanosecond(
+                val.creation_utc_time
+                    .timestamp_nanos_opt()
+                    .unwrap_or(0)
+                    .into(),
+            )
+            .ok()
+            .map_or_else(|| Timestamp::MIN.into(), Into::into),
         })
     }
 }
@@ -512,7 +533,7 @@ from_key_value!(
 impl FromKeyValue<FileCreateStreamHash> for FileCreateStreamHashEvent {
     fn from_key_value(key: &[u8], val: FileCreateStreamHash) -> Result<Self> {
         Ok(FileCreateStreamHashEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             agent_name: val.agent_name,
             agent_id: val.agent_id,
             process_guid: val.process_guid,
@@ -522,7 +543,14 @@ impl FromKeyValue<FileCreateStreamHash> for FileCreateStreamHashEvent {
             contents: val.contents,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
+            creation_utc_time: Timestamp::from_nanosecond(
+                val.creation_utc_time
+                    .timestamp_nanos_opt()
+                    .unwrap_or(0)
+                    .into(),
+            )
+            .ok()
+            .map_or_else(|| Timestamp::MIN.into(), Into::into),
         })
     }
 }
@@ -583,7 +611,7 @@ from_key_value!(
 impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
     fn from_key_value(key: &[u8], value: NetworkConnection) -> Result<Self> {
         Ok(NetworkConnectionEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             agent_name: value.agent_name,
             agent_id: value.agent_id,
             process_guid: value.process_guid,
@@ -1183,14 +1211,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_create_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<ProcessCreate>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1209,14 +1238,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_time_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<FileCreationTimeChanged>(
                 &exist_data,
                 filter,
@@ -1239,14 +1269,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.network_connect_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<NetworkConnection>(
                 &exist_data,
                 filter,
@@ -1268,14 +1299,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_terminate_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<ProcessTerminated>(
                 &exist_data,
                 filter,
@@ -1297,14 +1329,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.image_load_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<ImageLoaded>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1323,14 +1356,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<FileCreate>(&exist_data, filter))
         };
 
@@ -1350,14 +1384,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_value_set_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<RegistryValueSet>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1376,14 +1411,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_key_rename_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<RegistryKeyValueRename>(
                 &exist_data,
                 filter,
@@ -1405,14 +1441,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_stream_hash_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<FileCreateStreamHash>(
                 &exist_data,
                 filter,
@@ -1435,14 +1472,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.pipe_event_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<PipeEvent>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1461,14 +1499,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dns_query_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<DnsEvent>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1487,14 +1526,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<FileDelete>(&exist_data, filter))
         };
 
@@ -1514,14 +1554,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_tamper_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<ProcessTampering>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -1540,14 +1581,15 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GigantoTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_detected_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<FileDeleteDetected>(
                 &exist_data,
                 filter,

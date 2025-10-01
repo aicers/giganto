@@ -8,16 +8,17 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{Log, OpLog};
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 
 use super::{
-    Engine, FromKeyValue, base64_engine, get_time_from_key, get_time_from_key_prefix,
-    handle_paged_events, load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
+    Engine, FromKeyValue, GigantoTimestamp, base64_engine, get_time_from_key,
+    get_time_from_key_prefix, handle_paged_events, load_connection_by_prefix_timestamp_key,
+    paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -49,9 +50,9 @@ impl KeyExtractor for LogFilter {
         self.kind.as_ref().map(|kind| kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -85,9 +86,9 @@ pub struct OpLogFilter {
 }
 
 impl TimestampKeyExtractor for OpLogFilter {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_start_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -157,14 +158,14 @@ impl RawEventFilter for OpLogFilter {
     log_raw_events::LogRawEventsLogRawEventsEdgesNode
 ]))]
 struct LogRawEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     log: String,
 }
 
 impl FromKeyValue<Log> for LogRawEvent {
     fn from_key_value(key: &[u8], l: Log) -> Result<Self> {
         Ok(LogRawEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             log: base64_engine.encode(l.log),
         })
     }
@@ -172,7 +173,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     level: String,
     contents: String,
     agent_name: String,
@@ -182,7 +183,7 @@ struct OpLogRawEvent {
 impl FromKeyValue<OpLog> for OpLogRawEvent {
     fn from_key_value(key: &[u8], l: OpLog) -> Result<Self> {
         Ok(OpLogRawEvent {
-            time: get_time_from_key_prefix(key)?,
+            time: get_time_from_key_prefix(key)?.into(),
             level: format!("{:?}", l.log_level),
             contents: l.contents,
             agent_name: l.agent_name,

@@ -1,16 +1,16 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 
 use super::{
-    FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
-    handle_paged_events, paged_events_in_cluster,
+    FromKeyValue, GigantoTimestamp, IpRange, PortRange, check_address, check_contents, check_port,
+    get_time_from_key, handle_paged_events, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -57,9 +57,9 @@ impl KeyExtractor for NetflowFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -98,7 +98,7 @@ impl RawEventFilter for NetflowFilter {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -127,7 +127,7 @@ pub struct Netflow5RawEvent {
 impl FromKeyValue<Netflow5> for Netflow5RawEvent {
     fn from_key_value(key: &[u8], val: Netflow5) -> Result<Self> {
         Ok(Netflow5RawEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             src_addr: val.src_addr.to_string(),
             dst_addr: val.dst_addr.to_string(),
             next_hop: val.next_hop.to_string(),
@@ -162,7 +162,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     sequence: StringNumberU32,
     source_id: StringNumberU32,
     template_id: u16,
@@ -177,7 +177,7 @@ pub struct Netflow9RawEvent {
 impl FromKeyValue<Netflow9> for Netflow9RawEvent {
     fn from_key_value(key: &[u8], val: Netflow9) -> Result<Self> {
         Ok(Netflow9RawEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             sequence: val.sequence.into(),
             source_id: val.source_id.into(),
             template_id: val.template_id,

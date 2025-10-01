@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{TimeZone, Utc};
 use giganto_client::connection::client_handshake;
 use giganto_client::frame::send_raw;
 use giganto_client::ingest::log::Log;
@@ -39,6 +38,7 @@ use giganto_client::{
         stream::{RequestStreamRecord, StreamRequestPayload},
     },
 };
+use jiff::Timestamp;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
@@ -546,7 +546,7 @@ where
             .mid_key(kind.map(|s| s.as_bytes().to_vec()));
         let from_key = key_builder
             .clone()
-            .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start_time())))
+            .lower_closed_bound_end_key(Some(Timestamp::from_nanosecond(msg.start_time().into())?))
             .build();
         let to_key = key_builder.upper_open_bound_end_key(None).build();
         let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
@@ -1670,10 +1670,12 @@ where
 
     let from_key = key_builder
         .clone()
-        .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(request_range.start)))
+        .lower_closed_bound_end_key(Some(Timestamp::from_nanosecond(
+            request_range.start.into(),
+        )?))
         .build();
     let to_key = key_builder
-        .upper_open_bound_end_key(Some(Utc.timestamp_nanos(request_range.end)))
+        .upper_open_bound_end_key(Some(Timestamp::from_nanosecond(request_range.end.into())?))
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
