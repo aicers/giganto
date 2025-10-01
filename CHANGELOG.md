@@ -110,6 +110,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of sensor-based iteration. `periodic time series` retention is
   temporarily disabled until proper policy-based retention logic is implemented.
 
+### Security
+
+- Implemented client certificate authentication for GraphQL endpoint to prevent
+  unauthorized access. Clients must now provide valid certificates signed by a
+  trusted CA to access the GraphQL API. Added `graphql_authorized_clients`
+  configuration field for future fine-grained authorization (currently logs a
+  warning as CN-based filtering is not yet implemented).
+
 ## [0.25.1] - 2025-07-08
 
 ### Changed
