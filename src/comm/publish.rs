@@ -1617,7 +1617,20 @@ where
     T: DeserializeOwned + ResponseRangeData,
     I: DeserializeOwned + Serialize,
 {
-    if is_current_giganto_in_charge(ingest_sensors, &request_range.sensor).await {
+    // If sensor is empty, request from all sources
+    if request_range.sensor.is_empty() {
+        process_range_data_all_sources::<T, I>(
+            send,
+            store,
+            request_range,
+            ingest_sensors,
+            peers,
+            peer_idents,
+            certs,
+            availed_kind,
+        )
+        .await?;
+    } else if is_current_giganto_in_charge(ingest_sensors, &request_range.sensor).await {
         process_range_data_in_current_giganto(send, store, request_range, availed_kind).await?;
     } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
@@ -1631,6 +1644,105 @@ where
     }
     send_range_data::<T>(send, None).await?;
     send.finish()?;
+    Ok(())
+}
+
+/// Processes range data requests when source (sensor) is not specified.
+/// This function queries all local sensors and all peer Giganto instances,
+/// then aggregates and merges the results.
+///
+/// # Errors
+///
+/// Returns an error if database operations fail or peer communication fails.
+#[allow(clippy::too_many_arguments)]
+async fn process_range_data_all_sources<T, I>(
+    send: &mut SendStream,
+    store: RawEventStore<'_, T>,
+    request_range: RequestRange,
+    ingest_sensors: IngestSensors,
+    peers: Peers,
+    peer_idents: PeerIdents,
+    certs: &Certs,
+    availed_kind: bool,
+) -> Result<()>
+where
+    T: DeserializeOwned + ResponseRangeData,
+    I: DeserializeOwned + Serialize,
+{
+    // Get all local sensors
+    let local_sensors: Vec<String> = ingest_sensors.read().await.iter().cloned().collect();
+
+    // Process data from all local sensors
+    for sensor in &local_sensors {
+        let key_builder = StorageKey::builder().start_key(sensor);
+        let key_builder = if availed_kind {
+            key_builder.mid_key(Some(request_range.kind.as_bytes().to_vec()))
+        } else {
+            key_builder
+        };
+
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(request_range.start)))
+            .build();
+        let to_key = key_builder
+            .upper_open_bound_end_key(Some(Utc.timestamp_nanos(request_range.end)))
+            .build();
+
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+
+        for item in iter.take(request_range.count) {
+            let (key, val) = item.context("Failed to read Database")?;
+            let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+            send_range_data(send, Some((val, timestamp, sensor))).await?;
+        }
+    }
+
+    // Get all peer addresses
+    let peer_addrs: Vec<_> = {
+        let peers_guard = peers.read().await;
+        peers_guard
+            .iter()
+            .filter_map(|(addr_str, peer_info)| {
+                peer_info.publish_port.map(|port| {
+                    SocketAddr::new(
+                        addr_str
+                            .parse::<IpAddr>()
+                            .expect("Peer's IP address must be valid"),
+                        port,
+                    )
+                })
+            })
+            .collect()
+    };
+
+    // Request data from all peers
+    for peer_addr in peer_addrs {
+        let peer_name = match peer_name(peer_idents.clone(), &peer_addr).await {
+            Ok(name) => name,
+            Err(e) => {
+                warn!("Failed to get peer name for {}: {}", peer_addr, e);
+                continue;
+            }
+        };
+
+        let result = process_range_data_in_peer_giganto::<I>(
+            send,
+            peer_idents.clone(),
+            peer_addr,
+            certs,
+            request_range.clone(),
+        )
+        .await;
+
+        if let Err(e) = result {
+            warn!(
+                "Failed to get range data from peer {} ({}): {}",
+                peer_name, peer_addr, e
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -1751,27 +1863,181 @@ where
     T: DeserializeOwned + ResponseRangeData,
     I: DeserializeOwned + Serialize + Clone,
 {
-    let (handle_by_current_giganto, handle_by_peer_gigantos) =
-        req_inputs_by_gigantos_in_charge(ingest_sensors, req.input).await;
+    // Check if any input has empty sensor (meaning "all sources")
+    let has_empty_sensor = req.input.iter().any(|(sensor, _)| sensor.is_empty());
 
-    if !handle_by_current_giganto.is_empty() {
-        process_raw_event_in_current_giganto(send, store, handle_by_current_giganto).await?;
-    }
-
-    if !handle_by_peer_gigantos.is_empty() {
-        process_raw_event_in_peer_gigantos::<I>(
+    if has_empty_sensor {
+        // Process raw events from all sources
+        process_raw_events_all_sources::<T, I>(
             send,
-            req.kind,
-            certs,
+            store,
+            req,
+            ingest_sensors,
             peers,
             peer_idents,
-            handle_by_peer_gigantos,
+            certs,
         )
         .await?;
+    } else {
+        let (handle_by_current_giganto, handle_by_peer_gigantos) =
+            req_inputs_by_gigantos_in_charge(ingest_sensors, req.input).await;
+
+        if !handle_by_current_giganto.is_empty() {
+            process_raw_event_in_current_giganto(send, store, handle_by_current_giganto).await?;
+        }
+
+        if !handle_by_peer_gigantos.is_empty() {
+            process_raw_event_in_peer_gigantos::<I>(
+                send,
+                req.kind,
+                certs,
+                peers,
+                peer_idents,
+                handle_by_peer_gigantos,
+            )
+            .await?;
+        }
     }
 
     send_range_data::<T>(send, None).await?;
     send.finish()?;
+    Ok(())
+}
+
+/// Processes raw events requests when source (sensor) is not specified.
+/// This function retrieves raw events from all local sensors and all peer
+/// Giganto instances, then aggregates and merges the results.
+///
+/// # Errors
+///
+/// Returns an error if database operations fail or peer communication fails.
+async fn process_raw_events_all_sources<T, I>(
+    send: &mut SendStream,
+    store: RawEventStore<'_, T>,
+    req: RequestRawData,
+    ingest_sensors: IngestSensors,
+    peers: Peers,
+    peer_idents: PeerIdents,
+    certs: &Certs,
+) -> Result<()>
+where
+    T: DeserializeOwned + ResponseRangeData,
+    I: DeserializeOwned + Serialize + Clone,
+{
+    // Collect all timestamps from the request (for empty sensor entries)
+    let all_timestamps: Vec<i64> = req
+        .input
+        .iter()
+        .filter(|(sensor, _)| sensor.is_empty())
+        .flat_map(|(_, timestamps)| timestamps.clone())
+        .collect();
+
+    // Get all local sensors and create input for each sensor
+    let local_sensors: Vec<String> = ingest_sensors.read().await.iter().cloned().collect();
+    let local_inputs: Vec<(String, Vec<i64>)> = local_sensors
+        .into_iter()
+        .map(|sensor| (sensor, all_timestamps.clone()))
+        .collect();
+
+    // Process local events
+    if !local_inputs.is_empty() {
+        process_raw_event_in_current_giganto(send, store, local_inputs).await?;
+    }
+
+    // Get all peer addresses and request from each peer
+    let peer_addrs: Vec<_> = {
+        let peers_guard = peers.read().await;
+        peers_guard
+            .iter()
+            .filter_map(|(addr_str, peer_info)| {
+                peer_info.publish_port.map(|port| {
+                    (
+                        SocketAddr::new(
+                            addr_str
+                                .parse::<IpAddr>()
+                                .expect("Peer's IP address must be valid"),
+                            port,
+                        ),
+                        peer_info.ingest_sensors.clone(),
+                    )
+                })
+            })
+            .collect()
+    };
+
+    // Request from all peers
+    for (peer_addr, peer_sensors) in peer_addrs {
+        let peer_name = match peer_name(peer_idents.clone(), &peer_addr).await {
+            Ok(name) => name,
+            Err(e) => {
+                warn!("Failed to get peer name for {}: {}", peer_addr, e);
+                continue;
+            }
+        };
+
+        // Create input for all sensors of this peer
+        let peer_inputs: Vec<(String, Vec<i64>)> = peer_sensors
+            .iter()
+            .map(|sensor| (sensor.clone(), all_timestamps.clone()))
+            .collect();
+
+        if peer_inputs.is_empty() {
+            continue;
+        }
+
+        let connection = match connect(peer_addr, peer_name.as_str(), certs).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                warn!("Failed to connect to peer {}: {}", peer_name, e);
+                continue;
+            }
+        };
+
+        let (mut peer_send, mut peer_recv) = match connection.open_bi().await {
+            Ok(streams) => streams,
+            Err(e) => {
+                warn!(
+                    "Failed to open bi-directional stream to peer {}: {}",
+                    peer_name, e
+                );
+                continue;
+            }
+        };
+
+        if let Err(e) = send_range_data_request(
+            &mut peer_send,
+            MessageCode::RawData,
+            RequestRawData {
+                kind: req.kind.clone(),
+                input: peer_inputs,
+            },
+        )
+        .await
+        {
+            warn!("Failed to send request to peer {}: {}", peer_name, e);
+            continue;
+        }
+
+        // Receive and forward data from peer
+        loop {
+            match receive_range_data::<Option<(i64, String, Vec<I>)>>(&mut peer_recv).await {
+                Ok(Some(event)) => {
+                    let send_buf =
+                        encode_legacy(&Some(event)).map_err(PublishError::SerializationError)?;
+                    if let Err(e) = send_raw(send, &send_buf).await {
+                        warn!("Failed to forward data from peer {}: {}", peer_name, e);
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    warn!("Failed to receive data from peer {}: {}", peer_name, e);
+                    break;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

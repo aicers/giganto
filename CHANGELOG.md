@@ -16,6 +16,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - Unified time field types to `DateTime<Utc>` for consistent temporal
     handling.
   - Updated migration functions to handle new event structure fields.
+- Added support for requesting raw events from all sources when the `source`
+  field is not specified. When `source` is empty in `RequestRange` or
+  `RequestRawData`, Giganto now queries all local sensors and fans out
+  requests to all peer Giganto instances, aggregating and streaming the
+  combined results back to the client (e.g., REconverge).
 - Introduced a new feature flag, `cluster`, to enable or disable Giganto's
   cluster functionality.
   - When `cluster` is enabled (default), Giganto connects to other instances in
