@@ -1,16 +1,16 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
 
 use super::{
-    FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
-    handle_paged_events, paged_events_in_cluster,
+    FromKeyValue, GigantoTimestamp, IpRange, PortRange, check_address, check_contents, check_port,
+    get_time_from_key, handle_paged_events, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -46,9 +46,9 @@ impl KeyExtractor for SecuLogFilter {
         Some(self.kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -86,7 +86,7 @@ impl RawEventFilter for SecuLogFilter {
     secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
 ]))]
 struct SecuLogRawEvent {
-    time: DateTime<Utc>,
+    time: GigantoTimestamp,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -100,7 +100,7 @@ struct SecuLogRawEvent {
 impl FromKeyValue<SecuLog> for SecuLogRawEvent {
     fn from_key_value(key: &[u8], sl: SecuLog) -> Result<Self> {
         Ok(SecuLogRawEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             log_type: sl.log_type,
             version: sl.version,
             orig_addr: sl.orig_addr.map(|addr| addr.to_string()),
