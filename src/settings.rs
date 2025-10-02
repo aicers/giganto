@@ -98,6 +98,10 @@ pub struct ConfigVisible {
 
     // ack transmission interval
     pub ack_transmission: u16,
+
+    // GraphQL client authorization
+    #[serde(default)]
+    pub graphql_authorized_clients: HashSet<String>,
 }
 
 impl Settings {
