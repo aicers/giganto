@@ -1617,6 +1617,145 @@ type LogRawEventEdge {
 }
 
 """
+Represents an event for malformed DNS traffic.
+"""
+type MalformedDnsRawEvent {
+	"""
+	Time the event started transmitting from a sensor
+	"""
+	time: DateTime!
+	"""
+	Source IP address
+	"""
+	origAddr: String!
+	"""
+	Source Port Number
+	"""
+	origPort: Int!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Destination Port Number
+	"""
+	respPort: Int!
+	"""
+	Protocol Number
+	
+	TCP is 6, and UDP is 17.
+	"""
+	proto: Int!
+	"""
+	Start Time
+	"""
+	startTime: DateTime!
+	"""
+	End Time
+	"""
+	endTime: DateTime!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
+	Transaction ID
+	"""
+	transId: Int!
+	"""
+	DNS Flags bitfield
+	"""
+	flags: Int!
+	"""
+	Question Record count
+	"""
+	questionCount: Int!
+	"""
+	Answer Record count
+	"""
+	answerCount: Int!
+	"""
+	Authority Record count
+	"""
+	authorityCount: Int!
+	"""
+	Additional Record count
+	"""
+	additionalCount: Int!
+	"""
+	Captured malformed query count
+	"""
+	queryCount: StringNumberU32!
+	"""
+	Captured malformed response count
+	"""
+	respCount: StringNumberU32!
+	"""
+	Total malformed query bytes
+	"""
+	queryBytes: StringNumberU64!
+	"""
+	Total malformed response bytes
+	"""
+	respBytes: StringNumberU64!
+	"""
+	Raw malformed query payloads (base64 encoded)
+	"""
+	queryBody: [String!]!
+	"""
+	Raw malformed response payloads (base64 encoded)
+	"""
+	respBody: [String!]!
+}
+
+type MalformedDnsRawEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [MalformedDnsRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [MalformedDnsRawEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type MalformedDnsRawEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: MalformedDnsRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
+"""
 Represents an event extracted from the MQTT protocol.
 """
 type MqttRawEvent {
@@ -1921,7 +2060,7 @@ input NetworkFilter {
 	agentId: String
 }
 
-union NetworkRawEvents = ConnRawEvent | DnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent
+union NetworkRawEvents = ConnRawEvent | DnsRawEvent | MalformedDnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent
 
 type NetworkRawEventsConnection {
 	"""
@@ -2471,6 +2610,7 @@ type Query {
 	opLogRawEvents(filter: OpLogFilter!, after: String, before: String, first: Int, last: Int): OpLogRawEventConnection!
 	connRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ConnRawEventConnection!
 	dnsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DnsRawEventConnection!
+	malformedDnsRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): MalformedDnsRawEventConnection!
 	httpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): HttpRawEventConnection!
 	rdpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RdpRawEventConnection!
 	smtpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SmtpRawEventConnection!
@@ -2490,6 +2630,7 @@ type Query {
 	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
 	searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchMalformedDnsRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchHttpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchRdpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchSmtpRawEvents(filter: SearchFilter!): [DateTime!]!

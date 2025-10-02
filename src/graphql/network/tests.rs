@@ -3,8 +3,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
-    Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 
@@ -467,6 +467,47 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
     store.append(&key, &ser_dns_body).unwrap();
 }
 
+fn insert_malformed_dns_raw_event(
+    store: &RawEventStore<MalformedDns>,
+    sensor: &str,
+    timestamp: i64,
+) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let malformed_dns_body = MalformedDns {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_port: 46378,
+        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 17,
+        start_time: chrono::Utc::now(),
+        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        duration: 1,
+        orig_pkts: 1,
+        resp_pkts: 2,
+        orig_l2_bytes: 32,
+        resp_l2_bytes: 64,
+        trans_id: 1,
+        flags: 42,
+        question_count: 1,
+        answer_count: 2,
+        authority_count: 3,
+        additional_count: 4,
+        query_count: 5,
+        resp_count: 6,
+        query_bytes: 32,
+        resp_bytes: 64,
+        query_body: vec![b"malformed query".to_vec()],
+        resp_body: vec![b"malformed response".to_vec()],
+    };
+    let ser_malformed_dns_body = encode_legacy(&malformed_dns_body).unwrap();
+
+    store.append(&key, &ser_malformed_dns_body).unwrap();
+}
+
 #[tokio::test]
 async fn dns_with_data_giganto_cluster() {
     // given
@@ -565,6 +606,235 @@ async fn dns_with_data_giganto_cluster() {
         res.data.to_string(),
         "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
         origPort: 46378, rtt: \"567\"}}]}}"
+    );
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn malformed_dns_empty() {
+    let schema = TestSchema::new();
+    let query = r#"
+    {
+        malformedDnsRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                sensor: "ingest_sensor_1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 100, end: 200 }
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    origPort,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{malformedDnsRawEvents: {edges: []}}");
+}
+
+#[tokio::test]
+async fn malformed_dns_empty_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        malformedDnsRawEvents(
+            filter: {
+                time: { start: "1992-06-05T00:00:00Z", end: "2011-09-22T00:00:00Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.123", end: "31.3.245.143" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 100, end: 200 }
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    origPort,
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "malformedDnsRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": false,
+                    "hasNextPage": false
+                },
+                "edges": [
+                ]
+            }
+        }
+    }
+    "#;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(res.data.to_string(), "{malformedDnsRawEvents: {edges: []}}");
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn malformed_dns_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.malformed_dns_store().unwrap();
+
+    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        malformedDnsRawEvents(
+            filter: {
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            last: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    questionCount,
+                    queryCount,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, queryCount: \"5\"}}]}}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_dns_with_data_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        malformedDnsRawEvents(
+            filter: {
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "31.3.245.100", end: "31.3.245.245" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 0, end: 200 }
+            }
+            last: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    questionCount,
+                    queryCount,
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "malformedDnsRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": true,
+                    "hasNextPage": false
+                },
+                "edges": [
+                    {
+                        "cursor": "bWFsZm9ybWVkRG5zQ3Vyc29y",
+                        "node": {
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 80,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "endTime": "2023-11-16T15:03:46.291779203+00:00",
+                            "duration": "1",
+                            "origPkts": "1",
+                            "respPkts": "2",
+                            "origL2Bytes": "32",
+                            "respL2Bytes": "64",
+                            "transId": 1,
+                            "flags": 42,
+                            "questionCount": 1,
+                            "answerCount": 2,
+                            "authorityCount": 3,
+                            "additionalCount": 4,
+                            "queryCount": "5",
+                            "respCount": "6",
+                            "queryBytes": "32",
+                            "respBytes": "64",
+                            "queryBody": [
+                                "bWFsZm9ybWVkIHF1ZXJ5"
+                            ],
+                            "respBody": [
+                                "bWFsZm9ybWVkIHJlc3BvbnNl"
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(
+        res.data.to_string(),
+        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, queryCount: \"5\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -4167,6 +4437,92 @@ async fn search_dns_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn search_malformed_dns_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.malformed_dns_store().unwrap();
+
+    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
+    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
+    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
+    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
+
+    insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        searchMalformedDnsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 70, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+}
+
+#[tokio::test]
+async fn search_malformed_dns_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchMalformedDnsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 70, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchMalformedDnsRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
     mock.assert_async().await;
 }
