@@ -240,7 +240,6 @@ async fn main() -> Result<()> {
             web_cert_pem,
             web_key_pem,
             &args.ca_certs,
-            &settings.config.visible.graphql_authorized_clients,
             web_notify_shutdown,
         ) {
             error!("Failed to start GraphQL server: {e}");

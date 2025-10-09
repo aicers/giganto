@@ -1,4 +1,4 @@
-use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use async_graphql::{
     Executor,
@@ -11,9 +11,9 @@ use poem::{
     listener::{Listener, RustlsCertificate, RustlsConfig, TcpListener},
 };
 use tokio::{sync::Notify, task};
-use tracing::{info, warn};
+use tracing::info;
 
-/// Runs the GraphQL server with mTLS client authentication and authorization.
+/// Runs the GraphQL server with mTLS client authentication.
 ///
 /// Note that `key` is not compatible with the DER-encoded key extracted by
 /// rustls-pemfile.
@@ -25,7 +25,6 @@ use tracing::{info, warn};
 /// * `cert` - Server certificate in PEM format
 /// * `key` - Server private key in PEM format
 /// * `ca_certs` - Paths to CA certificate files for client verification
-/// * `authorized_clients` - Set of authorized client names (from certificate CN)
 /// * `notify_shutdown` - Notification channel for graceful shutdown
 ///
 /// # Errors
@@ -40,19 +39,8 @@ pub fn serve<S: Executor>(
     cert: Vec<u8>,
     key: Vec<u8>,
     ca_certs: &[String],
-    authorized_clients: &HashSet<String>,
     notify_shutdown: Arc<Notify>,
 ) -> anyhow::Result<()> {
-    // Log authorization configuration
-    if !authorized_clients.is_empty() {
-        warn!(
-            "graphql_authorized_clients is configured but fine-grained CN-based \
-            authorization is not yet implemented. Only clients with certificates \
-            signed by the trusted CA will be accepted. Configure your firewall or \
-            network policies to restrict access."
-        );
-    }
-
     let graphql = GraphQL::new(schema);
 
     let playground = make_sync(move |_| {
@@ -84,16 +72,7 @@ pub fn serve<S: Executor>(
             .client_auth_required(ca_cert_data),
     );
 
-    if authorized_clients.is_empty() {
-        info!(
-            "GraphQL web server is starting on https://{addr:?} with mTLS enabled (all valid certificates accepted)"
-        );
-    } else {
-        info!(
-            "GraphQL web server is starting on https://{addr:?} with mTLS enabled ({} authorized client(s))",
-            authorized_clients.len()
-        );
-    }
+    info!("GraphQL web server is starting on https://{addr:?} with mTLS enabled");
 
     task::spawn(async move {
         let server = Server::new(listener).run_with_graceful_shutdown(

@@ -114,9 +114,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Implemented client certificate authentication for GraphQL endpoint to prevent
   unauthorized access. Clients must now provide valid certificates signed by a
-  trusted CA to access the GraphQL API. Added `graphql_authorized_clients`
-  configuration field for future fine-grained authorization (currently logs a
-  warning as CN-based filtering is not yet implemented).
+  trusted CA to access the GraphQL API.
 
 ## [0.25.1] - 2025-07-08
 
