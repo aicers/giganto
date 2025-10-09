@@ -15,8 +15,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-#[cfg(feature = "count_events")]
-use anyhow::anyhow;
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     Packet,

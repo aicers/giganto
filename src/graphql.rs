@@ -274,7 +274,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -310,7 +310,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -399,7 +399,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -433,7 +433,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -616,7 +616,7 @@ where
     let mut filtered_iter = filtered_iter.peekable();
     if let Some(cursor) = cursor
         && let Some((key, _)) = filtered_iter.peek()
-        && key.as_ref() == cursor
+        && key.as_ref() == cursor.as_slice()
     {
         filtered_iter.next();
     }

@@ -266,6 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn packets_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
@@ -387,6 +388,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn pcap_with_data() {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();

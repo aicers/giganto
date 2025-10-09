@@ -2182,7 +2182,8 @@ fn export_statistic_file(
     let mut invalid_data_cnt: u32 = 0;
     for iter in &mut statistics_vec {
         loop {
-            match iter.next() {
+            let result: Option<anyhow::Result<(Box<[u8]>, Statistics)>> = iter.next();
+            match result {
                 Some(Ok(item)) => {
                     iter_next_values.push(item);
                     break;
@@ -2218,7 +2219,8 @@ fn export_statistic_file(
         // change the value of the selected iter to the following value.
         if let Some(iter) = statistics_vec.get_mut(min_index) {
             loop {
-                match iter.next() {
+                let result: Option<anyhow::Result<(Box<[u8]>, Statistics)>> = iter.next();
+                match result {
                     Some(Ok(item)) => {
                         *iter_next_values
                             .get_mut(min_index)
