@@ -229,13 +229,21 @@ async fn main() -> Result<()> {
             settings.clone(),
         );
 
-        task::spawn(web::serve(
+        let web_cert_pem = cert_pem.clone();
+        let web_key_pem = key_pem.clone();
+        let web_addr = settings.config.visible.graphql_srv_addr;
+        let web_notify_shutdown = notify_shutdown.clone();
+
+        if let Err(e) = web::serve(
             schema,
-            settings.config.visible.graphql_srv_addr,
-            cert_pem.clone(),
-            key_pem.clone(),
-            notify_shutdown.clone(),
-        ));
+            web_addr,
+            web_cert_pem,
+            web_key_pem,
+            &args.ca_certs,
+            web_notify_shutdown,
+        ) {
+            error!("Failed to start GraphQL server: {e}");
+        }
 
         let db = database.clone();
         let notify_shutdown_copy = notify_shutdown.clone();
