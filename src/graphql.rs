@@ -1017,7 +1017,7 @@ mod tests {
         assert!(
             expect == actual,
             "The GraphQL schema is not up to date. Please run the following command to update it.\n\
-            `cargo run --bin gen_schema --no-default-features --target-dir target_gen_schema`"
+            `cargo run --bin gen_schema --no-default-features --target-dir target/gen_schema`"
         );
     }
 
