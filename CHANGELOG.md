@@ -101,19 +101,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.
   String representations of numbers (e.g., "123456") are now correctly parsed
-  into wrapped integer types such as `StringNumberI64(i64)` or
-  `StringNumberU64(u64)`.
-- Modified `retain_periodically` function to stop further delete operations on
-  a column family when a delete operation fails, preventing cascading failures
+  into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
+- Modified `retain_periodically` function to stop further delete operations on a
+  column family when a delete operation fails, preventing cascading failures
   and reducing excessive error logs.
-- Fixed the database retention logic for `oplog` and `periodic time series`
-  with non-standard key formats. `oplog` now uses timestamp-based range
-  deletion instead of sensor-based iteration. `periodic time series` retention
-  is temporarily disabled until proper policy-based retention logic is
-  implemented.
-- Fixed schema generation directory to be under `target/gen_schema` instead of
-  `target_gen_schema`. The generated files are now properly removed by
-  `cargo clean`, preventing unnecessary disk usage growth.
+- Fixed the database retention logic for `oplog` and `periodic time series` with
+  non-standard key formats. `oplog` now uses timestamp-based range deletion
+  instead of sensor-based iteration. `periodic time series` retention is
+  temporarily disabled until proper policy-based retention logic is implemented.
 
 ### Security
 
