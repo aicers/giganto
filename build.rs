@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "gen_schema",
                 "--no-default-features",
                 "--target-dir",
-                "target_gen_schema",
+                "target/gen_schema",
             ])
             .status()?;
         assert!(status.success(), "Failed to generate GraphQL schema");
