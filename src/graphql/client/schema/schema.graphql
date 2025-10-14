@@ -1717,13 +1717,13 @@ type MalformedDnsRawEvent {
 	"""
 	respBytes: StringNumberU64!
 	"""
-	Raw malformed query payloads (base64 encoded)
+	Raw malformed query payloads
 	"""
-	queryBody: [String!]!
+	queryBody: [[Int!]!]!
 	"""
-	Raw malformed response payloads (base64 encoded)
+	Raw malformed response payloads
 	"""
-	respBody: [String!]!
+	respBody: [[Int!]!]!
 }
 
 type MalformedDnsRawEventConnection {

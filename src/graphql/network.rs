@@ -328,10 +328,10 @@ struct MalformedDnsRawEvent {
     query_bytes: StringNumberU64,
     /// Total malformed response bytes
     resp_bytes: StringNumberU64,
-    /// Raw malformed query payloads (base64 encoded)
-    query_body: Vec<String>,
-    /// Raw malformed response payloads (base64 encoded)
-    resp_body: Vec<String>,
+    /// Raw malformed query payloads
+    query_body: Vec<Vec<u8>>,
+    /// Raw malformed response payloads
+    resp_body: Vec<Vec<u8>>,
 }
 
 /// Represents an event extracted from the HTTP protocol.
@@ -1522,16 +1522,8 @@ impl FromKeyValue<MalformedDns> for MalformedDnsRawEvent {
             resp_count: val.resp_count.into(),
             query_bytes: val.query_bytes.into(),
             resp_bytes: val.resp_bytes.into(),
-            query_body: val
-                .query_body
-                .into_iter()
-                .map(|body| base64_engine.encode(body))
-                .collect(),
-            resp_body: val
-                .resp_body
-                .into_iter()
-                .map(|body| base64_engine.encode(body))
-                .collect(),
+            query_body: val.query_body,
+            resp_body: val.resp_body,
         })
     }
 }

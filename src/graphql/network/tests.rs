@@ -500,8 +500,8 @@ fn insert_malformed_dns_raw_event(
         resp_count: 6,
         query_bytes: 32,
         resp_bytes: 64,
-        query_body: vec![b"malformed query".to_vec()],
-        resp_body: vec![b"malformed response".to_vec()],
+        query_body: vec![vec![113]],
+        resp_body: vec![vec![114]],
     };
     let ser_malformed_dns_body = encode_legacy(&malformed_dns_body).unwrap();
 
@@ -802,12 +802,8 @@ async fn malformed_dns_with_data_giganto_cluster() {
                             "respCount": "6",
                             "queryBytes": "32",
                             "respBytes": "64",
-                            "queryBody": [
-                                "bWFsZm9ybWVkIHF1ZXJ5"
-                            ],
-                            "respBody": [
-                                "bWFsZm9ybWVkIHJlc3BvbnNl"
-                            ]
+                            "queryBody": [[113]],
+                            "respBody": [[114]]
                         }
                     }
                 ]

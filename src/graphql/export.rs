@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use base64::Engine;
 use chrono::{DateTime, Local, Utc};
 use giganto_client::{
     RawEventKind,
@@ -39,8 +38,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
 use super::{
-    IpRange, NodeName, PortRange, RawEventFilter, TIMESTAMP_SIZE, TimeRange, base64_engine,
-    check_address, check_agent_id, check_port,
+    IpRange, NodeName, PortRange, RawEventFilter, TIMESTAMP_SIZE, TimeRange, check_address,
+    check_agent_id, check_port,
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
 };
@@ -177,8 +176,8 @@ struct MalformedDnsJsonOutput {
     resp_count: u32,
     query_bytes: u64,
     resp_bytes: u64,
-    query_body: Vec<String>,
-    resp_body: Vec<String>,
+    query_body: Vec<Vec<u8>>,
+    resp_body: Vec<Vec<u8>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1221,16 +1220,8 @@ impl JsonOutput<MalformedDnsJsonOutput> for MalformedDns {
             resp_count: self.resp_count,
             query_bytes: self.query_bytes,
             resp_bytes: self.resp_bytes,
-            query_body: self
-                .query_body
-                .iter()
-                .map(|body| base64_engine.encode(body))
-                .collect(),
-            resp_body: self
-                .resp_body
-                .iter()
-                .map(|body| base64_engine.encode(body))
-                .collect(),
+            query_body: self.query_body.clone(),
+            resp_body: self.resp_body.clone(),
         })
     }
 }

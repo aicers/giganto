@@ -191,6 +191,7 @@ struct GraphQlAutogenFieldAttrs {
     pub skip: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 fn derive_from_graphql_client_autogen_2(
     item: proc_macro2::TokenStream,
 ) -> deluxe::Result<proc_macro2::TokenStream> {
@@ -221,6 +222,15 @@ fn derive_from_graphql_client_autogen_2(
                     };
                     let from_field_name = resolve_from_field_name(&from_name, to_field_name);
                     let field_type = &field.ty;
+
+                    if is_vec_of_vec_with_safe_inner(field_type) {
+                        return quote! {
+                            #to_field_name: node.#from_field_name
+                                .into_iter()
+                                .map(|inner| inner.into_iter().map(|x| x as _).collect())
+                                .collect(),
+                        };
+                    }
 
                     match segment_type_and_cast_style(field_type, recursive_into) {
                         (_, CastStyle::None) => {
@@ -375,4 +385,25 @@ static SAFE_TO_I64_TYPES: [&str; 5] = ["u8", "u16", "i8", "i16", "i32"];
 fn is_target_of_safe_to_i64_cast(ty: &Type) -> bool {
     let type_token = ty.to_token_stream().to_string();
     SAFE_TO_I64_TYPES.contains(&type_token.as_str())
+}
+
+fn is_vec_of_vec_with_safe_inner(ty: &Type) -> bool {
+    extract_vec_inner_type(ty)
+        .and_then(extract_vec_inner_type)
+        .is_some_and(is_target_of_safe_to_i64_cast)
+}
+
+fn extract_vec_inner_type(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Vec"
+        && let PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        for arg in &args.args {
+            if let GenericArgument::Type(inner_ty) = arg {
+                return Some(inner_ty);
+            }
+        }
+    }
+    None
 }
