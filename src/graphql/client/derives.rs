@@ -3,7 +3,7 @@
 use graphql_client::GraphQLQuery;
 
 use crate::graphql::{
-    GigantoTimestamp, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize,
+    StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, TimestampScalar,
 };
 
 #[derive(GraphQLQuery)]
