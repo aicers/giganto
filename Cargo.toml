@@ -63,7 +63,7 @@ x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
 tokio-rustls = "0.26"
 async-graphql-poem = "7"
-jiff = { version = "0.2.15", features = ["serde"] }
+jiff = { version = "0.2", features = ["serde"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 
 [dev-dependencies]

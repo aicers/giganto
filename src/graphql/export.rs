@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::Local;
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -35,6 +34,7 @@ use giganto_client::{
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
+use jiff::Zoned;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
@@ -1918,7 +1918,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
             .kind
             .as_ref()
             .map_or(String::new(), |k| format!("{k}_")),
-        Local::now().format("%Y%m%d_%H%M%S"),
+        Zoned::now().strftime("%Y%m%d_%H%M%S"),
     );
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));

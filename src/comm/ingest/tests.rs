@@ -8,7 +8,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
@@ -25,6 +25,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+use jiff::Timestamp;
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -57,6 +58,21 @@ fn get_token() -> &'static Mutex<u32> {
     static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
 
     TOKEN.get_or_init(|| Mutex::new(0))
+}
+
+// Helper function to convert jiff::Timestamp to chrono::DateTime<Utc>
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn jiff_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let nanos = ts.as_nanosecond();
+    let secs = (nanos / 1_000_000_000) as i64;
+    let nsecs = (nanos % 1_000_000_000) as u32;
+    DateTime::from_timestamp(secs, nsecs).expect("valid timestamp")
+}
+
+// Helper function to get current timestamp as i64 nanoseconds
+#[allow(clippy::cast_possible_truncation)]
+fn now_nanos() -> i64 {
+    Timestamp::now().as_nanosecond() as i64
 }
 
 const CERT_PATH: &str = "tests/certs/node1/cert.pem";
@@ -167,7 +183,7 @@ async fn conn() {
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let tmp_dur = Duration::nanoseconds(12345);
-    let start_time = chrono::Utc::now();
+    let start_time = jiff_to_chrono(Timestamp::now());
     let end_time = start_time + chrono::Duration::nanoseconds(tmp_dur.num_nanoseconds().unwrap());
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -191,13 +207,9 @@ async fn conn() {
     send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
         .await
         .unwrap();
-    send_events(
-        &mut send_conn,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        conn_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_conn, now_nanos(), conn_body)
+        .await
+        .unwrap();
 
     send_conn.finish().expect("failed to shutdown stream");
 
@@ -217,8 +229,8 @@ async fn dns() {
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let start_time = chrono::Utc::now();
-    let end_time = start_time + chrono::Duration::seconds(1);
+    let start_time = jiff_to_chrono(Timestamp::now());
+    let end_time = start_time + Duration::seconds(1);
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -249,13 +261,9 @@ async fn dns() {
     send_record_header(&mut send_dns, RAW_EVENT_KIND_DNS)
         .await
         .unwrap();
-    send_events(
-        &mut send_dns,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dns_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dns, now_nanos(), dns_body)
+        .await
+        .unwrap();
 
     send_dns.finish().expect("failed to shutdown stream");
 
@@ -283,13 +291,9 @@ async fn log() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    send_events(
-        &mut send_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        log_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_log, now_nanos(), log_body)
+        .await
+        .unwrap();
 
     send_log.finish().expect("failed to shutdown stream");
 
@@ -314,8 +318,8 @@ async fn http() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -346,13 +350,9 @@ async fn http() {
     send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_http,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        http_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_http, now_nanos(), http_body)
+        .await
+        .unwrap();
 
     send_http.finish().expect("failed to shutdown stream");
 
@@ -377,8 +377,8 @@ async fn rdp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -390,13 +390,9 @@ async fn rdp() {
     send_record_header(&mut send_rdp, RAW_EVENT_KIND_RDP)
         .await
         .unwrap();
-    send_events(
-        &mut send_rdp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        rdp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_rdp, now_nanos(), rdp_body)
+        .await
+        .unwrap();
 
     send_rdp.finish().expect("failed to shutdown stream");
 
@@ -429,7 +425,7 @@ async fn periodic_time_series() {
     .unwrap();
     send_events(
         &mut send_periodic_time_series,
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        now_nanos(),
         periodic_time_series_body,
     )
     .await
@@ -460,8 +456,8 @@ async fn smtp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -479,13 +475,9 @@ async fn smtp() {
     send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_smtp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smtp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_smtp, now_nanos(), smtp_body)
+        .await
+        .unwrap();
 
     send_smtp.finish().expect("failed to shutdown stream");
 
@@ -510,8 +502,8 @@ async fn ntlm() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -527,13 +519,9 @@ async fn ntlm() {
     send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
         .await
         .unwrap();
-    send_events(
-        &mut send_ntlm,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ntlm_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ntlm, now_nanos(), ntlm_body)
+        .await
+        .unwrap();
 
     send_ntlm.finish().expect("failed to shutdown stream");
 
@@ -558,8 +546,8 @@ async fn kerberos() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -579,13 +567,9 @@ async fn kerberos() {
     send_record_header(&mut send_kerberos, RAW_EVENT_KIND_KERBEROS)
         .await
         .unwrap();
-    send_events(
-        &mut send_kerberos,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        kerberos_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_kerberos, now_nanos(), kerberos_body)
+        .await
+        .unwrap();
 
     send_kerberos.finish().expect("failed to shutdown stream");
 
@@ -610,8 +594,8 @@ async fn ssh() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -635,13 +619,9 @@ async fn ssh() {
     send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
         .await
         .unwrap();
-    send_events(
-        &mut send_ssh,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ssh_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ssh, now_nanos(), ssh_body)
+        .await
+        .unwrap();
 
     send_ssh.finish().expect("failed to shutdown stream");
 
@@ -666,8 +646,8 @@ async fn dce_rpc() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -682,13 +662,9 @@ async fn dce_rpc() {
     send_record_header(&mut send_dce_rpc, RAW_EVENT_KIND_DCE_RPC)
         .await
         .unwrap();
-    send_events(
-        &mut send_dce_rpc,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dce_rpc_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dce_rpc, now_nanos(), dce_rpc_body)
+        .await
+        .unwrap();
 
     send_dce_rpc.finish().expect("failed to shutdown stream");
 
@@ -718,13 +694,9 @@ async fn op_log() {
     send_record_header(&mut send_op_log, RAW_EVENT_KIND_OPLOG)
         .await
         .unwrap();
-    send_events(
-        &mut send_op_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        op_log_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_op_log, now_nanos(), op_log_body)
+        .await
+        .unwrap();
 
     send_op_log.finish().expect("failed to shutdown stream");
 
@@ -746,20 +718,16 @@ async fn packet() {
 
     let packet: Vec<u8> = vec![0, 1, 0, 1, 0, 1];
     let packet_body = Packet {
-        packet_timestamp: Utc::now().timestamp_nanos_opt().unwrap(),
+        packet_timestamp: now_nanos(),
         packet,
     };
 
     send_record_header(&mut send_packet, RAW_EVENT_KIND_PACKET)
         .await
         .unwrap();
-    send_events(
-        &mut send_packet,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        packet_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_packet, now_nanos(), packet_body)
+        .await
+        .unwrap();
 
     send_packet.finish().expect("failed to shutdown stream");
 
@@ -784,8 +752,8 @@ async fn ftp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -810,13 +778,9 @@ async fn ftp() {
     send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_ftp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ftp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ftp, now_nanos(), ftp_body)
+        .await
+        .unwrap();
 
     send_ftp.finish().expect("failed to shutdown stream");
 
@@ -841,8 +805,8 @@ async fn mqtt() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -859,13 +823,9 @@ async fn mqtt() {
     send_record_header(&mut send_mqtt, RAW_EVENT_KIND_MQTT)
         .await
         .unwrap();
-    send_events(
-        &mut send_mqtt,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        mqtt_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_mqtt, now_nanos(), mqtt_body)
+        .await
+        .unwrap();
 
     send_mqtt.finish().expect("failed to shutdown stream");
 
@@ -890,8 +850,8 @@ async fn ldap() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -909,13 +869,9 @@ async fn ldap() {
     send_record_header(&mut send_ldap, RAW_EVENT_KIND_LDAP)
         .await
         .unwrap();
-    send_events(
-        &mut send_ldap,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ldap_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ldap, now_nanos(), ldap_body)
+        .await
+        .unwrap();
 
     send_ldap.finish().expect("failed to shutdown stream");
 
@@ -940,8 +896,8 @@ async fn tls() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -973,13 +929,9 @@ async fn tls() {
     send_record_header(&mut send_tls, RAW_EVENT_KIND_TLS)
         .await
         .unwrap();
-    send_events(
-        &mut send_tls,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        tls_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_tls, now_nanos(), tls_body)
+        .await
+        .unwrap();
 
     send_tls.finish().expect("failed to shutdown stream");
 
@@ -1004,8 +956,8 @@ async fn smb() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1027,13 +979,9 @@ async fn smb() {
     send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
         .await
         .unwrap();
-    send_events(
-        &mut send_smb,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smb_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_smb, now_nanos(), smb_body)
+        .await
+        .unwrap();
 
     send_smb.finish().expect("failed to shutdown stream");
 
@@ -1058,8 +1006,8 @@ async fn nfs() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1072,13 +1020,9 @@ async fn nfs() {
     send_record_header(&mut send_nfs, RAW_EVENT_KIND_NFS)
         .await
         .unwrap();
-    send_events(
-        &mut send_nfs,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        nfs_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_nfs, now_nanos(), nfs_body)
+        .await
+        .unwrap();
 
     send_nfs.finish().expect("failed to shutdown stream");
 
@@ -1103,8 +1047,8 @@ async fn bootp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1126,13 +1070,9 @@ async fn bootp() {
     send_record_header(&mut send_bootp, RAW_EVENT_KIND_BOOTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_bootp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        bootp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_bootp, now_nanos(), bootp_body)
+        .await
+        .unwrap();
 
     send_bootp.finish().expect("failed to shutdown stream");
 
@@ -1157,8 +1097,8 @@ async fn dhcp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: jiff_to_chrono(Timestamp::now()),
+        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1193,13 +1133,9 @@ async fn dhcp() {
     send_record_header(&mut send_dhcp, RAW_EVENT_KIND_DHCP)
         .await
         .unwrap();
-    send_events(
-        &mut send_dhcp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dhcp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dhcp, now_nanos(), dhcp_body)
+        .await
+        .unwrap();
 
     send_dhcp.finish().expect("failed to shutdown stream");
 
@@ -1226,13 +1162,9 @@ async fn statistics() {
     send_record_header(&mut send_statistics, RAW_EVENT_KIND_STATISTICS)
         .await
         .unwrap();
-    send_events(
-        &mut send_statistics,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        statistics_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_statistics, now_nanos(), statistics_body)
+        .await
+        .unwrap();
 
     send_statistics.finish().expect("failed to shutdown stream");
 
@@ -1260,14 +1192,10 @@ async fn ack_info() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-    send_events(
-        &mut send_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        log_body,
-    )
-    .await
-    .unwrap();
+    let timestamp = now_nanos();
+    send_events(&mut send_log, now_nanos(), log_body)
+        .await
+        .unwrap();
 
     for i in 0..1023 {
         let log_body: Log = Log {
