@@ -16,7 +16,7 @@ use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
 
 use super::{
-    Engine, FromKeyValue, TimestampScalar, base64_engine, get_time_from_key,
+    Engine, FromKeyValue, GigantoTimestamp, base64_engine, get_time_from_key,
     get_time_from_key_prefix, handle_paged_events, load_connection_by_prefix_timestamp_key,
     paged_events_in_cluster,
 };
@@ -158,7 +158,7 @@ impl RawEventFilter for OpLogFilter {
     log_raw_events::LogRawEventsLogRawEventsEdgesNode
 ]))]
 struct LogRawEvent {
-    time: TimestampScalar,
+    time: GigantoTimestamp,
     log: String,
 }
 
@@ -173,7 +173,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    time: TimestampScalar,
+    time: GigantoTimestamp,
     level: String,
     contents: String,
     agent_name: String,

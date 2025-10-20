@@ -5,7 +5,7 @@ use jiff::Timestamp;
 
 use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
 use crate::comm::ingest::generation::SequenceGenerator;
-use crate::graphql::{TimestampScalar, load_connection};
+use crate::graphql::{GigantoTimestamp, load_connection};
 use crate::{
     bincode_utils::encode_legacy,
     graphql::{TimeRange, tests::TestSchema},
@@ -29,10 +29,10 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
             }),
@@ -60,7 +60,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
                 end: None,
@@ -94,7 +94,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(4_i64.into()).unwrap(),
                 )),
             }),
@@ -126,10 +126,10 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
             }),
@@ -157,7 +157,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
                 end: None,
@@ -191,7 +191,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
             }),
@@ -219,10 +219,10 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(3_i64.into()).unwrap(),
                 )),
             }),
@@ -250,7 +250,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(2_i64.into()).unwrap(),
                 )),
                 end: None,
@@ -280,7 +280,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(5_i64.into()).unwrap(),
                 )),
             }),
@@ -312,10 +312,10 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(4_i64.into()).unwrap(),
                 )),
             }),
@@ -343,7 +343,7 @@ async fn load_time_range() {
         &store,
         &LogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(2_i64.into()).unwrap(),
                 )),
                 end: None,
@@ -373,7 +373,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(4_i64.into()).unwrap(),
                 )),
             }),
@@ -535,10 +535,10 @@ async fn load_oplog() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(5_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(7_i64.into()).unwrap(),
                 )),
             }),
@@ -581,10 +581,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(10_i64.into()).unwrap(),
                 )),
             }),
@@ -609,10 +609,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(10_i64.into()).unwrap(),
                 )),
             }),
@@ -637,10 +637,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(10_i64.into()).unwrap(),
                 )),
             }),
@@ -663,10 +663,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &store,
         &OpLogFilter {
             time: Some(TimeRange {
-                start: Some(TimestampScalar(
+                start: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(1_i64.into()).unwrap(),
                 )),
-                end: Some(TimestampScalar(
+                end: Some(GigantoTimestamp(
                     Timestamp::from_nanosecond(10_i64.into()).unwrap(),
                 )),
             }),

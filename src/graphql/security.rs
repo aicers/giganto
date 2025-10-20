@@ -9,7 +9,7 @@ use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
 
 use super::{
-    FromKeyValue, IpRange, PortRange, TimestampScalar, check_address, check_contents, check_port,
+    FromKeyValue, GigantoTimestamp, IpRange, PortRange, check_address, check_contents, check_port,
     get_time_from_key, handle_paged_events, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
@@ -86,7 +86,7 @@ impl RawEventFilter for SecuLogFilter {
     secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
 ]))]
 struct SecuLogRawEvent {
-    time: TimestampScalar,
+    time: GigantoTimestamp,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
