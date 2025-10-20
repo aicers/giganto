@@ -77,8 +77,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<TimestampScalar>,
-    end: Option<TimestampScalar>,
+    start: Option<GigantoTimestamp>,
+    end: Option<GigantoTimestamp>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -118,7 +118,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<TimestampScalar>,
+    pub times: Vec<GigantoTimestamp>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -190,7 +190,7 @@ const A_BILLION: i64 = 1_000_000_000;
 fn collect_exist_times<T>(
     target_data: &BTreeSet<(Timestamp, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<TimestampScalar>
+) -> Vec<GigantoTimestamp>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -905,30 +905,30 @@ impl_string_number!(StringNumberU64, u64);
 impl_string_number!(StringNumberU32, u32);
 impl_string_number!(StringNumberI64, i64);
 
-// Newtype wrapper for Timestamp to implement ScalarType
+// Newtype wrapper for jiff::Timestamp to implement ScalarType
 #[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, Default, PartialEq)]
 #[serde(transparent)]
-pub struct TimestampScalar(pub Timestamp);
+pub struct GigantoTimestamp(pub Timestamp);
 
-impl From<Timestamp> for TimestampScalar {
+impl From<Timestamp> for GigantoTimestamp {
     fn from(ts: Timestamp) -> Self {
         Self(ts)
     }
 }
 
-impl From<TimestampScalar> for Timestamp {
-    fn from(gts: TimestampScalar) -> Self {
+impl From<GigantoTimestamp> for Timestamp {
+    fn from(gts: GigantoTimestamp) -> Self {
         gts.0
     }
 }
 
-#[Scalar]
-impl ScalarType for TimestampScalar {
+#[Scalar(name = "Timestamp")]
+impl ScalarType for GigantoTimestamp {
     fn parse(value: Value) -> InputValueResult<Self> {
         if let Value::String(value) = &value {
             value
                 .parse::<Timestamp>()
-                .map(TimestampScalar)
+                .map(GigantoTimestamp)
                 .map_err(|e| InputValueError::custom(format!("Invalid timestamp: {e}")))
         } else {
             Err(InputValueError::expected_type(value))

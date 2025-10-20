@@ -2,7 +2,6 @@ use std::mem;
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
 
-use chrono::{Duration, Utc};
 use giganto_client::ingest::{
     log::{Log, OpLog, OpLogLevel},
     network::{
@@ -11,6 +10,7 @@ use giganto_client::ingest::{
     },
     timeseries::PeriodicTimeSeries,
 };
+use jiff::{SignedDuration, Timestamp};
 
 use crate::bincode_utils::encode_legacy;
 use crate::comm::ingest::generation::SequenceGenerator;
@@ -82,11 +82,15 @@ async fn export_conn() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_conn_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -132,7 +136,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
-    let tmp_dur = Duration::nanoseconds(12345);
+    let tmp_dur = SignedDuration::from_nanos(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -140,8 +144,8 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
         resp_port: 80,
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap()),
-        end_time: chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap()),
+        start_time: Timestamp::from_nanosecond(tmp_dur.as_nanos()).unwrap(),
+        end_time: Timestamp::from_nanosecond(tmp_dur.as_nanos()).unwrap(),
         duration: 1_000_000_000,
         service: "-".to_string(),
         orig_bytes: 77,
@@ -161,11 +165,15 @@ async fn export_dns() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_dns_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -217,8 +225,10 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -247,11 +257,15 @@ async fn export_http() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_http_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -303,8 +317,10 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -341,11 +357,15 @@ async fn export_rdp() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_rdp_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -397,8 +417,10 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -416,11 +438,15 @@ async fn export_smtp() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_smtp_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -472,8 +498,10 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -497,11 +525,15 @@ async fn export_ntlm() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_ntlm_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -553,8 +585,10 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -576,11 +610,15 @@ async fn export_kerberos() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_kerberos_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -632,8 +670,10 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -659,11 +699,15 @@ async fn export_ssh() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_ssh_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -714,8 +758,10 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -745,11 +791,15 @@ async fn export_dce_rpc() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_dce_rpc_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -800,8 +850,10 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -825,14 +877,14 @@ async fn export_log() {
     insert_log_raw_event(
         &store,
         "src1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
         "kind1",
         b"log1",
     );
     insert_log_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
         "kind2",
         b"log2",
     );
@@ -897,13 +949,13 @@ async fn export_time_series() {
     insert_time_series(
         &store,
         "src1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
         vec![0.0; 12],
     );
     insert_time_series(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
         vec![0.0; 12],
     );
 
@@ -1021,11 +1073,15 @@ async fn export_ftp() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_ftp_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1077,8 +1133,10 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1109,11 +1167,15 @@ async fn export_mqtt() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_mqtt_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1165,8 +1227,10 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1189,11 +1253,15 @@ async fn export_ldap() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_ldap_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1245,8 +1313,10 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1270,11 +1340,15 @@ async fn export_tls() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_tls_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1326,8 +1400,10 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1365,11 +1441,15 @@ async fn export_smb() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_smb_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1421,8 +1501,10 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1450,11 +1532,15 @@ async fn export_nfs() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_nfs_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1506,8 +1592,10 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1526,11 +1614,15 @@ async fn export_bootp() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_bootp_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1582,8 +1674,10 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1611,11 +1705,15 @@ async fn export_dhcp() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(
+        &store,
+        "src1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
     insert_dhcp_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
     );
 
     // export csv file
@@ -1667,8 +1765,10 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

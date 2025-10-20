@@ -8,7 +8,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, Duration, Utc};
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
@@ -25,7 +24,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -58,15 +57,6 @@ fn get_token() -> &'static Mutex<u32> {
     static TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
 
     TOKEN.get_or_init(|| Mutex::new(0))
-}
-
-// Helper function to convert jiff::Timestamp to chrono::DateTime<Utc>
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn jiff_to_chrono(ts: Timestamp) -> DateTime<Utc> {
-    let nanos = ts.as_nanosecond();
-    let secs = (nanos / 1_000_000_000) as i64;
-    let nsecs = (nanos % 1_000_000_000) as u32;
-    DateTime::from_timestamp(secs, nsecs).expect("valid timestamp")
 }
 
 // Helper function to get current timestamp as i64 nanoseconds
@@ -182,9 +172,9 @@ async fn conn() {
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let tmp_dur = Duration::nanoseconds(12345);
-    let start_time = jiff_to_chrono(Timestamp::now());
-    let end_time = start_time + chrono::Duration::nanoseconds(tmp_dur.num_nanoseconds().unwrap());
+    let tmp_dur = SignedDuration::from_nanos(12345);
+    let start_time = Timestamp::now();
+    let end_time = start_time + tmp_dur;
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -194,7 +184,7 @@ async fn conn() {
         conn_state: "sf".to_string(),
         start_time,
         end_time,
-        duration: tmp_dur.num_nanoseconds().unwrap(),
+        duration: tmp_dur.as_nanos().try_into().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,
@@ -229,8 +219,8 @@ async fn dns() {
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let start_time = jiff_to_chrono(Timestamp::now());
-    let end_time = start_time + Duration::seconds(1);
+    let start_time = Timestamp::now();
+    let end_time = start_time + SignedDuration::from_secs(1);
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -318,8 +308,8 @@ async fn http() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -377,8 +367,8 @@ async fn rdp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -456,8 +446,8 @@ async fn smtp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -502,8 +492,8 @@ async fn ntlm() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -546,8 +536,8 @@ async fn kerberos() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -594,8 +584,8 @@ async fn ssh() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -646,8 +636,8 @@ async fn dce_rpc() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -752,8 +742,8 @@ async fn ftp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -805,8 +795,8 @@ async fn mqtt() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -850,8 +840,8 @@ async fn ldap() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -896,8 +886,8 @@ async fn tls() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -956,8 +946,8 @@ async fn smb() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1006,8 +996,8 @@ async fn nfs() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1047,8 +1037,8 @@ async fn bootp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1097,8 +1087,8 @@ async fn dhcp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: jiff_to_chrono(Timestamp::now()),
-        end_time: jiff_to_chrono(Timestamp::now()) + Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

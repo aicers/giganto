@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -586,8 +586,9 @@ impl MigrationNew<DnsBeforeV26> for DnsFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -617,8 +618,9 @@ impl MigrationNew<RdpBeforeV26> for RdpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -637,8 +639,9 @@ impl MigrationNew<SmtpBeforeV26> for SmtpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -663,8 +666,9 @@ impl MigrationNew<NtlmBeforeV26> for NtlmFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -687,8 +691,9 @@ impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -715,8 +720,9 @@ impl MigrationNew<SshBeforeV26> for SshFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -747,8 +753,9 @@ impl MigrationNew<DceRpcBeforeV26> for DceRpcFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -770,8 +777,9 @@ impl MigrationNew<FtpBeforeV26> for FtpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -803,8 +811,9 @@ impl MigrationNew<MqttBeforeV26> for MqttFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -828,8 +837,9 @@ impl MigrationNew<LdapBeforeV26> for LdapFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -854,8 +864,9 @@ impl MigrationNew<TlsBeforeV26> for TlsFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -894,8 +905,9 @@ impl MigrationNew<SmbBeforeV26> for SmbFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -924,8 +936,9 @@ impl MigrationNew<NfsBeforeV26> for NfsFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -945,8 +958,9 @@ impl MigrationNew<BootpBeforeV26> for BootpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,
@@ -975,8 +989,9 @@ impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Utc.timestamp_nanos(start_time),
-            end_time: Utc.timestamp_nanos(old_data.end_time),
+            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
+                .expect("valid timestamp"),
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,

@@ -1128,12 +1128,12 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.23.0"
-source = "git+https://github.com/aicers/giganto-client.git?rev=e85bcb5#e85bcb57bc7a1c6d65ab6fc89aab718c4a2b9a9c"
+version = "0.24.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.24.0#f6f059eaf9c321f8807c35d5e229fc708148e1f7"
 dependencies = [
  "anyhow",
  "bincode",
- "chrono",
+ "jiff",
  "num_enum",
  "quinn",
  "semver",
