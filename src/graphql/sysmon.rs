@@ -16,7 +16,7 @@ use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
 
 use super::{
-    Engine, FromKeyValue, GigantoTimestamp, NetworkFilter, SearchFilter, base64_engine,
+    Engine, FromKeyValue, GqlTimestamp, NetworkFilter, SearchFilter, base64_engine,
     collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
     handle_paged_events, min_max_time, paged_events_in_cluster,
 };
@@ -62,7 +62,7 @@ pub(super) struct SysmonQuery;
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessCreateEvent
 ]))]
 struct ProcessCreateEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -95,15 +95,15 @@ struct ProcessCreateEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreationTimeChangedEvent
 ]))]
 struct FileCreationTimeChangedEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: GigantoTimestamp,
-    previous_creation_utc_time: GigantoTimestamp,
+    creation_utc_time: GqlTimestamp,
+    previous_creation_utc_time: GqlTimestamp,
     user: String,
 }
 
@@ -114,7 +114,7 @@ struct FileCreationTimeChangedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnNetworkConnectionEvent
 ]))]
 struct NetworkConnectionEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -142,7 +142,7 @@ struct NetworkConnectionEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTerminatedEvent
 ]))]
 struct ProcessTerminatedEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -158,7 +158,7 @@ struct ProcessTerminatedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnImageLoadedEvent
 ]))]
 struct ImageLoadedEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -184,14 +184,14 @@ struct ImageLoadedEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateEvent
 ]))]
 struct FileCreateEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: GigantoTimestamp,
+    creation_utc_time: GqlTimestamp,
     user: String,
 }
 
@@ -202,7 +202,7 @@ struct FileCreateEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryValueSetEvent
 ]))]
 struct RegistryValueSetEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -221,7 +221,7 @@ struct RegistryValueSetEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryKeyValueRenameEvent
 ]))]
 struct RegistryKeyValueRenameEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -240,14 +240,14 @@ struct RegistryKeyValueRenameEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileCreateStreamHashEvent
 ]))]
 struct FileCreateStreamHashEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
     process_id: StringNumberU32,
     image: String,
     target_filename: String,
-    creation_utc_time: GigantoTimestamp,
+    creation_utc_time: GqlTimestamp,
     hash: Vec<String>,
     contents: String,
     user: String,
@@ -260,7 +260,7 @@ struct FileCreateStreamHashEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnPipeEventEvent
 ]))]
 struct PipeEventEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     event_type: String,
@@ -278,7 +278,7 @@ struct PipeEventEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDnsEventEvent
 ]))]
 struct DnsEventEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -297,7 +297,7 @@ struct DnsEventEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteEvent
 ]))]
 struct FileDeleteEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -317,7 +317,7 @@ struct FileDeleteEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessTamperingEvent
 ]))]
 struct ProcessTamperingEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -334,7 +334,7 @@ struct ProcessTamperingEvent {
     sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnFileDeleteDetectedEvent
 ]))]
 struct FileDeleteDetectedEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     agent_name: String,
     agent_id: String,
     process_guid: String,
@@ -1193,7 +1193,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_create_store()?;
@@ -1220,7 +1220,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_time_store()?;
@@ -1251,7 +1251,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.network_connect_store()?;
@@ -1281,7 +1281,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_terminate_store()?;
@@ -1311,7 +1311,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.image_load_store()?;
@@ -1338,7 +1338,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_store()?;
@@ -1366,7 +1366,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_value_set_store()?;
@@ -1393,7 +1393,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.registry_key_rename_store()?;
@@ -1423,7 +1423,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_create_stream_hash_store()?;
@@ -1454,7 +1454,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.pipe_event_store()?;
@@ -1481,7 +1481,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dns_query_store()?;
@@ -1508,7 +1508,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_store()?;
@@ -1536,7 +1536,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.process_tamper_store()?;
@@ -1563,7 +1563,7 @@ impl SysmonQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<GigantoTimestamp>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.file_delete_detected_store()?;

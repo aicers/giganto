@@ -16,9 +16,8 @@ use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
 
 use super::{
-    Engine, FromKeyValue, GigantoTimestamp, base64_engine, get_time_from_key,
-    get_time_from_key_prefix, handle_paged_events, load_connection_by_prefix_timestamp_key,
-    paged_events_in_cluster,
+    Engine, FromKeyValue, GqlTimestamp, base64_engine, get_time_from_key, get_time_from_key_prefix,
+    handle_paged_events, load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -158,7 +157,7 @@ impl RawEventFilter for OpLogFilter {
     log_raw_events::LogRawEventsLogRawEventsEdgesNode
 ]))]
 struct LogRawEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     log: String,
 }
 
@@ -173,7 +172,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    time: GigantoTimestamp,
+    time: GqlTimestamp,
     level: String,
     contents: String,
     agent_name: String,

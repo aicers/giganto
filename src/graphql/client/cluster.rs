@@ -895,11 +895,11 @@ mod tests {
     use jiff::Timestamp;
 
     use super::{ClusterSortKey, sort_and_trunk_edges};
-    use crate::graphql::GigantoTimestamp;
+    use crate::graphql::GqlTimestamp;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        time: GigantoTimestamp,
+        time: GqlTimestamp,
     }
 
     impl ClusterSortKey for TestNode {

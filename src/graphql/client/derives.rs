@@ -3,11 +3,11 @@
 use graphql_client::GraphQLQuery;
 
 use crate::graphql::{
-    GigantoTimestamp, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize,
+    GqlTimestamp, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize,
 };
 
 // Type alias for graphql_client generated code
-type Timestamp = GigantoTimestamp;
+type Timestamp = GqlTimestamp;
 
 #[derive(GraphQLQuery)]
 #[graphql(
