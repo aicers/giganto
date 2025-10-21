@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use tracing::info;
 
 use super::{
-    Direction, FromKeyValue, GigantoTimestamp, RawEventFilter, TIMESTAMP_SIZE, TimeRange,
+    Direction, FromKeyValue, GqlTimestamp, RawEventFilter, TIMESTAMP_SIZE, TimeRange,
     collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
 #[cfg(feature = "cluster")]
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: GigantoTimestamp,
+    request_time: GqlTimestamp,
     packet_time: Option<TimeRange>,
 }
 
@@ -83,8 +83,8 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: GigantoTimestamp,
-    packet_time: GigantoTimestamp,
+    request_time: GqlTimestamp,
+    packet_time: GqlTimestamp,
     packet: String,
 }
 
@@ -94,7 +94,7 @@ struct Packet {
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: GigantoTimestamp,
+    request_time: GqlTimestamp,
     parsed_pcap: String,
 }
 

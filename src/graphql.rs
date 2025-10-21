@@ -77,8 +77,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<GigantoTimestamp>,
-    end: Option<GigantoTimestamp>,
+    start: Option<GqlTimestamp>,
+    end: Option<GqlTimestamp>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -118,7 +118,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<GigantoTimestamp>,
+    pub times: Vec<GqlTimestamp>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -190,7 +190,7 @@ const A_BILLION: i64 = 1_000_000_000;
 fn collect_exist_times<T>(
     target_data: &BTreeSet<(Timestamp, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<GigantoTimestamp>
+) -> Vec<GqlTimestamp>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -908,27 +908,27 @@ impl_string_number!(StringNumberI64, i64);
 // Newtype wrapper for jiff::Timestamp to implement ScalarType
 #[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, Default, PartialEq)]
 #[serde(transparent)]
-pub struct GigantoTimestamp(pub Timestamp);
+pub struct GqlTimestamp(pub Timestamp);
 
-impl From<Timestamp> for GigantoTimestamp {
+impl From<Timestamp> for GqlTimestamp {
     fn from(ts: Timestamp) -> Self {
         Self(ts)
     }
 }
 
-impl From<GigantoTimestamp> for Timestamp {
-    fn from(gts: GigantoTimestamp) -> Self {
+impl From<GqlTimestamp> for Timestamp {
+    fn from(gts: GqlTimestamp) -> Self {
         gts.0
     }
 }
 
 #[Scalar(name = "Timestamp")]
-impl ScalarType for GigantoTimestamp {
+impl ScalarType for GqlTimestamp {
     fn parse(value: Value) -> InputValueResult<Self> {
         if let Value::String(value) = &value {
             value
                 .parse::<Timestamp>()
-                .map(GigantoTimestamp)
+                .map(GqlTimestamp)
                 .map_err(|e| InputValueError::custom(format!("Invalid timestamp: {e}")))
         } else {
             Err(InputValueError::expected_type(value))
