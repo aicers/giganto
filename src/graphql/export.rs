@@ -20,8 +20,8 @@ use giganto_client::{
         log::{Log, OpLog, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Qclass,
-            Qtype, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+            Ntlm, Qclass, Qtype, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -54,9 +54,10 @@ use crate::{
     storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
 };
 
-const ADDRESS_PROTOCOL: [&str; 19] = [
+const ADDRESS_PROTOCOL: [&str; 20] = [
     "conn",
     "dns",
+    "malformed_dns",
     "http",
     "rdp",
     "smtp",
@@ -147,6 +148,36 @@ struct DnsJsonOutput {
     rd_flag: bool,
     ra_flag: bool,
     ttl: Vec<String>,
+}
+
+#[derive(Serialize, Debug)]
+struct MalformedDnsJsonOutput {
+    time: String,
+    sensor: String,
+    orig_addr: String,
+    orig_port: u16,
+    resp_addr: String,
+    resp_port: u16,
+    proto: u8,
+    start_time: String,
+    end_time: String,
+    duration: i64,
+    orig_pkts: u64,
+    resp_pkts: u64,
+    orig_l2_bytes: u64,
+    resp_l2_bytes: u64,
+    trans_id: u16,
+    flags: u16,
+    question_count: u16,
+    answer_count: u16,
+    authority_count: u16,
+    additional_count: u16,
+    query_count: u32,
+    resp_count: u32,
+    query_bytes: u64,
+    resp_bytes: u64,
+    query_body: Vec<Vec<u8>>,
+    resp_body: Vec<Vec<u8>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1162,6 +1193,39 @@ impl JsonOutput<DnsJsonOutput> for Dns {
     }
 }
 
+impl JsonOutput<MalformedDnsJsonOutput> for MalformedDns {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<MalformedDnsJsonOutput> {
+        Ok(MalformedDnsJsonOutput {
+            time,
+            sensor,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            start_time: self.start_time.to_string(),
+            end_time: self.end_time.to_string(),
+            duration: self.duration,
+            orig_pkts: self.orig_pkts,
+            resp_pkts: self.resp_pkts,
+            orig_l2_bytes: self.orig_l2_bytes,
+            resp_l2_bytes: self.resp_l2_bytes,
+            trans_id: self.trans_id,
+            flags: self.flags,
+            question_count: self.question_count,
+            answer_count: self.answer_count,
+            authority_count: self.authority_count,
+            additional_count: self.additional_count,
+            query_count: self.query_count,
+            resp_count: self.resp_count,
+            query_bytes: self.query_bytes,
+            resp_bytes: self.resp_bytes,
+            query_body: self.query_body.clone(),
+            resp_body: self.resp_body.clone(),
+        })
+    }
+}
+
 impl JsonOutput<LogJsonOutput> for Log {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<LogJsonOutput> {
         Ok(LogJsonOutput {
@@ -1959,6 +2023,7 @@ fn export_by_protocol(
     match protocol {
         "conn" => spawn_export!(conn_store, process_export),
         "dns" => spawn_export!(dns_store, process_export),
+        "malformed_dns" => spawn_export!(malformed_dns_store, process_export),
         "http" => spawn_export!(http_store, process_export),
         "log" => spawn_export!(log_store, process_export),
         "rdp" => spawn_export!(rdp_store, process_export),

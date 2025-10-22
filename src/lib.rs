@@ -191,6 +191,7 @@ struct GraphQlAutogenFieldAttrs {
     pub skip: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 fn derive_from_graphql_client_autogen_2(
     item: proc_macro2::TokenStream,
 ) -> deluxe::Result<proc_macro2::TokenStream> {
@@ -246,6 +247,22 @@ fn derive_from_graphql_client_autogen_2(
                         (SegmentType::Vec, CastStyle::Into) => {
                             quote! {
                                 #to_field_name: node.#from_field_name.into_iter().map(|x| x.into()).collect(),
+                            }
+                        },
+                        (SegmentType::VecVec, CastStyle::As) => {
+                            quote! {
+                                #to_field_name: node.#from_field_name
+                                    .into_iter()
+                                    .map(|inner| inner.into_iter().map(|x| x as _).collect())
+                                    .collect(),
+                            }
+                        },
+                        (SegmentType::VecVec, CastStyle::Into) => {
+                            quote! {
+                                #to_field_name: node.#from_field_name
+                                    .into_iter()
+                                    .map(|inner| inner.into_iter().map(|x| x.into()).collect())
+                                    .collect(),
                             }
                         },
                         (SegmentType::Option, CastStyle::Into) => {
@@ -318,6 +335,7 @@ fn resolve_from_field_name(from_name: &str, field_name: &Ident) -> Ident {
 enum SegmentType {
     Other,
     Vec,
+    VecVec,
     Option,
 }
 
@@ -336,6 +354,9 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
             if let PathArguments::AngleBracketed(vec_element_type_arg) = &segment.arguments {
                 for arg in &vec_element_type_arg.args {
                     if let GenericArgument::Type(el_type) = arg {
+                        if let Some(inner_type) = vec_vec_inner_type(el_type) {
+                            return (SegmentType::VecVec, cast_style(inner_type, recursive_into));
+                        }
                         return (SegmentType::Vec, cast_style(el_type, recursive_into));
                     }
                 }
@@ -375,4 +396,23 @@ static SAFE_TO_I64_TYPES: [&str; 5] = ["u8", "u16", "i8", "i16", "i32"];
 fn is_target_of_safe_to_i64_cast(ty: &Type) -> bool {
     let type_token = ty.to_token_stream().to_string();
     SAFE_TO_I64_TYPES.contains(&type_token.as_str())
+}
+
+fn vec_vec_inner_type(ty: &Type) -> Option<&Type> {
+    extract_vec_inner_type(ty)
+}
+
+fn extract_vec_inner_type(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Vec"
+        && let PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        for arg in &args.args {
+            if let GenericArgument::Type(inner_ty) = arg {
+                return Some(inner_ty);
+            }
+        }
+    }
+    None
 }

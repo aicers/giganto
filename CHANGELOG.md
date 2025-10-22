@@ -21,6 +21,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   setting on startup and reports an error if it doesn't match the database's
   compression scheme. Changing compression settings is not supported for
   existing databases.
+- Added support for `MalformedDns` events, including database storage, ingest,
+  publish, and GraphQL API functionality.
 - Introduced a new feature flag, `cluster`, to enable or disable Giganto's
   cluster functionality.
   - When `cluster` is enabled (default), Giganto connects to other instances in

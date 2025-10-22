@@ -7,10 +7,11 @@ use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
 };
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb,
-    Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -18,10 +19,10 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, StringNumberI64,
-    StringNumberU32, StringNumberU64, StringNumberUsize, base64_engine, check_address,
-    check_agent_id, check_port, collect_exist_times, events_vec_in_cluster, get_peekable_iter,
-    get_time_from_key, handle_paged_events, min_max_time, paged_events_in_cluster,
+    FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, StringNumberI64, StringNumberU32,
+    StringNumberU64, StringNumberUsize, base64_engine, check_address, check_agent_id, check_port,
+    collect_exist_times, events_vec_in_cluster, get_peekable_iter, get_time_from_key,
+    handle_paged_events, min_max_time, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -32,23 +33,25 @@ use crate::graphql::client::{
     },
     derives::{
         BootpRawEvents, ConnRawEvents, DceRpcRawEvents, DhcpRawEvents, DnsRawEvents, FtpRawEvents,
-        HttpRawEvents, KerberosRawEvents, LdapRawEvents, MqttRawEvents,
+        HttpRawEvents, KerberosRawEvents, LdapRawEvents, MalformedDnsRawEvents, MqttRawEvents,
         NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RadiusRawEvents,
         RdpRawEvents, SearchBootpRawEvents, SearchConnRawEvents, SearchDceRpcRawEvents,
         SearchDhcpRawEvents, SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents,
-        SearchKerberosRawEvents, SearchLdapRawEvents, SearchMqttRawEvents, SearchNfsRawEvents,
-        SearchNtlmRawEvents, SearchRadiusRawEvents, SearchRdpRawEvents, SearchSmbRawEvents,
-        SearchSmtpRawEvents, SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents,
-        SshRawEvents, TlsRawEvents, bootp_raw_events, conn_raw_events, dce_rpc_raw_events,
-        dhcp_raw_events, dns_raw_events, ftp_raw_events, http_raw_events, kerberos_raw_events,
-        ldap_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events, ntlm_raw_events,
-        radius_raw_events, rdp_raw_events, search_bootp_raw_events, search_conn_raw_events,
-        search_dce_rpc_raw_events, search_dhcp_raw_events, search_dns_raw_events,
-        search_ftp_raw_events, search_http_raw_events, search_kerberos_raw_events,
-        search_ldap_raw_events, search_mqtt_raw_events, search_nfs_raw_events,
-        search_ntlm_raw_events, search_radius_raw_events, search_rdp_raw_events,
-        search_smb_raw_events, search_smtp_raw_events, search_ssh_raw_events,
-        search_tls_raw_events, smb_raw_events, smtp_raw_events, ssh_raw_events, tls_raw_events,
+        SearchKerberosRawEvents, SearchLdapRawEvents, SearchMalformedDnsRawEvents,
+        SearchMqttRawEvents, SearchNfsRawEvents, SearchNtlmRawEvents, SearchRadiusRawEvents,
+        SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents, SearchSshRawEvents,
+        SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents, TlsRawEvents,
+        bootp_raw_events, conn_raw_events, dce_rpc_raw_events, dhcp_raw_events, dns_raw_events,
+        ftp_raw_events, http_raw_events, kerberos_raw_events, ldap_raw_events,
+        malformed_dns_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
+        ntlm_raw_events, radius_raw_events, rdp_raw_events, search_bootp_raw_events,
+        search_conn_raw_events, search_dce_rpc_raw_events, search_dhcp_raw_events,
+        search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
+        search_kerberos_raw_events, search_ldap_raw_events, search_malformed_dns_raw_events,
+        search_mqtt_raw_events, search_nfs_raw_events, search_ntlm_raw_events,
+        search_radius_raw_events, search_rdp_raw_events, search_smb_raw_events,
+        search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
+        smtp_raw_events, ssh_raw_events, tls_raw_events,
     },
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
@@ -265,6 +268,70 @@ struct DnsRawEvent {
     ra_flag: bool,
     /// Time to Live
     ttl: Vec<i32>,
+}
+
+/// Represents an event for malformed DNS traffic.
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    malformed_dns_raw_events::MalformedDnsRawEventsMalformedDnsRawEventsEdgesNode,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnMalformedDnsRawEvent
+]))]
+struct MalformedDnsRawEvent {
+    /// Time the event started transmitting from a sensor
+    time: DateTime<Utc>,
+    /// Source IP address
+    orig_addr: String,
+    /// Source Port Number
+    orig_port: u16,
+    /// Destination IP Address
+    resp_addr: String,
+    /// Destination Port Number
+    resp_port: u16,
+    /// Protocol Number
+    ///
+    /// TCP is 6, and UDP is 17.
+    proto: u8,
+    /// Start Time
+    start_time: DateTime<Utc>,
+    /// End Time
+    end_time: DateTime<Utc>,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
+    /// Transaction ID
+    trans_id: u16,
+    /// DNS Flags bitfield
+    flags: u16,
+    /// Question Record count
+    question_count: u16,
+    /// Answer Record count
+    answer_count: u16,
+    /// Authority Record count
+    authority_count: u16,
+    /// Additional Record count
+    additional_count: u16,
+    /// Captured malformed query count
+    query_count: StringNumberU32,
+    /// Captured malformed response count
+    resp_count: StringNumberU32,
+    /// Total malformed query bytes
+    query_bytes: StringNumberU64,
+    /// Total malformed response bytes
+    resp_bytes: StringNumberU64,
+    /// Raw malformed query payloads
+    query_body: Vec<Vec<u8>>,
+    /// Raw malformed response payloads
+    resp_body: Vec<Vec<u8>>,
 }
 
 /// Represents an event extracted from the HTTP protocol.
@@ -1272,6 +1339,7 @@ struct RadiusRawEvent {
 enum NetworkRawEvents {
     ConnRawEvent(ConnRawEvent),
     DnsRawEvent(DnsRawEvent),
+    MalformedDnsRawEvent(MalformedDnsRawEvent),
     HttpRawEvent(HttpRawEvent),
     RdpRawEvent(RdpRawEvent),
     NtlmRawEvent(NtlmRawEvent),
@@ -1300,6 +1368,9 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
             network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::DnsRawEvent(event) => {
                 NetworkRawEvents::DnsRawEvent(event.into())
             }
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::MalformedDnsRawEvent(
+                event,
+            ) => NetworkRawEvents::MalformedDnsRawEvent(event.into()),
             network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::HttpRawEvent(event) => {
                 NetworkRawEvents::HttpRawEvent(event.into())
             }
@@ -1421,6 +1492,38 @@ impl FromKeyValue<Http> for HttpRawEvent {
             state: val.state,
             request_len: StringNumberUsize(val.request_len),
             response_len: StringNumberUsize(val.response_len),
+        })
+    }
+}
+
+impl FromKeyValue<MalformedDns> for MalformedDnsRawEvent {
+    fn from_key_value(key: &[u8], val: MalformedDns) -> Result<Self> {
+        Ok(MalformedDnsRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            start_time: val.start_time,
+            end_time: val.end_time,
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
+            trans_id: val.trans_id,
+            flags: val.flags,
+            question_count: val.question_count,
+            answer_count: val.answer_count,
+            authority_count: val.authority_count,
+            additional_count: val.additional_count,
+            query_count: val.query_count.into(),
+            resp_count: val.resp_count.into(),
+            query_bytes: val.query_bytes.into(),
+            resp_bytes: val.resp_bytes.into(),
+            query_body: val.query_body,
+            resp_body: val.resp_body,
         })
     }
 }
@@ -1771,6 +1874,20 @@ async fn handle_paged_dns_raw_events(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
+async fn handle_paged_malformed_dns_raw_events(
+    ctx: &Context<'_>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, MalformedDnsRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.malformed_dns_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
 async fn handle_paged_http_raw_events(
     ctx: &Context<'_>,
     filter: NetworkFilter,
@@ -2027,6 +2144,15 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let (malformed_dns_iter, _) = get_peekable_iter(
+                &db.malformed_dns_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
             let (http_iter, _) = get_peekable_iter(
                 &db.http_store()?,
                 &filter,
@@ -2179,6 +2305,7 @@ async fn handle_network_raw_events(
             network_connection(
                 conn_iter,
                 dns_iter,
+                malformed_dns_iter,
                 http_iter,
                 rdp_iter,
                 ntlm_iter,
@@ -2257,6 +2384,33 @@ impl NetworkQuery {
             dns_raw_events::Variables,
             dns_raw_events::ResponseData,
             dns_raw_events
+        )
+    }
+
+    async fn malformed_dns_raw_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, MalformedDnsRawEvent>> {
+        let handler = handle_paged_malformed_dns_raw_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            MalformedDnsRawEvents,
+            malformed_dns_raw_events::Variables,
+            malformed_dns_raw_events::ResponseData,
+            malformed_dns_raw_events
         )
     }
 
@@ -2769,6 +2923,33 @@ impl NetworkQuery {
         )
     }
 
+    async fn search_malformed_dns_raw_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.malformed_dns_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+            Ok(collect_exist_times::<MalformedDns>(&exist_data, filter))
+        };
+
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchMalformedDnsRawEvents,
+            search_malformed_dns_raw_events::Variables,
+            search_malformed_dns_raw_events::ResponseData,
+            search_malformed_dns_raw_events
+        )
+    }
+
     async fn search_http_raw_events(
         &self,
         ctx: &Context<'_>,
@@ -3217,6 +3398,7 @@ impl NetworkQuery {
 fn network_connection(
     mut conn_iter: Peekable<FilteredIter<Conn>>,
     mut dns_iter: Peekable<FilteredIter<Dns>>,
+    mut malformed_dns_iter: Peekable<FilteredIter<MalformedDns>>,
     mut http_iter: Peekable<FilteredIter<Http>>,
     mut rdp_iter: Peekable<FilteredIter<Rdp>>,
     mut ntlm_iter: Peekable<FilteredIter<Ntlm>>,
@@ -3244,6 +3426,7 @@ fn network_connection(
 
     let mut conn_data = conn_iter.next();
     let mut dns_data = dns_iter.next();
+    let mut malformed_dns_data = malformed_dns_iter.next();
     let mut http_data = http_iter.next();
     let mut rdp_data = rdp_iter.next();
     let mut ntlm_data = ntlm_iter.next();
@@ -3269,6 +3452,12 @@ fn network_connection(
         };
 
         let dns_ts = if let Some((ref key, _)) = dns_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let malformed_dns_ts = if let Some((ref key, _)) = malformed_dns_data {
             get_time_from_key(key)?
         } else {
             min_max_time(is_forward)
@@ -3372,6 +3561,7 @@ fn network_connection(
 
         let selected = if is_forward {
             time.min(dns_ts)
+                .min(malformed_dns_ts)
                 .min(conn_ts)
                 .min(http_ts)
                 .min(rdp_ts)
@@ -3391,6 +3581,7 @@ fn network_connection(
                 .min(radius_ts)
         } else {
             time.max(dns_ts)
+                .max(malformed_dns_ts)
                 .max(conn_ts)
                 .max(http_ts)
                 .max(rdp_ts)
@@ -3427,6 +3618,17 @@ fn network_connection(
                         NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
                     ));
                     dns_data = dns_iter.next();
+                }
+            }
+            _ if selected == malformed_dns_ts => {
+                if let Some((key, value)) = malformed_dns_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::MalformedDnsRawEvent(
+                            MalformedDnsRawEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    malformed_dns_data = malformed_dns_iter.next();
                 }
             }
             _ if selected == http_ts => {
@@ -3586,6 +3788,7 @@ fn network_connection(
         if (result_vec.len() >= size)
             || (conn_data.is_none()
                 && dns_data.is_none()
+                && malformed_dns_data.is_none()
                 && http_data.is_none()
                 && rdp_data.is_none()
                 && ntlm_data.is_none()
@@ -3605,6 +3808,7 @@ fn network_connection(
         {
             if conn_data.is_some()
                 || dns_data.is_some()
+                || malformed_dns_data.is_some()
                 || http_data.is_some()
                 || rdp_data.is_some()
                 || ntlm_data.is_some()
@@ -3645,6 +3849,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     network_raw_events,
     conn_raw_events,
     dns_raw_events,
+    malformed_dns_raw_events,
     http_raw_events,
     rdp_raw_events,
     smtp_raw_events,
@@ -3664,6 +3869,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_conn_raw_events,
     search_dce_rpc_raw_events,
     search_dns_raw_events,
+    search_malformed_dns_raw_events,
     search_ftp_raw_events,
     search_http_raw_events,
     search_kerberos_raw_events,
@@ -3686,6 +3892,7 @@ impl_from_giganto_network_filter_for_graphql_client!(
     network_raw_events,
     conn_raw_events,
     dns_raw_events,
+    malformed_dns_raw_events,
     http_raw_events,
     rdp_raw_events,
     smtp_raw_events,
@@ -3709,6 +3916,7 @@ impl_from_giganto_search_filter_for_graphql_client!(
     search_conn_raw_events,
     search_dce_rpc_raw_events,
     search_dns_raw_events,
+    search_malformed_dns_raw_events,
     search_ftp_raw_events,
     search_http_raw_events,
     search_kerberos_raw_events,
