@@ -600,6 +600,12 @@ pub fn get_time_from_key(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
+pub fn try_to_gql_timestamp_or_min(timestamp: Timestamp) -> GqlTimestamp {
+    Timestamp::from_nanosecond(timestamp.as_nanosecond())
+        .ok()
+        .map_or_else(|| Timestamp::MIN.into(), Into::into)
+}
+
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,

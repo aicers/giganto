@@ -256,8 +256,10 @@ fn gen_malformed_dns_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now()
+            .checked_add(SignedDuration::from_secs(1))
+            .unwrap(),
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -1148,7 +1150,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let malformed_dns_store = db.malformed_dns_store().unwrap();
-        let send_malformed_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_malformed_dns_time = Timestamp::now().as_nanosecond().try_into().unwrap();
         let malformed_dns_data: MalformedDns = decode_legacy(&insert_malformed_dns_raw_event(
             &malformed_dns_store,
             SENSOR,
@@ -1156,25 +1158,21 @@ async fn request_range_data_with_protocol() {
         ))
         .unwrap();
 
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
+        let start = date(1970, 1, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .expect("valid datetime")
+            .timestamp();
+        let end = date(2050, 12, 31)
+            .at(23, 59, 59, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .expect("valid datetime")
+            .timestamp();
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(MALFORMED_DNS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
+            start: start.as_nanosecond().try_into().unwrap(),
+            end: end.as_nanosecond().try_into().unwrap(),
             count: 5,
         };
 

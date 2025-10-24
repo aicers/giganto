@@ -235,7 +235,6 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone};
     use giganto_client::ingest::Packet as pk;
     use jiff::Timestamp;
 
@@ -460,18 +459,17 @@ mod tests {
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<Timestamp> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(parse_local_datetime_to_timestamp)
             .collect();
 
-        // Change to the UTC timezone by applying an offset
-        let ts1 = convert_to_utc_timezone(timestamps[0]);
-        let ts2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = timestamps[0].to_string();
+        let ts2 = timestamps[1].to_string();
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:01.404277 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:01.404277Z");
 
         let query = r#"
         {
@@ -489,18 +487,17 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<Timestamp> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(parse_local_datetime_to_timestamp)
             .collect();
 
-        // Change to the UTC timezone by applying an offset
-        let ts1 = convert_to_utc_timezone(timestamps[0]);
-        let ts2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = timestamps[0].to_string();
+        let ts2 = timestamps[1].to_string();
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
 
         let query = r#"
         {
@@ -518,18 +515,17 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<Timestamp> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(parse_local_datetime_to_timestamp)
             .collect();
 
-        // Change to the UTC timezone by applying an offset
-        let ts1 = convert_to_utc_timezone(timestamps[0]);
-        let ts2 = convert_to_utc_timezone(timestamps[1]);
+        let ts1 = timestamps[0].to_string();
+        let ts2 = timestamps[1].to_string();
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
     }
 
     fn insert_packet(
@@ -556,9 +552,10 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
-        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
-        let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+    fn parse_local_datetime_to_timestamp(s: &str) -> Timestamp {
+        let date_time: jiff::civil::DateTime = s.parse().unwrap();
+        let local_tz = jiff::tz::TimeZone::system();
+        let zoned = date_time.to_zoned(local_tz).unwrap();
+        zoned.timestamp()
     }
 }
