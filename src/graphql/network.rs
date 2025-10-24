@@ -7,8 +7,6 @@ use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
 };
-use base64::Engine;
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
     Radius, Rdp, Smb, Smtp, Ssh, Tls,
@@ -24,7 +22,7 @@ use super::{
     StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, base64_engine,
     check_address, check_agent_id, check_port, collect_exist_times, events_vec_in_cluster,
     get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
-    paged_events_in_cluster,
+    paged_events_in_cluster, try_to_gql_timestamp_or_min,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -281,7 +279,7 @@ struct DnsRawEvent {
 ]))]
 struct MalformedDnsRawEvent {
     /// Time the event started transmitting from a sensor
-    time: DateTime<Utc>,
+    time: GqlTimestamp,
     /// Source IP address
     orig_addr: String,
     /// Source Port Number
@@ -295,9 +293,9 @@ struct MalformedDnsRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: GqlTimestamp,
     /// End Time
-    end_time: DateTime<Utc>,
+    end_time: GqlTimestamp,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1437,8 +1435,8 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
-                    start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond()).ok().map(Into::into).unwrap_or_else(|| Timestamp::MIN.into()),
-                    end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond()).ok().map(Into::into).unwrap_or_else(|| Timestamp::MIN.into()),
+                    start_time: try_to_gql_timestamp_or_min(val.start_time),
+                    end_time: try_to_gql_timestamp_or_min(val.end_time),
                     duration: val.duration.into(),
                     orig_pkts: val.orig_pkts.into(),
                     resp_pkts: val.resp_pkts.into(),
@@ -1467,12 +1465,8 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1505,14 +1499,14 @@ impl FromKeyValue<Http> for HttpRawEvent {
 impl FromKeyValue<MalformedDns> for MalformedDnsRawEvent {
     fn from_key_value(key: &[u8], val: MalformedDns) -> Result<Self> {
         Ok(MalformedDnsRawEvent {
-            time: get_time_from_key(key)?,
+            time: get_time_from_key(key)?.into(),
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1544,12 +1538,8 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
@@ -1571,12 +1561,8 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1613,12 +1599,8 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1648,12 +1630,8 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1694,12 +1672,8 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: Timestamp::from_nanosecond(val.start_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
-            end_time: Timestamp::from_nanosecond(val.end_time.as_nanosecond())
-                .ok()
-                .map_or_else(|| Timestamp::MIN.into(), Into::into),
+            start_time: try_to_gql_timestamp_or_min(val.start_time),
+            end_time: try_to_gql_timestamp_or_min(val.end_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -2955,14 +2929,15 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<GqlTimestamp>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.malformed_dns_store()?;
+            let times: Vec<Timestamp> = filter.times.iter().map(|t| t.0).collect();
             let exist_data = store
-                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .batched_multi_get_from_ts(&filter.sensor, &times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(Timestamp, Vec<u8>)>>();
             Ok(collect_exist_times::<MalformedDns>(&exist_data, filter))
         };
 

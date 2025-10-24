@@ -502,8 +502,8 @@ fn insert_malformed_dns_raw_event(
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Timestamp::now(),
+        end_time: Timestamp::now() + SignedDuration::from_secs(1),
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -727,8 +727,16 @@ async fn malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(
+        &store,
+        "src 1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
+    insert_malformed_dns_raw_event(
+        &store,
+        "src 1",
+        Timestamp::now().as_nanosecond().try_into().unwrap(),
+    );
 
     let query = r#"
     {
@@ -4678,15 +4686,27 @@ async fn search_malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
+    let time1 = jiff::civil::datetime(2020, 1, 1, 0, 0, 1, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp(); //2020-01-01T00:00:01Z
+    let time2 = jiff::civil::datetime(2020, 1, 1, 0, 1, 1, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp(); //2020-01-01T00:01:01Z
+    let time3 = jiff::civil::datetime(2020, 1, 1, 1, 1, 1, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp(); //2020-01-01T01:01:01Z
+    let time4 = jiff::civil::datetime(2020, 1, 2, 0, 0, 1, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp(); //2020-01-02T00:00:01Z
 
-    insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time1.as_nanosecond().try_into().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time2.as_nanosecond().try_into().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time3.as_nanosecond().try_into().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time4.as_nanosecond().try_into().unwrap());
 
     let query = r#"
     {

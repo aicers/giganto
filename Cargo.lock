@@ -1082,7 +1082,6 @@ dependencies = [
  "async-graphql-poem",
  "base64",
  "bincode",
- "chrono",
  "clap",
  "config",
  "ctrlc",
@@ -1662,7 +1661,7 @@ checksum = "03343451ff899767262ec32146f6d559dd759fdadf42ff0e227c7c48f72594b4"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.106",
+ "syn 2.0.108",
 ]
 
 [[package]]

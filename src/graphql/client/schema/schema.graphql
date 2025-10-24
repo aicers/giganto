@@ -1635,7 +1635,7 @@ type MalformedDnsRawEvent {
 	respPort: Int!
 	"""
 	Protocol Number
-
+	
 	TCP is 6, and UDP is 17.
 	"""
 	proto: Int!
@@ -1649,7 +1649,7 @@ type MalformedDnsRawEvent {
 	endTime: Timestamp!
 	"""
 	Duration
-
+	
 	It is measured in nanoseconds.
 	"""
 	duration: StringNumberI64!
@@ -2623,7 +2623,7 @@ type Query {
 	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
 	searchConnRawEvents(filter: SearchFilter!): [Timestamp!]!
 	searchDnsRawEvents(filter: SearchFilter!): [Timestamp!]!
-    searchMalformedDnsRawEvents(filter: SearchFilter!): [Timestamp!]!
+	searchMalformedDnsRawEvents(filter: SearchFilter!): [Timestamp!]!
 	searchHttpRawEvents(filter: SearchFilter!): [Timestamp!]!
 	searchRdpRawEvents(filter: SearchFilter!): [Timestamp!]!
 	searchSmtpRawEvents(filter: SearchFilter!): [Timestamp!]!
