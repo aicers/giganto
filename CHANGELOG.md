@@ -101,6 +101,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed packet extraction request routing to ensure requests are only sent to
+  actual sensor connections. Connection information is now stored in
+  `pcap_sensors` only when the connected agent is identified as a sensor
+  (containing "piglet" in the certificate). This prevents issues where packet
+  extraction requests were incorrectly routed to time-series-generator when both
+  it and the sensor shared the same hostname.
+- Updated `SensorInfo` and `check_sensors_conn` to manage connection state
+  information only for sensor applications. Previously, ingest connection state
+  was tracked for all agents except data-broker, but the original intent was to
+  manage this only for sensor applications. This has been corrected by using
+  `should_register_sensor` to explicitly filter sensor agents, excluding
+  non-sensor agents. As a result, there is no longer a need to send or check a
+  separate boolean flag through the internal channel.
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.
   String representations of numbers (e.g., "123456") are now correctly parsed
   into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
