@@ -173,8 +173,9 @@ async fn handle_connection(
 
     let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
     let rep = agent.contains("reproduce");
+    let should_register_sensor = agent.contains("piglet");
 
-    if !rep {
+    if should_register_sensor {
         pcap_sensors
             .write()
             .await
