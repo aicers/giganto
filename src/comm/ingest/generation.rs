@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use chrono::{Datelike, Utc};
+use jiff::Timestamp;
 
 pub struct SequenceGenerator {
     counter: AtomicUsize,
@@ -36,7 +36,7 @@ impl SequenceGenerator {
     }
 
     pub(crate) fn get_current_date_time() -> u32 {
-        let utc_now = Utc::now();
-        utc_now.day()
+        let now = Timestamp::now();
+        u32::from(now.to_zoned(jiff::tz::TimeZone::UTC).day().unsigned_abs())
     }
 }
