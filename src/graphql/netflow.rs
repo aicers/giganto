@@ -9,7 +9,7 @@ use graphql_client::GraphQLQuery;
 use jiff::Timestamp;
 
 use super::{
-    FromKeyValue, GqlTimestamp, IpRange, PortRange, check_address, check_contents, check_port,
+    FromKeyValue, IpRange, PortRange, TimestampIso8601, check_address, check_contents, check_port,
     get_time_from_key, handle_paged_events, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
@@ -98,7 +98,7 @@ impl RawEventFilter for NetflowFilter {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
-    time: GqlTimestamp,
+    time: TimestampIso8601,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -162,7 +162,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
-    time: GqlTimestamp,
+    time: TimestampIso8601,
     sequence: StringNumberU32,
     source_id: StringNumberU32,
     template_id: u16,

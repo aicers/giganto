@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use tracing::info;
 
 use super::{
-    Direction, FromKeyValue, GqlTimestamp, RawEventFilter, TIMESTAMP_SIZE, TimeRange,
+    Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, TimestampIso8601,
     collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
 #[cfg(feature = "cluster")]
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: GqlTimestamp,
+    request_time: TimestampIso8601,
     packet_time: Option<TimeRange>,
 }
 
@@ -41,12 +41,7 @@ impl KeyExtractor for PacketFilter {
     }
 
     fn get_mid_key(&self) -> Option<Vec<u8>> {
-        let ns: i64 = self
-            .request_time
-            .0
-            .as_nanosecond()
-            .try_into()
-            .unwrap_or(i64::MAX);
+        let ns: i64 = self.request_time.0.as_nanosecond().try_into().ok()?;
         Some(ns.to_be_bytes().to_vec())
     }
 
@@ -83,8 +78,8 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: GqlTimestamp,
-    packet_time: GqlTimestamp,
+    request_time: TimestampIso8601,
+    packet_time: TimestampIso8601,
     packet: String,
 }
 
@@ -94,7 +89,7 @@ struct Packet {
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: GqlTimestamp,
+    request_time: TimestampIso8601,
     parsed_pcap: String,
 }
 

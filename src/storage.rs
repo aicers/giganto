@@ -759,7 +759,7 @@ impl StorageKeyBuilder {
     pub fn lower_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
+            time.as_nanosecond().try_into().unwrap_or(0)
         } else {
             0
         };
@@ -822,7 +822,7 @@ impl StorageTimestampKeyBuilder {
     pub fn lower_closed_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
+            time.as_nanosecond().try_into().unwrap_or(0)
         } else {
             0
         };
