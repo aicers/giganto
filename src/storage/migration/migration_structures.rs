@@ -989,9 +989,8 @@ impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
             resp_addr: old_data.resp_addr,
             resp_port: old_data.resp_port,
             proto: old_data.proto,
-            start_time: Timestamp::from_nanosecond(start_time.into()).expect("valid timestamp"),
-            end_time: Timestamp::from_nanosecond(old_data.end_time.into())
-                .expect("valid timestamp"),
+            start_time: Timestamp::from_nanosecond(start_time.into())?,
+            end_time: Timestamp::from_nanosecond(old_data.end_time.into())?,
             duration: old_data.end_time - start_time,
             orig_pkts: 0,
             resp_pkts: 0,

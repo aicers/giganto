@@ -77,8 +77,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<GqlTimestamp>,
-    end: Option<GqlTimestamp>,
+    start: Option<TimestampIso8601>,
+    end: Option<TimestampIso8601>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -118,7 +118,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<GqlTimestamp>,
+    pub times: Vec<TimestampIso8601>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -190,7 +190,7 @@ const A_BILLION: i64 = 1_000_000_000;
 fn collect_exist_times<T>(
     target_data: &BTreeSet<(Timestamp, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<GqlTimestamp>
+) -> Vec<TimestampIso8601>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -600,12 +600,6 @@ pub fn get_time_from_key(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn try_to_gql_timestamp_or_min(timestamp: Timestamp) -> GqlTimestamp {
-    Timestamp::from_nanosecond(timestamp.as_nanosecond())
-        .ok()
-        .map_or_else(|| Timestamp::MIN.into(), Into::into)
-}
-
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,
@@ -911,47 +905,55 @@ impl_string_number!(StringNumberU64, u64);
 impl_string_number!(StringNumberU32, u32);
 impl_string_number!(StringNumberI64, i64);
 
-// Newtype wrapper for jiff::Timestamp to implement ScalarType
-#[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, Default, PartialEq)]
-#[serde(transparent)]
-pub struct GqlTimestamp(pub Timestamp);
+fn iso8601_to_timestamp(s: &str) -> anyhow::Result<Timestamp> {
+    // Replace 'Z' with '+00:00' for consistent parsing
+    let normalized = if let Some(stripped) = s.strip_suffix('Z') {
+        format!("{stripped}+00:00")
+    } else {
+        s.to_string()
+    };
 
-impl From<Timestamp> for GqlTimestamp {
+    let zdt = jiff::Zoned::strptime("%Y-%m-%dT%H:%M:%S%.f%:z", &normalized)
+        .map_err(|e| anyhow!("Failed to parse datetime: {s} (error: {e})"))?;
+    Ok(zdt.timestamp())
+}
+
+fn timestamp_to_iso8601(ts: Timestamp) -> String {
+    let zdt = ts.to_zoned(jiff::tz::TimeZone::UTC);
+    zdt.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct TimestampIso8601(pub Timestamp);
+
+impl From<Timestamp> for TimestampIso8601 {
     fn from(ts: Timestamp) -> Self {
         Self(ts)
     }
 }
 
-impl From<GqlTimestamp> for Timestamp {
-    fn from(gts: GqlTimestamp) -> Self {
-        gts.0
+impl From<TimestampIso8601> for Timestamp {
+    fn from(wrapper: TimestampIso8601) -> Self {
+        wrapper.0
     }
 }
 
 #[Scalar(name = "Timestamp")]
-impl ScalarType for GqlTimestamp {
+impl ScalarType for TimestampIso8601 {
     fn parse(value: Value) -> InputValueResult<Self> {
-        if let Value::String(value) = &value {
-            value
-                .parse::<Timestamp>()
-                .map(GqlTimestamp)
-                .map_err(|e| InputValueError::custom(format!("Invalid timestamp: {e}")))
+        if let Value::String(s) = &value {
+            match iso8601_to_timestamp(s) {
+                Ok(ts) => Ok(Self(ts)),
+                Err(e) => Err(InputValueError::custom(format!("{e}"))),
+            }
         } else {
             Err(InputValueError::expected_type(value))
         }
     }
 
     fn to_value(&self) -> Value {
-        // Format timestamp to match chrono's format with +00:00 instead of Z
-        // jiff's default format uses 'Z', but chrono uses '+00:00', so we need to convert
-        let s = self.0.to_string();
-        // Replace 'Z' suffix with '+00:00' to match chrono format
-        let formatted = if s.ends_with('Z') {
-            format!("{}+00:00", &s[..s.len() - 1])
-        } else {
-            s
-        };
-        Value::String(formatted)
+        Value::String(timestamp_to_iso8601(self.0))
     }
 }
 

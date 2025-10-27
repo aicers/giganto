@@ -7,7 +7,7 @@ use async_graphql::{
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 use jiff::Timestamp;
 
-use super::{FromKeyValue, GqlTimestamp, get_time_from_key, load_connection};
+use super::{FromKeyValue, TimestampIso8601, get_time_from_key, load_connection};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -61,7 +61,7 @@ impl RawEventFilter for TimeSeriesFilter {
 
 #[derive(SimpleObject, Debug)]
 struct TimeSeries {
-    start: GqlTimestamp,
+    start: TimestampIso8601,
     id: String,
     data: Vec<f64>,
 }
