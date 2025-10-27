@@ -212,6 +212,69 @@ impl Database {
         Ok(Database { db: Arc::new(db) })
     }
 
+    /// Opens the database as a secondary instance.
+    ///
+    /// A secondary instance can read from the database without blocking the primary
+    /// instance. This is useful for query workloads that need to see up-to-date data
+    /// without interfering with write operations. The secondary instance must
+    /// periodically call `try_catch_up_with_primary()` to synchronize with the
+    /// primary instance and see newly written data.
+    ///
+    /// # Arguments
+    ///
+    /// * `primary_path` - The path to the primary database directory
+    /// * `secondary_path` - The path where the secondary instance will store its
+    ///   state. This must be a different directory from the primary path.
+    /// * `db_options` - Database configuration options
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The database paths do not exist or are not accessible
+    /// * The database cannot be opened as secondary
+    /// * Column families cannot be accessed
+    /// * The `secondary_path` is the same as `primary_path`
+    pub fn open_as_secondary(
+        primary_path: &Path,
+        secondary_path: &Path,
+        db_options: &DbOptions,
+    ) -> Result<Database> {
+        let (db_opts, cf_opts) = rocksdb_options(db_options);
+        let mut cfs_name: Vec<&str> = Vec::with_capacity(
+            RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
+        );
+        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
+
+        let cfs = cfs_name
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+
+        let db = DB::open_cf_descriptors_as_secondary(&db_opts, primary_path, secondary_path, cfs)
+            .context("cannot open database as secondary")?;
+        Ok(Database { db: Arc::new(db) })
+    }
+
+    /// Tries to catch up with the primary instance by reading as much as possible
+    /// from the log files.
+    ///
+    /// This method should be called periodically on secondary instances to
+    /// synchronize with changes made by the primary instance. After calling this
+    /// method, newly written data will become visible to read operations on the
+    /// secondary instance.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The secondary instance cannot read from the primary's log files
+    /// * The database is not opened as a secondary instance
+    pub fn try_catch_up_with_primary(&self) -> Result<()> {
+        self.db
+            .try_catch_up_with_primary()
+            .context("failed to catch up with primary")?;
+        Ok(())
+    }
+
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
     ///
     /// This method flushes all in-memory changes to disk, writes all pending Write Ahead Log (WAL) entries to disk,

@@ -50,10 +50,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   over all keys in the database to provide exact counts, which may be expensive
   on large datasets.
 - Bump bincode crate to 2.0 and modified the related code.
-- Added read-only RocksDB instance support for query operations. GraphQL and
-  Publish interfaces now use a separate read-only database instance while
-  Ingest interface uses the primary read-write instance. This separation
-  prevents query workloads from impacting write performance.
 
 ### Changed
 
@@ -101,16 +97,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed data visibility issue where newly ingested data was not immediately
+  visible to export and query operations. GraphQL and Publish interfaces now
+  use a secondary database instance that periodically synchronizes with the
+  primary write instance, ensuring near real-time visibility of ingested data
+  without requiring a restart.
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.
   String representations of numbers (e.g., "123456") are now correctly parsed
-  into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
+  into wrapped integer types such as `StringNumberI64(i64)` or
+  `StringNumberU64(u64)`.
 - Modified `retain_periodically` function to stop further delete operations on a
   column family when a delete operation fails, preventing cascading failures
   and reducing excessive error logs.
 - Fixed the database retention logic for `oplog` and `periodic time series` with
   non-standard key formats. `oplog` now uses timestamp-based range deletion
   instead of sensor-based iteration. `periodic time series` retention is
-  temporarily disabled until proper policy-based retention logic is implemented.
+  temporarily disabled until proper policy-based retention logic is
+  implemented.
 
 ### Security
 

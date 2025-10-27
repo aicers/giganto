@@ -197,8 +197,11 @@ async fn main() -> Result<()> {
         // Open primary database instance for write operations (Ingest)
         let database = storage::Database::open(&db_path, &db_options, false)?;
 
-        // Open read-only database instance for query operations (GraphQL, Publish)
-        let database_readonly = storage::Database::open(&db_path, &db_options, true)?;
+        // Open secondary database instance for query operations (GraphQL, Publish)
+        // Secondary instances can see newly ingested data by periodically syncing with primary
+        let secondary_path = settings.config.visible.data_dir.join("db-secondary");
+        let database_readonly =
+            storage::Database::open_as_secondary(&db_path, &secondary_path, &db_options)?;
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());
@@ -266,6 +269,26 @@ async fn main() -> Result<()> {
             }
         });
 
+        // Spawn a task to periodically sync the secondary database instance with the primary
+        let db_readonly = database_readonly.clone();
+        let sync_notify_shutdown = notify_shutdown.clone();
+        let sync_task_handle: JoinHandle<()> = task::spawn(async move {
+            const SYNC_INTERVAL: Duration = Duration::from_secs(1);
+            loop {
+                select! {
+                    () = sync_notify_shutdown.notified() => {
+                        info!("Secondary database sync task shutting down");
+                        break;
+                    }
+                    () = sleep(SYNC_INTERVAL) => {
+                        if let Err(e) = db_readonly.try_catch_up_with_primary() {
+                            warn!("Failed to sync secondary database with primary: {e}");
+                        }
+                    }
+                }
+            }
+        });
+
         let peer_task_handle: Option<JoinHandle<Result<()>>>;
         if let Some(addr_to_peers) = settings.config.addr_to_peers {
             let peer_server = peer::Peer::new(addr_to_peers, &certs.clone())?;
@@ -315,7 +338,7 @@ async fn main() -> Result<()> {
                     match settings.update_config_file(&new_config) {
                         Ok(()) => {
                             notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle, sync_task_handle).await;
                             break;
                         }
                         Err(e) => {
@@ -326,21 +349,21 @@ async fn main() -> Result<()> {
                 () = notify_terminate.notified() => {
                     info!("Termination signal: daemon exit");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle, sync_task_handle).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
                 () = notify_reboot.notified() => {
                     info!("Restarting the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle, sync_task_handle).await;
                     is_reboot = true;
                     break;
                 }
                 () = notify_power_off.notified() => {
                     info!("Power off the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle, sync_task_handle).await;
                     is_power_off = true;
                     break;
                 }
@@ -432,11 +455,17 @@ async fn wait_for_task_shutdown(
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
     retain_task_handle: std::thread::JoinHandle<()>,
+    sync_task_handle: JoinHandle<()>,
 ) {
     if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            handle_peers,
+            sync_task_handle
+        );
     } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+        let _ = tokio::join!(ingest_task_handle, publish_task_handle, sync_task_handle);
     }
     let _ = retain_task_handle.join();
 }
