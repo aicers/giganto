@@ -30,10 +30,10 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -61,7 +61,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
                 end: None,
             }),
@@ -95,7 +95,7 @@ async fn load_time_range() {
             time: Some(TimeRange {
                 start: None,
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(4_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -127,10 +127,10 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -158,7 +158,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
                 end: None,
             }),
@@ -192,7 +192,7 @@ async fn load_time_range() {
             time: Some(TimeRange {
                 start: None,
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -220,10 +220,10 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(3_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(3_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -251,7 +251,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(2_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(2_i128).unwrap(),
                 )),
                 end: None,
             }),
@@ -281,7 +281,7 @@ async fn load_time_range() {
             time: Some(TimeRange {
                 start: None,
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(5_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(5_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -313,10 +313,10 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(4_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -344,7 +344,7 @@ async fn load_time_range() {
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(2_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(2_i128).unwrap(),
                 )),
                 end: None,
             }),
@@ -374,7 +374,7 @@ async fn load_time_range() {
             time: Some(TimeRange {
                 start: None,
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(4_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(4_i128).unwrap(),
                 )),
             }),
             sensor: "src1".to_string(),
@@ -536,10 +536,10 @@ async fn load_oplog() {
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(5_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(5_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(7_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(7_i128).unwrap(),
                 )),
             }),
             agent_id: None,
@@ -582,10 +582,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(10_i128).unwrap(),
                 )),
             }),
             agent_id: Some("manager".to_string()),
@@ -610,10 +610,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(10_i128).unwrap(),
                 )),
             }),
             agent_id: Some("manager".to_string()),
@@ -638,10 +638,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(10_i128).unwrap(),
                 )),
             }),
             agent_id: Some("manager".to_string()),
@@ -664,10 +664,10 @@ async fn load_connection_by_prefix_timestamp_key() {
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(1_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(1_i128).unwrap(),
                 )),
                 end: Some(TimestampIso8601(
-                    Timestamp::from_nanosecond(10_i64.into()).unwrap(),
+                    Timestamp::from_nanosecond(10_i128).unwrap(),
                 )),
             }),
             agent_id: Some("sensor".to_string()),
