@@ -758,35 +758,28 @@ impl StorageKeyBuilder {
 
     pub fn lower_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(0)
-        } else {
-            0
-        };
+        let ns: i64 = time
+            .and_then(|t| t.as_nanosecond().try_into().ok())
+            .unwrap_or(0);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_open_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
-        } else {
-            i64::MAX
-        };
+        let ns: i64 = time
+            .and_then(|t| t.as_nanosecond().try_into().ok())
+            .unwrap_or(i64::MAX);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        if let Some(time) = time {
-            let ns = time.as_nanosecond();
-            if let Some(ns) = ns.checked_sub(1)
-                && ns >= 0
-            {
-                let ns_i64: i64 = ns.try_into().unwrap_or(i64::MAX);
-                self.pre_key.extend_from_slice(&ns_i64.to_be_bytes());
+        if let Some(t) = time {
+            let ns_opt: Option<i64> = t.as_nanosecond().try_into().ok();
+            if let Some(ns) = ns_opt.and_then(|v| v.checked_sub(1)).filter(|v| *v >= 0) {
+                self.pre_key.extend_from_slice(&ns.to_be_bytes());
                 return self;
             }
         }
