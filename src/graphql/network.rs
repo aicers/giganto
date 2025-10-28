@@ -21,8 +21,8 @@ use super::{
     Engine, FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, StringNumberI64,
     StringNumberU32, StringNumberU64, StringNumberUsize, TimestampIso8601, base64_engine,
     check_address, check_agent_id, check_port, collect_exist_times, events_vec_in_cluster,
-    get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
-    paged_events_in_cluster,
+    get_peekable_iter, get_time_from_key, get_timestamp_or_minmax, handle_paged_events,
+    min_max_time, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
@@ -3464,119 +3464,25 @@ fn network_connection(
     let mut radius_data = radius_iter.next();
 
     loop {
-        let conn_ts = if let Some((ref key, _)) = conn_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let dns_ts = if let Some((ref key, _)) = dns_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let malformed_dns_ts = if let Some((ref key, _)) = malformed_dns_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let http_ts = if let Some((ref key, _)) = http_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let rdp_ts = if let Some((ref key, _)) = rdp_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let ntlm_ts = if let Some((ref key, _)) = ntlm_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let kerberos_ts = if let Some((ref key, _)) = kerberos_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let ssh_ts = if let Some((ref key, _)) = ssh_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let dce_rpc_ts = if let Some((ref key, _)) = dce_rpc_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let ftp_ts = if let Some((ref key, _)) = ftp_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let mqtt_ts = if let Some((ref key, _)) = mqtt_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let ldap_ts = if let Some((ref key, _)) = ldap_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let tls_ts = if let Some((ref key, _)) = tls_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let smb_ts = if let Some((ref key, _)) = smb_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let nfs_ts = if let Some((ref key, _)) = nfs_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let smtp_ts = if let Some((ref key, _)) = smtp_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let bootp_ts = if let Some((ref key, _)) = bootp_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let dhcp_ts = if let Some((ref key, _)) = dhcp_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
-
-        let radius_ts = if let Some((ref key, _)) = radius_data {
-            get_time_from_key(key)?
-        } else {
-            min_max_time(is_forward)
-        };
+        let conn_ts = get_timestamp_or_minmax(conn_data.as_ref(), is_forward)?;
+        let dns_ts = get_timestamp_or_minmax(dns_data.as_ref(), is_forward)?;
+        let malformed_dns_ts = get_timestamp_or_minmax(malformed_dns_data.as_ref(), is_forward)?;
+        let http_ts = get_timestamp_or_minmax(http_data.as_ref(), is_forward)?;
+        let rdp_ts = get_timestamp_or_minmax(rdp_data.as_ref(), is_forward)?;
+        let ntlm_ts = get_timestamp_or_minmax(ntlm_data.as_ref(), is_forward)?;
+        let kerberos_ts = get_timestamp_or_minmax(kerberos_data.as_ref(), is_forward)?;
+        let ssh_ts = get_timestamp_or_minmax(ssh_data.as_ref(), is_forward)?;
+        let dce_rpc_ts = get_timestamp_or_minmax(dce_rpc_data.as_ref(), is_forward)?;
+        let ftp_ts = get_timestamp_or_minmax(ftp_data.as_ref(), is_forward)?;
+        let mqtt_ts = get_timestamp_or_minmax(mqtt_data.as_ref(), is_forward)?;
+        let ldap_ts = get_timestamp_or_minmax(ldap_data.as_ref(), is_forward)?;
+        let tls_ts = get_timestamp_or_minmax(tls_data.as_ref(), is_forward)?;
+        let smb_ts = get_timestamp_or_minmax(smb_data.as_ref(), is_forward)?;
+        let nfs_ts = get_timestamp_or_minmax(nfs_data.as_ref(), is_forward)?;
+        let smtp_ts = get_timestamp_or_minmax(smtp_data.as_ref(), is_forward)?;
+        let bootp_ts = get_timestamp_or_minmax(bootp_data.as_ref(), is_forward)?;
+        let dhcp_ts = get_timestamp_or_minmax(dhcp_data.as_ref(), is_forward)?;
+        let radius_ts = get_timestamp_or_minmax(radius_data.as_ref(), is_forward)?;
 
         let selected = if is_forward {
             time.min(dns_ts)

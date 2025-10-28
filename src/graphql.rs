@@ -600,6 +600,19 @@ pub fn get_time_from_key(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
+/// Extracts timestamp from an optional key-value pair, returning min/max time if None.
+/// This is optimized for hot loop usage to reduce repeated pattern matching.
+#[inline]
+pub fn get_timestamp_or_minmax<T>(
+    data: Option<&(Box<[u8]>, T)>,
+    is_forward: bool,
+) -> Result<Timestamp> {
+    match data {
+        Some((key, _)) => Ok(get_time_from_key(key)?),
+        None => Ok(min_max_time(is_forward)),
+    }
+}
+
 fn get_peekable_iter<'c, T>(
     store: &RawEventStore<'c, T>,
     filter: &'c NetworkFilter,

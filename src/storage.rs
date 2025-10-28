@@ -726,6 +726,14 @@ pub trait TimestampKeyExtractor {
     fn get_range_start_key(&self) -> (Option<Timestamp>, Option<Timestamp>);
 }
 
+/// Converts an optional Timestamp to i64 nanoseconds with a fallback value.
+/// Returns the fallback if the timestamp is None or if conversion fails.
+#[inline]
+fn timestamp_to_i64_or(time: Option<Timestamp>, fallback: i64) -> i64 {
+    time.and_then(|t| t.as_nanosecond().try_into().ok())
+        .unwrap_or(fallback)
+}
+
 #[allow(clippy::module_name_repetitions)]
 #[derive(Default, Debug, Clone)]
 pub struct StorageKeyBuilder {
@@ -758,18 +766,14 @@ impl StorageKeyBuilder {
 
     pub fn lower_closed_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = time
-            .and_then(|t| t.as_nanosecond().try_into().ok())
-            .unwrap_or(0);
+        let ns = timestamp_to_i64_or(time, 0);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_open_bound_end_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = time
-            .and_then(|t| t.as_nanosecond().try_into().ok())
-            .unwrap_or(i64::MAX);
+        let ns = timestamp_to_i64_or(time, i64::MAX);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
@@ -814,38 +818,26 @@ impl StorageTimestampKeyBuilder {
 
     pub fn lower_closed_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(0)
-        } else {
-            0
-        };
+        let ns = timestamp_to_i64_or(time, 0);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_open_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns: i64 = if let Some(time) = time {
-            time.as_nanosecond().try_into().unwrap_or(i64::MAX)
-        } else {
-            i64::MAX
-        };
+        let ns = timestamp_to_i64_or(time, i64::MAX);
         self.pre_key.extend_from_slice(&ns.to_be_bytes());
         self
     }
 
     pub fn upper_closed_bound_start_key(mut self, time: Option<Timestamp>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
-        if let Some(time) = time {
-            let ns: i64 = time.as_nanosecond().try_into().unwrap_or(i64::MAX);
-            if let Some(ns_minus_1) = ns.checked_sub(1)
-                && ns_minus_1 >= 0
-            {
-                self.pre_key.extend_from_slice(&ns_minus_1.to_be_bytes());
-                return self;
-            }
+        let ns = timestamp_to_i64_or(time, i64::MAX);
+        if let Some(ns_minus_1) = ns.checked_sub(1).filter(|&v| v >= 0) {
+            self.pre_key.extend_from_slice(&ns_minus_1.to_be_bytes());
+        } else {
+            self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
         }
-        self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
         self
     }
 
