@@ -987,7 +987,7 @@ pub async fn retain_periodically(
     running_flag: Arc<AtomicBool>,
 ) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
-    const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
+    const ONE_DAY_TIMESTAMP_NANOS: i128 = 86_400_000_000_000_i128;
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
@@ -1009,7 +1009,7 @@ pub async fn retain_periodically(
                         "Disk usage is over {USAGE_THRESHOLD}%. \
                         Retention period is temporarily reduced."
                     );
-                    retention_timestamp += i128::from(ONE_DAY_TIMESTAMP_NANOS);
+                    retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                     usage_flag = true;
                 }
 
@@ -1089,7 +1089,7 @@ pub async fn retain_periodically(
                         warn!("Failed to delete file in range for operation log");
                     }
                     if check_db_usage().await.1 && usage_flag {
-                        retention_timestamp += i128::from(ONE_DAY_TIMESTAMP_NANOS);
+                        retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                         if retention_timestamp > now.as_nanosecond() {
                             warn!("cannot delete data to usage under {USAGE_LOW}");
                             break;
