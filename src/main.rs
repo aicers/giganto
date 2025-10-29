@@ -6,6 +6,9 @@ mod settings;
 mod storage;
 mod web;
 
+#[cfg(test)]
+mod chrono_jiff_equivalence_tests;
+
 use std::{
     fs::{self, OpenOptions},
     path::Path,
