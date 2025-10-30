@@ -938,7 +938,7 @@ mod tests {
     impl TestSchema {
         fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
-            let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+            let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();

@@ -966,7 +966,7 @@ async fn request_range_data_with_protocol() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -2142,7 +2142,7 @@ async fn request_range_data_with_log() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -2250,7 +2250,7 @@ async fn request_range_data_with_period_time_series() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -2383,7 +2383,7 @@ async fn request_network_event_stream() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
 
     let semi_supervised_msg = RequestSemiSupervisedStream {
         start: 0,
@@ -4466,7 +4466,7 @@ async fn request_raw_events() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -4547,7 +4547,7 @@ async fn request_malformed_dns_raw_events() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -4633,7 +4633,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     // spawn node2 publish server
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -4709,7 +4709,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -4838,7 +4838,7 @@ async fn request_range_data_with_log_giganto_cluster() {
     // spawn node2 publish server
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -4919,7 +4919,7 @@ async fn request_range_data_with_log_giganto_cluster() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -5046,7 +5046,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     // spawn node2 publish server
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -5131,7 +5131,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -5259,7 +5259,7 @@ async fn request_raw_events_giganto_cluster() {
     // spawn node2 publish server
     tokio::spawn(async {
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
@@ -5333,7 +5333,7 @@ async fn request_raw_events_giganto_cluster() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let ingest_sensors = Arc::new(tokio::sync::RwLock::new(

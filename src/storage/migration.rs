@@ -128,7 +128,7 @@ fn read_version_file(path: &Path) -> Result<Version> {
 fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     rename_sources_to_sensors(db_path, db_opts)?;
 
-    let db = Database::open(db_path, db_opts, false)?;
+    let db = Database::open(db_path, db_opts)?;
     migrate_0_21_to_0_23_netflow5(&db)?;
     migrate_0_21_to_0_23_netflow9(&db)?;
     migrate_0_21_to_0_23_secu_log(&db)?;
@@ -136,13 +136,13 @@ fn migrate_0_21_to_0_23(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 }
 
 fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open(db_path, db_opts, false)?;
+    let db = Database::open(db_path, db_opts)?;
     migrate_0_23_0_to_0_24_0_op_log(&db)?;
     Ok(())
 }
 
 fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open(db_path, db_opts, false)?;
+    let db = Database::open(db_path, db_opts)?;
     migrate_0_24_to_0_26_conn(&db)?;
     migrate_0_24_to_0_26_http(&db)?;
     migration_0_24_to_0_26_other_protocols(&db)?;
@@ -618,7 +618,7 @@ mod tests {
         // run migration
         super::migrate_0_21_to_0_23(&db_path, &DbOptions::default()).unwrap();
 
-        let db = Database::open(&db_path, &DbOptions::default(), false).unwrap();
+        let db = Database::open(&db_path, &DbOptions::default()).unwrap();
 
         // check netflow5
         let netflow5_store = db.netflow5_store().unwrap();
@@ -705,7 +705,7 @@ mod tests {
         const TEST_TIMESTAMP: i64 = 1000;
 
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let op_log_store = db.op_log_store().unwrap();
 
         let old_op_log = OpLogBeforeV24 {
@@ -752,7 +752,7 @@ mod tests {
 
         // open temp db & store
         let db_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_dir.path(), &DbOptions::default(), false).unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
 
         // prepare old conn raw data
         let old_conn = ConnFromV21BeforeV26 {

@@ -50,10 +50,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   over all keys in the database to provide exact counts, which may be expensive
   on large datasets.
 - Bump bincode crate to 2.0 and modified the related code.
-- Added read-only RocksDB instance support for query operations. GraphQL and
-  Publish interfaces now use a separate read-only database instance while
-  Ingest interface uses the primary read-write instance. This separation
-  prevents query workloads from impacting write performance.
 
 ### Changed
 
