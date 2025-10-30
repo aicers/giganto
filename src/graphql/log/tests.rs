@@ -672,7 +672,7 @@ fn insert_oplog_raw_event(
 
     let oplog_body = OpLog {
         sensor: sensor.to_string(),
-        agent_name: agent_id.to_string(),
+        agent_name: agent_id.clone(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };
