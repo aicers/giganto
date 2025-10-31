@@ -17,17 +17,16 @@ path = "src/gen_schema.rs"
 
 [dependencies]
 anyhow = "1"
-async-graphql = { version = "7", features = ["chrono", "string_number"] }
+async-graphql = { version = "7", features = ["string_number"] }
 base64 = "0.22"
 bincode = { version = "2", features = ["serde"] }
-chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
 ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "e85bcb5" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.24.0" }
 graphql_client = "0.14"
 humantime = "2"
 humantime-serde = "1"
@@ -64,6 +63,7 @@ x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
 tokio-rustls = "0.26"
 async-graphql-poem = "7"
+jiff = { version = "0.2", features = ["serde"] }
 
 [dev-dependencies]
 mockito = "1"
@@ -71,6 +71,7 @@ regex = "1"
 serial_test = "3"
 tempfile = "3"
 url = "2"
+chrono = { version = "0.4", features = ["serde"] }
 
 [features]
 default = ["benchmark", "cluster"]

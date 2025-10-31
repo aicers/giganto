@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, Utc};
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -34,6 +33,8 @@ use giganto_client::{
 };
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
+use jiff::Timestamp;
+use jiff::Zoned;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
@@ -1862,9 +1863,9 @@ impl KeyExtractor for ExportFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<Timestamp>, Option<Timestamp>) {
         if let Some(time) = &self.time {
-            (time.start, time.end)
+            (time.start.map(|t| t.0), time.end.map(|t| t.0))
         } else {
             (None, None)
         }
@@ -1917,7 +1918,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
             .kind
             .as_ref()
             .map_or(String::new(), |k| format!("{k}_")),
-        Local::now().format("%Y%m%d_%H%M%S"),
+        Zoned::now().strftime("%Y%m%d_%H%M%S"),
     );
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));
@@ -2181,7 +2182,8 @@ fn export_statistic_file(
     let mut invalid_data_cnt: u32 = 0;
     for iter in &mut statistics_vec {
         loop {
-            match iter.next() {
+            let result: Option<anyhow::Result<(Box<[u8]>, Statistics)>> = iter.next();
+            match result {
                 Some(Ok(item)) => {
                     iter_next_values.push(item);
                     break;
@@ -2217,7 +2219,8 @@ fn export_statistic_file(
         // change the value of the selected iter to the following value.
         if let Some(iter) = statistics_vec.get_mut(min_index) {
             loop {
-                match iter.next() {
+                let result: Option<anyhow::Result<(Box<[u8]>, Statistics)>> = iter.next();
+                match result {
                     Some(Ok(item)) => {
                         *iter_next_values
                             .get_mut(min_index)
@@ -2274,9 +2277,9 @@ where
         value.agent_id(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
-            .to_string();
+        let ts = Timestamp::from_nanosecond(timestamp.into())?;
+        // Format timestamp as seconds.nanoseconds
+        let time = format!("{}.{:09}", ts.as_second(), ts.subsec_nanosecond());
 
         match export_type {
             "csv" => {
