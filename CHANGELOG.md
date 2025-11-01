@@ -97,6 +97,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed packet extraction request routing to ensure requests are only sent to
+  actual sensor connections. Connection information is now stored in
+  `pcap_sensors` only when the connected agent is identified as a sensor
+  (containing "piglet" in the certificate).
 - Fixed deserialization issue for GraphQL `StringNumber` fields in cluster mode.
   String representations of numbers (e.g., "123456") are now correctly parsed
   into wrapped integer types such as `StringNumberI64(i64)` or `StringNumberU64(u64)`.
