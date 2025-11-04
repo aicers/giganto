@@ -71,7 +71,6 @@ regex = "1"
 serial_test = "3"
 tempfile = "3"
 url = "2"
-chrono = { version = "0.4", features = ["serde"] }
 
 [features]
 default = ["benchmark", "cluster"]
