@@ -28,7 +28,7 @@ use crate::graphql::client::{
 };
 use crate::{
     graphql::{StringNumberI64, TimeRange, events_in_cluster},
-    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
+    storage::{Database, ReadableRawEventStore, StatisticsIter, StorageKey},
 };
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
@@ -128,7 +128,8 @@ async fn handle_statistics(
     // Configure statistics results by sensor.
     for sensor in sensors {
         for core in 0..MAX_CORE_SIZE {
-            let stats_iter = get_statistics_iter(&db.statistics_store()?, core, sensor, time);
+            let store = db.statistics_store()?;
+            let stats_iter = get_statistics_iter(store.as_ref(), core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
             if peek_stats_iter.peek().is_some() {
                 stats_iters.push(peek_stats_iter);
@@ -224,7 +225,7 @@ fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
 }
 
 fn get_statistics_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     core_id: u32,
     sensor: &str,
     time: Option<&TimeRange>,
@@ -379,16 +380,16 @@ mod tests {
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
     };
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::WritableRawEventStore};
 
     #[tokio::test]
     async fn test_statistics() {
         let schema = TestSchema::new();
-        let store = schema.db.statistics_store().unwrap();
+        let store = schema.db.statistics_store_writable().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         let query = r#"
     {
@@ -413,7 +414,7 @@ mod tests {
     }
 
     fn insert_statistics_raw_event(
-        store: &RawEventStore<Statistics>,
+        store: &dyn WritableRawEventStore<'_, Statistics>,
         timestamp: i64,
         sensor: &str,
         core: u32,
@@ -599,12 +600,36 @@ mod tests {
             .port();
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
-        let store = schema.db.statistics_store().unwrap();
+        let store = schema.db.statistics_store_writable().unwrap();
         let timestamp: i64 = 1_702_272_560;
 
-        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            0,
+            600,
+            1_000_000,
+            300_000_000,
+        );
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            1,
+            600,
+            2_000_000,
+            600_000_000,
+        );
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            2,
+            600,
+            3_000_000,
+            900_000_000,
+        );
 
         // when
         let res = schema.execute(query).await;
@@ -684,9 +709,9 @@ mod tests {
     async fn test_count_by_protocol_basic() {
         let schema = TestSchema::new();
 
-        let conn_store = schema.db.conn_store().unwrap();
-        let dns_store = schema.db.dns_store().unwrap();
-        let http_store = schema.db.http_store().unwrap();
+        let conn_store = schema.db.conn_store_writable().unwrap();
+        let dns_store = schema.db.dns_store_writable().unwrap();
+        let http_store = schema.db.http_store_writable().unwrap();
 
         let now = Utc::now().timestamp_nanos_opt().unwrap();
 
@@ -696,17 +721,17 @@ mod tests {
         //   HTTP    -> 9 events
         for i in 0..5 {
             let sensor = format!("sensor{i}");
-            insert_conn_raw_event(&conn_store, &sensor, now + i);
+            insert_conn_raw_event(conn_store.as_ref(), &sensor, now + i);
         }
 
         for i in 0..7 {
             let sensor = format!("sensor{i}");
-            insert_dns_raw_event(&dns_store, &sensor, now + i);
+            insert_dns_raw_event(dns_store.as_ref(), &sensor, now + i);
         }
 
         for i in 0..9 {
             let sensor = format!("sensor{i}");
-            insert_http_raw_event(&http_store, &sensor, now + i);
+            insert_http_raw_event(http_store.as_ref(), &sensor, now + i);
         }
 
         let query = r"

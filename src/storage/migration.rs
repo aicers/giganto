@@ -31,7 +31,7 @@ use crate::{
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
         Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, StorageKey, Tls as TlsFromV26,
-        rocksdb_options,
+        WritableRawEventStore, rocksdb_options,
     },
 };
 
@@ -149,7 +149,7 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
-    let store = db.netflow5_store()?;
+    let store = db.netflow5_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<Netflow5BeforeV23>(&val)?;
@@ -162,7 +162,7 @@ fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
-    let store = db.netflow9_store()?;
+    let store = db.netflow9_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<Netflow9BeforeV23>(&val)?;
@@ -175,7 +175,7 @@ fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
-    let store = db.secu_log_store()?;
+    let store = db.secu_log_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<SecuLogBeforeV23>(&val)?;
@@ -189,7 +189,7 @@ fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
 
 fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
     info!("Starting migration for oplog");
-    let store = db.op_log_store()?;
+    let store = db.op_log_store_writable()?;
     let counter = AtomicUsize::new(0);
 
     for raw_event in store.iter_forward() {
@@ -281,27 +281,72 @@ fn get_timestamp_from_key(key: &[u8]) -> Result<i64, anyhow::Error> {
 
 fn migration_0_24_to_0_26_other_protocols(db: &Database) -> Result<()> {
     info!("Starting migration for other raw event");
-    migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(&db.dns_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<RdpBeforeV26, RdpFromV26>(&db.rdp_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<SmtpBeforeV26, SmtpFromV26>(&db.smtp_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<NtlmBeforeV26, NtlmFromV26>(&db.ntlm_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<KerberosBeforeV26, KerberosFromV26>(&db.kerberos_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<SshBeforeV26, SshFromV26>(&db.ssh_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(&db.dce_rpc_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<FtpBeforeV26, FtpFromV26>(&db.ftp_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<MqttBeforeV26, MqttFromV26>(&db.mqtt_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<LdapBeforeV26, LdapFromV26>(&db.ldap_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<TlsBeforeV26, TlsFromV26>(&db.tls_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<SmbBeforeV26, SmbFromV26>(&db.smb_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(&db.nfs_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(&db.bootp_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(&db.dhcp_store()?)?;
+    {
+        let store = db.dns_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.rdp_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<RdpBeforeV26, RdpFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.smtp_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<SmtpBeforeV26, SmtpFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.ntlm_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<NtlmBeforeV26, NtlmFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.kerberos_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<KerberosBeforeV26, KerberosFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.ssh_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<SshBeforeV26, SshFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.dce_rpc_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.ftp_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<FtpBeforeV26, FtpFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.mqtt_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<MqttBeforeV26, MqttFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.ldap_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<LdapBeforeV26, LdapFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.tls_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<TlsBeforeV26, TlsFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.smb_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<SmbBeforeV26, SmbFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.nfs_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.bootp_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(store.as_ref())?;
+    }
+    {
+        let store = db.dhcp_store_writable()?;
+        migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(store.as_ref())?;
+    }
     info!("Completed migration for other raw event");
     Ok(())
 }
 
 fn migrate_raw_event_0_24_to_0_26<OldT, NewT>(
-    store: &crate::storage::RawEventStore<'_, NewT>,
+    store: &dyn WritableRawEventStore<'_, NewT>,
 ) -> Result<()>
 where
     OldT: DeserializeOwned + Sized,
@@ -324,7 +369,7 @@ where
 
 fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
     info!("Starting migration for conn");
-    let store = db.conn_store()?;
+    let store = db.conn_store_writable()?;
 
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -364,7 +409,7 @@ fn migrate_0_24_to_0_26_conn(db: &Database) -> Result<()> {
 
 fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
     info!("Starting migration for http field consolidation");
-    let store = db.http_store()?;
+    let store = db.http_store_writable()?;
 
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -430,6 +475,7 @@ mod tests {
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
 
+    use super::super::DatabaseMode;
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV26,
@@ -466,6 +512,7 @@ mod tests {
         let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
         Database {
             db: std::sync::Arc::new(db),
+            mode: DatabaseMode::Primary,
         }
     }
 
@@ -587,19 +634,19 @@ mod tests {
             let db = open_with_old_cfs(&db_path, &DbOptions::default());
 
             // insert netflow5 data using the old key.
-            let netflow5_store = db.netflow5_store().unwrap();
+            let netflow5_store = db.netflow5_store_writable().unwrap();
             netflow5_store
                 .append(&netflow5_key, &serialized_netflow5_old)
                 .unwrap();
 
             // insert netflow9 data using the old key.
-            let netflow9_store = db.netflow9_store().unwrap();
+            let netflow9_store = db.netflow9_store_writable().unwrap();
             netflow9_store
                 .append(&netflow9_key, &serialized_netflow9_old)
                 .unwrap();
 
             // insert secuLog data using the old key.
-            let secu_log_store = db.secu_log_store().unwrap();
+            let secu_log_store = db.secu_log_store_writable().unwrap();
             secu_log_store
                 .append(&secu_log_key, &serialized_secu_log_old)
                 .unwrap();
@@ -611,7 +658,7 @@ mod tests {
         let db = Database::open(&db_path, &DbOptions::default()).unwrap();
 
         // check netflow5
-        let netflow5_store = db.netflow5_store().unwrap();
+        let netflow5_store = db.netflow5_store_writable().unwrap();
         let mut result_iter = netflow5_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -623,7 +670,7 @@ mod tests {
         );
 
         // check netflow9
-        let netflow9_store = db.netflow9_store().unwrap();
+        let netflow9_store = db.netflow9_store_writable().unwrap();
         let mut result_iter = netflow9_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -635,7 +682,7 @@ mod tests {
         );
 
         // check secuLog
-        let secu_log_store = db.secu_log_store().unwrap();
+        let secu_log_store = db.secu_log_store_writable().unwrap();
         let mut result_iter = secu_log_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -705,7 +752,7 @@ mod tests {
 
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let op_log_store = db.op_log_store().unwrap();
+        let op_log_store = db.op_log_store_writable().unwrap();
 
         let old_op_log = OpLogBeforeV24 {
             agent_name: "local".to_string(),
@@ -776,7 +823,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let conn_store = db.conn_store().unwrap();
+        let conn_store = db.conn_store_writable().unwrap();
         conn_store.append(&conn_old_key, &ser_old_conn).unwrap();
 
         // migration conn raw events
@@ -842,7 +889,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let http_store = db.http_store().unwrap();
+        let http_store = db.http_store_writable().unwrap();
         http_store.append(&http_old_key, &ser_old_http).unwrap();
 
         // migration http raw events
@@ -914,7 +961,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let dns_store = db.dns_store().unwrap();
+        let dns_store = db.dns_store_writable().unwrap();
         dns_store.append(&dns_old_key, &ser_dns_old).unwrap();
 
         // migration dns raw events
@@ -966,7 +1013,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let rdp_store = db.rdp_store().unwrap();
+        let rdp_store = db.rdp_store_writable().unwrap();
         rdp_store.append(&rdp_key, &ser_rdp_old).unwrap();
 
         // migration rdp raw events
@@ -1013,7 +1060,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let smtp_store = db.smtp_store().unwrap();
+        let smtp_store = db.smtp_store_writable().unwrap();
         smtp_store.append(&smtp_key, &ser_smtp_old).unwrap();
 
         // migration smtp raw events
@@ -1064,7 +1111,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let ntlm_store = db.ntlm_store().unwrap();
+        let ntlm_store = db.ntlm_store_writable().unwrap();
         ntlm_store.append(&ntlm_key, &ser_ntlm_old).unwrap();
 
         // migration ntlm raw events
@@ -1117,7 +1164,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let kerberos_store = db.kerberos_store().unwrap();
+        let kerberos_store = db.kerberos_store_writable().unwrap();
         kerberos_store
             .append(&kerberos_key, &ser_kerberos_old)
             .unwrap();
@@ -1183,7 +1230,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let ssh_store = db.ssh_store().unwrap();
+        let ssh_store = db.ssh_store_writable().unwrap();
         ssh_store.append(&ssh_key, &ser_ssh_old).unwrap();
 
         // migration ssh raw events
@@ -1239,7 +1286,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let dcerpc_store = db.dce_rpc_store().unwrap();
+        let dcerpc_store = db.dce_rpc_store_writable().unwrap();
         dcerpc_store.append(&dcerpc_key, &ser_dcerpc_old).unwrap();
 
         // migration dcerpc raw events
@@ -1295,7 +1342,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let ftp_store = db.ftp_store().unwrap();
+        let ftp_store = db.ftp_store_writable().unwrap();
         ftp_store.append(&ftp_key, &ser_ftp_old).unwrap();
 
         // migration ftp raw events
@@ -1354,7 +1401,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let mqtt_store = db.mqtt_store().unwrap();
+        let mqtt_store = db.mqtt_store_writable().unwrap();
         mqtt_store.append(&mqtt_key, &ser_mqtt_old).unwrap();
 
         // migration mqtt raw events
@@ -1406,7 +1453,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let ldap_store = db.ldap_store().unwrap();
+        let ldap_store = db.ldap_store_writable().unwrap();
         ldap_store.append(&ldap_key, &ser_ldap_old).unwrap();
 
         // migration ldap raw events
@@ -1473,7 +1520,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let tls_store = db.tls_store().unwrap();
+        let tls_store = db.tls_store_writable().unwrap();
         tls_store.append(&tls_key, &ser_tls_old).unwrap();
 
         // migration tls raw events
@@ -1544,7 +1591,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let smb_store = db.smb_store().unwrap();
+        let smb_store = db.smb_store_writable().unwrap();
         smb_store.append(&smb_key, &ser_smb_old).unwrap();
 
         // migration smb raw events
@@ -1596,7 +1643,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let nfs_store = db.nfs_store().unwrap();
+        let nfs_store = db.nfs_store_writable().unwrap();
         nfs_store.append(&nfs_key, &ser_nfs_old).unwrap();
 
         // migration nfs raw events
@@ -1648,7 +1695,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let bootp_store = db.bootp_store().unwrap();
+        let bootp_store = db.bootp_store_writable().unwrap();
         bootp_store.append(&bootp_key, &ser_bootp_old).unwrap();
 
         // migration bootp raw events
@@ -1723,7 +1770,7 @@ mod tests {
             .end_key(timestamp)
             .build()
             .key();
-        let dhcp_store = db.dhcp_store().unwrap();
+        let dhcp_store = db.dhcp_store_writable().unwrap();
         dhcp_store.append(&dhcp_key, &ser_dhcp_old).unwrap();
 
         // migration dhcp raw events

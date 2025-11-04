@@ -24,7 +24,7 @@ use comm::{
     publish,
 };
 use settings::{ConfigVisible, Settings};
-use storage::{db_path_and_option, repair_db};
+use storage::{data_dir_to_secondary_path, db_path_and_option, repair_db};
 use tokio::{
     runtime, select,
     sync::{
@@ -193,7 +193,11 @@ async fn main() -> Result<()> {
             bail!("migration failed")
         }
 
-        let database = storage::Database::open(&db_path, &db_options)?;
+        let primary_database = storage::Database::open(&db_path, &db_options)?;
+        let secondary_path = data_dir_to_secondary_path(&settings.config.visible.data_dir);
+        let secondary_database =
+            storage::Database::open_secondary(&db_path, &secondary_path, &db_options)?;
+        secondary_database.try_catch_up_with_primary()?;
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());
@@ -202,7 +206,7 @@ async fn main() -> Result<()> {
         let mut notify_sensor_change = None;
 
         let pcap_sensors = new_pcap_sensors();
-        let ingest_sensors = new_ingest_sensors(&database);
+        let ingest_sensors = new_ingest_sensors(&primary_database);
         let runtime_ingest_sensors = new_runtime_ingest_sensors();
         let stream_direct_channels = new_stream_direct_channels();
         let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
@@ -211,7 +215,7 @@ async fn main() -> Result<()> {
 
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
-            database.clone(),
+            secondary_database.clone(),
             pcap_sensors.clone(),
             ingest_sensors.clone(),
             peers.clone(),
@@ -240,7 +244,7 @@ async fn main() -> Result<()> {
             error!("Failed to start GraphQL server: {e}");
         }
 
-        let db = database.clone();
+        let db = primary_database.clone();
         let notify_shutdown_copy = notify_shutdown.clone();
         let running_flag = retain_flag.clone();
         let retain_task_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -281,7 +285,7 @@ async fn main() -> Result<()> {
         let publish_server =
             publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
         let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
-            database.clone(),
+            secondary_database.clone(),
             pcap_sensors.clone(),
             stream_direct_channels.clone(),
             ingest_sensors.clone(),
@@ -294,7 +298,7 @@ async fn main() -> Result<()> {
         let ingest_server =
             ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
         let ingest_task_handle: JoinHandle<()> = task::spawn(ingest_server.run(
-            database.clone(),
+            primary_database.clone(),
             pcap_sensors,
             ingest_sensors,
             runtime_ingest_sensors,
@@ -304,13 +308,20 @@ async fn main() -> Result<()> {
             ack_transmission_cnt,
         ));
 
+        let secondary_sync_task_handle: JoinHandle<()> =
+            task::spawn(storage::sync_secondary_periodically(
+                settings.config.visible.secondary_sync_interval,
+                secondary_database.clone(),
+                notify_shutdown.clone(),
+            ));
+
         loop {
             select! {
                 Some(new_config) = reload_rx.recv() => {
                     match settings.update_config_file(&new_config) {
                         Ok(()) => {
                             notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, secondary_sync_task_handle, retain_task_handle).await;
                             break;
                         }
                         Err(e) => {
@@ -321,21 +332,21 @@ async fn main() -> Result<()> {
                 () = notify_terminate.notified() => {
                     info!("Termination signal: daemon exit");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, secondary_sync_task_handle, retain_task_handle).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
                 () = notify_reboot.notified() => {
                     info!("Restarting the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, secondary_sync_task_handle, retain_task_handle).await;
                     is_reboot = true;
                     break;
                 }
                 () = notify_power_off.notified() => {
                     info!("Power off the system...");
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, secondary_sync_task_handle, retain_task_handle).await;
                     is_power_off = true;
                     break;
                 }
@@ -349,7 +360,8 @@ async fn main() -> Result<()> {
                 }
                 sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
             }
-            database.shutdown()?;
+            primary_database.shutdown()?;
+            secondary_database.shutdown()?;
 
             if is_reload_config {
                 info!("Before reloading config, wait {SERVER_REBOOT_DELAY} seconds...");
@@ -426,12 +438,22 @@ async fn wait_for_task_shutdown(
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
+    secondary_sync_task_handle: JoinHandle<()>,
     retain_task_handle: std::thread::JoinHandle<()>,
 ) {
     if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            handle_peers,
+            secondary_sync_task_handle
+        );
     } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            secondary_sync_task_handle
+        );
     }
     let _ = retain_task_handle.join();
 }
