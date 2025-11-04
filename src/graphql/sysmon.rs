@@ -1609,8 +1609,9 @@ async fn handle_sysmon_events(
         first,
         last,
         |after, before, first, last| async move {
+            let process_create_store = db.process_create_store()?;
             let (process_create_iter, size) = get_peekable_iter(
-                &db.process_create_store()?,
+                process_create_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1618,8 +1619,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let file_create_time_store = db.file_create_time_store()?;
             let (file_create_time_iter, _) = get_peekable_iter(
-                &db.file_create_time_store()?,
+                file_create_time_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1627,8 +1629,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let network_connect_store = db.network_connect_store()?;
             let (network_connect_iter, _) = get_peekable_iter(
-                &db.network_connect_store()?,
+                network_connect_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1636,8 +1639,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let process_terminate_store = db.process_terminate_store()?;
             let (process_terminate_iter, _) = get_peekable_iter(
-                &db.process_terminate_store()?,
+                process_terminate_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1645,8 +1649,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let image_load_store = db.image_load_store()?;
             let (image_load_iter, _) = get_peekable_iter(
-                &db.image_load_store()?,
+                image_load_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1654,8 +1659,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let file_create_store = db.file_create_store()?;
             let (file_create_iter, _) = get_peekable_iter(
-                &db.file_create_store()?,
+                file_create_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1663,8 +1669,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let registry_value_set_store = db.registry_value_set_store()?;
             let (registry_value_set_iter, _) = get_peekable_iter(
-                &db.registry_value_set_store()?,
+                registry_value_set_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1672,8 +1679,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let registry_key_rename_store = db.registry_key_rename_store()?;
             let (registry_key_rename_iter, _) = get_peekable_iter(
-                &db.registry_key_rename_store()?,
+                registry_key_rename_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1681,8 +1689,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let file_create_stream_hash_store = db.file_create_stream_hash_store()?;
             let (file_create_stream_hash_iter, _) = get_peekable_iter(
-                &db.file_create_stream_hash_store()?,
+                file_create_stream_hash_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1690,8 +1699,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let pipe_event_store = db.pipe_event_store()?;
             let (pipe_event_iter, _) = get_peekable_iter(
-                &db.pipe_event_store()?,
+                pipe_event_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1699,8 +1709,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let dns_query_store = db.dns_query_store()?;
             let (dns_query_iter, _) = get_peekable_iter(
-                &db.dns_query_store()?,
+                dns_query_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1708,8 +1719,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let file_delete_store = db.file_delete_store()?;
             let (file_delete_iter, _) = get_peekable_iter(
-                &db.file_delete_store()?,
+                file_delete_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1717,8 +1729,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let process_tamper_store = db.process_tamper_store()?;
             let (process_tamper_iter, _) = get_peekable_iter(
-                &db.process_tamper_store()?,
+                process_tamper_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1726,8 +1739,9 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let file_delete_detected_store = db.file_delete_detected_store()?;
             let (file_delete_detected_iter, _) = get_peekable_iter(
-                &db.file_delete_detected_store()?,
+                file_delete_detected_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),

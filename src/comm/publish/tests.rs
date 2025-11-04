@@ -54,7 +54,7 @@ use crate::{
         to_cert_chain, to_private_key, to_root_cert,
     },
     server::Certs,
-    storage::{Database, DbOptions, RawEventStore},
+    storage::{Database, DbOptions, WritableRawEventStore},
 };
 
 fn get_token() -> &'static Mutex<u32> {
@@ -770,14 +770,22 @@ fn gen_radius_raw_event() -> Vec<u8> {
     encode_legacy(&radius_body).unwrap()
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_conn_raw_event(
+    store: &dyn WritableRawEventStore<Conn>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_conn_body = gen_conn_raw_event();
     store.append(&key, &ser_conn_body).unwrap();
     ser_conn_body
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_dns_raw_event(
+    store: &dyn WritableRawEventStore<Dns>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_dns_body = gen_dns_raw_event();
     store.append(&key, &ser_dns_body).unwrap();
@@ -785,7 +793,7 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
 }
 
 fn insert_malformed_dns_raw_event(
-    store: &RawEventStore<MalformedDns>,
+    store: &dyn WritableRawEventStore<MalformedDns>,
     sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
@@ -795,28 +803,44 @@ fn insert_malformed_dns_raw_event(
     ser_malformed_dns_body
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_rdp_raw_event(
+    store: &dyn WritableRawEventStore<Rdp>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_rdp_body = gen_rdp_raw_event();
     store.append(&key, &ser_rdp_body).unwrap();
     ser_rdp_body
 }
 
-fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_http_raw_event(
+    store: &dyn WritableRawEventStore<Http>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_http_body = gen_http_raw_event();
     store.append(&key, &ser_http_body).unwrap();
     ser_http_body
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_smtp_raw_event(
+    store: &dyn WritableRawEventStore<Smtp>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_smtp_body = gen_smtp_raw_event();
     store.append(&key, &ser_smtp_body).unwrap();
     ser_smtp_body
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_ntlm_raw_event(
+    store: &dyn WritableRawEventStore<Ntlm>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ntlm_body = gen_ntlm_raw_event();
     store.append(&key, &ser_ntlm_body).unwrap();
@@ -824,7 +848,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
 }
 
 fn insert_kerberos_raw_event(
-    store: &RawEventStore<Kerberos>,
+    store: &dyn WritableRawEventStore<Kerberos>,
     sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
@@ -834,7 +858,11 @@ fn insert_kerberos_raw_event(
     ser_kerberos_body
 }
 
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_ssh_raw_event(
+    store: &dyn WritableRawEventStore<Ssh>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ssh_body = gen_ssh_raw_event();
     store.append(&key, &ser_ssh_body).unwrap();
@@ -842,7 +870,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
 }
 
 fn insert_dce_rpc_raw_event(
-    store: &RawEventStore<DceRpc>,
+    store: &dyn WritableRawEventStore<DceRpc>,
     sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
@@ -853,7 +881,7 @@ fn insert_dce_rpc_raw_event(
 }
 
 fn insert_log_raw_event(
-    store: &RawEventStore<Log>,
+    store: &dyn WritableRawEventStore<Log>,
     sensor: &str,
     kind: &str,
     timestamp: i64,
@@ -865,7 +893,7 @@ fn insert_log_raw_event(
 }
 
 fn insert_periodic_time_series_raw_event(
-    store: &RawEventStore<PeriodicTimeSeries>,
+    store: &dyn WritableRawEventStore<PeriodicTimeSeries>,
     sensor: &str,
     timestamp: i64,
 ) -> Vec<u8> {
@@ -875,63 +903,99 @@ fn insert_periodic_time_series_raw_event(
     ser_periodic_time_series_body
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_ftp_raw_event(
+    store: &dyn WritableRawEventStore<Ftp>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ftp_body = gen_ftp_raw_event();
     store.append(&key, &ser_ftp_body).unwrap();
     ser_ftp_body
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_mqtt_raw_event(
+    store: &dyn WritableRawEventStore<Mqtt>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_mqtt_body = gen_mqtt_raw_event();
     store.append(&key, &ser_mqtt_body).unwrap();
     ser_mqtt_body
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_ldap_raw_event(
+    store: &dyn WritableRawEventStore<Ldap>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_ldap_body = gen_ldap_raw_event();
     store.append(&key, &ser_ldap_body).unwrap();
     ser_ldap_body
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_tls_raw_event(
+    store: &dyn WritableRawEventStore<Tls>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_tls_body = gen_tls_raw_event();
     store.append(&key, &ser_tls_body).unwrap();
     ser_tls_body
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_smb_raw_event(
+    store: &dyn WritableRawEventStore<Smb>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_smb_body = gen_smb_raw_event();
     store.append(&key, &ser_smb_body).unwrap();
     ser_smb_body
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_nfs_raw_event(
+    store: &dyn WritableRawEventStore<Nfs>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_nfs_body = gen_nfs_raw_event();
     store.append(&key, &ser_nfs_body).unwrap();
     ser_nfs_body
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_bootp_raw_event(
+    store: &dyn WritableRawEventStore<Bootp>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_bootp_body = gen_bootp_raw_event();
     store.append(&key, &ser_bootp_body).unwrap();
     ser_bootp_body
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_dhcp_raw_event(
+    store: &dyn WritableRawEventStore<Dhcp>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_dhcp_body = gen_dhcp_raw_event();
     store.append(&key, &ser_dhcp_body).unwrap();
     ser_dhcp_body
 }
 
-fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_radius_raw_event(
+    store: &dyn WritableRawEventStore<Radius>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
     let ser_radius_body = gen_radius_raw_event();
     store.append(&key, &ser_radius_body).unwrap();
@@ -1006,7 +1070,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let conn_store = db.conn_store().unwrap();
+        let conn_store = db.conn_store_writable().unwrap();
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data: Conn =
             decode_legacy(&insert_conn_raw_event(&conn_store, SENSOR, send_conn_time)).unwrap();
@@ -1064,7 +1128,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let dns_store = db.dns_store().unwrap();
+        let dns_store = db.dns_store_writable().unwrap();
         let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dns_data: Dns =
             decode_legacy(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time)).unwrap();
@@ -1122,7 +1186,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let malformed_dns_store = db.malformed_dns_store().unwrap();
+        let malformed_dns_store = db.malformed_dns_store_writable().unwrap();
         let send_malformed_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
         let malformed_dns_data: MalformedDns = decode_legacy(&insert_malformed_dns_raw_event(
             &malformed_dns_store,
@@ -1186,7 +1250,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let http_store = db.http_store().unwrap();
+        let http_store = db.http_store_writable().unwrap();
         let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
         let http_data: Http =
             decode_legacy(&insert_http_raw_event(&http_store, SENSOR, send_http_time)).unwrap();
@@ -1244,7 +1308,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let rdp_store = db.rdp_store().unwrap();
+        let rdp_store = db.rdp_store_writable().unwrap();
         let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let rdp_data: Rdp =
             decode_legacy(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time)).unwrap();
@@ -1302,7 +1366,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let smtp_store = db.smtp_store().unwrap();
+        let smtp_store = db.smtp_store_writable().unwrap();
         let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smtp_data: Smtp =
             decode_legacy(&insert_smtp_raw_event(&smtp_store, SENSOR, send_smtp_time)).unwrap();
@@ -1360,7 +1424,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let ntlm_store = db.ntlm_store().unwrap();
+        let ntlm_store = db.ntlm_store_writable().unwrap();
         let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ntlm_data: Ntlm =
             decode_legacy(&insert_ntlm_raw_event(&ntlm_store, SENSOR, send_ntlm_time)).unwrap();
@@ -1418,7 +1482,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let kerberos_store = db.kerberos_store().unwrap();
+        let kerberos_store = db.kerberos_store_writable().unwrap();
         let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
         let kerberos_data: Kerberos = decode_legacy(&insert_kerberos_raw_event(
             &kerberos_store,
@@ -1481,7 +1545,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let ssh_store = db.ssh_store().unwrap();
+        let ssh_store = db.ssh_store_writable().unwrap();
         let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ssh_data: Ssh =
             decode_legacy(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time)).unwrap();
@@ -1539,7 +1603,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let dce_rpc_store = db.dce_rpc_store().unwrap();
+        let dce_rpc_store = db.dce_rpc_store_writable().unwrap();
         let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dce_rpc_data: DceRpc = decode_legacy(&insert_dce_rpc_raw_event(
             &dce_rpc_store,
@@ -1603,7 +1667,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let ftp_store = db.ftp_store().unwrap();
+        let ftp_store = db.ftp_store_writable().unwrap();
         let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ftp_data: Ftp =
             decode_legacy(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time)).unwrap();
@@ -1661,7 +1725,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let mqtt_store = db.mqtt_store().unwrap();
+        let mqtt_store = db.mqtt_store_writable().unwrap();
         let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
         let mqtt_data: Mqtt =
             decode_legacy(&insert_mqtt_raw_event(&mqtt_store, SENSOR, send_mqtt_time)).unwrap();
@@ -1719,7 +1783,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let ldap_store = db.ldap_store().unwrap();
+        let ldap_store = db.ldap_store_writable().unwrap();
         let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
         let ldap_data: Ldap =
             decode_legacy(&insert_ldap_raw_event(&ldap_store, SENSOR, send_ldap_time)).unwrap();
@@ -1777,7 +1841,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let tls_store = db.tls_store().unwrap();
+        let tls_store = db.tls_store_writable().unwrap();
         let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
         let tls_data: Tls =
             decode_legacy(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time)).unwrap();
@@ -1835,7 +1899,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let smb_store = db.smb_store().unwrap();
+        let smb_store = db.smb_store_writable().unwrap();
         let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
         let smb_data: Smb =
             decode_legacy(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time)).unwrap();
@@ -1893,7 +1957,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let nfs_store = db.nfs_store().unwrap();
+        let nfs_store = db.nfs_store_writable().unwrap();
         let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
         let nfs_data: Nfs =
             decode_legacy(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time)).unwrap();
@@ -1951,7 +2015,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let bootp_store = db.bootp_store().unwrap();
+        let bootp_store = db.bootp_store_writable().unwrap();
         let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let bootp_data: Bootp = decode_legacy(&insert_bootp_raw_event(
             &bootp_store,
@@ -2013,7 +2077,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let dhcp_store = db.dhcp_store().unwrap();
+        let dhcp_store = db.dhcp_store_writable().unwrap();
         let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
         let dhcp_data: Dhcp =
             decode_legacy(&insert_dhcp_raw_event(&dhcp_store, SENSOR, send_dhcp_time)).unwrap();
@@ -2071,7 +2135,7 @@ async fn request_range_data_with_protocol() {
     {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
-        let radius_store = db.radius_store().unwrap();
+        let radius_store = db.radius_store_writable().unwrap();
         let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
         let radius_data: Radius = decode_legacy(&insert_radius_raw_event(
             &radius_store,
@@ -2180,7 +2244,7 @@ async fn request_range_data_with_log() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let log_store = db.log_store().unwrap();
+    let log_store = db.log_store_writable().unwrap();
     let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
     let log_data: Log = decode_legacy(&insert_log_raw_event(
         &log_store,
@@ -2288,7 +2352,7 @@ async fn request_range_data_with_period_time_series() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let time_series_store = db.periodic_time_series_store().unwrap();
+    let time_series_store = db.periodic_time_series_store_writable().unwrap();
     let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
     let time_series_data: PeriodicTimeSeries =
         decode_legacy(&insert_periodic_time_series_raw_event(
@@ -2435,7 +2499,7 @@ async fn request_network_event_stream() {
     let mut publish = TestClient::new().await;
 
     {
-        let conn_store = db.conn_store().unwrap();
+        let conn_store = db.conn_store_writable().unwrap();
 
         // direct conn network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -2543,7 +2607,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let dns_store = db.dns_store().unwrap();
+        let dns_store = db.dns_store_writable().unwrap();
 
         // direct dns network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -2654,7 +2718,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let rdp_store = db.rdp_store().unwrap();
+        let rdp_store = db.rdp_store_writable().unwrap();
 
         // direct rdp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -2764,7 +2828,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let http_store = db.http_store().unwrap();
+        let http_store = db.http_store_writable().unwrap();
 
         // direct http network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -2876,7 +2940,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let smtp_store = db.smtp_store().unwrap();
+        let smtp_store = db.smtp_store_writable().unwrap();
 
         // direct smtp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -2988,7 +3052,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let ntlm_store = db.ntlm_store().unwrap();
+        let ntlm_store = db.ntlm_store_writable().unwrap();
 
         // direct ntlm network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3100,7 +3164,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let kerberos_store = db.kerberos_store().unwrap();
+        let kerberos_store = db.kerberos_store_writable().unwrap();
 
         // direct kerberos network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3214,7 +3278,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let ssh_store = db.ssh_store().unwrap();
+        let ssh_store = db.ssh_store_writable().unwrap();
 
         // direct ssh network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3326,7 +3390,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let dce_rpc_store = db.dce_rpc_store().unwrap();
+        let dce_rpc_store = db.dce_rpc_store_writable().unwrap();
 
         // direct dce_rpc network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3441,7 +3505,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let ftp_store = db.ftp_store().unwrap();
+        let ftp_store = db.ftp_store_writable().unwrap();
 
         // direct ftp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3553,7 +3617,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let mqtt_store = db.mqtt_store().unwrap();
+        let mqtt_store = db.mqtt_store_writable().unwrap();
 
         // direct mqtt network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3665,7 +3729,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let ldap_store = db.ldap_store().unwrap();
+        let ldap_store = db.ldap_store_writable().unwrap();
 
         // direct ldap network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3777,7 +3841,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let tls_store = db.tls_store().unwrap();
+        let tls_store = db.tls_store_writable().unwrap();
 
         // direct tls network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -3889,7 +3953,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let smb_store = db.smb_store().unwrap();
+        let smb_store = db.smb_store_writable().unwrap();
 
         // direct smb network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -4001,7 +4065,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let nfs_store = db.nfs_store().unwrap();
+        let nfs_store = db.nfs_store_writable().unwrap();
 
         // direct nfs network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -4113,7 +4177,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let bootp_store = db.bootp_store().unwrap();
+        let bootp_store = db.bootp_store_writable().unwrap();
 
         // direct bootp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -4227,7 +4291,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let dhcp_store = db.dhcp_store().unwrap();
+        let dhcp_store = db.dhcp_store_writable().unwrap();
 
         // direct dhcp network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -4339,7 +4403,7 @@ async fn request_network_event_stream() {
     }
 
     {
-        let radius_store = db.radius_store().unwrap();
+        let radius_store = db.radius_store_writable().unwrap();
 
         // direct radius network event for the Semi-supervised Engine (src1,src2)
         send_stream_request(
@@ -4505,7 +4569,7 @@ async fn request_raw_events() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let conn_store = db.conn_store().unwrap();
+    let conn_store = db.conn_store_writable().unwrap();
     let send_conn_time = TIMESTAMP;
     let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
     let conn_data: Conn = decode_legacy(&conn_raw_data).unwrap();
@@ -4586,7 +4650,7 @@ async fn request_malformed_dns_raw_events() {
     let (mut send_pub_req, mut recv_pub_resp) =
         publish.conn.open_bi().await.expect("failed to open stream");
 
-    let malformed_dns_store = db.malformed_dns_store().unwrap();
+    let malformed_dns_store = db.malformed_dns_store_writable().unwrap();
     let send_malformed_dns_time = TIMESTAMP;
     let malformed_dns_raw =
         insert_malformed_dns_raw_event(&malformed_dns_store, SENSOR, send_malformed_dns_time);
@@ -4677,7 +4741,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let notify_shutdown = Arc::new(Notify::new());
 
         // prepare data in node2 database
-        let conn_store = db.conn_store().unwrap();
+        let conn_store = db.conn_store_writable().unwrap();
         let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
         let conn_data: Conn =
             decode_legacy(&insert_conn_raw_event(&conn_store, SENSOR, send_conn_time)).unwrap();
@@ -4688,6 +4752,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         {
             eprintln!("the receiver is dropped");
         }
+        drop(conn_store);
 
         let node2_server = Server::new(
             SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
@@ -4882,7 +4947,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         let notify_shutdown = Arc::new(Notify::new());
 
         // prepare data in node2 database
-        let log_store = db.log_store().unwrap();
+        let log_store = db.log_store_writable().unwrap();
         let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
         let log_data: Log = decode_legacy(&insert_log_raw_event(
             &log_store,
@@ -4898,6 +4963,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         {
             eprintln!("the receiver is dropped");
         }
+        drop(log_store);
 
         let node2_server = Server::new(
             SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
@@ -5090,7 +5156,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let notify_shutdown = Arc::new(Notify::new());
 
         // prepare data in node2 database
-        let time_series_store = db.periodic_time_series_store().unwrap();
+        let time_series_store = db.periodic_time_series_store_writable().unwrap();
         let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
         let time_series_data: PeriodicTimeSeries =
             decode_legacy(&insert_periodic_time_series_raw_event(
@@ -5110,6 +5176,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         {
             eprintln!("the receiver is dropped");
         }
+        drop(time_series_store);
 
         let node2_server = Server::new(
             SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
@@ -5303,7 +5370,7 @@ async fn request_raw_events_giganto_cluster() {
         let notify_shutdown = Arc::new(Notify::new());
 
         // prepare data in node2 database
-        let conn_store = db.conn_store().unwrap();
+        let conn_store = db.conn_store_writable().unwrap();
         let send_conn_time = TIMESTAMP;
         let conn_raw_data = insert_conn_raw_event(&conn_store, SENSOR, send_conn_time);
         let conn_data: Conn = decode_legacy(&conn_raw_data).unwrap();
@@ -5312,6 +5379,7 @@ async fn request_raw_events_giganto_cluster() {
         if oneshot_send.send(raw_data).is_err() {
             eprintln!("the receiver is dropped");
         }
+        drop(conn_store);
 
         let node2_server = Server::new(
             SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
