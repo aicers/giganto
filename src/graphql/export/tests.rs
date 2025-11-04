@@ -12,7 +12,6 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
 };
 
-use crate::bincode_utils::encode_legacy;
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
@@ -151,7 +150,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
         orig_l2_bytes: 21515,
         resp_l2_bytes: 27889,
     };
-    let ser_conn_body = encode_legacy(&conn_body).unwrap();
+    let ser_conn_body = bincode::serialize(&conn_body).unwrap();
 
     store.append(&key, &ser_conn_body).unwrap();
 }
@@ -237,7 +236,7 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
         ra_flag: false,
         ttl: vec![1; 5],
     };
-    let ser_dns_body = encode_legacy(&dns_body).unwrap();
+    let ser_dns_body = bincode::serialize(&dns_body).unwrap();
 
     store.append(&key, &ser_dns_body).unwrap();
 }
@@ -331,7 +330,7 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
         body: Vec::new(),
         state: String::new(),
     };
-    let ser_http_body = encode_legacy(&http_body).unwrap();
+    let ser_http_body = bincode::serialize(&http_body).unwrap();
 
     store.append(&key, &ser_http_body).unwrap();
 }
@@ -406,7 +405,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_l2_bytes: 200,
         cookie: "rdp_test".to_string(),
     };
-    let ser_rdp_body = encode_legacy(&rdp_body).unwrap();
+    let ser_rdp_body = bincode::serialize(&rdp_body).unwrap();
 
     store.append(&key, &ser_rdp_body).unwrap();
 }
@@ -487,7 +486,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         agent: "agent".to_string(),
         state: String::new(),
     };
-    let ser_smtp_body = encode_legacy(&smtp_body).unwrap();
+    let ser_smtp_body = bincode::serialize(&smtp_body).unwrap();
 
     store.append(&key, &ser_smtp_body).unwrap();
 }
@@ -566,7 +565,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         success: "tf".to_string(),
         protocol: "protocol".to_string(),
     };
-    let ser_ntlm_body = encode_legacy(&ntlm_body).unwrap();
+    let ser_ntlm_body = bincode::serialize(&ntlm_body).unwrap();
 
     store.append(&key, &ser_ntlm_body).unwrap();
 }
@@ -649,7 +648,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         sname_type: 1,
         service_name: vec!["service_name".to_string()],
     };
-    let ser_kerberos_body = encode_legacy(&kerberos_body).unwrap();
+    let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
     store.append(&key, &ser_kerberos_body).unwrap();
 }
@@ -735,7 +734,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         client_shka: "client_shka".to_string(),
         server_shka: "server_shka".to_string(),
     };
-    let ser_ssh_body = encode_legacy(&ssh_body).unwrap();
+    let ser_ssh_body = bincode::serialize(&ssh_body).unwrap();
 
     store.append(&key, &ser_ssh_body).unwrap();
 }
@@ -812,7 +811,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         endpoint: "endpoint".to_string(),
         operation: "operation".to_string(),
     };
-    let ser_dce_rpc_body = encode_legacy(&dce_rpc_body).unwrap();
+    let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
 
     store.append(&key, &ser_dce_rpc_body).unwrap();
 }
@@ -885,7 +884,7 @@ fn insert_log_raw_event(
         kind: kind.to_string(),
         log: body.to_vec(),
     };
-    let value = encode_legacy(&log_body).unwrap();
+    let value = bincode::serialize(&log_body).unwrap();
     store.append(&key, &value).unwrap();
 }
 
@@ -950,7 +949,7 @@ fn insert_time_series(
         id: id.to_string(),
         data,
     };
-    let value = encode_legacy(&time_series_data).unwrap();
+    let value = bincode::serialize(&time_series_data).unwrap();
     store.append(&key, &value).unwrap();
 }
 
@@ -1011,7 +1010,7 @@ fn insert_op_log_raw_event(
         contents: "op_log".to_string(),
     };
 
-    let value = encode_legacy(&op_log_body).unwrap();
+    let value = bincode::serialize(&op_log_body).unwrap();
 
     store.append(&key, &value).unwrap();
 }
@@ -1099,7 +1098,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
             file_id: "1".to_string(),
         }],
     };
-    let ser_ftp_body = encode_legacy(&ftp_body).unwrap();
+    let ser_ftp_body = bincode::serialize(&ftp_body).unwrap();
 
     store.append(&key, &ser_ftp_body).unwrap();
 }
@@ -1179,7 +1178,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         subscribe: vec!["subscribe".to_string()],
         suback_reason: vec![1],
     };
-    let ser_mqtt_body = encode_legacy(&mqtt_body).unwrap();
+    let ser_mqtt_body = bincode::serialize(&mqtt_body).unwrap();
 
     store.append(&key, &ser_mqtt_body).unwrap();
 }
@@ -1260,7 +1259,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         object: Vec::new(),
         argument: Vec::new(),
     };
-    let ser_ldap_body = encode_legacy(&ldap_body).unwrap();
+    let ser_ldap_body = bincode::serialize(&ldap_body).unwrap();
 
     store.append(&key, &ser_ldap_body).unwrap();
 }
@@ -1355,7 +1354,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         issuer_common_name: "issuer_comm".to_string(),
         last_alert: 13,
     };
-    let ser_tls_body = encode_legacy(&tls_body).unwrap();
+    let ser_tls_body = bincode::serialize(&tls_body).unwrap();
 
     store.append(&key, &ser_tls_body).unwrap();
 }
@@ -1440,7 +1439,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         write_time: 10_000_000,
         change_time: 20_000_000,
     };
-    let ser_smb_body = encode_legacy(&smb_body).unwrap();
+    let ser_smb_body = bincode::serialize(&smb_body).unwrap();
 
     store.append(&key, &ser_smb_body).unwrap();
 }
@@ -1516,7 +1515,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         read_files: vec![],
         write_files: vec![],
     };
-    let ser_nfs_body = encode_legacy(&nfs_body).unwrap();
+    let ser_nfs_body = bincode::serialize(&nfs_body).unwrap();
 
     store.append(&key, &ser_nfs_body).unwrap();
 }
@@ -1601,7 +1600,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         sname: "sname".to_string(),
         file: "file".to_string(),
     };
-    let ser_bootp_body = encode_legacy(&bootp_body).unwrap();
+    let ser_bootp_body = bincode::serialize(&bootp_body).unwrap();
 
     store.append(&key, &ser_bootp_body).unwrap();
 }
@@ -1699,7 +1698,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         client_id_type: 1,
         client_id: vec![0, 1, 2],
     };
-    let ser_dhcp_body = encode_legacy(&dhcp_body).unwrap();
+    let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
 
     store.append(&key, &ser_dhcp_body).unwrap();
 }

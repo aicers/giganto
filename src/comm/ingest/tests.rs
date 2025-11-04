@@ -44,7 +44,6 @@ use tokio::{
 
 use super::Server;
 use crate::{
-    bincode_utils::encode_legacy,
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
         new_stream_direct_channels, to_cert_chain, to_private_key, to_root_cert,
@@ -1345,8 +1344,8 @@ async fn send_events<T: Serialize>(
     timestamp: i64,
     msg: T,
 ) -> anyhow::Result<()> {
-    let msg_buf = encode_legacy(&msg)?;
-    let buf = encode_legacy(&vec![(timestamp, msg_buf)])?;
+    let msg_buf = bincode::serialize(&msg)?;
+    let buf = bincode::serialize(&vec![(timestamp, msg_buf)])?;
     send_raw(send, &buf).await?;
     Ok(())
 }

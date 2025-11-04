@@ -379,7 +379,7 @@ mod tests {
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
     };
-    use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn test_statistics() {
@@ -433,7 +433,7 @@ mod tests {
             period,
             stats: vec![(RawEventKind::Statistics, count, size)],
         };
-        let msg = bincode_utils::encode_legacy(&msg).unwrap();
+        let msg = bincode::serialize(&msg).unwrap();
         store.append(&key, &msg).unwrap();
     }
 
