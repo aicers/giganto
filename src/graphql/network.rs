@@ -2126,8 +2126,9 @@ async fn handle_network_raw_events(
         first,
         last,
         |after, before, first, last| async move {
+            let conn_store = db.conn_store()?;
             let (conn_iter, size) = get_peekable_iter(
-                &db.conn_store()?,
+                conn_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2135,8 +2136,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let dns_store = db.dns_store()?;
             let (dns_iter, _) = get_peekable_iter(
-                &db.dns_store()?,
+                dns_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2144,8 +2146,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let malformed_dns_store = db.malformed_dns_store()?;
             let (malformed_dns_iter, _) = get_peekable_iter(
-                &db.malformed_dns_store()?,
+                malformed_dns_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2153,8 +2156,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let http_store = db.http_store()?;
             let (http_iter, _) = get_peekable_iter(
-                &db.http_store()?,
+                http_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2162,8 +2166,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let rdp_store = db.rdp_store()?;
             let (rdp_iter, _) = get_peekable_iter(
-                &db.rdp_store()?,
+                rdp_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2171,8 +2176,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let ntlm_store = db.ntlm_store()?;
             let (ntlm_iter, _) = get_peekable_iter(
-                &db.ntlm_store()?,
+                ntlm_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2180,8 +2186,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let kerberos_store = db.kerberos_store()?;
             let (kerberos_iter, _) = get_peekable_iter(
-                &db.kerberos_store()?,
+                kerberos_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2189,8 +2196,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let ssh_store = db.ssh_store()?;
             let (ssh_iter, _) = get_peekable_iter(
-                &db.ssh_store()?,
+                ssh_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2198,8 +2206,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let dce_rpc_store = db.dce_rpc_store()?;
             let (dce_rpc_iter, _) = get_peekable_iter(
-                &db.dce_rpc_store()?,
+                dce_rpc_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2207,8 +2216,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let ftp_store = db.ftp_store()?;
             let (ftp_iter, _) = get_peekable_iter(
-                &db.ftp_store()?,
+                ftp_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2216,8 +2226,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let mqtt_store = db.mqtt_store()?;
             let (mqtt_iter, _) = get_peekable_iter(
-                &db.mqtt_store()?,
+                mqtt_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2225,8 +2236,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let ldap_store = db.ldap_store()?;
             let (ldap_iter, _) = get_peekable_iter(
-                &db.ldap_store()?,
+                ldap_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2234,8 +2246,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let tls_store = db.tls_store()?;
             let (tls_iter, _) = get_peekable_iter(
-                &db.tls_store()?,
+                tls_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2243,8 +2256,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let smb_store = db.smb_store()?;
             let (smb_iter, _) = get_peekable_iter(
-                &db.smb_store()?,
+                smb_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2252,8 +2266,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let nfs_store = db.nfs_store()?;
             let (nfs_iter, _) = get_peekable_iter(
-                &db.nfs_store()?,
+                nfs_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2261,8 +2276,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let smtp_store = db.smtp_store()?;
             let (smtp_iter, _) = get_peekable_iter(
-                &db.smtp_store()?,
+                smtp_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2270,8 +2286,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let bootp_store = db.bootp_store()?;
             let (bootp_iter, _) = get_peekable_iter(
-                &db.bootp_store()?,
+                bootp_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2279,8 +2296,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let dhcp_store = db.dhcp_store()?;
             let (dhcp_iter, _) = get_peekable_iter(
-                &db.dhcp_store()?,
+                dhcp_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -2288,8 +2306,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let radius_store = db.radius_store()?;
             let (radius_iter, _) = get_peekable_iter(
-                &db.radius_store()?,
+                radius_store.as_ref(),
                 &filter,
                 after.as_deref(),
                 before.as_deref(),

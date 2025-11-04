@@ -10,7 +10,7 @@ use mockito;
 
 use crate::bincode_utils::encode_legacy;
 use crate::graphql::tests::TestSchema;
-use crate::storage::RawEventStore;
+use crate::storage::WritableRawEventStore;
 
 #[tokio::test]
 async fn conn_empty() {
@@ -107,7 +107,7 @@ async fn conn_empty_giganto_cluster() {
 #[tokio::test]
 async fn conn_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.conn_store().unwrap();
+    let store = schema.db.conn_store_writable().unwrap();
 
     insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -152,7 +152,11 @@ async fn conn_with_data() {
     );
 }
 
-pub(crate) fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
+pub(crate) fn insert_conn_raw_event(
+    store: &dyn WritableRawEventStore<Conn>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -395,7 +399,7 @@ async fn dns_empty_giganto_cluster() {
 #[tokio::test]
 async fn dns_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dns_store().unwrap();
+    let store = schema.db.dns_store_writable().unwrap();
 
     insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -430,7 +434,11 @@ async fn dns_with_data() {
     );
 }
 
-pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
+pub(crate) fn insert_dns_raw_event(
+    store: &dyn WritableRawEventStore<Dns>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -468,7 +476,7 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
 }
 
 fn insert_malformed_dns_raw_event(
-    store: &RawEventStore<MalformedDns>,
+    store: &dyn WritableRawEventStore<MalformedDns>,
     sensor: &str,
     timestamp: i64,
 ) {
@@ -706,7 +714,7 @@ async fn malformed_dns_empty_giganto_cluster() {
 #[tokio::test]
 async fn malformed_dns_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.malformed_dns_store().unwrap();
+    let store = schema.db.malformed_dns_store_writable().unwrap();
 
     insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -929,7 +937,7 @@ async fn http_empty_giganto_cluster() {
 #[tokio::test]
 async fn http_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.http_store().unwrap();
+    let store = schema.db.http_store_writable().unwrap();
 
     insert_http_raw_event(
         &store,
@@ -979,7 +987,11 @@ async fn http_with_data() {
     );
 }
 
-pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+pub(crate) fn insert_http_raw_event(
+    store: &dyn WritableRawEventStore<Http>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1238,7 +1250,7 @@ async fn rdp_empty_giganto_cluster() {
 #[tokio::test]
 async fn rdp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.rdp_store().unwrap();
+    let store = schema.db.rdp_store_writable().unwrap();
 
     insert_rdp_raw_event(
         &store,
@@ -1285,7 +1297,7 @@ async fn rdp_with_data() {
     );
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+fn insert_rdp_raw_event(store: &dyn WritableRawEventStore<Rdp>, sensor: &str, timestamp: i64) {
     let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1400,7 +1412,7 @@ async fn rdp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn smtp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.smtp_store().unwrap();
+    let store = schema.db.smtp_store_writable().unwrap();
 
     insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -1427,7 +1439,7 @@ async fn smtp_with_data() {
     );
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
+fn insert_smtp_raw_event(store: &dyn WritableRawEventStore<Smtp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1547,7 +1559,7 @@ async fn smtp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn ntlm_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ntlm_store().unwrap();
+    let store = schema.db.ntlm_store_writable().unwrap();
 
     insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -1574,7 +1586,7 @@ async fn ntlm_with_data() {
     );
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
+fn insert_ntlm_raw_event(store: &dyn WritableRawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1690,7 +1702,7 @@ async fn ntlm_with_data_giganto_cluster() {
 #[tokio::test]
 async fn kerberos_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.kerberos_store().unwrap();
+    let store = schema.db.kerberos_store_writable().unwrap();
 
     insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -1717,7 +1729,11 @@ async fn kerberos_with_data() {
     );
 }
 
-fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+fn insert_kerberos_raw_event(
+    store: &dyn WritableRawEventStore<Kerberos>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1850,7 +1866,7 @@ async fn kerberos_with_data_giganto_cluster() {
 #[tokio::test]
 async fn ssh_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ssh_store().unwrap();
+    let store = schema.db.ssh_store_writable().unwrap();
 
     insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -1877,7 +1893,7 @@ async fn ssh_with_data() {
     );
 }
 
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
+fn insert_ssh_raw_event(store: &dyn WritableRawEventStore<Ssh>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2009,7 +2025,7 @@ async fn ssh_with_data_giganto_cluster() {
 #[tokio::test]
 async fn dce_rpc_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dce_rpc_store().unwrap();
+    let store = schema.db.dce_rpc_store_writable().unwrap();
 
     insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2036,7 +2052,11 @@ async fn dce_rpc_with_data() {
     );
 }
 
-fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
+fn insert_dce_rpc_raw_event(
+    store: &dyn WritableRawEventStore<DceRpc>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2150,7 +2170,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
 #[tokio::test]
 async fn ftp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ftp_store().unwrap();
+    let store = schema.db.ftp_store_writable().unwrap();
 
     insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2177,7 +2197,7 @@ async fn ftp_with_data() {
     );
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
+fn insert_ftp_raw_event(store: &dyn WritableRawEventStore<Ftp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2316,7 +2336,7 @@ async fn ftp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn mqtt_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.mqtt_store().unwrap();
+    let store = schema.db.mqtt_store_writable().unwrap();
 
     insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2343,7 +2363,7 @@ async fn mqtt_with_data() {
     );
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
+fn insert_mqtt_raw_event(store: &dyn WritableRawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2466,7 +2486,7 @@ async fn mqtt_with_data_giganto_cluster() {
 #[tokio::test]
 async fn ldap_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ldap_store().unwrap();
+    let store = schema.db.ldap_store_writable().unwrap();
 
     insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2493,7 +2513,7 @@ async fn ldap_with_data() {
     );
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
+fn insert_ldap_raw_event(store: &dyn WritableRawEventStore<Ldap>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2629,7 +2649,7 @@ async fn ldap_with_data_giganto_cluster() {
 #[tokio::test]
 async fn tls_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.tls_store().unwrap();
+    let store = schema.db.tls_store_writable().unwrap();
 
     insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2656,7 +2676,7 @@ async fn tls_with_data() {
     );
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
+fn insert_tls_raw_event(store: &dyn WritableRawEventStore<Tls>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2818,7 +2838,7 @@ async fn tls_with_data_giganto_cluster() {
 #[tokio::test]
 async fn smb_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.smb_store().unwrap();
+    let store = schema.db.smb_store_writable().unwrap();
 
     insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -2852,7 +2872,7 @@ async fn smb_with_data() {
     );
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
+fn insert_smb_raw_event(store: &dyn WritableRawEventStore<Smb>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -2986,7 +3006,7 @@ async fn smb_with_data_giganto_cluster() {
 #[tokio::test]
 async fn nfs_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.nfs_store().unwrap();
+    let store = schema.db.nfs_store_writable().unwrap();
 
     insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -3013,7 +3033,7 @@ async fn nfs_with_data() {
     );
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
+fn insert_nfs_raw_event(store: &dyn WritableRawEventStore<Nfs>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -3127,7 +3147,7 @@ async fn nfs_with_data_giganto_cluster() {
 #[tokio::test]
 async fn bootp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.bootp_store().unwrap();
+    let store = schema.db.bootp_store_writable().unwrap();
 
     insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -3155,7 +3175,7 @@ async fn bootp_with_data() {
     );
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
+fn insert_bootp_raw_event(store: &dyn WritableRawEventStore<Bootp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -3284,7 +3304,7 @@ async fn bootp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn dhcp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dhcp_store().unwrap();
+    let store = schema.db.dhcp_store_writable().unwrap();
 
     insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -3315,7 +3335,7 @@ async fn dhcp_with_data() {
     );
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+fn insert_dhcp_raw_event(store: &dyn WritableRawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -3466,7 +3486,7 @@ async fn dhcp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn radius_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.radius_store().unwrap();
+    let store = schema.db.radius_store_writable().unwrap();
 
     insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
@@ -3498,7 +3518,11 @@ async fn radius_with_data() {
     );
 }
 
-fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) {
+fn insert_radius_raw_event(
+    store: &dyn WritableRawEventStore<Radius>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -3636,7 +3660,7 @@ async fn radius_with_data_giganto_cluster() {
 #[allow(clippy::too_many_lines)]
 async fn test_search_boundary_for_addr_port() {
     let schema = TestSchema::new();
-    let store = schema.db.conn_store().unwrap();
+    let store = schema.db.conn_store_writable().unwrap();
 
     insert_conn_raw_event_with_addr_port(
         &store,
@@ -3956,7 +3980,7 @@ async fn test_search_boundary_for_addr_port() {
 }
 
 fn insert_conn_raw_event_with_addr_port(
-    store: &RawEventStore<Conn>,
+    store: &dyn WritableRawEventStore<Conn>,
     sensor: &str,
     timestamp: i64,
     orig_addr: Option<IpAddr>,
@@ -3978,23 +4002,23 @@ fn insert_conn_raw_event_with_addr_port(
 #[allow(clippy::too_many_lines)]
 async fn union() {
     let schema = TestSchema::new();
-    let conn_store = schema.db.conn_store().unwrap();
-    let dns_store = schema.db.dns_store().unwrap();
-    let http_store = schema.db.http_store().unwrap();
-    let rdp_store = schema.db.rdp_store().unwrap();
-    let ntlm_store = schema.db.ntlm_store().unwrap();
-    let kerberos_store = schema.db.kerberos_store().unwrap();
-    let ssh_store = schema.db.ssh_store().unwrap();
-    let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
-    let ftp_store = schema.db.ftp_store().unwrap();
-    let mqtt_store = schema.db.mqtt_store().unwrap();
-    let ldap_store = schema.db.ldap_store().unwrap();
-    let tls_store = schema.db.tls_store().unwrap();
-    let smb_store = schema.db.smb_store().unwrap();
-    let nfs_store = schema.db.nfs_store().unwrap();
-    let smtp_store = schema.db.smtp_store().unwrap();
-    let bootp_store = schema.db.bootp_store().unwrap();
-    let dhcp_store = schema.db.dhcp_store().unwrap();
+    let conn_store = schema.db.conn_store_writable().unwrap();
+    let dns_store = schema.db.dns_store_writable().unwrap();
+    let http_store = schema.db.http_store_writable().unwrap();
+    let rdp_store = schema.db.rdp_store_writable().unwrap();
+    let ntlm_store = schema.db.ntlm_store_writable().unwrap();
+    let kerberos_store = schema.db.kerberos_store_writable().unwrap();
+    let ssh_store = schema.db.ssh_store_writable().unwrap();
+    let dce_rpc_store = schema.db.dce_rpc_store_writable().unwrap();
+    let ftp_store = schema.db.ftp_store_writable().unwrap();
+    let mqtt_store = schema.db.mqtt_store_writable().unwrap();
+    let ldap_store = schema.db.ldap_store_writable().unwrap();
+    let tls_store = schema.db.tls_store_writable().unwrap();
+    let smb_store = schema.db.smb_store_writable().unwrap();
+    let nfs_store = schema.db.nfs_store_writable().unwrap();
+    let smtp_store = schema.db.smtp_store_writable().unwrap();
+    let bootp_store = schema.db.bootp_store_writable().unwrap();
+    let dhcp_store = schema.db.dhcp_store_writable().unwrap();
 
     insert_conn_raw_event(
         &conn_store,
@@ -4232,7 +4256,7 @@ async fn search_empty() {
 #[tokio::test]
 async fn search_http_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.http_store().unwrap();
+    let store = schema.db.http_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4268,7 +4292,7 @@ async fn search_http_with_data() {
 #[tokio::test]
 async fn search_conn_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.conn_store().unwrap();
+    let store = schema.db.conn_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4354,7 +4378,7 @@ async fn search_conn_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_dns_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dns_store().unwrap();
+    let store = schema.db.dns_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4440,7 +4464,7 @@ async fn search_dns_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_malformed_dns_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.malformed_dns_store().unwrap();
+    let store = schema.db.malformed_dns_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
@@ -4526,7 +4550,7 @@ async fn search_malformed_dns_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_rdp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.rdp_store().unwrap();
+    let store = schema.db.rdp_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4612,7 +4636,7 @@ async fn search_rdp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_smtp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.smtp_store().unwrap();
+    let store = schema.db.smtp_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4698,7 +4722,7 @@ async fn search_smtp_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_ntlm_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ntlm_store().unwrap();
+    let store = schema.db.ntlm_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4784,7 +4808,7 @@ async fn search_ntlm_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_kerberos_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.kerberos_store().unwrap();
+    let store = schema.db.kerberos_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4869,7 +4893,7 @@ async fn search_kerberos_with_data_giganto_cluster() {
 #[tokio::test]
 async fn search_ssh_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ssh_store().unwrap();
+    let store = schema.db.ssh_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4905,7 +4929,7 @@ async fn search_ssh_with_data() {
 #[tokio::test]
 async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dce_rpc_store().unwrap();
+    let store = schema.db.dce_rpc_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4941,7 +4965,7 @@ async fn search_dce_rpc_with_data() {
 #[tokio::test]
 async fn search_ftp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ftp_store().unwrap();
+    let store = schema.db.ftp_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -4977,7 +5001,7 @@ async fn search_ftp_with_data() {
 #[tokio::test]
 async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.mqtt_store().unwrap();
+    let store = schema.db.mqtt_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5013,7 +5037,7 @@ async fn search_mqtt_with_data() {
 #[tokio::test]
 async fn search_ldap_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.ldap_store().unwrap();
+    let store = schema.db.ldap_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5049,7 +5073,7 @@ async fn search_ldap_with_data() {
 #[tokio::test]
 async fn search_tls_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.tls_store().unwrap();
+    let store = schema.db.tls_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5085,7 +5109,7 @@ async fn search_tls_with_data() {
 #[tokio::test]
 async fn search_smb_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.smb_store().unwrap();
+    let store = schema.db.smb_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5121,7 +5145,7 @@ async fn search_smb_with_data() {
 #[tokio::test]
 async fn search_nfs_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.nfs_store().unwrap();
+    let store = schema.db.nfs_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5157,7 +5181,7 @@ async fn search_nfs_with_data() {
 #[tokio::test]
 async fn search_bootp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.bootp_store().unwrap();
+    let store = schema.db.bootp_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5193,7 +5217,7 @@ async fn search_bootp_with_data() {
 #[tokio::test]
 async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.dhcp_store().unwrap();
+    let store = schema.db.dhcp_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
@@ -5229,7 +5253,7 @@ async fn search_dhcp_with_data() {
 #[tokio::test]
 async fn search_radius_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.radius_store().unwrap();
+    let store = schema.db.radius_store_writable().unwrap();
 
     let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
     let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z

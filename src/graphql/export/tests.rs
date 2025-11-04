@@ -15,7 +15,7 @@ use giganto_client::ingest::{
 use crate::bincode_utils::encode_legacy;
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::tests::TestSchema;
-use crate::storage::RawEventStore;
+use crate::storage::WritableRawEventStore;
 
 #[tokio::test]
 async fn invalid_query() {
@@ -80,7 +80,7 @@ async fn invalid_query() {
 #[tokio::test]
 async fn export_conn() {
     let schema = TestSchema::new();
-    let store = schema.db.conn_store().unwrap();
+    let store = schema.db.conn_store_writable().unwrap();
 
     insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_conn_raw_event(
@@ -126,7 +126,7 @@ async fn export_conn() {
     assert!(res.data.to_string().contains("conn"));
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
+fn insert_conn_raw_event(store: &dyn WritableRawEventStore<Conn>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -159,7 +159,7 @@ fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_dns() {
     let schema = TestSchema::new();
-    let store = schema.db.dns_store().unwrap();
+    let store = schema.db.dns_store_writable().unwrap();
 
     insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dns_raw_event(
@@ -205,7 +205,7 @@ async fn export_dns() {
     assert!(res.data.to_string().contains("dns"));
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
+fn insert_dns_raw_event(store: &dyn WritableRawEventStore<Dns>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -245,7 +245,7 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_http() {
     let schema = TestSchema::new();
-    let store = schema.db.http_store().unwrap();
+    let store = schema.db.http_store_writable().unwrap();
 
     insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_http_raw_event(
@@ -291,7 +291,7 @@ async fn export_http() {
     assert!(res.data.to_string().contains("http"));
 }
 
-fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+fn insert_http_raw_event(store: &dyn WritableRawEventStore<Http>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -339,7 +339,7 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_rdp() {
     let schema = TestSchema::new();
-    let store = schema.db.rdp_store().unwrap();
+    let store = schema.db.rdp_store_writable().unwrap();
 
     insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_rdp_raw_event(
@@ -385,7 +385,7 @@ async fn export_rdp() {
     assert!(res.data.to_string().contains("rdp"));
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+fn insert_rdp_raw_event(store: &dyn WritableRawEventStore<Rdp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -414,7 +414,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_smtp() {
     let schema = TestSchema::new();
-    let store = schema.db.smtp_store().unwrap();
+    let store = schema.db.smtp_store_writable().unwrap();
 
     insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_smtp_raw_event(
@@ -460,7 +460,7 @@ async fn export_smtp() {
     assert!(res.data.to_string().contains("smtp"));
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
+fn insert_smtp_raw_event(store: &dyn WritableRawEventStore<Smtp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -495,7 +495,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_ntlm() {
     let schema = TestSchema::new();
-    let store = schema.db.ntlm_store().unwrap();
+    let store = schema.db.ntlm_store_writable().unwrap();
 
     insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ntlm_raw_event(
@@ -541,7 +541,7 @@ async fn export_ntlm() {
     assert!(res.data.to_string().contains("ntlm"));
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
+fn insert_ntlm_raw_event(store: &dyn WritableRawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -574,7 +574,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_kerberos() {
     let schema = TestSchema::new();
-    let store = schema.db.kerberos_store().unwrap();
+    let store = schema.db.kerberos_store_writable().unwrap();
 
     insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_kerberos_raw_event(
@@ -620,7 +620,11 @@ async fn export_kerberos() {
     assert!(res.data.to_string().contains("kerberos"));
 }
 
-fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+fn insert_kerberos_raw_event(
+    store: &dyn WritableRawEventStore<Kerberos>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -657,7 +661,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
 #[tokio::test]
 async fn export_ssh() {
     let schema = TestSchema::new();
-    let store = schema.db.ssh_store().unwrap();
+    let store = schema.db.ssh_store_writable().unwrap();
 
     insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ssh_raw_event(
@@ -702,7 +706,7 @@ async fn export_ssh() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ssh"));
 }
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
+fn insert_ssh_raw_event(store: &dyn WritableRawEventStore<Ssh>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -743,7 +747,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_dce_rpc() {
     let schema = TestSchema::new();
-    let store = schema.db.dce_rpc_store().unwrap();
+    let store = schema.db.dce_rpc_store_writable().unwrap();
 
     insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dce_rpc_raw_event(
@@ -788,7 +792,11 @@ async fn export_dce_rpc() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dcerpc"));
 }
-fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
+fn insert_dce_rpc_raw_event(
+    store: &dyn WritableRawEventStore<DceRpc>,
+    sensor: &str,
+    timestamp: i64,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -820,7 +828,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
 #[tokio::test]
 async fn export_log() {
     let schema = TestSchema::new();
-    let store = schema.db.log_store().unwrap();
+    let store = schema.db.log_store_writable().unwrap();
 
     insert_log_raw_event(
         &store,
@@ -869,7 +877,7 @@ async fn export_log() {
 }
 
 fn insert_log_raw_event(
-    store: &RawEventStore<Log>,
+    store: &dyn WritableRawEventStore<Log>,
     sensor: &str,
     timestamp: i64,
     kind: &str,
@@ -892,7 +900,7 @@ fn insert_log_raw_event(
 #[tokio::test]
 async fn export_time_series() {
     let schema = TestSchema::new();
-    let store = schema.db.periodic_time_series_store().unwrap();
+    let store = schema.db.periodic_time_series_store_writable().unwrap();
 
     insert_time_series(
         &store,
@@ -937,7 +945,7 @@ async fn export_time_series() {
 }
 
 fn insert_time_series(
-    store: &RawEventStore<PeriodicTimeSeries>,
+    store: &dyn WritableRawEventStore<PeriodicTimeSeries>,
     id: &str,
     start: i64,
     data: Vec<f64>,
@@ -957,7 +965,7 @@ fn insert_time_series(
 #[tokio::test]
 async fn export_op_log() {
     let schema = TestSchema::new();
-    let store = schema.db.op_log_store().unwrap();
+    let store = schema.db.op_log_store_writable().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
     insert_op_log_raw_event(&store, "agent1", "src1", 1, &generator);
@@ -991,7 +999,7 @@ async fn export_op_log() {
 }
 
 fn insert_op_log_raw_event(
-    store: &RawEventStore<'_, OpLog>,
+    store: &dyn WritableRawEventStore<'_, OpLog>,
     agent_name: &str,
     sensor: &str,
     timestamp: i64,
@@ -1019,7 +1027,7 @@ fn insert_op_log_raw_event(
 #[tokio::test]
 async fn export_ftp() {
     let schema = TestSchema::new();
-    let store = schema.db.ftp_store().unwrap();
+    let store = schema.db.ftp_store_writable().unwrap();
 
     insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ftp_raw_event(
@@ -1065,7 +1073,7 @@ async fn export_ftp() {
     assert!(res.data.to_string().contains("ftp"));
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
+fn insert_ftp_raw_event(store: &dyn WritableRawEventStore<Ftp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1107,7 +1115,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_mqtt() {
     let schema = TestSchema::new();
-    let store = schema.db.mqtt_store().unwrap();
+    let store = schema.db.mqtt_store_writable().unwrap();
 
     insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_mqtt_raw_event(
@@ -1153,7 +1161,7 @@ async fn export_mqtt() {
     assert!(res.data.to_string().contains("mqtt"));
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
+fn insert_mqtt_raw_event(store: &dyn WritableRawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1187,7 +1195,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_ldap() {
     let schema = TestSchema::new();
-    let store = schema.db.ldap_store().unwrap();
+    let store = schema.db.ldap_store_writable().unwrap();
 
     insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_ldap_raw_event(
@@ -1233,7 +1241,7 @@ async fn export_ldap() {
     assert!(res.data.to_string().contains("ldap"));
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
+fn insert_ldap_raw_event(store: &dyn WritableRawEventStore<Ldap>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1268,7 +1276,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
 #[tokio::test]
 async fn export_tls() {
     let schema = TestSchema::new();
-    let store = schema.db.tls_store().unwrap();
+    let store = schema.db.tls_store_writable().unwrap();
 
     insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_tls_raw_event(
@@ -1314,7 +1322,7 @@ async fn export_tls() {
     assert!(res.data.to_string().contains("tls"));
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
+fn insert_tls_raw_event(store: &dyn WritableRawEventStore<Tls>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1363,7 +1371,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_smb() {
     let schema = TestSchema::new();
-    let store = schema.db.smb_store().unwrap();
+    let store = schema.db.smb_store_writable().unwrap();
 
     insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_smb_raw_event(
@@ -1409,7 +1417,7 @@ async fn export_smb() {
     assert!(res.data.to_string().contains("smb"));
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
+fn insert_smb_raw_event(store: &dyn WritableRawEventStore<Smb>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1448,7 +1456,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_nfs() {
     let schema = TestSchema::new();
-    let store = schema.db.nfs_store().unwrap();
+    let store = schema.db.nfs_store_writable().unwrap();
 
     insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_nfs_raw_event(
@@ -1494,7 +1502,7 @@ async fn export_nfs() {
     assert!(res.data.to_string().contains("nfs"));
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
+fn insert_nfs_raw_event(store: &dyn WritableRawEventStore<Nfs>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1524,7 +1532,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
 #[tokio::test]
 async fn export_bootp() {
     let schema = TestSchema::new();
-    let store = schema.db.bootp_store().unwrap();
+    let store = schema.db.bootp_store_writable().unwrap();
 
     insert_bootp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_bootp_raw_event(
@@ -1570,7 +1578,7 @@ async fn export_bootp() {
     assert!(res.data.to_string().contains("bootp"));
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
+fn insert_bootp_raw_event(store: &dyn WritableRawEventStore<Bootp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
@@ -1609,7 +1617,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
 #[tokio::test]
 async fn export_dhcp() {
     let schema = TestSchema::new();
-    let store = schema.db.dhcp_store().unwrap();
+    let store = schema.db.dhcp_store_writable().unwrap();
 
     insert_dhcp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
     insert_dhcp_raw_event(
@@ -1655,7 +1663,7 @@ async fn export_dhcp() {
     assert!(res.data.to_string().contains("dhcp"));
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+fn insert_dhcp_raw_event(store: &dyn WritableRawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
