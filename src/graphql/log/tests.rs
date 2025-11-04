@@ -8,24 +8,24 @@ use crate::graphql::load_connection;
 use crate::ingest::generation::SequenceGenerator;
 use crate::{
     graphql::{TimeRange, tests::TestSchema},
-    storage::RawEventStore,
+    storage::WritableRawEventStore,
 };
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn load_time_range() {
     let schema = TestSchema::new();
-    let store = schema.db.log_store().unwrap();
+    let store = schema.db.log_store_writable().unwrap();
 
-    insert_log_raw_event(&store, "src1", 1, "kind1", b"log1");
-    insert_log_raw_event(&store, "src1", 2, "kind1", b"log2");
-    insert_log_raw_event(&store, "src1", 3, "kind1", b"log3");
-    insert_log_raw_event(&store, "src1", 4, "kind1", b"log4");
-    insert_log_raw_event(&store, "src1", 5, "kind1", b"log5");
+    insert_log_raw_event(store.as_ref(), "src1", 1, "kind1", b"log1");
+    insert_log_raw_event(store.as_ref(), "src1", 2, "kind1", b"log2");
+    insert_log_raw_event(store.as_ref(), "src1", 3, "kind1", b"log3");
+    insert_log_raw_event(store.as_ref(), "src1", 4, "kind1", b"log4");
+    insert_log_raw_event(store.as_ref(), "src1", 5, "kind1", b"log5");
 
     // backward traversal in `start..end`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -52,7 +52,7 @@ async fn load_time_range() {
 
     // backward traversal in `start..`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(3)),
@@ -83,7 +83,7 @@ async fn load_time_range() {
 
     // backward traversal in `..end`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
@@ -114,7 +114,7 @@ async fn load_time_range() {
 
     // forward traversal in `start..end`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -141,7 +141,7 @@ async fn load_time_range() {
 
     // forward traversal `start..`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(3)),
@@ -172,7 +172,7 @@ async fn load_time_range() {
 
     // forward traversal `..end`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
@@ -199,7 +199,7 @@ async fn load_time_range() {
 
     // backward traversal in `start..end` and `before cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -226,7 +226,7 @@ async fn load_time_range() {
 
     // backward traversal in `start..` and `before cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(2)),
@@ -253,7 +253,7 @@ async fn load_time_range() {
 
     // backward traversal in `..end` and `before cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
@@ -284,7 +284,7 @@ async fn load_time_range() {
 
     // forward traversal in `start..end` and `after cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -311,7 +311,7 @@ async fn load_time_range() {
 
     // forward traversal `start..` and `after cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(2)),
@@ -338,7 +338,7 @@ async fn load_time_range() {
 
     // forward traversal `..end` and `after cursor`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
@@ -365,7 +365,7 @@ async fn load_time_range() {
 
     // forward traversal `..`
     let connection = load_connection::<LogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &LogFilter {
             time: Some(TimeRange {
                 start: None,
@@ -411,10 +411,10 @@ async fn log_empty() {
 #[tokio::test]
 async fn log_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.log_store().unwrap();
+    let store = schema.db.log_store_writable().unwrap();
 
-    insert_log_raw_event(&store, "src 1", 1, "kind 1", b"log 1");
-    insert_log_raw_event(&store, "src 1", 2, "kind 2", b"log 2");
+    insert_log_raw_event(store.as_ref(), "src 1", 1, "kind 1", b"log 1");
+    insert_log_raw_event(store.as_ref(), "src 1", 2, "kind 2", b"log 2");
 
     let query = r#"
         {
@@ -460,9 +460,9 @@ async fn oplog_empty() {
 #[tokio::test]
 async fn oplog_with_data() {
     let schema = TestSchema::new();
-    let store = schema.db.op_log_store().unwrap();
+    let store = schema.db.op_log_store_writable().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
-    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 1, &generator);
 
     let query = r#"
         {
@@ -485,21 +485,21 @@ async fn oplog_with_data() {
 #[tokio::test]
 async fn load_oplog() {
     let schema = TestSchema::new();
-    let store = schema.db.op_log_store().unwrap();
+    let store = schema.db.op_log_store_writable().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_oplog_raw_event(&store, "giganto", "src1", 1, &generator);
-    insert_oplog_raw_event(&store, "giganto", "src1", 2, &generator);
-    insert_oplog_raw_event(&store, "manager", "src1", 2, &generator);
-    insert_oplog_raw_event(&store, "manager", "src1", 3, &generator);
-    insert_oplog_raw_event(&store, "giganto", "src1", 3, &generator);
-    insert_oplog_raw_event(&store, "giganto", "src1", 4, &generator);
-    insert_oplog_raw_event(&store, "giganto", "src1", 5, &generator);
-    insert_oplog_raw_event(&store, "manager", "src1", 5, &generator);
-    insert_oplog_raw_event(&store, "aice", "src1", 5, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 1, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 2, &generator);
+    insert_oplog_raw_event(store.as_ref(), "manager", "src1", 2, &generator);
+    insert_oplog_raw_event(store.as_ref(), "manager", "src1", 3, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 3, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 4, &generator);
+    insert_oplog_raw_event(store.as_ref(), "giganto", "src1", 5, &generator);
+    insert_oplog_raw_event(store.as_ref(), "manager", "src1", 5, &generator);
+    insert_oplog_raw_event(store.as_ref(), "aice", "src1", 5, &generator);
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(5)),
@@ -525,23 +525,23 @@ async fn load_oplog() {
 #[allow(clippy::too_many_lines)]
 async fn load_connection_by_prefix_timestamp_key() {
     let schema = TestSchema::new();
-    let store = schema.db.op_log_store().unwrap();
+    let store = schema.db.op_log_store_writable().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
     let key_list: Vec<Vec<u8>> = vec![
-        insert_oplog_raw_event(&store, "sensor", "src1", 1, &generator),
-        insert_oplog_raw_event(&store, "sensor", "src1", 2, &generator),
-        insert_oplog_raw_event(&store, "manager", "src1", 2, &generator),
-        insert_oplog_raw_event(&store, "manager", "src1", 3, &generator),
-        insert_oplog_raw_event(&store, "sensor", "src1", 3, &generator),
-        insert_oplog_raw_event(&store, "sensor", "src1", 4, &generator),
-        insert_oplog_raw_event(&store, "sensor", "src2", 5, &generator),
-        insert_oplog_raw_event(&store, "sensor", "src2", 6, &generator),
-        insert_oplog_raw_event(&store, "manager", "src1", 4, &generator),
-        insert_oplog_raw_event(&store, "manager", "src2", 5, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src1", 1, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src1", 2, &generator),
+        insert_oplog_raw_event(store.as_ref(), "manager", "src1", 2, &generator),
+        insert_oplog_raw_event(store.as_ref(), "manager", "src1", 3, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src1", 3, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src1", 4, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src2", 5, &generator),
+        insert_oplog_raw_event(store.as_ref(), "sensor", "src2", 6, &generator),
+        insert_oplog_raw_event(store.as_ref(), "manager", "src1", 4, &generator),
+        insert_oplog_raw_event(store.as_ref(), "manager", "src2", 5, &generator),
     ];
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -565,7 +565,7 @@ async fn load_connection_by_prefix_timestamp_key() {
     let after = key_list.get(3).unwrap();
     let after = base64_engine.encode(after);
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -589,7 +589,7 @@ async fn load_connection_by_prefix_timestamp_key() {
     let before = key_list.get(8).unwrap();
     let before = base64_engine.encode(before);
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -611,7 +611,7 @@ async fn load_connection_by_prefix_timestamp_key() {
     assert_eq!(connection.edges[1].node.contents.as_str(), "oplog");
 
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
-        &store,
+        store.as_ref(),
         &OpLogFilter {
             time: Some(TimeRange {
                 start: Some(DateTime::from_timestamp_nanos(1)),
@@ -634,7 +634,7 @@ async fn load_connection_by_prefix_timestamp_key() {
 }
 
 fn insert_log_raw_event(
-    store: &RawEventStore<Log>,
+    store: &dyn WritableRawEventStore<'_, Log>,
     sensor: &str,
     timestamp: i64,
     kind: &str,
@@ -655,7 +655,7 @@ fn insert_log_raw_event(
 }
 
 fn insert_oplog_raw_event(
-    store: &RawEventStore<'_, OpLog>,
+    store: &dyn WritableRawEventStore<'_, OpLog>,
     agent_name: &str,
     sensor: &str,
     timestamp: i64,

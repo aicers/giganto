@@ -44,7 +44,8 @@ use crate::{
     peer::Peers,
     settings::{ConfigVisible, Settings},
     storage::{
-        Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
+        Database, Direction, FilteredIter, KeyExtractor, KeyValue, ReadableRawEventStore,
+        ReadableRawEventStoreHandle, StorageKey, TimestampKeyExtractor,
     },
 };
 
@@ -231,7 +232,7 @@ fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) 
 
 #[allow(clippy::too_many_lines)]
 fn get_connection<T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -358,7 +359,7 @@ where
 
 #[allow(clippy::too_many_lines)]
 fn get_connection_by_prefix_timestamp_key<T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -476,7 +477,7 @@ where
 }
 
 fn load_connection<N, T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -494,7 +495,7 @@ where
 }
 
 fn load_connection_by_prefix_timestamp_key<N, T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -598,7 +599,7 @@ pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
 }
 
 fn get_peekable_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -622,7 +623,7 @@ where
 }
 
 fn get_filtered_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -826,7 +827,7 @@ fn min_max_time(is_forward: bool) -> DateTime<Utc> {
 }
 
 async fn handle_paged_events<N, T>(
-    store: RawEventStore<'_, T>,
+    store: ReadableRawEventStoreHandle<'_, T>,
     filter: impl RawEventFilter + KeyExtractor,
     after: Option<String>,
     before: Option<String>,
@@ -843,7 +844,7 @@ where
         first,
         last,
         |after, before, first, last| async move {
-            load_connection::<N, T>(&store, &filter, after, before, first, last)
+            load_connection::<N, T>(store.as_ref(), &filter, after, before, first, last)
         },
     )
     .await
