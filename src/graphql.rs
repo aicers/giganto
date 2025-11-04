@@ -1061,4 +1061,353 @@ mod tests {
         let result: Result<StringNumberU32, _> = serde_json::from_str(json_str);
         assert!(result.is_err());
     }
+
+    /// Tests for Chrono `DateTime` behavior before migrating to Jiff
+    mod chrono_regression_tests {
+        use chrono::{DateTime, TimeZone, Utc};
+
+        /// Test `timestamp_nanos` conversion for various timestamps
+        #[test]
+        fn test_timestamp_nanos_conversion() {
+            // Test zero timestamp
+            let dt = Utc.timestamp_nanos(0);
+            assert_eq!(dt.timestamp_nanos_opt(), Some(0));
+
+            // Test positive timestamp
+            let timestamp_ns = 1_700_000_000_000_000_000_i64;
+            let dt = Utc.timestamp_nanos(timestamp_ns);
+            assert_eq!(dt.timestamp_nanos_opt(), Some(timestamp_ns));
+
+            // Test negative timestamp (before epoch)
+            let negative_ts = -1_000_000_000_i64;
+            let dt = Utc.timestamp_nanos(negative_ts);
+            assert_eq!(dt.timestamp_nanos_opt(), Some(negative_ts));
+        }
+
+        /// Test boundary conditions with MIN and MAX timestamps
+        #[test]
+        fn test_boundary_timestamps() {
+            // Test i64::MIN timestamp
+            let dt_min = Utc.timestamp_nanos(i64::MIN);
+            assert_eq!(dt_min.timestamp_nanos_opt(), Some(i64::MIN));
+
+            // Test i64::MAX timestamp
+            let dt_max = Utc.timestamp_nanos(i64::MAX);
+            assert_eq!(dt_max.timestamp_nanos_opt(), Some(i64::MAX));
+
+            // Test DateTime::MIN_UTC and MAX_UTC constants
+            let min_utc = DateTime::<Utc>::MIN_UTC;
+            let max_utc = DateTime::<Utc>::MAX_UTC;
+
+            // Verify MIN is before MAX
+            assert!(min_utc < max_utc);
+
+            // Note: MIN_UTC and MAX_UTC may not have valid nanosecond timestamps
+            // as they represent the absolute bounds of the DateTime type,
+            // which is wider than what can be represented in i64 nanoseconds.
+            // This is expected behavior that Jiff migration should preserve.
+            let min_ts = min_utc.timestamp_nanos_opt();
+            let max_ts = max_utc.timestamp_nanos_opt();
+
+            // Document the actual behavior: these may return None due to overflow
+            // If they have values, they should be at the extremes
+            if let Some(min) = min_ts {
+                assert_eq!(min, i64::MIN, "MIN_UTC timestamp should be i64::MIN");
+            }
+            if let Some(max) = max_ts {
+                assert_eq!(max, i64::MAX, "MAX_UTC timestamp should be i64::MAX");
+            }
+        }
+
+        /// Test `time_range` helper function with various inputs
+        #[test]
+        fn test_time_range_function() {
+            // Test None input (should return MIN/MAX)
+            let (start, end) = super::super::time_range(None);
+            assert_eq!(start, Utc.timestamp_nanos(i64::MIN));
+            assert_eq!(end, Utc.timestamp_nanos(i64::MAX));
+
+            // Test with Some but None fields
+            let time_range = super::super::TimeRange {
+                start: None,
+                end: None,
+            };
+            let (start, end) = super::super::time_range(Some(&time_range));
+            assert_eq!(start, Utc.timestamp_nanos(i64::MIN));
+            assert_eq!(end, Utc.timestamp_nanos(i64::MAX));
+
+            // Test with specific start and end times
+            let specific_start = Utc.timestamp_nanos(1_000_000_000);
+            let specific_end = Utc.timestamp_nanos(2_000_000_000);
+            let time_range = super::super::TimeRange {
+                start: Some(specific_start),
+                end: Some(specific_end),
+            };
+            let (start, end) = super::super::time_range(Some(&time_range));
+            assert_eq!(start, specific_start);
+            assert_eq!(end, specific_end);
+        }
+
+        /// Test `get_time_from_key_prefix` function
+        #[test]
+        fn test_get_time_from_key_prefix() {
+            // Test valid key with timestamp prefix
+            let timestamp = 1_700_000_000_000_000_000_i64;
+            let mut key = timestamp.to_be_bytes().to_vec();
+            key.extend_from_slice(b"additional_data");
+
+            let result = super::super::get_time_from_key_prefix(&key);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().timestamp_nanos_opt(), Some(timestamp));
+
+            // Test with exactly TIMESTAMP_SIZE bytes
+            let key_exact = timestamp.to_be_bytes();
+            let result = super::super::get_time_from_key_prefix(&key_exact);
+            assert!(result.is_err());
+
+            // Test with insufficient bytes
+            let short_key = [0u8; 4];
+            let result = super::super::get_time_from_key_prefix(&short_key);
+            assert!(result.is_err());
+
+            // Test with zero timestamp
+            let mut key_zero = 0_i64.to_be_bytes().to_vec();
+            key_zero.extend_from_slice(b"data");
+            let result = super::super::get_time_from_key_prefix(&key_zero);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().timestamp_nanos_opt(), Some(0));
+        }
+
+        /// Test `get_time_from_key` function (suffix extraction)
+        #[test]
+        fn test_get_time_from_key_suffix() {
+            // Test valid key with timestamp suffix
+            let timestamp = 1_700_000_000_000_000_000_i64;
+            let mut key = b"prefix_data".to_vec();
+            key.extend_from_slice(&timestamp.to_be_bytes());
+
+            let result = super::super::get_time_from_key(&key);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().timestamp_nanos_opt(), Some(timestamp));
+
+            // Test with exactly TIMESTAMP_SIZE bytes
+            let key_exact = timestamp.to_be_bytes();
+            let result = super::super::get_time_from_key(&key_exact);
+            assert!(result.is_err());
+
+            // Test with insufficient bytes
+            let short_key = [0u8; 4];
+            let result = super::super::get_time_from_key(&short_key);
+            assert!(result.is_err());
+
+            // Test with negative timestamp
+            let negative_ts = -1_000_000_000_i64;
+            let mut key_neg = b"data".to_vec();
+            key_neg.extend_from_slice(&negative_ts.to_be_bytes());
+            let result = super::super::get_time_from_key(&key_neg);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().timestamp_nanos_opt(), Some(negative_ts));
+        }
+
+        /// Test `min_max_time` helper function
+        #[test]
+        fn test_min_max_time_function() {
+            // Test forward direction (should return MAX)
+            let max_time = super::super::min_max_time(true);
+            assert_eq!(max_time, DateTime::<Utc>::MAX_UTC);
+
+            // Test backward direction (should return MIN)
+            let min_time = super::super::min_max_time(false);
+            assert_eq!(min_time, DateTime::<Utc>::MIN_UTC);
+        }
+
+        /// Test `DateTime` comparisons and ordering
+        #[test]
+        fn test_datetime_comparisons() {
+            let earlier = Utc.timestamp_nanos(1_000_000_000);
+            let later = Utc.timestamp_nanos(2_000_000_000);
+
+            // Test basic comparisons
+            assert!(earlier < later);
+            assert!(later > earlier);
+            assert_eq!(earlier, earlier);
+
+            // Test with MIN/MAX
+            let min_dt = DateTime::<Utc>::MIN_UTC;
+            let max_dt = DateTime::<Utc>::MAX_UTC;
+
+            assert!(min_dt < earlier);
+            assert!(later < max_dt);
+            assert!(min_dt < max_dt);
+        }
+
+        /// Test time range filtering logic
+        #[test]
+        fn test_time_range_filtering() {
+            let start = Utc.timestamp_nanos(1_000_000_000);
+            let end = Utc.timestamp_nanos(3_000_000_000);
+
+            // Test time within range
+            let within = Utc.timestamp_nanos(2_000_000_000);
+            assert!(within >= start && within < end);
+
+            // Test time before range
+            let before = Utc.timestamp_nanos(500_000_000);
+            assert!(!(before >= start && before < end));
+
+            // Test time after range
+            let after = Utc.timestamp_nanos(4_000_000_000);
+            assert!(!(after >= start && after < end));
+
+            // Test boundary: start time (inclusive)
+            assert!(start >= start && start < end);
+
+            // Test boundary: end time (exclusive)
+            assert!(!(end >= start && end < end));
+        }
+
+        /// Test timestamp serialization/deserialization consistency
+        #[test]
+        fn test_timestamp_round_trip() {
+            let test_timestamps = vec![
+                0_i64,
+                1_i64,
+                -1_i64,
+                1_700_000_000_000_000_000_i64,
+                -1_700_000_000_000_000_000_i64,
+                i64::MAX,
+                i64::MIN,
+            ];
+
+            for ts in test_timestamps {
+                // Convert timestamp to DateTime and back
+                let dt = Utc.timestamp_nanos(ts);
+                let recovered_ts = dt.timestamp_nanos_opt();
+
+                assert_eq!(
+                    recovered_ts,
+                    Some(ts),
+                    "Round trip failed for timestamp: {ts}"
+                );
+            }
+        }
+
+        /// Test big-endian byte conversion for timestamps
+        #[test]
+        fn test_timestamp_byte_conversion() {
+            let timestamp = 1_700_000_000_000_000_000_i64;
+            let bytes = timestamp.to_be_bytes();
+
+            // Test bytes are big-endian (most significant byte first)
+            let recovered = i64::from_be_bytes(bytes);
+            assert_eq!(recovered, timestamp);
+
+            // Test with zero
+            let zero_bytes = 0_i64.to_be_bytes();
+            assert_eq!(i64::from_be_bytes(zero_bytes), 0);
+
+            // Test with negative number
+            let negative = -1_000_000_000_i64;
+            let neg_bytes = negative.to_be_bytes();
+            assert_eq!(i64::from_be_bytes(neg_bytes), negative);
+
+            // Test that big-endian maintains proper ordering for sorting
+            let ts1 = 1_000_i64;
+            let ts2 = 2_000_i64;
+            let bytes1 = ts1.to_be_bytes();
+            let bytes2 = ts2.to_be_bytes();
+            assert!(bytes1 < bytes2, "Big-endian bytes should maintain order");
+        }
+
+        /// Test UTC consistency
+        #[test]
+        fn test_utc_consistency() {
+            // Create same timestamp multiple times
+            let ts = 1_700_000_000_000_000_000_i64;
+            let dt1 = Utc.timestamp_nanos(ts);
+            let dt2 = Utc.timestamp_nanos(ts);
+
+            // They should be equal
+            assert_eq!(dt1, dt2);
+
+            // Test that Utc::now() returns a valid DateTime
+            let now = Utc::now();
+            let now_ts = now.timestamp_nanos_opt();
+            assert!(now_ts.is_some());
+
+            // Verify that current time is within reasonable bounds
+            assert!(now > DateTime::<Utc>::MIN_UTC);
+            assert!(now < DateTime::<Utc>::MAX_UTC);
+        }
+
+        /// Test `TimeRange` serialization
+        #[test]
+        fn test_time_range_serialization() {
+            use serde_json;
+
+            // Test serialization of TimeRange with values
+            let dt = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+            let time_range = super::super::TimeRange {
+                start: Some(dt),
+                end: Some(dt),
+            };
+
+            let serialized = serde_json::to_string(&time_range);
+            assert!(serialized.is_ok());
+
+            // Test serialization with None values
+            let empty_range = super::super::TimeRange {
+                start: None,
+                end: None,
+            };
+
+            let serialized_empty = serde_json::to_string(&empty_range);
+            assert!(serialized_empty.is_ok());
+        }
+
+        /// Test timestamp overflow protection
+        #[test]
+        fn test_timestamp_overflow_handling() {
+            // Test that timestamp_nanos_opt handles overflow correctly
+            // DateTime::MIN_UTC and MAX_UTC represent the absolute bounds
+            // of the DateTime type, which is wider than i64 nanoseconds
+
+            // Test near boundaries
+            let max_dt = DateTime::<Utc>::MAX_UTC;
+            let max_ts = max_dt.timestamp_nanos_opt();
+            // MAX_UTC may overflow i64 nanosecond representation
+            // This documents the actual behavior before Jiff migration
+
+            let min_dt = DateTime::<Utc>::MIN_UTC;
+            let min_ts = min_dt.timestamp_nanos_opt();
+            // MIN_UTC may also overflow i64 nanosecond representation
+
+            // Document that the behavior is consistent
+            // Both should either have values or be None
+            assert_eq!(
+                min_ts.is_some(),
+                max_ts.is_some(),
+                "MIN and MAX should have consistent overflow behavior"
+            );
+        }
+
+        /// Test `checked_sub` for safe arithmetic
+        #[test]
+        fn test_checked_subtraction() {
+            // Test normal subtraction
+            let value = 1000_i64;
+            let result = value.checked_sub(1);
+            assert_eq!(result, Some(999));
+
+            // Test underflow protection
+            let min_value = i64::MIN;
+            let result = min_value.checked_sub(1);
+            assert_eq!(result, None, "Should return None on underflow");
+
+            // Test at zero
+            let zero = 0_i64;
+            let result = zero.checked_sub(1);
+            assert_eq!(result, Some(-1));
+        }
+    }
 }

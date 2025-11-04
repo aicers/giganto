@@ -1290,3 +1290,417 @@ pub fn repair_db(
     let dur = start.elapsed();
     info!("DB repair duration: {}", to_hms(dur));
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, TimeZone, Utc};
+
+    use super::*;
+
+    /// Tests for Chrono `DateTime` behavior in storage operations
+    /// before migrating to Jiff
+    mod chrono_storage_tests {
+        use super::*;
+
+        /// Test `SensorStore` insert with `DateTime` conversion
+        #[test]
+        fn test_sensor_store_datetime_to_timestamp() {
+            let dir = tempfile::tempdir().unwrap();
+            let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+            let sensor_store = db.sensors_store().unwrap();
+
+            // Test with current time
+            let now = Utc::now();
+            let result = sensor_store.insert("test_sensor", now);
+            assert!(result.is_ok());
+
+            // Test with specific timestamp
+            let specific_time = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+            let result = sensor_store.insert("test_sensor_2", specific_time);
+            assert!(result.is_ok());
+
+            // Test with boundary values
+            let min_time = DateTime::<Utc>::MIN_UTC;
+            let result = sensor_store.insert("test_sensor_min", min_time);
+            assert!(result.is_ok());
+
+            let max_time = DateTime::<Utc>::MAX_UTC;
+            let result = sensor_store.insert("test_sensor_max", max_time);
+            assert!(result.is_ok());
+        }
+
+        /// Test `timestamp_nanos_opt` with `unwrap_or` fallback behavior
+        #[test]
+        fn test_timestamp_nanos_opt_with_fallback() {
+            // Test normal case
+            let dt = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+            let ts = dt.timestamp_nanos_opt().unwrap_or(i64::MAX);
+            assert_eq!(ts, 1_700_000_000_000_000_000);
+
+            // Test with MIN_UTC and MAX_UTC
+            // Note: These may overflow i64 nanoseconds, which is expected
+            let min_dt = DateTime::<Utc>::MIN_UTC;
+            let min_ts = min_dt.timestamp_nanos_opt().unwrap_or(i64::MAX);
+            // If it overflows, fallback to i64::MAX is used
+
+            let max_dt = DateTime::<Utc>::MAX_UTC;
+            let max_ts = max_dt.timestamp_nanos_opt().unwrap_or(i64::MAX);
+            // Document that the unwrap_or pattern provides safe fallback
+
+            // Verify fallback behavior is consistent
+            assert!(
+                min_ts == i64::MAX || max_ts == i64::MAX || min_ts < max_ts,
+                "Fallback or ordering should be consistent"
+            );
+        }
+
+        /// Test `StorageKeyBuilder` with timestamp boundaries
+        #[test]
+        fn test_storage_key_builder_lower_bound() {
+            // Test with None (should use 0)
+            let key_none = StorageKey::builder()
+                .start_key("test_source")
+                .lower_closed_bound_end_key(None)
+                .build();
+            let expected_none = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&0_i64.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_none.key(), expected_none);
+
+            // Test with Some(DateTime)
+            let some_time = Utc.timestamp_nanos(1_000_000_000);
+            let key_some = StorageKey::builder()
+                .start_key("test_source")
+                .lower_closed_bound_end_key(Some(some_time))
+                .build();
+            let expected_some = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&1_000_000_000_i64.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_some.key(), expected_some);
+
+            // Test with MIN timestamp
+            let min_time = Utc.timestamp_nanos(i64::MIN);
+            let key_min = StorageKey::builder()
+                .start_key("test_source")
+                .lower_closed_bound_end_key(Some(min_time))
+                .build();
+            let expected_min = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&i64::MIN.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_min.key(), expected_min);
+        }
+
+        /// Test `StorageKeyBuilder` with upper bound edge cases
+        #[test]
+        fn test_storage_key_builder_upper_bound() {
+            // Test upper_closed_bound with None (should use i64::MAX)
+            let key_none = StorageKey::builder()
+                .start_key("test_source")
+                .upper_closed_bound_end_key(None)
+                .build();
+            let expected_none = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&i64::MAX.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_none.key(), expected_none);
+
+            // Test upper_closed_bound with Some(DateTime)
+            // Should subtract 1 if possible
+            let some_time = Utc.timestamp_nanos(2_000_000_000);
+            let key_some = StorageKey::builder()
+                .start_key("test_source")
+                .upper_closed_bound_end_key(Some(some_time))
+                .build();
+            let expected_some = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&1_999_999_999_i64.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_some.key(), expected_some);
+
+            // Test upper_closed_bound with 0 (edge case)
+            // When timestamp is 0, subtracting 1 gives -1, which fails >= 0 check
+            // So it falls through to i64::MAX
+            let zero_time = Utc.timestamp_nanos(0);
+            let key_zero = StorageKey::builder()
+                .start_key("test_source")
+                .upper_closed_bound_end_key(Some(zero_time))
+                .build();
+            let expected_zero = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&i64::MAX.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_zero.key(), expected_zero);
+
+            // Test upper_open_bound with None (should use i64::MAX)
+            let key_open_none = StorageKey::builder()
+                .start_key("test_source")
+                .upper_open_bound_end_key(None)
+                .build();
+            let expected_open_none = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&i64::MAX.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_open_none.key(), expected_open_none);
+
+            // Test upper_open_bound with Some(DateTime)
+            let some_time_open = Utc.timestamp_nanos(3_000_000_000);
+            let key_open_some = StorageKey::builder()
+                .start_key("test_source")
+                .upper_open_bound_end_key(Some(some_time_open))
+                .build();
+            let expected_open_some = {
+                let mut k = b"test_source\0".to_vec();
+                k.extend_from_slice(&3_000_000_000_i64.to_be_bytes());
+                k
+            };
+            assert_eq!(*key_open_some.key(), expected_open_some);
+        }
+
+        /// Test time arithmetic for retention calculation
+        #[test]
+        fn test_retention_time_calculation() {
+            // Simulate retention calculation
+            let now = Utc::now();
+            let retention_duration = 86_400_000_000_000_i64; // 1 day in nanoseconds
+
+            // Test current time can be converted to nanos
+            let now_nanos = now.timestamp_nanos_opt().unwrap_or(retention_duration);
+            assert_ne!(now_nanos, retention_duration, "now should have value");
+
+            // Test subtraction for retention
+            let retention_timestamp = now_nanos - retention_duration;
+            assert!(retention_timestamp < now_nanos);
+
+            // Test with specific values
+            let specific_time = Utc.timestamp_nanos(2_000_000_000_000_000_000);
+            let specific_nanos = specific_time
+                .timestamp_nanos_opt()
+                .unwrap_or(retention_duration);
+            let specific_retention = specific_nanos - retention_duration;
+            assert_eq!(
+                specific_retention,
+                2_000_000_000_000_000_000 - 86_400_000_000_000
+            );
+        }
+
+        /// Test `checked_sub` with timestamp boundaries
+        #[test]
+        fn test_checked_sub_with_timestamps() {
+            // Test normal case
+            let ts = 1_000_000_000_i64;
+            let result = ts.checked_sub(1);
+            assert_eq!(result, Some(999_999_999));
+            assert!(result.unwrap() >= 0);
+
+            // Test at boundary (i64::MIN)
+            let min_ts = i64::MIN;
+            let result = min_ts.checked_sub(1);
+            assert_eq!(result, None, "Should overflow");
+
+            // Test near zero
+            let near_zero = 1_i64;
+            let result = near_zero.checked_sub(1);
+            assert_eq!(result, Some(0));
+            assert!(result.unwrap() >= 0);
+
+            // Test zero
+            let zero = 0_i64;
+            let result = zero.checked_sub(1);
+            assert_eq!(result, Some(-1));
+            // Note: result < 0 after subtracting from 0
+        }
+
+        /// Test timestamp byte ordering for storage keys
+        #[test]
+        fn test_timestamp_byte_ordering_storage() {
+            // Verify that big-endian encoding maintains sort order
+            let timestamps = [
+                0_i64,
+                1_000_i64,
+                1_000_000_i64,
+                1_000_000_000_i64,
+                1_700_000_000_000_000_000_i64,
+            ];
+
+            let mut byte_keys: Vec<Vec<u8>> = timestamps
+                .iter()
+                .map(|ts| ts.to_be_bytes().to_vec())
+                .collect();
+
+            let original_keys = byte_keys.clone();
+
+            // Sort the byte keys
+            byte_keys.sort();
+
+            // Verify order is maintained
+            assert_eq!(
+                byte_keys, original_keys,
+                "Big-endian encoding should maintain timestamp order"
+            );
+        }
+
+        /// Test `Utc::now()` behavior
+        #[test]
+        fn test_utc_now_properties() {
+            // Get current time twice
+            let now1 = Utc::now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let now2 = Utc::now();
+
+            // Verify they are different (time progresses)
+            assert!(now2 >= now1, "Time should progress forward");
+
+            // Verify both have valid timestamps
+            assert!(now1.timestamp_nanos_opt().is_some());
+            assert!(now2.timestamp_nanos_opt().is_some());
+
+            // Verify they are within reasonable bounds
+            assert!(now1 > DateTime::<Utc>::MIN_UTC);
+            assert!(now1 < DateTime::<Utc>::MAX_UTC);
+            assert!(now2 > DateTime::<Utc>::MIN_UTC);
+            assert!(now2 < DateTime::<Utc>::MAX_UTC);
+        }
+
+        /// Test `DateTime` comparison for retention logic
+        #[test]
+        fn test_datetime_comparison_retention() {
+            let retention_time = Utc.timestamp_nanos(1_000_000_000);
+            let old_data_time = Utc.timestamp_nanos(500_000_000);
+            let new_data_time = Utc.timestamp_nanos(2_000_000_000);
+
+            // Old data should be deleted
+            assert!(
+                old_data_time < retention_time,
+                "Old data timestamp should be before retention cutoff"
+            );
+
+            // New data should be kept
+            assert!(
+                new_data_time > retention_time,
+                "New data timestamp should be after retention cutoff"
+            );
+
+            // Test with actual timestamps from nanos
+            let retention_ts = retention_time.timestamp_nanos_opt().unwrap();
+            let old_ts = old_data_time.timestamp_nanos_opt().unwrap();
+            let new_ts = new_data_time.timestamp_nanos_opt().unwrap();
+
+            assert!(old_ts < retention_ts);
+            assert!(new_ts > retention_ts);
+        }
+
+        /// Test timestamp conversion round-trip through storage
+        #[test]
+        fn test_timestamp_storage_round_trip() {
+            // Test with timestamps that are guaranteed to fit in i64 nanoseconds
+            // Exclude MIN_UTC and MAX_UTC as they may overflow
+            let test_times = vec![
+                Utc.timestamp_nanos(0),
+                Utc.timestamp_nanos(1_700_000_000_000_000_000),
+                Utc.timestamp_nanos(-1_000_000_000),
+                Utc.timestamp_nanos(i64::MIN),
+                Utc.timestamp_nanos(i64::MAX),
+            ];
+
+            for time in test_times {
+                // Convert to timestamp
+                let ts_opt = time.timestamp_nanos_opt();
+                assert!(ts_opt.is_some(), "Timestamp should be valid for i64 range");
+
+                let ts = ts_opt.unwrap();
+
+                // Convert to bytes (as would be stored)
+                let bytes = ts.to_be_bytes();
+
+                // Recover from bytes
+                let recovered_ts = i64::from_be_bytes(bytes);
+                assert_eq!(recovered_ts, ts, "Round trip should preserve value");
+
+                // Convert back to DateTime
+                let recovered_time = Utc.timestamp_nanos(recovered_ts);
+                assert_eq!(
+                    recovered_time, time,
+                    "Full round trip should preserve DateTime"
+                );
+            }
+        }
+
+        /// Test time handling with None/Some patterns
+        #[test]
+        fn test_optional_time_handling() {
+            // Test pattern: time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+            let some_time = Some(Utc.timestamp_nanos(1_000_000_000));
+            let none_time: Option<DateTime<Utc>> = None;
+
+            // With Some
+            if let Some(time) = some_time {
+                let ts = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
+                assert_eq!(ts, 1_000_000_000);
+            }
+
+            // With None - fallback to default
+            let default_ts = if let Some(time) = none_time {
+                time.timestamp_nanos_opt().unwrap_or(i64::MAX)
+            } else {
+                0 // or i64::MAX depending on use case
+            };
+            assert_eq!(default_ts, 0);
+        }
+
+        /// Test consistency across UTC timezone
+        #[test]
+        fn test_utc_timezone_consistency() {
+            // Create DateTime from same timestamp multiple times
+            let ts = 1_700_000_000_000_000_000_i64;
+
+            let dt1 = Utc.timestamp_nanos(ts);
+            let dt2 = Utc.timestamp_nanos(ts);
+
+            // Should be exactly equal
+            assert_eq!(dt1, dt2);
+
+            // Should have same timestamp
+            assert_eq!(dt1.timestamp_nanos_opt(), dt2.timestamp_nanos_opt());
+
+            // Test across different construction methods
+            let dt3 = Utc.timestamp_nanos(ts);
+            assert_eq!(dt1, dt3);
+        }
+
+        /// Test boundary arithmetic for upper bounds
+        #[test]
+        fn test_upper_bound_arithmetic() {
+            // Test the pattern: checked_sub(1) && ns >= 0
+            let test_cases = vec![
+                (1000_i64, Some(999_i64), true), // Normal case
+                (1_i64, Some(0_i64), true),      // Edge: 1 - 1 = 0
+                (0_i64, Some(-1_i64), false),    // Edge: 0 - 1 = -1 (fails >= 0)
+                (-1_i64, Some(-2_i64), false),   // Negative
+                (i64::MIN, None, false),         // Overflow
+            ];
+
+            for (input, expected_result, expected_ge_zero) in test_cases {
+                let result = input.checked_sub(1);
+                assert_eq!(result, expected_result, "checked_sub failed for {input}");
+
+                if let Some(ns) = result {
+                    let ge_zero = ns >= 0;
+                    assert_eq!(
+                        ge_zero, expected_ge_zero,
+                        ">= 0 check failed for result {ns}"
+                    );
+                }
+            }
+        }
+    }
+}
