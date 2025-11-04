@@ -182,15 +182,15 @@ mod tests {
     use giganto_client::ingest::log::SecuLog;
 
     use crate::graphql::tests::TestSchema;
-    use crate::storage::RawEventStore;
+    use crate::storage::WritableRawEventStore;
 
     #[tokio::test]
     async fn test_secu_log_event() {
         let schema = TestSchema::new();
-        let store = schema.db.secu_log_store().unwrap();
+        let store = schema.db.secu_log_store_writable().unwrap();
 
-        insert_secu_log_event(&store, "device", "src1", 1);
-        insert_secu_log_event(&store, "device", "src 1", 2);
+        insert_secu_log_event(store.as_ref(), "device", "src1", 1);
+        insert_secu_log_event(store.as_ref(), "device", "src 1", 2);
 
         let query = r#"
         {
@@ -287,7 +287,7 @@ mod tests {
     }
 
     fn insert_secu_log_event(
-        store: &RawEventStore<SecuLog>,
+        store: &dyn WritableRawEventStore<'_, SecuLog>,
         kind: &str,
         sensor: &str,
         timestamp: i64,

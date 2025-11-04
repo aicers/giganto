@@ -48,7 +48,7 @@ use crate::{
         events_in_cluster, impl_from_giganto_range_structs_for_graphql_client,
     },
     ingest::implement::EventFilter,
-    storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
+    storage::{BoundaryIter, Database, Direction, KeyExtractor,  ReadableRawEventStore, StorageKey},
 };
 
 const ADDRESS_PROTOCOL: [&str; 18] = [
@@ -1781,7 +1781,7 @@ fn export_by_protocol(
 }
 
 fn process_export<T, N>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     export_done_path: &Path,
@@ -1814,7 +1814,7 @@ where
 }
 
 fn process_statistics_export(
-    store: &RawEventStore<Statistics>,
+    store: &dyn ReadableRawEventStore<'_, Statistics>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     export_done_path: &Path,

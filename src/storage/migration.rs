@@ -25,7 +25,7 @@ use crate::{
     ingest::implement::EventFilter,
     storage::{
         Conn as ConnFromV21, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, RawEventStore,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, WritableRawEventStore,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
         Tls as TlsFromV21, rocksdb_options,
     },
@@ -125,7 +125,9 @@ fn read_version_file(path: &Path) -> Result<Version> {
 
 const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 impl Database {
-    fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Result<Self> {
+    fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Database {
+        const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
+
         let (db_opts, cf_opts) = rocksdb_options(db_opts);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + OLD_META_DATA_COLUMN_FAMILY_NAMES.len(),
@@ -137,10 +139,11 @@ impl Database {
             .into_iter()
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
-        let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).context("cannot open database")?;
-        Ok(Database {
+        let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
+        Database {
             db: std::sync::Arc::new(db),
-        })
+            mode: DatabaseMode::Primary,
+        }
     }
 }
 
@@ -300,7 +303,7 @@ fn migrate_0_23_to_0_24(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
-    let store = db.netflow5_store()?;
+    let store = db.netflow5_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<Netflow5BeforeV23>(&val)?;
@@ -313,7 +316,7 @@ fn migrate_0_21_to_0_23_netflow5(db: &Database) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
-    let store = db.netflow9_store()?;
+    let store = db.netflow9_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<Netflow9BeforeV23>(&val)?;
@@ -326,7 +329,7 @@ fn migrate_0_21_to_0_23_netflow9(db: &Database) -> Result<()> {
 }
 
 fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
-    let store = db.secu_log_store()?;
+    let store = db.secu_log_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<SecuLogBeforeV23>(&val)?;
@@ -339,8 +342,8 @@ fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
 }
 
 fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
-    info!("start migration for oplog");
-    let store = db.op_log_store()?;
+    info!("Starting migration for oplog");
+    let store = db.op_log_store_writable()?;
     let counter = AtomicUsize::new(0);
 
     for raw_event in store.iter_forward() {
@@ -444,6 +447,7 @@ mod tests {
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
 
+    use super::super::DatabaseMode;
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::migration::migration_structures::OpLogBeforeV24;
     use crate::storage::{
@@ -1073,19 +1077,19 @@ mod tests {
             let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
 
             // insert netflow5 data using the old key.
-            let netflow5_store = db.netflow5_store().unwrap();
+            let netflow5_store = db.netflow5_store_writable().unwrap();
             netflow5_store
                 .append(&netflow5_key, &serialized_netflow5_old)
                 .unwrap();
 
             // insert netflow9 data using the old key.
-            let netflow9_store = db.netflow9_store().unwrap();
+            let netflow9_store = db.netflow9_store_writable().unwrap();
             netflow9_store
                 .append(&netflow9_key, &serialized_netflow9_old)
                 .unwrap();
 
             // insert secuLog data using the old key.
-            let secu_log_store = db.secu_log_store().unwrap();
+            let secu_log_store = db.secu_log_store_writable().unwrap();
             secu_log_store
                 .append(&secu_log_key, &serialized_secu_log_old)
                 .unwrap();
@@ -1097,7 +1101,7 @@ mod tests {
         let db = Database::open(&db_path, &DbOptions::default()).unwrap();
 
         // check netflow5
-        let netflow5_store = db.netflow5_store().unwrap();
+        let netflow5_store = db.netflow5_store_writable().unwrap();
         let mut result_iter = netflow5_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -1109,7 +1113,7 @@ mod tests {
         );
 
         // check netflow9
-        let netflow9_store = db.netflow9_store().unwrap();
+        let netflow9_store = db.netflow9_store_writable().unwrap();
         let mut result_iter = netflow9_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -1121,7 +1125,7 @@ mod tests {
         );
 
         // check secuLog
-        let secu_log_store = db.secu_log_store().unwrap();
+        let secu_log_store = db.secu_log_store_writable().unwrap();
         let mut result_iter = secu_log_store.iter_forward();
         let (result_key, result_value) = result_iter.next().unwrap().unwrap();
 
@@ -1191,7 +1195,7 @@ mod tests {
 
         let db_dir = tempfile::tempdir().unwrap();
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-        let op_log_store = db.op_log_store().unwrap();
+        let op_log_store = db.op_log_store_writable().unwrap();
 
         let old_op_log = OpLogBeforeV24 {
             agent_name: "local".to_string(),

@@ -23,7 +23,7 @@ use crate::{
         client::derives::{Statistics as Stats, statistics as stats},
         events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
     },
-    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
+    storage::{Database, ReadableRawEventStore, StatisticsIter, StorageKey},
 };
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
@@ -101,7 +101,8 @@ async fn handle_statistics(
     // Configure statistics results by sensor.
     for sensor in sensors {
         for core in 0..MAX_CORE_SIZE {
-            let stats_iter = get_statistics_iter(&db.statistics_store()?, core, sensor, time);
+            let store = db.statistics_store()?;
+            let stats_iter = get_statistics_iter(store.as_ref(), core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
             if peek_stats_iter.peek().is_some() {
                 stats_iters.push(peek_stats_iter);
@@ -145,7 +146,7 @@ impl StatisticsQuery {
 impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 
 fn get_statistics_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     core_id: u32,
     sensor: &str,
     time: Option<&TimeRange>,
@@ -301,11 +302,11 @@ mod tests {
     #[tokio::test]
     async fn test_statistics() {
         let schema = TestSchema::new();
-        let store = schema.db.statistics_store().unwrap();
+        let store = schema.db.statistics_store_writable().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(store.as_ref(), now, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         let query = r#"
     {
@@ -330,7 +331,7 @@ mod tests {
     }
 
     fn insert_statistics_raw_event(
-        store: &RawEventStore<Statistics>,
+        store: &dyn WritableRawEventStore<'_, Statistics>,
         timestamp: i64,
         sensor: &str,
         core: u32,
@@ -516,12 +517,36 @@ mod tests {
             .port();
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
-        let store = schema.db.statistics_store().unwrap();
+        let store = schema.db.statistics_store_writable().unwrap();
         let timestamp: i64 = 1_702_272_560;
 
-        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            0,
+            600,
+            1_000_000,
+            300_000_000,
+        );
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            1,
+            600,
+            2_000_000,
+            600_000_000,
+        );
+        insert_statistics_raw_event(
+            store.as_ref(),
+            timestamp,
+            "src 1",
+            2,
+            600,
+            3_000_000,
+            900_000_000,
+        );
 
         // when
         let res = schema.execute(query).await;

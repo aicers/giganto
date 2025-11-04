@@ -10,6 +10,7 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use config::{Config as ConfConfig, ConfigBuilder, ConfigError, File, builder::DefaultState};
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
+use humantime::parse_duration;
 use toml_edit::DocumentMut;
 use tracing::info;
 
@@ -24,7 +25,8 @@ const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
-const DEFAULT_MAX_SUB_COMPACTIONS: u32 = 2;
+const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
+const DEFAULT_SECONDARY_SYNC_INTERVAL: &str = "5s";
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -98,6 +100,19 @@ pub struct ConfigVisible {
 
     // ack transmission interval
     pub ack_transmission: u16,
+
+    /// Interval for syncing RocksDB secondary databases with the primary.
+    #[serde(with = "humantime_serde", default = "default_secondary_sync_interval")]
+    pub secondary_sync_interval: Duration,
+}
+
+fn default_compression() -> bool {
+    true
+}
+
+fn default_secondary_sync_interval() -> Duration {
+    parse_duration(DEFAULT_SECONDARY_SYNC_INTERVAL)
+        .expect("default secondary sync interval should be valid")
 }
 
 impl Settings {
@@ -178,6 +193,8 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default number of thread")
         .set_default("max_sub_compactions", DEFAULT_MAX_SUB_COMPACTIONS)
         .expect("default max subcompactions")
+        .set_default("secondary_sync_interval", DEFAULT_SECONDARY_SYNC_INTERVAL)
+        .expect("default secondary sync interval")
         .set_default("addr_to_peers", DEFAULT_INVALID_ADDR_TO_PEERS)
         .expect("default ack transmission")
         .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)
