@@ -107,7 +107,7 @@ impl TimeSeriesQuery {
 mod tests {
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::WritableRawEventStore};
 
     #[tokio::test]
     async fn time_series_empty() {
@@ -129,10 +129,10 @@ mod tests {
     #[tokio::test]
     async fn time_series_with_data() {
         let schema = TestSchema::new();
-        let store = schema.db.periodic_time_series_store().unwrap();
+        let store = schema.db.periodic_time_series_store_writable().unwrap();
 
-        insert_time_series(&store, "src 1", 1, vec![0.0; 12]);
-        insert_time_series(&store, "src 1", 2, vec![0.0; 12]);
+        insert_time_series(store.as_ref(), "src 1", 1, vec![0.0; 12]);
+        insert_time_series(store.as_ref(), "src 1", 2, vec![0.0; 12]);
 
         let query = r#"
         {
@@ -156,7 +156,7 @@ mod tests {
     }
 
     fn insert_time_series(
-        store: &RawEventStore<PeriodicTimeSeries>,
+        store: &dyn WritableRawEventStore<'_, PeriodicTimeSeries>,
         id: &str,
         start: i64,
         data: Vec<f64>,

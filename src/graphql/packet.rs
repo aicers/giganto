@@ -237,7 +237,7 @@ mod tests {
     use chrono::{NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::WritableRawEventStore};
 
     #[tokio::test]
     async fn packets_empty() {
@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn packets_with_data() {
         let schema = TestSchema::new();
-        let store = schema.db.packet_store().unwrap();
+        let store = schema.db.packet_store_writable().unwrap();
 
         let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
         let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
@@ -276,14 +276,14 @@ mod tests {
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
         let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
-        insert_packet(&store, "src 1", ts1, ts1);
-        insert_packet(&store, "src 1", ts1, ts2);
+        insert_packet(store.as_ref(), "src 1", ts1, ts1);
+        insert_packet(store.as_ref(), "src 1", ts1, ts2);
 
-        insert_packet(&store, "ingest src 1", ts1, ts1);
-        insert_packet(&store, "ingest src 1", ts1, ts3);
+        insert_packet(store.as_ref(), "ingest src 1", ts1, ts1);
+        insert_packet(store.as_ref(), "ingest src 1", ts1, ts3);
 
-        insert_packet(&store, "src 1", ts2, ts1);
-        insert_packet(&store, "src 1", ts2, ts3);
+        insert_packet(store.as_ref(), "src 1", ts2, ts1);
+        insert_packet(store.as_ref(), "src 1", ts2, ts3);
 
         let query = r#"
         {
@@ -357,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn pcap_with_data() {
         let schema = TestSchema::new();
-        let store = schema.db.packet_store().unwrap();
+        let store = schema.db.packet_store_writable().unwrap();
 
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
@@ -370,14 +370,14 @@ mod tests {
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
         let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
-        insert_packet(&store, "src 1", ts1, ts1);
-        insert_packet(&store, "src 1", ts1, ts2);
+        insert_packet(store.as_ref(), "src 1", ts1, ts1);
+        insert_packet(store.as_ref(), "src 1", ts1, ts2);
 
-        insert_packet(&store, "ingest src 1", ts1, ts1);
-        insert_packet(&store, "ingest src 1", ts1, ts3);
+        insert_packet(store.as_ref(), "ingest src 1", ts1, ts1);
+        insert_packet(store.as_ref(), "ingest src 1", ts1, ts3);
 
-        insert_packet(&store, "src 1", ts2, ts1);
-        insert_packet(&store, "src 1", ts2, ts3);
+        insert_packet(store.as_ref(), "src 1", ts2, ts1);
+        insert_packet(store.as_ref(), "src 1", ts2, ts3);
 
         let query = r#"
         {
@@ -469,7 +469,7 @@ mod tests {
     }
 
     fn insert_packet(
-        store: &RawEventStore<pk>,
+        store: &dyn WritableRawEventStore<'_, pk>,
         sensor: &str,
         req_timestamp: i64,
         pk_timestamp: i64,

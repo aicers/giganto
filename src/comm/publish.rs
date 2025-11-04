@@ -56,7 +56,9 @@ use crate::graphql::TIMESTAMP_SIZE;
 use crate::server::{
     Certs, config_client, config_server, extract_cert_from_conn, subject_from_cert_verbose,
 };
-use crate::storage::{Database, Direction, RawEventStore, StorageKey};
+use crate::storage::{
+    Database, Direction, ReadableRawEventStore, ReadableRawEventStoreHandle, StorageKey,
+};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.26.0-alpha.8,<0.26.0-alpha.9";
 
@@ -235,6 +237,7 @@ async fn request_stream(
     loop {
         match receive_stream_request(&mut recv).await {
             Ok(stream_payload) => {
+                stream_db.try_catch_up_with_primary()?;
                 let db = stream_db.clone();
                 let conn = connection.clone();
                 let sensor = conn_sensor.clone();
@@ -492,7 +495,7 @@ pub async fn send_direct_stream(
 
 #[allow(clippy::too_many_arguments)]
 async fn send_stream<T, N>(
-    store: RawEventStore<'_, T>,
+    store: ReadableRawEventStoreHandle<'_, T>,
     conn: Connection,
     record_type: RequestStreamRecord,
     msg: N,
@@ -633,6 +636,7 @@ async fn handle_request(
     peer_idents: PeerIdents,
     certs: Arc<Certs>,
 ) -> Result<()> {
+    db.try_catch_up_with_primary()?;
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
         MessageCode::ReqRange => {
@@ -1629,7 +1633,7 @@ async fn handle_request(
 #[allow(clippy::too_many_arguments)]
 async fn process_range_data<T, I>(
     send: &mut SendStream,
-    store: RawEventStore<'_, T>,
+    store: ReadableRawEventStoreHandle<'_, T>,
     request_range: RequestRange,
     ingest_sensors: IngestSensors,
     peers: Peers,
@@ -1642,7 +1646,8 @@ where
     I: DeserializeOwned + Serialize,
 {
     if is_current_giganto_in_charge(ingest_sensors, &request_range.sensor).await {
-        process_range_data_in_current_giganto(send, store, request_range, availed_kind).await?;
+        process_range_data_in_current_giganto(send, store.as_ref(), request_range, availed_kind)
+            .await?;
     } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
         process_range_data_in_peer_giganto::<I>(send, peer_idents, peer_addr, certs, request_range)
@@ -1678,7 +1683,7 @@ async fn peer_in_charge_publish_addr(peers: Peers, sensor: &str) -> Option<Socke
 
 async fn process_range_data_in_current_giganto<T>(
     send: &mut SendStream,
-    store: RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     request_range: RequestRange,
     availed_kind: bool,
 ) -> Result<()>
@@ -1764,7 +1769,7 @@ where
 
 async fn process_raw_events<T, I>(
     send: &mut SendStream,
-    store: RawEventStore<'_, T>,
+    store: ReadableRawEventStoreHandle<'_, T>,
     req: RequestRawData,
     ingest_sensors: IngestSensors,
     peers: Peers,
@@ -1779,7 +1784,8 @@ where
         req_inputs_by_gigantos_in_charge(ingest_sensors, req.input).await;
 
     if !handle_by_current_giganto.is_empty() {
-        process_raw_event_in_current_giganto(send, store, handle_by_current_giganto).await?;
+        process_raw_event_in_current_giganto(send, store.as_ref(), handle_by_current_giganto)
+            .await?;
     }
 
     if !handle_by_peer_gigantos.is_empty() {
@@ -1818,7 +1824,7 @@ async fn req_inputs_by_gigantos_in_charge(
 
 async fn process_raw_event_in_current_giganto<T>(
     send: &mut SendStream,
-    store: RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     handle_by_current_giganto: Vec<(String, Vec<i64>)>,
 ) -> Result<()>
 where

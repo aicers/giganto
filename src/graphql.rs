@@ -17,10 +17,12 @@ mod timeseries;
 use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
 
 use anyhow::anyhow;
+use async_graphql::async_trait::async_trait;
 use async_graphql::{
     EmptySubscription, InputObject, InputValueError, InputValueResult, MergedObject, OutputType,
-    Result, Scalar, ScalarType, Value,
+    Request, Result, Scalar, ScalarType, ServerError, ServerResult, Value,
     connection::{Connection, Edge, query},
+    extensions::{Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{DateTime, TimeZone, Utc};
@@ -44,8 +46,8 @@ use crate::{
     comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
     settings::{ConfigVisible, Settings},
     storage::{
-        Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
-        TimestampKeyExtractor,
+        Database, Direction, FilteredIter, KeyExtractor, KeyValue, ReadableRawEventStore,
+        ReadableRawEventStoreHandle, StorageKey, TimestampKeyExtractor,
     },
 };
 
@@ -178,7 +180,38 @@ pub fn schema(
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
         .data(settings)
+        .extension(SecondarySyncExtension)
         .finish()
+}
+
+struct SecondarySyncExtension;
+
+impl ExtensionFactory for SecondarySyncExtension {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(SecondarySyncExtensionImpl)
+    }
+}
+
+struct SecondarySyncExtensionImpl;
+
+#[async_trait]
+impl Extension for SecondarySyncExtensionImpl {
+    async fn prepare_request(
+        &self,
+        ctx: &ExtensionContext<'_>,
+        request: Request,
+        next: NextPrepareRequest<'_>,
+    ) -> ServerResult<Request> {
+        if let Ok(db) = ctx.data::<Database>()
+            && let Err(e) = db.try_catch_up_with_primary()
+        {
+            return Err(ServerError::new(
+                format!("failed to synchronize secondary database: {e}"),
+                None,
+            ));
+        }
+        next.run(ctx, request).await
+    }
 }
 
 /// The default page size for connections when neither `first` nor `last` is
@@ -233,7 +266,7 @@ fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) 
 
 #[allow(clippy::too_many_lines)]
 fn get_connection<T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -360,7 +393,7 @@ where
 
 #[allow(clippy::too_many_lines)]
 fn get_connection_by_prefix_timestamp_key<T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -478,7 +511,7 @@ where
 }
 
 fn load_connection<N, T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -496,7 +529,7 @@ where
 }
 
 fn load_connection_by_prefix_timestamp_key<N, T>(
-    store: &RawEventStore<'_, T>,
+    store: &dyn ReadableRawEventStore<'_, T>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -600,7 +633,7 @@ pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
 }
 
 fn get_peekable_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -623,7 +656,7 @@ where
 }
 
 fn get_filtered_iter<'c, T>(
-    store: &RawEventStore<'c, T>,
+    store: &dyn ReadableRawEventStore<'c, T>,
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -830,7 +863,7 @@ fn min_max_time(is_forward: bool) -> DateTime<Utc> {
 }
 
 async fn handle_paged_events<N, T>(
-    store: RawEventStore<'_, T>,
+    store: ReadableRawEventStoreHandle<'_, T>,
     filter: impl RawEventFilter + KeyExtractor,
     after: Option<String>,
     before: Option<String>,
@@ -847,7 +880,7 @@ where
         first,
         last,
         |after, before, first, last| async move {
-            load_connection::<N, T>(&store, &filter, after, before, first, last)
+            load_connection::<N, T>(store.as_ref(), &filter, after, before, first, last)
         },
     )
     .await
