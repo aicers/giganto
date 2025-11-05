@@ -14,7 +14,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use generation::SequenceGenerator;
 use giganto_client::frame::recv_raw;
 use giganto_client::{
@@ -29,6 +28,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+use jiff::Timestamp;
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use tokio::{
     select,
@@ -60,7 +60,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = ">=0.26.0-alpha.6,<0.26.0-alpha.8";
 
-type SensorInfo = (String, DateTime<Utc>, ConnState);
+type SensorInfo = (String, Timestamp, ConnState);
 
 static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
@@ -183,7 +183,7 @@ async fn handle_connection(
             .push(connection.clone());
 
         if let Err(error) = sender
-            .send((sensor.clone(), Utc::now(), ConnState::Connected))
+            .send((sensor.clone(), Timestamp::now(), ConnState::Connected))
             .await
         {
             error!("Failed to send channel data : {error}");
@@ -196,7 +196,7 @@ async fn handle_connection(
                 let stream = match stream {
                     Err(conn_err) => {
                         if should_register_sensor && let Err(error) = sender
-                            .send((sensor, Utc::now(), ConnState::Disconnected))
+                            .send((sensor, Timestamp::now(), ConnState::Disconnected))
                             .await
                         {
                             error!("Failed to send internal channel data: {error}");
@@ -1118,7 +1118,7 @@ async fn check_sensors_conn(
                 let keys: Vec<String> = runtime_sensors.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for sensor_key in keys {
-                    let time = Utc::now();
+                    let time = Timestamp::now();
                     if sensor_store.insert(&sensor_key, time).is_err(){
                         error!("Failed to append sensor store");
                     }

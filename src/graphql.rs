@@ -23,8 +23,8 @@ use async_graphql::{
     connection::{Connection, Edge, query},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
+use jiff::Timestamp;
 use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
@@ -77,8 +77,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    start: Option<TimestampIso8601>,
+    end: Option<TimestampIso8601>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -118,7 +118,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<DateTime<Utc>>,
+    pub times: Vec<TimestampIso8601>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -188,9 +188,9 @@ const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
 fn collect_exist_times<T>(
-    target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
+    target_data: &BTreeSet<(Timestamp, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<DateTime<Utc>>
+) -> Vec<TimestampIso8601>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -212,7 +212,7 @@ where
                             raw_event.sensor(),
                             raw_event.agent_id(),
                         )
-                        .map_or(None, |c| c.then_some(*time))
+                        .map_or(None, |c| c.then_some((*time).into()))
                 } else {
                     None
                 }
@@ -221,14 +221,14 @@ where
         .collect::<Vec<_>>()
 }
 
-fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn time_range(time_range: Option<&TimeRange>) -> (Timestamp, Timestamp) {
     let (start, end) = if let Some(time) = time_range {
-        (time.start, time.end)
+        (time.start.map(|t| t.0), time.end.map(|t| t.0))
     } else {
         (None, None)
     };
-    let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
-    let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
+    let start = start.unwrap_or(Timestamp::MIN);
+    let end = end.unwrap_or(Timestamp::MAX);
     (start, end)
 }
 
@@ -274,7 +274,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -310,7 +310,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -399,7 +399,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -433,7 +433,7 @@ where
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
         if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+            && key.as_ref() == cursor.as_slice()
         {
             iter.next();
         }
@@ -584,20 +584,33 @@ where
     (records, has_more)
 }
 
-pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
-        return Ok(Utc.timestamp_nanos(timestamp));
+        return Ok(Timestamp::from_nanosecond(timestamp.into())?);
     }
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<Timestamp, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        return Ok(Utc.timestamp_nanos(nanos));
+        return Ok(Timestamp::from_nanosecond(nanos.into())?);
     }
     Err(anyhow!("invalid database key length"))
+}
+
+/// Extracts timestamp from an optional key-value pair, returning min/max time if None.
+/// This is optimized for hot loop usage to reduce repeated pattern matching.
+#[inline]
+pub fn get_timestamp_or_minmax<T>(
+    data: Option<&(Box<[u8]>, T)>,
+    is_forward: bool,
+) -> Result<Timestamp> {
+    match data {
+        Some((key, _)) => Ok(get_time_from_key(key)?),
+        None => Ok(min_max_time(is_forward)),
+    }
 }
 
 fn get_peekable_iter<'c, T>(
@@ -616,7 +629,7 @@ where
     let mut filtered_iter = filtered_iter.peekable();
     if let Some(cursor) = cursor
         && let Some((key, _)) = filtered_iter.peek()
-        && key.as_ref() == cursor
+        && key.as_ref() == cursor.as_slice()
     {
         filtered_iter.next();
     }
@@ -822,11 +835,11 @@ fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     })
 }
 
-fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+fn min_max_time(is_forward: bool) -> Timestamp {
     if is_forward {
-        DateTime::<Utc>::MAX_UTC
+        Timestamp::MAX
     } else {
-        DateTime::<Utc>::MIN_UTC
+        Timestamp::MIN
     }
 }
 
@@ -904,6 +917,58 @@ impl_string_number!(StringNumberUsize, usize);
 impl_string_number!(StringNumberU64, u64);
 impl_string_number!(StringNumberU32, u32);
 impl_string_number!(StringNumberI64, i64);
+
+fn iso8601_to_timestamp(s: &str) -> anyhow::Result<Timestamp> {
+    // Replace 'Z' with '+00:00' for consistent parsing
+    let normalized = if let Some(stripped) = s.strip_suffix('Z') {
+        format!("{stripped}+00:00")
+    } else {
+        s.to_string()
+    };
+
+    let zdt = jiff::Zoned::strptime("%Y-%m-%dT%H:%M:%S%.f%:z", &normalized)
+        .map_err(|e| anyhow!("Failed to parse datetime: {s} (error: {e})"))?;
+    Ok(zdt.timestamp())
+}
+
+fn timestamp_to_iso8601(ts: Timestamp) -> String {
+    let zdt = ts.to_zoned(jiff::tz::TimeZone::UTC);
+    zdt.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct TimestampIso8601(pub Timestamp);
+
+impl From<Timestamp> for TimestampIso8601 {
+    fn from(ts: Timestamp) -> Self {
+        Self(ts)
+    }
+}
+
+impl From<TimestampIso8601> for Timestamp {
+    fn from(wrapper: TimestampIso8601) -> Self {
+        wrapper.0
+    }
+}
+
+#[Scalar(name = "Timestamp")]
+impl ScalarType for TimestampIso8601 {
+    fn parse(value: Value) -> InputValueResult<Self> {
+        if let Value::String(s) = &value {
+            match iso8601_to_timestamp(s) {
+                Ok(ts) => Ok(Self(ts)),
+                Err(e) => Err(InputValueError::custom(format!("{e}"))),
+            }
+        } else {
+            Err(InputValueError::expected_type(value))
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(timestamp_to_iso8601(self.0))
+    }
+}
 
 #[cfg(test)]
 mod tests {
