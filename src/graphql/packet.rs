@@ -234,10 +234,82 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Utc};
+    use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
 
-    use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{
+        bincode_utils,
+        graphql::{FromKeyValue, TimeRange, tests::TestSchema},
+        storage::{KeyExtractor, RawEventStore, StorageKey},
+    };
+
+    #[test]
+    fn packet_filter_mid_key_contains_request_timestamp() {
+        let request_time = Utc.with_ymd_and_hms(2023, 9, 1, 12, 30, 0).unwrap();
+        let filter = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: None,
+        };
+
+        let mid_key = filter.get_mid_key().expect("mid key present");
+        assert_eq!(
+            mid_key,
+            request_time.timestamp_nanos_opt().unwrap().to_be_bytes()
+        );
+    }
+
+    #[test]
+    fn packet_filter_range_end_key_reflects_packet_time() {
+        let request_time = Utc.with_ymd_and_hms(2023, 9, 1, 12, 30, 0).unwrap();
+        let start = request_time + Duration::seconds(5);
+        let end = start + Duration::seconds(10);
+        let filter = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: Some(TimeRange {
+                start: Some(start),
+                end: Some(end),
+            }),
+        };
+
+        let (range_start, range_end) = filter.get_range_end_key();
+        assert_eq!(range_start, Some(start));
+        assert_eq!(range_end, Some(end));
+
+        let filter_without_range = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: None,
+        };
+        let (none_start, none_end) = filter_without_range.get_range_end_key();
+        assert!(none_start.is_none());
+        assert!(none_end.is_none());
+    }
+
+    #[test]
+    fn packet_from_key_value_decodes_timestamps() {
+        let request_time = Utc.with_ymd_and_hms(2023, 5, 10, 6, 0, 0).unwrap();
+        let packet_time = request_time + Duration::milliseconds(750);
+        let request_ts = request_time.timestamp_nanos_opt().unwrap();
+        let packet_ts = packet_time.timestamp_nanos_opt().unwrap();
+
+        let key = StorageKey::builder()
+            .start_key("sensor-1")
+            .mid_key(Some(request_ts.to_be_bytes().to_vec()))
+            .end_key(packet_ts)
+            .build()
+            .key();
+
+        let packet = pk {
+            packet_timestamp: packet_ts,
+            packet: vec![1, 2, 3, 4],
+        };
+
+        let decoded = super::Packet::from_key_value(&key, packet).expect("decode succeeds");
+        assert_eq!(decoded.request_time, request_time);
+        assert_eq!(decoded.packet_time, packet_time);
+    }
 
     #[tokio::test]
     async fn packets_empty() {

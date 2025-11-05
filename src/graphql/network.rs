@@ -1616,7 +1616,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             giaddr: val.giaddr.to_string(),
             chaddr: val.chaddr.clone(),
             sname: val.sname.clone(),
-            file: val.file.clone(),
+            file: val.file,
         })
     }
 }
@@ -1692,7 +1692,7 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             state: val.state.clone(),
             nas_id: val.nas_id.clone(),
             nas_port_type: StringNumberU32(val.nas_port_type),
-            message: val.message.clone(),
+            message: val.message,
         })
     }
 }

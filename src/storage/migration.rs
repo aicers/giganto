@@ -428,7 +428,14 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
+    use std::{
+        fs,
+        fs::File,
+        io::Write,
+        net::{IpAddr, Ipv4Addr},
+        path::Path,
+        path::PathBuf,
+    };
 
     use chrono::Utc;
     use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
@@ -439,6 +446,7 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::{
         bincode_utils::{decode_legacy, encode_legacy},
+        graphql::TIMESTAMP_SIZE,
         storage::{
             Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions,
             DceRpc as DceRpcFromV26, Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26,
@@ -450,7 +458,7 @@ mod tests {
             Tls as TlsFromV26, data_dir_to_db_path, migrate_data_dir,
             migration::migration_structures::{
                 BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DhcpBeforeV26, DnsBeforeV26,
-                FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26,
+                FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MigrationNew,
                 MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
                 OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26,
                 SshBeforeV26, TlsBeforeV26,
@@ -488,6 +496,129 @@ mod tests {
     }
 
     #[test]
+    fn get_timestamp_from_key_extracts_nanoseconds() {
+        let timestamp = 1_700_000_000_123_456_789_i64;
+        let mut key = b"sensor-1\0".to_vec();
+        key.extend_from_slice(&timestamp.to_be_bytes());
+
+        let extracted = super::get_timestamp_from_key(&key).expect("valid key");
+        assert_eq!(extracted, timestamp);
+
+        let invalid_key = vec![0u8; TIMESTAMP_SIZE - 1];
+        assert!(super::get_timestamp_from_key(&invalid_key).is_err());
+    }
+
+    #[test]
+    fn migrate_conn_preserves_datetime_fields() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(temp_dir.path(), &DbOptions::default()).unwrap();
+        let store = db.conn_store().unwrap();
+
+        let start_time = 1_700_000_000_000_000_000_i64;
+        let duration = 1_500_i64;
+        let end_time = start_time + duration;
+
+        let mut key = b"sensor-1\0".to_vec();
+        key.extend_from_slice(&start_time.to_be_bytes());
+
+        let old_conn = ConnFromV21BeforeV26 {
+            orig_addr: IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10)),
+            orig_port: 12345,
+            resp_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)),
+            resp_port: 443,
+            proto: 6,
+            conn_state: "SF".to_string(),
+            duration,
+            service: "https".to_string(),
+            orig_bytes: 512,
+            resp_bytes: 1024,
+            orig_pkts: 4,
+            resp_pkts: 8,
+            orig_l2_bytes: 2048,
+            resp_l2_bytes: 4096,
+        };
+        let encoded_old = encode_legacy(&old_conn).unwrap();
+        store.append(&key, &encoded_old).unwrap();
+
+        super::migrate_0_24_to_0_26_conn(&db).unwrap();
+
+        let mut iter = store.iter_forward();
+        let (_, raw) = iter.next().expect("entry exists").expect("entry ok");
+        let migrated: ConnFromV26 = decode_legacy(&raw).unwrap();
+
+        assert_eq!(
+            migrated.start_time.timestamp_nanos_opt().unwrap(),
+            start_time
+        );
+        assert_eq!(migrated.end_time.timestamp_nanos_opt().unwrap(), end_time);
+        assert_eq!(migrated.duration, duration);
+    }
+
+    #[test]
+    fn migrate_dns_preserves_chrono_datetimes() {
+        let start_time = 1_700_000_000_500_000_000_i64;
+        let end_time = start_time + 5_000;
+
+        let old_dns = DnsBeforeV26 {
+            orig_addr: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            orig_port: 53,
+            resp_addr: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            resp_port: 1053,
+            proto: 17,
+            end_time,
+            query: "example.com".to_string(),
+            answer: vec!["93.184.216.34".to_string()],
+            trans_id: 42,
+            rtt: 100,
+            qclass: 1,
+            qtype: 1,
+            rcode: 0,
+            aa_flag: false,
+            tc_flag: false,
+            rd_flag: true,
+            ra_flag: true,
+            ttl: vec![300],
+        };
+
+        let migrated = DnsFromV26::new(old_dns.clone(), start_time);
+        assert_eq!(
+            migrated.start_time.timestamp_nanos_opt().unwrap(),
+            start_time
+        );
+        assert_eq!(migrated.end_time.timestamp_nanos_opt().unwrap(), end_time);
+        assert_eq!(migrated.duration, end_time - start_time);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(temp_dir.path(), &DbOptions::default()).unwrap();
+        let store = db.dns_store().unwrap();
+
+        let key = {
+            let mut buf = b"sensor-2\0".to_vec();
+            buf.extend_from_slice(&start_time.to_be_bytes());
+            buf
+        };
+
+        let encoded_old = encode_legacy(&old_dns).unwrap();
+        store.append(&key, &encoded_old).unwrap();
+
+        super::migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(&store).unwrap();
+
+        let mut iter = store.iter_forward();
+        let (_, raw) = iter.next().expect("entry exists").expect("entry ok");
+        let migrated_store: DnsFromV26 = decode_legacy(&raw).unwrap();
+
+        assert_eq!(
+            migrated_store.start_time.timestamp_nanos_opt().unwrap(),
+            start_time
+        );
+        assert_eq!(
+            migrated_store.end_time.timestamp_nanos_opt().unwrap(),
+            end_time
+        );
+        assert_eq!(migrated_store.duration, end_time - start_time);
+    }
+
+    #[test]
     fn version() {
         let compatible = VersionReq::parse(COMPATIBLE_VERSION_REQ).expect("valid semver");
         let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid semver");
@@ -497,7 +628,7 @@ mod tests {
 
         // Older versions are not compatible.
         let breaking = {
-            let mut breaking = current.clone();
+            let mut breaking = current;
             if breaking.major == 0 {
                 breaking.minor -= 6;
             } else {
@@ -568,7 +699,7 @@ mod tests {
             resp_addr: "192.168.4.80".parse::<IpAddr>().unwrap(),
             resp_port: 6000,
             proto: 6,
-            contents: format!("netflow5_contents {TEST_TIMESTAMP}").to_string(),
+            contents: format!("netflow5_contents {TEST_TIMESTAMP}"),
         };
         let serialized_netflow9_old = encode_legacy(&netflow9_old).unwrap();
 
@@ -588,7 +719,7 @@ mod tests {
             resp_addr: None,
             resp_port: None,
             proto: None,
-            contents: format!("secu_log_contents {TEST_TIMESTAMP}").to_string(),
+            contents: format!("secu_log_contents {TEST_TIMESTAMP}"),
         };
 
         let serialized_secu_log_old = encode_legacy(&secu_log_old).unwrap();
@@ -950,7 +1081,7 @@ mod tests {
             tc_flag: dns_old.tc_flag,
             rd_flag: dns_old.rd_flag,
             ra_flag: dns_old.ra_flag,
-            ttl: dns_old.ttl.clone(),
+            ttl: dns_old.ttl,
         };
         assert_eq!(store_dns, new_dns);
 
@@ -992,7 +1123,7 @@ mod tests {
             resp_pkts: 0,
             orig_l2_bytes: 0,
             resp_l2_bytes: 0,
-            cookie: rdp_old.cookie.clone(),
+            cookie: rdp_old.cookie,
         };
         assert_eq!(store_rdp, new_rdp);
 
@@ -1046,7 +1177,7 @@ mod tests {
             to: smtp_old.to.clone(),
             subject: smtp_old.subject.clone(),
             agent: smtp_old.agent.clone(),
-            state: smtp_old.state.clone(),
+            state: smtp_old.state,
         };
         assert_eq!(store_smtp, new_smtp);
 
@@ -1808,7 +1939,7 @@ mod tests {
 
     #[test]
     fn migrate_data_dir_unsupported_version_test() {
-        // Test that migration from unsupported version (< 0.21.0) fails
+        // Test that migration from an unsupported version (< 0.21.0) fails
         let version_dir = tempfile::tempdir().unwrap();
         mock_version_file(&version_dir, "0.13.0");
         let db_options = DbOptions::new(8000, 512, 8, 2, true);

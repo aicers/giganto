@@ -319,7 +319,7 @@ mod tests {
             resp_addr: None,
             resp_port: None,
             proto: None,
-            contents: format!("secu_log_contents {timestamp}").to_string(),
+            contents: format!("secu_log_contents {timestamp}"),
         };
         let value = bincode_utils::encode_legacy(&secu_log_body).unwrap();
 

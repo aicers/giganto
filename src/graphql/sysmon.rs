@@ -1,3 +1,6 @@
+#[cfg(test)]
+pub(crate) mod tests;
+
 use std::{collections::BTreeSet, iter::Peekable};
 
 use async_graphql::{
