@@ -751,4 +751,107 @@ mod tests {
             .expect("countByProtocol should be an integer");
         assert_eq!(count_result, 9, "HTTP count must be 9");
     }
+
+    #[cfg(test)]
+    mod chrono_regression_tests {
+        //! Regression tests for Chrono crate time handling in statistics module.
+        //!
+        //! These tests ensure that all time-related behaviors using the Chrono crate
+        //! remain consistent when migrating to the Jiff crate. They focus on:
+        //! - `Utc::now().timestamp_nanos_opt()` usage for test data creation
+        //! - Timestamp generation and validation
+
+        use chrono::Utc;
+
+        #[test]
+        fn test_utc_now_timestamp_nanos_opt() {
+            // Test Utc::now().timestamp_nanos_opt() which is used in statistics.rs lines 388, 691
+
+            let now = Utc::now().timestamp_nanos_opt();
+
+            // Should always succeed for current time
+            assert!(now.is_some());
+
+            let timestamp = now.unwrap();
+
+            // Should be positive (after Unix epoch)
+            assert!(timestamp > 0);
+
+            // Should be reasonable (after 2020, before 2100)
+            let year_2020_ns = 1_577_836_800_000_000_000_i64; // 2020-01-01 00:00:00 UTC
+            let year_2100_ns = 4_102_444_800_000_000_000_i64; // 2100-01-01 00:00:00 UTC
+            assert!(timestamp > year_2020_ns);
+            assert!(timestamp < year_2100_ns);
+        }
+
+        #[test]
+        fn test_utc_now_timestamp_nanos_opt_consistency() {
+            // Test that multiple calls produce monotonically increasing or equal values
+
+            let ts1 = Utc::now().timestamp_nanos_opt().unwrap();
+            let ts2 = Utc::now().timestamp_nanos_opt().unwrap();
+            let ts3 = Utc::now().timestamp_nanos_opt().unwrap();
+
+            // All should be valid
+            assert!(ts1 > 0);
+            assert!(ts2 > 0);
+            assert!(ts3 > 0);
+
+            // Should be monotonically increasing or equal
+            assert!(ts2 >= ts1);
+            assert!(ts3 >= ts2);
+
+            // Should all be within a reasonable time window (1 second)
+            assert!((ts3 - ts1) < 1_000_000_000);
+        }
+
+        #[test]
+        fn test_timestamp_nanos_opt_unwrap_safety() {
+            // Test that timestamp_nanos_opt().unwrap() is safe for current times
+
+            // Current time should always unwrap successfully
+            let _timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+
+            // Multiple rapid calls should all succeed
+            for _ in 0..10 {
+                let ts = Utc::now().timestamp_nanos_opt();
+                assert!(
+                    ts.is_some(),
+                    "timestamp_nanos_opt() should not return None for current time"
+                );
+                assert!(ts.unwrap() > 0);
+            }
+        }
+
+        #[test]
+        fn test_timestamp_nanosecond_precision() {
+            // Test that timestamps have nanosecond precision
+
+            let ts1 = Utc::now().timestamp_nanos_opt().unwrap();
+            let ts2 = Utc::now().timestamp_nanos_opt().unwrap();
+
+            // Timestamps should be in nanoseconds (very large numbers)
+            assert!(ts1 > 1_000_000_000_000_000_000); // Should be > 10^18
+
+            // The difference should be measurable in nanoseconds
+            let diff = ts2 - ts1;
+            assert!(diff >= 0);
+        }
+
+        #[test]
+        fn test_timestamp_for_test_data_insertion() {
+            // Test the pattern used in test_statistics() and test_count_by_protocol()
+            // where Utc::now().timestamp_nanos_opt().unwrap() is used for test data
+
+            let now = Utc::now().timestamp_nanos_opt().unwrap();
+
+            // Should be usable as a key/timestamp for database operations
+            assert!(now > 0);
+            assert!(now.to_string().len() >= 19); // At least 19 digits
+
+            // Should be unique across rapid calls (or equal if very fast)
+            let now2 = Utc::now().timestamp_nanos_opt().unwrap();
+            assert!(now2 >= now);
+        }
+    }
 }

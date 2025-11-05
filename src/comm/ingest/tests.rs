@@ -1350,3 +1350,194 @@ async fn send_events<T: Serialize>(
     send_raw(send, &buf).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod chrono_regression_tests {
+    //! Regression tests for Chrono crate time handling in ingest module.
+    //!
+    //! These tests ensure that all time-related behaviors using the Chrono crate
+    //! remain consistent when migrating to the Jiff crate. They focus on:
+    //! - `Utc::now()` usage for sensor connection timestamps
+    //! - `DateTime<Utc>` usage in `SensorInfo`
+    //! - Duration operations
+
+    use chrono::{DateTime, Duration, Utc};
+
+    #[test]
+    fn test_utc_now_sensor_timestamp() {
+        // Test Utc::now() which is used in ingest.rs lines 186, 199, 1121 for sensor timestamps
+
+        let timestamp1 = Utc::now();
+        let timestamp2 = Utc::now();
+
+        // Timestamps should be valid
+        assert!(timestamp1.timestamp_nanos_opt().is_some());
+        assert!(timestamp2.timestamp_nanos_opt().is_some());
+
+        // Second timestamp should be >= first (monotonic)
+        assert!(timestamp2 >= timestamp1);
+
+        // Should be after Unix epoch
+        assert!(timestamp1.timestamp() > 0);
+    }
+
+    #[test]
+    fn test_datetime_utc_type_sensor_info() {
+        // Test DateTime<Utc> type used in SensorInfo tuple (ingest.rs:63)
+        // type SensorInfo = (String, DateTime<Utc>, ConnState);
+
+        let sensor_name = "test_sensor".to_string();
+        let connection_time = Utc::now();
+
+        // Create a tuple similar to SensorInfo
+        let sensor_info: (String, DateTime<Utc>) = (sensor_name.clone(), connection_time);
+
+        assert_eq!(sensor_info.0, "test_sensor");
+        assert_eq!(sensor_info.1, connection_time);
+        assert!(sensor_info.1.timestamp_nanos_opt().is_some());
+    }
+
+    #[test]
+    fn test_datetime_utc_ordering() {
+        // Test DateTime ordering for sensor connection tracking
+
+        let early = Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        let late = Utc::now();
+
+        assert!(late > early);
+        assert!(late >= early);
+        assert_eq!(early, early);
+        assert_ne!(early, late);
+    }
+
+    #[test]
+    fn test_duration_nanoseconds() {
+        // Test Duration::nanoseconds() used in tests (tests.rs:169)
+
+        let duration = Duration::nanoseconds(12345);
+
+        assert_eq!(duration.num_nanoseconds().unwrap(), 12345);
+        assert!(duration.num_microseconds().is_some());
+        assert!(duration.num_milliseconds() > 0 || duration.num_nanoseconds().unwrap() < 1_000_000);
+    }
+
+    #[test]
+    fn test_duration_seconds() {
+        // Test Duration::seconds() used in tests (tests.rs:221)
+
+        let one_second = Duration::seconds(1);
+
+        assert_eq!(one_second.num_seconds(), 1);
+        assert_eq!(one_second.num_milliseconds(), 1000);
+        assert_eq!(one_second.num_nanoseconds().unwrap(), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_datetime_duration_arithmetic() {
+        // Test DateTime + Duration arithmetic used in tests
+
+        let base_time = Utc::now();
+        let duration = Duration::nanoseconds(12345);
+
+        let later_time = base_time + duration;
+
+        assert!(later_time > base_time);
+        assert_eq!(
+            (later_time.timestamp_nanos_opt().unwrap() - base_time.timestamp_nanos_opt().unwrap()),
+            12345
+        );
+
+        // Test with seconds
+        let one_second = Duration::seconds(1);
+        let time_plus_second = base_time + one_second;
+
+        assert_eq!(
+            time_plus_second.timestamp_nanos_opt().unwrap(),
+            base_time.timestamp_nanos_opt().unwrap() + 1_000_000_000
+        );
+    }
+
+    #[test]
+    fn test_timestamp_nanos_opt_usage() {
+        // Test timestamp_nanos_opt() which is used throughout the tests
+
+        let now = Utc::now();
+        let timestamp_opt = now.timestamp_nanos_opt();
+
+        // Should always succeed for current time
+        assert!(timestamp_opt.is_some());
+
+        let timestamp = timestamp_opt.unwrap();
+
+        // Should be positive (after Unix epoch)
+        assert!(timestamp > 0);
+
+        // Round-trip conversion
+        let dt_from_timestamp = chrono::TimeZone::timestamp_nanos(&Utc, timestamp);
+        assert_eq!(dt_from_timestamp.timestamp_nanos_opt().unwrap(), timestamp);
+    }
+
+    #[test]
+    fn test_duration_num_nanoseconds_unwrap() {
+        // Test that Duration::num_nanoseconds() is safe to unwrap for reasonable values
+
+        let durations = vec![
+            Duration::nanoseconds(1),
+            Duration::nanoseconds(12345),
+            Duration::milliseconds(100),
+            Duration::seconds(1),
+            Duration::seconds(60),
+            Duration::hours(1),
+        ];
+
+        for dur in durations {
+            // All these should unwrap successfully
+            let nanos = dur.num_nanoseconds().unwrap();
+            assert!(nanos > 0);
+        }
+    }
+
+    #[test]
+    fn test_utc_now_multiple_calls_consistency() {
+        // Test that multiple Utc::now() calls within a short time frame are consistent
+
+        let timestamps: Vec<DateTime<Utc>> = (0..5).map(|_| Utc::now()).collect();
+
+        // All should be valid
+        for ts in &timestamps {
+            assert!(ts.timestamp_nanos_opt().is_some());
+        }
+
+        // Should be monotonically increasing or equal
+        for i in 1..timestamps.len() {
+            assert!(timestamps[i] >= timestamps[i - 1]);
+        }
+
+        // All should be within a reasonable time window (1 second)
+        let first = timestamps.first().unwrap();
+        let last = timestamps.last().unwrap();
+        let diff_ns = last.timestamp_nanos_opt().unwrap() - first.timestamp_nanos_opt().unwrap();
+
+        assert!(diff_ns >= 0);
+        assert!(diff_ns < 1_000_000_000); // Less than 1 second
+    }
+
+    #[test]
+    fn test_datetime_properties_for_sensor_tracking() {
+        // Test DateTime properties needed for sensor connection/disconnection tracking
+
+        let connect_time = Utc::now();
+
+        // Should have UTC timezone
+        assert_eq!(connect_time.timezone(), Utc);
+
+        // Should have valid timestamp
+        assert!(connect_time.timestamp() > 0);
+        assert!(connect_time.timestamp_nanos_opt().is_some());
+
+        // Should be comparable
+        let disconnect_time = Utc::now();
+        assert!(disconnect_time >= connect_time);
+    }
+}
