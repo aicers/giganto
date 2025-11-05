@@ -60,7 +60,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = ">=0.26.0-alpha.6,<0.26.0-alpha.8";
 
-type SensorInfo = (String, DateTime<Utc>, ConnState);
+type SensorInfo = (String, DateTime<Utc>, ConnState, bool);
 
 static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
@@ -172,22 +172,27 @@ async fn handle_connection(
     }
 
     let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
-    let should_register_sensor = agent.contains("piglet");
+    let is_pcap_sensor = agent.contains("piglet");
 
-    if should_register_sensor {
+    if is_pcap_sensor {
         pcap_sensors
             .write()
             .await
             .entry(sensor.clone())
             .or_insert_with(Vec::new)
             .push(connection.clone());
+    }
 
-        if let Err(error) = sender
-            .send((sensor.clone(), Utc::now(), ConnState::Connected))
-            .await
-        {
-            error!("Failed to send channel data : {error}");
-        }
+    if let Err(error) = sender
+        .send((
+            sensor.clone(),
+            Utc::now(),
+            ConnState::Connected,
+            is_pcap_sensor,
+        ))
+        .await
+    {
+        error!("Failed to send channel data : {error}");
     }
 
     loop {
@@ -195,8 +200,8 @@ async fn handle_connection(
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(conn_err) => {
-                        if should_register_sensor && let Err(error) = sender
-                            .send((sensor, Utc::now(), ConnState::Disconnected))
+                        if let Err(error) = sender
+                            .send((sensor, Utc::now(), ConnState::Disconnected, is_pcap_sensor))
                             .await
                         {
                             error!("Failed to send internal channel data: {error}");
@@ -1126,7 +1131,7 @@ async fn check_sensors_conn(
                 }
             }
 
-            Some((sensor_key, time_val, conn_state)) = rx.recv() => {
+            Some((sensor_key, time_val, conn_state, is_pcap_sensor)) = rx.recv() => {
                 match conn_state {
                     ConnState::Connected => {
                         if sensor_store.insert(&sensor_key, time_val).is_err() {
@@ -1143,8 +1148,9 @@ async fn check_sensors_conn(
                             error!("Failed to append sensor store");
                         }
                         runtime_ingest_sensors.write().await.remove(&sensor_key);
-                        if let Some(connections) = pcap_sensors.write().await.get_mut(&sensor_key).filter(|connection_vec| !connection_vec.is_empty()) {
-                            connections.remove(0);
+                        if is_pcap_sensor
+                            && let Some(connections) = pcap_sensors.write().await.get_mut(&sensor_key).filter(|connection_vec| !connection_vec.is_empty()) {
+                                connections.remove(0);
                         }
                     }
                 }
