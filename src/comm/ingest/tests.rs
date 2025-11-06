@@ -1476,7 +1476,7 @@ fn run_server(db_dir: &TempDir) -> Database {
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let _ = tokio::spawn(server().run(
+    tokio::spawn(server().run(
         db,
         pcap_sensors,
         ingest_sensors,
