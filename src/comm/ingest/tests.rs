@@ -27,7 +27,7 @@ use giganto_client::{
 };
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use tempfile::TempDir;
 static INIT: OnceLock<()> = OnceLock::new();
 
@@ -37,12 +37,10 @@ fn init_crypto() {
     });
 }
 
-use tokio::{
-    sync::{Mutex, Notify},
-    task::JoinHandle,
-};
+use tokio::sync::{Mutex, Notify};
 
 use super::Server;
+use crate::bincode_utils::decode_legacy;
 use crate::{
     bincode_utils::encode_legacy,
     comm::{
@@ -50,7 +48,7 @@ use crate::{
         new_stream_direct_channels, to_cert_chain, to_private_key, to_root_cert,
     },
     server::Certs,
-    storage::{Database, DbOptions},
+    storage::{Database, DbOptions, RawEventStore},
 };
 
 fn get_token() -> &'static Mutex<u32> {
@@ -161,7 +159,7 @@ async fn conn() {
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
 
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
@@ -169,6 +167,7 @@ async fn conn() {
     let tmp_dur = Duration::nanoseconds(12345);
     let start_time = chrono::Utc::now();
     let end_time = start_time + chrono::Duration::nanoseconds(tmp_dur.num_nanoseconds().unwrap());
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -191,13 +190,19 @@ async fn conn() {
     send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
         .await
         .unwrap();
-    send_events(
-        &mut send_conn,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        conn_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_conn, send_timestamp, conn_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.conn_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_conn.finish().expect("failed to shutdown stream");
 
@@ -212,13 +217,14 @@ async fn dns() {
 
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let start_time = chrono::Utc::now();
     let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -249,13 +255,19 @@ async fn dns() {
     send_record_header(&mut send_dns, RAW_EVENT_KIND_DNS)
         .await
         .unwrap();
-    send_events(
-        &mut send_dns,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dns_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dns, send_timestamp, dns_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.dns_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_dns.finish().expect("failed to shutdown stream");
 
@@ -303,19 +315,22 @@ async fn http() {
     const RAW_EVENT_KIND_HTTP: RawEventKind = RawEventKind::Http;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -346,13 +361,19 @@ async fn http() {
     send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_http,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        http_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_http, send_timestamp, http_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.http_store().expect("failed to open http store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_http.finish().expect("failed to shutdown stream");
 
@@ -366,19 +387,22 @@ async fn rdp() {
     const RAW_EVENT_KIND_RDP: RawEventKind = RawEventKind::Rdp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -390,13 +414,19 @@ async fn rdp() {
     send_record_header(&mut send_rdp, RAW_EVENT_KIND_RDP)
         .await
         .unwrap();
-    send_events(
-        &mut send_rdp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        rdp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_rdp, send_timestamp, rdp_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.rdp_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_rdp.finish().expect("failed to shutdown stream");
 
@@ -449,19 +479,22 @@ async fn smtp() {
     const RAW_EVENT_KIND_SMTP: RawEventKind = RawEventKind::Smtp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_smtp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let smtp_body = Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -479,13 +512,19 @@ async fn smtp() {
     send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_smtp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smtp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_smtp, send_timestamp, smtp_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.smtp_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_smtp.finish().expect("failed to shutdown stream");
 
@@ -499,19 +538,22 @@ async fn ntlm() {
     const RAW_EVENT_KIND_NTLM: RawEventKind = RawEventKind::Ntlm;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ntlm, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let ntlm_body = Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -527,13 +569,19 @@ async fn ntlm() {
     send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
         .await
         .unwrap();
-    send_events(
-        &mut send_ntlm,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ntlm_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ntlm, send_timestamp, ntlm_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.ntlm_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_ntlm.finish().expect("failed to shutdown stream");
 
@@ -547,19 +595,22 @@ async fn kerberos() {
     const RAW_EVENT_KIND_KERBEROS: RawEventKind = RawEventKind::Kerberos;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_kerberos, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let kerberos_body = Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -579,13 +630,19 @@ async fn kerberos() {
     send_record_header(&mut send_kerberos, RAW_EVENT_KIND_KERBEROS)
         .await
         .unwrap();
-    send_events(
-        &mut send_kerberos,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        kerberos_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_kerberos, send_timestamp, kerberos_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.kerberos_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_kerberos.finish().expect("failed to shutdown stream");
 
@@ -599,19 +656,22 @@ async fn ssh() {
     const RAW_EVENT_KIND_SSH: RawEventKind = RawEventKind::Ssh;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ssh, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let ssh_body = Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -635,13 +695,19 @@ async fn ssh() {
     send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
         .await
         .unwrap();
-    send_events(
-        &mut send_ssh,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ssh_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ssh, send_timestamp, ssh_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.ssh_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_ssh.finish().expect("failed to shutdown stream");
 
@@ -655,19 +721,22 @@ async fn dce_rpc() {
     const RAW_EVENT_KIND_DCE_RPC: RawEventKind = RawEventKind::DceRpc;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dce_rpc, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let dce_rpc_body = DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -682,13 +751,19 @@ async fn dce_rpc() {
     send_record_header(&mut send_dce_rpc, RAW_EVENT_KIND_DCE_RPC)
         .await
         .unwrap();
-    send_events(
-        &mut send_dce_rpc,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dce_rpc_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dce_rpc, send_timestamp, dce_rpc_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.dce_rpc_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_dce_rpc.finish().expect("failed to shutdown stream");
 
@@ -773,19 +848,22 @@ async fn ftp() {
     const RAW_EVENT_KIND_FTP: RawEventKind = RawEventKind::Ftp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ftp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let ftp_body = Ftp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -810,13 +888,19 @@ async fn ftp() {
     send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_ftp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ftp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ftp, send_timestamp, ftp_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.ftp_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_ftp.finish().expect("failed to shutdown stream");
 
@@ -830,19 +914,22 @@ async fn mqtt() {
     const RAW_EVENT_KIND_MQTT: RawEventKind = RawEventKind::Mqtt;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_mqtt, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let mqtt_body = Mqtt {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -859,13 +946,19 @@ async fn mqtt() {
     send_record_header(&mut send_mqtt, RAW_EVENT_KIND_MQTT)
         .await
         .unwrap();
-    send_events(
-        &mut send_mqtt,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        mqtt_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_mqtt, send_timestamp, mqtt_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.mqtt_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_mqtt.finish().expect("failed to shutdown stream");
 
@@ -879,19 +972,22 @@ async fn ldap() {
     const RAW_EVENT_KIND_LDAP: RawEventKind = RawEventKind::Ldap;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_ldap, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let ldap_body = Ldap {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -909,13 +1005,19 @@ async fn ldap() {
     send_record_header(&mut send_ldap, RAW_EVENT_KIND_LDAP)
         .await
         .unwrap();
-    send_events(
-        &mut send_ldap,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ldap_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_ldap, send_timestamp, ldap_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.ldap_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_ldap.finish().expect("failed to shutdown stream");
 
@@ -929,19 +1031,22 @@ async fn tls() {
     const RAW_EVENT_KIND_TLS: RawEventKind = RawEventKind::Tls;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_tls, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let tls_body = Tls {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -973,13 +1078,19 @@ async fn tls() {
     send_record_header(&mut send_tls, RAW_EVENT_KIND_TLS)
         .await
         .unwrap();
-    send_events(
-        &mut send_tls,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        tls_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_tls, send_timestamp, tls_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.tls_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_tls.finish().expect("failed to shutdown stream");
 
@@ -993,19 +1104,22 @@ async fn smb() {
     const RAW_EVENT_KIND_SMB: RawEventKind = RawEventKind::Smb;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_smb, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let smb_body = Smb {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1027,13 +1141,19 @@ async fn smb() {
     send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
         .await
         .unwrap();
-    send_events(
-        &mut send_smb,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smb_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_smb, send_timestamp, smb_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.smb_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_smb.finish().expect("failed to shutdown stream");
 
@@ -1047,19 +1167,22 @@ async fn nfs() {
     const RAW_EVENT_KIND_NFS: RawEventKind = RawEventKind::Nfs;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_nfs, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let nfs_body = Nfs {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1072,13 +1195,19 @@ async fn nfs() {
     send_record_header(&mut send_nfs, RAW_EVENT_KIND_NFS)
         .await
         .unwrap();
-    send_events(
-        &mut send_nfs,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        nfs_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_nfs, send_timestamp, nfs_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.nfs_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_nfs.finish().expect("failed to shutdown stream");
 
@@ -1092,19 +1221,22 @@ async fn bootp() {
     const RAW_EVENT_KIND_BOOTP: RawEventKind = RawEventKind::Bootp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_bootp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let bootp_body = Bootp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1126,13 +1258,19 @@ async fn bootp() {
     send_record_header(&mut send_bootp, RAW_EVENT_KIND_BOOTP)
         .await
         .unwrap();
-    send_events(
-        &mut send_bootp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        bootp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_bootp, send_timestamp, bootp_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.bootp_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_bootp.finish().expect("failed to shutdown stream");
 
@@ -1146,19 +1284,22 @@ async fn dhcp() {
     const RAW_EVENT_KIND_DHCP: RawEventKind = RawEventKind::Dhcp;
     let _lock = get_token().lock().await;
     let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+    let db = run_server(&db_dir);
 
     let client = TestClient::new().await;
     let (mut send_dhcp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
+    let start_time = chrono::Utc::now();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    let send_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
     let dhcp_body = Dhcp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1193,13 +1334,19 @@ async fn dhcp() {
     send_record_header(&mut send_dhcp, RAW_EVENT_KIND_DHCP)
         .await
         .unwrap();
-    send_events(
-        &mut send_dhcp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dhcp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_dhcp, send_timestamp, dhcp_body)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let store = db.dhcp_store().expect("failed to open store");
+    let fetch = fetch_event(&store, HOST, send_timestamp);
+    assert_eq!(fetch.start_time, start_time);
+    assert_eq!(fetch.end_time, end_time);
+    assert!(
+        fetch.end_time >= fetch.start_time,
+        "end_time should be greater than or equal to start_time"
+    );
 
     send_dhcp.finish().expect("failed to shutdown stream");
 
@@ -1322,13 +1469,14 @@ async fn one_short_reproduce_channel_close() {
     assert_eq!(CHANNEL_CLOSE_TIMESTAMP, recv_timestamp);
 }
 
-fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
+fn run_server(db_dir: &TempDir) -> Database {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let db_clone = db.clone();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    tokio::spawn(server().run(
+    let _ = tokio::spawn(server().run(
         db,
         pcap_sensors,
         ingest_sensors,
@@ -1337,7 +1485,21 @@ fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
         Arc::new(Notify::new()),
         Some(Arc::new(Notify::new())),
         1024_u16,
-    ))
+    ));
+    db_clone
+}
+
+fn fetch_event<T: DeserializeOwned>(
+    store: &RawEventStore<'_, T>,
+    sensor: &str,
+    timestamp: i64,
+) -> T {
+    let (_, _, raw) = store
+        .batched_multi_get_with_sensor(sensor, &[timestamp])
+        .into_iter()
+        .next()
+        .expect("expected at least one stored event");
+    decode_legacy::<T>(&raw).expect("failed to decode stored event")
 }
 
 async fn send_events<T: Serialize>(
@@ -1349,195 +1511,4 @@ async fn send_events<T: Serialize>(
     let buf = encode_legacy(&vec![(timestamp, msg_buf)])?;
     send_raw(send, &buf).await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod chrono_regression_tests {
-    //! Regression tests for Chrono crate time handling in ingest module.
-    //!
-    //! These tests ensure that all time-related behaviors using the Chrono crate
-    //! remain consistent when migrating to the Jiff crate. They focus on:
-    //! - `Utc::now()` usage for sensor connection timestamps
-    //! - `DateTime<Utc>` usage in `SensorInfo`
-    //! - Duration operations
-
-    use chrono::{DateTime, Duration, Utc};
-
-    #[test]
-    fn test_utc_now_sensor_timestamp() {
-        // Test Utc::now() which is used in ingest.rs lines 186, 199, 1121 for sensor timestamps
-
-        let timestamp1 = Utc::now();
-        let timestamp2 = Utc::now();
-
-        // Timestamps should be valid
-        assert!(timestamp1.timestamp_nanos_opt().is_some());
-        assert!(timestamp2.timestamp_nanos_opt().is_some());
-
-        // Second timestamp should be >= first (monotonic)
-        assert!(timestamp2 >= timestamp1);
-
-        // Should be after Unix epoch
-        assert!(timestamp1.timestamp() > 0);
-    }
-
-    #[test]
-    fn test_datetime_utc_type_sensor_info() {
-        // Test DateTime<Utc> type used in SensorInfo tuple (ingest.rs:63)
-        // type SensorInfo = (String, DateTime<Utc>, ConnState);
-
-        let sensor_name = "test_sensor".to_string();
-        let connection_time = Utc::now();
-
-        // Create a tuple similar to SensorInfo
-        let sensor_info: (String, DateTime<Utc>) = (sensor_name.clone(), connection_time);
-
-        assert_eq!(sensor_info.0, "test_sensor");
-        assert_eq!(sensor_info.1, connection_time);
-        assert!(sensor_info.1.timestamp_nanos_opt().is_some());
-    }
-
-    #[test]
-    fn test_datetime_utc_ordering() {
-        // Test DateTime ordering for sensor connection tracking
-
-        let early = Utc::now();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        let late = Utc::now();
-
-        assert!(late > early);
-        assert!(late >= early);
-        assert_eq!(early, early);
-        assert_ne!(early, late);
-    }
-
-    #[test]
-    fn test_duration_nanoseconds() {
-        // Test Duration::nanoseconds() used in tests (tests.rs:169)
-
-        let duration = Duration::nanoseconds(12345);
-
-        assert_eq!(duration.num_nanoseconds().unwrap(), 12345);
-        assert!(duration.num_microseconds().is_some());
-        assert!(duration.num_milliseconds() > 0 || duration.num_nanoseconds().unwrap() < 1_000_000);
-    }
-
-    #[test]
-    fn test_duration_seconds() {
-        // Test Duration::seconds() used in tests (tests.rs:221)
-
-        let one_second = Duration::seconds(1);
-
-        assert_eq!(one_second.num_seconds(), 1);
-        assert_eq!(one_second.num_milliseconds(), 1000);
-        assert_eq!(one_second.num_nanoseconds().unwrap(), 1_000_000_000);
-    }
-
-    #[test]
-    fn test_datetime_duration_arithmetic() {
-        // Test DateTime + Duration arithmetic used in tests
-
-        let base_time = Utc::now();
-        let duration = Duration::nanoseconds(12345);
-
-        let later_time = base_time + duration;
-
-        assert!(later_time > base_time);
-        assert_eq!(
-            (later_time.timestamp_nanos_opt().unwrap() - base_time.timestamp_nanos_opt().unwrap()),
-            12345
-        );
-
-        // Test with seconds
-        let one_second = Duration::seconds(1);
-        let time_plus_second = base_time + one_second;
-
-        assert_eq!(
-            time_plus_second.timestamp_nanos_opt().unwrap(),
-            base_time.timestamp_nanos_opt().unwrap() + 1_000_000_000
-        );
-    }
-
-    #[test]
-    fn test_timestamp_nanos_opt_usage() {
-        // Test timestamp_nanos_opt() which is used throughout the tests
-
-        let now = Utc::now();
-        let timestamp_opt = now.timestamp_nanos_opt();
-
-        // Should always succeed for current time
-        assert!(timestamp_opt.is_some());
-
-        let timestamp = timestamp_opt.unwrap();
-
-        // Should be positive (after Unix epoch)
-        assert!(timestamp > 0);
-
-        // Round-trip conversion
-        let dt_from_timestamp = chrono::TimeZone::timestamp_nanos(&Utc, timestamp);
-        assert_eq!(dt_from_timestamp.timestamp_nanos_opt().unwrap(), timestamp);
-    }
-
-    #[test]
-    fn test_duration_num_nanoseconds_unwrap() {
-        // Test that Duration::num_nanoseconds() is safe to unwrap for reasonable values
-
-        let durations = vec![
-            Duration::nanoseconds(1),
-            Duration::nanoseconds(12345),
-            Duration::milliseconds(100),
-            Duration::seconds(1),
-            Duration::seconds(60),
-            Duration::hours(1),
-        ];
-
-        for dur in durations {
-            // All these should unwrap successfully
-            let nanos = dur.num_nanoseconds().unwrap();
-            assert!(nanos > 0);
-        }
-    }
-
-    #[test]
-    fn test_utc_now_multiple_calls_consistency() {
-        // Test that multiple Utc::now() calls within a short time frame are consistent
-
-        let timestamps: Vec<DateTime<Utc>> = (0..5).map(|_| Utc::now()).collect();
-
-        // All should be valid
-        for ts in &timestamps {
-            assert!(ts.timestamp_nanos_opt().is_some());
-        }
-
-        // Should be monotonically increasing or equal
-        for i in 1..timestamps.len() {
-            assert!(timestamps[i] >= timestamps[i - 1]);
-        }
-
-        // All should be within a reasonable time window (1 second)
-        let first = timestamps.first().unwrap();
-        let last = timestamps.last().unwrap();
-        let diff_ns = last.timestamp_nanos_opt().unwrap() - first.timestamp_nanos_opt().unwrap();
-
-        assert!(diff_ns >= 0);
-        assert!(diff_ns < 1_000_000_000); // Less than 1 second
-    }
-
-    #[test]
-    fn test_datetime_properties_for_sensor_tracking() {
-        // Test DateTime properties needed for sensor connection/disconnection tracking
-
-        let connect_time = Utc::now();
-
-        // Should have UTC timezone
-        assert_eq!(connect_time.timezone(), Utc);
-
-        // Should have valid timestamp
-        assert!(connect_time.timestamp() > 0);
-        assert!(connect_time.timestamp_nanos_opt().is_some());
-
-        // Should be comparable
-        let disconnect_time = Utc::now();
-        assert!(disconnect_time >= connect_time);
-    }
 }

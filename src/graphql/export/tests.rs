@@ -11,8 +11,9 @@ use giganto_client::ingest::{
     },
     timeseries::PeriodicTimeSeries,
 };
+use serde::de::DeserializeOwned;
 
-use crate::bincode_utils::encode_legacy;
+use crate::bincode_utils::{decode_legacy, encode_legacy};
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
@@ -82,12 +83,13 @@ async fn export_conn() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_conn_raw_event(&store, "src1", csv_timestamp);
+    insert_conn_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -107,6 +109,10 @@ async fn export_conn() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("conn"));
 
+    let csv_event: Conn = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -124,6 +130,10 @@ async fn export_conn() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("conn"));
+
+    let json_event: Conn = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
@@ -161,12 +171,13 @@ async fn export_dns() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_dns_raw_event(&store, "src1", csv_timestamp);
+    insert_dns_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -186,6 +197,10 @@ async fn export_dns() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dns"));
 
+    let csv_event: Dns = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -203,6 +218,10 @@ async fn export_dns() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dns"));
+
+    let json_event: Dns = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
@@ -211,14 +230,16 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -247,12 +268,13 @@ async fn export_http() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_http_raw_event(&store, "src1", csv_timestamp);
+    insert_http_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -272,6 +294,10 @@ async fn export_http() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("http"));
 
+    let csv_event: Http = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -289,6 +315,10 @@ async fn export_http() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("http"));
+
+    let json_event: Http = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
@@ -297,14 +327,16 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let http_body = Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -341,12 +373,13 @@ async fn export_rdp() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_rdp_raw_event(&store, "src1", csv_timestamp);
+    insert_rdp_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -366,6 +399,10 @@ async fn export_rdp() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("rdp"));
 
+    let csv_event: Rdp = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -383,6 +420,10 @@ async fn export_rdp() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("rdp"));
+
+    let json_event: Rdp = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
@@ -391,14 +432,16 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let rdp_body = Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -416,12 +459,13 @@ async fn export_smtp() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_smtp_raw_event(&store, "src1", csv_timestamp);
+    insert_smtp_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -441,6 +485,10 @@ async fn export_smtp() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("smtp"));
 
+    let csv_event: Smtp = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -458,6 +506,10 @@ async fn export_smtp() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("smtp"));
+
+    let json_event: Smtp = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
@@ -466,14 +518,16 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let smtp_body = Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -497,12 +551,13 @@ async fn export_ntlm() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_ntlm_raw_event(&store, "src1", csv_timestamp);
+    insert_ntlm_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -522,6 +577,10 @@ async fn export_ntlm() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ntlm"));
 
+    let csv_event: Ntlm = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -539,6 +598,10 @@ async fn export_ntlm() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ntlm"));
+
+    let json_event: Ntlm = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
@@ -547,14 +610,16 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let ntlm_body = Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -576,12 +641,13 @@ async fn export_kerberos() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_kerberos_raw_event(&store, "src1", csv_timestamp);
+    insert_kerberos_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -601,6 +667,10 @@ async fn export_kerberos() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("kerberos"));
 
+    let csv_event: Kerberos = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -618,6 +688,10 @@ async fn export_kerberos() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("kerberos"));
+
+    let json_event: Kerberos = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
@@ -626,14 +700,16 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let kerberos_body = Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -659,12 +735,13 @@ async fn export_ssh() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_ssh_raw_event(&store, "src1", csv_timestamp);
+    insert_ssh_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -684,6 +761,10 @@ async fn export_ssh() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ssh"));
 
+    let csv_event: Ssh = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -701,6 +782,10 @@ async fn export_ssh() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ssh"));
+
+    let json_event: Ssh = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
@@ -708,14 +793,16 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let ssh_body = Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -745,12 +832,13 @@ async fn export_dce_rpc() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_dce_rpc_raw_event(&store, "src1", csv_timestamp);
+    insert_dce_rpc_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -770,6 +858,10 @@ async fn export_dce_rpc() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dcerpc"));
 
+    let csv_event: DceRpc = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -787,6 +879,10 @@ async fn export_dce_rpc() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dcerpc"));
+
+    let json_event: DceRpc = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
@@ -794,14 +890,16 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let dce_rpc_body = DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1021,12 +1119,13 @@ async fn export_ftp() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_ftp_raw_event(&store, "src1", csv_timestamp);
+    insert_ftp_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1046,6 +1145,10 @@ async fn export_ftp() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ftp"));
 
+    let csv_event: Ftp = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1063,6 +1166,10 @@ async fn export_ftp() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ftp"));
+
+    let json_event: Ftp = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
@@ -1071,14 +1178,16 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let ftp_body = Ftp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1109,12 +1218,13 @@ async fn export_mqtt() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_mqtt_raw_event(&store, "src1", csv_timestamp);
+    insert_mqtt_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1134,6 +1244,10 @@ async fn export_mqtt() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("mqtt"));
 
+    let csv_event: Mqtt = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1151,6 +1265,10 @@ async fn export_mqtt() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("mqtt"));
+
+    let json_event: Mqtt = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
@@ -1159,14 +1277,16 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let mqtt_body = Mqtt {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1189,12 +1309,13 @@ async fn export_ldap() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_ldap_raw_event(&store, "src1", csv_timestamp);
+    insert_ldap_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1214,6 +1335,10 @@ async fn export_ldap() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ldap"));
 
+    let csv_event: Ldap = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1231,6 +1356,10 @@ async fn export_ldap() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("ldap"));
+
+    let json_event: Ldap = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
@@ -1239,14 +1368,16 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let ldap_body = Ldap {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1270,12 +1401,13 @@ async fn export_tls() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_tls_raw_event(&store, "src1", csv_timestamp);
+    insert_tls_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1295,6 +1427,10 @@ async fn export_tls() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("tls"));
 
+    let csv_event: Tls = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1312,6 +1448,10 @@ async fn export_tls() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("tls"));
+
+    let json_event: Tls = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
@@ -1320,14 +1460,16 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let tls_body = Tls {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1365,12 +1507,13 @@ async fn export_smb() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_smb_raw_event(&store, "src1", csv_timestamp);
+    insert_smb_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1390,6 +1533,10 @@ async fn export_smb() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("smb"));
 
+    let csv_event: Smb = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1407,6 +1554,10 @@ async fn export_smb() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("smb"));
+
+    let json_event: Smb = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
@@ -1415,14 +1566,16 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let smb_body = Smb {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1450,12 +1603,13 @@ async fn export_nfs() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_nfs_raw_event(&store, "src1", csv_timestamp);
+    insert_nfs_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1475,6 +1629,10 @@ async fn export_nfs() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("nfs"));
 
+    let csv_event: Nfs = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1492,6 +1650,10 @@ async fn export_nfs() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("nfs"));
+
+    let json_event: Nfs = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
@@ -1500,14 +1662,17 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
     let nfs_body = Nfs {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1526,12 +1691,13 @@ async fn export_bootp() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_bootp_raw_event(&store, "src1", csv_timestamp);
+    insert_bootp_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1551,6 +1717,10 @@ async fn export_bootp() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("bootp"));
 
+    let csv_event: Bootp = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1568,6 +1738,10 @@ async fn export_bootp() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("bootp"));
+
+    let json_event: Bootp = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
@@ -1576,14 +1750,16 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let bootp_body = Bootp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1611,12 +1787,13 @@ async fn export_dhcp() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    let csv_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let json_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+    let tmp_dur = Duration::nanoseconds(12345);
+    let expected_time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
+
+    insert_dhcp_raw_event(&store, "src1", csv_timestamp);
+    insert_dhcp_raw_event(&store, "ingest src 1", json_timestamp);
 
     // export csv file
     let query = r#"
@@ -1636,6 +1813,10 @@ async fn export_dhcp() {
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dhcp"));
 
+    let csv_event: Dhcp = fetch_event(&store, "src1", csv_timestamp);
+    assert_eq!(csv_event.start_time, expected_time);
+    assert_eq!(csv_event.end_time, expected_time);
+
     // export json file
     let query = r#"
     {
@@ -1653,6 +1834,10 @@ async fn export_dhcp() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("dhcp"));
+
+    let json_event: Dhcp = fetch_event(&store, "ingest src 1", json_timestamp);
+    assert_eq!(json_event.start_time, expected_time);
+    assert_eq!(json_event.end_time, expected_time);
 }
 
 fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
@@ -1661,14 +1846,16 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
+    let tmp_dur = Duration::nanoseconds(12345);
+    let time = chrono::DateTime::from_timestamp_nanos(tmp_dur.num_nanoseconds().unwrap());
     let dhcp_body = Dhcp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: time.clone(),
+        end_time: time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1702,4 +1889,17 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
     let ser_dhcp_body = encode_legacy(&dhcp_body).unwrap();
 
     store.append(&key, &ser_dhcp_body).unwrap();
+}
+
+fn fetch_event<T: DeserializeOwned>(
+    store: &RawEventStore<'_, T>,
+    sensor: &str,
+    timestamp: i64,
+) -> T {
+    let (_, _, raw) = store
+        .batched_multi_get_with_sensor(sensor, &[timestamp])
+        .into_iter()
+        .next()
+        .expect("expected at least one stored event");
+    decode_legacy(&raw).expect("failed to decode stored event")
 }
