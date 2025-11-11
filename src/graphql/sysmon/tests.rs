@@ -10,6 +10,7 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::{bincode_utils::encode_legacy, graphql::tests::TestSchema, storage::RawEventStore};
 
@@ -294,6 +295,259 @@ fn sample_file_delete_detected() -> FileDeleteDetected {
     }
 }
 
+fn first_node(data: &Value, root: &str) -> Value {
+    data[root]["edges"][0]["node"].clone()
+}
+
+fn expected_process_create_node(time: &str) -> Value {
+    let event = sample_process_create();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "fileVersion": event.file_version,
+        "description": event.description,
+        "product": event.product,
+        "company": event.company,
+        "originalFileName": event.original_file_name,
+        "commandLine": event.command_line,
+        "currentDirectory": event.current_directory,
+        "user": event.user,
+        "logonGuid": event.logon_guid,
+        "logonId": event.logon_id.to_string(),
+        "terminalSessionId": event.terminal_session_id.to_string(),
+        "integrityLevel": event.integrity_level,
+        "hashes": event.hashes,
+        "parentProcessGuid": event.parent_process_guid,
+        "parentProcessId": event.parent_process_id.to_string(),
+        "parentImage": event.parent_image,
+        "parentCommandLine": event.parent_command_line,
+        "parentUser": event.parent_user,
+    })
+}
+
+fn expected_file_create_time_node(time: &str) -> Value {
+    let event = sample_file_creation_time_changed();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "targetFilename": event.target_filename,
+        "creationUtcTime": event.creation_utc_time.to_rfc3339(),
+        "previousCreationUtcTime": event.previous_creation_utc_time.to_rfc3339(),
+        "user": event.user,
+    })
+}
+
+fn expected_network_connect_node(time: &str) -> Value {
+    let event = sample_network_connection();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "user": event.user,
+        "protocol": event.protocol,
+        "initiated": event.initiated,
+        "sourceIsIpv6": event.source_is_ipv6,
+        "sourceIp": event.source_ip.to_string(),
+        "sourceHostname": event.source_hostname,
+        "sourcePort": event.source_port,
+        "sourcePortName": event.source_port_name,
+        "destinationIsIpv6": event.destination_is_ipv6,
+        "destinationIp": event.destination_ip.to_string(),
+        "destinationHostname": event.destination_hostname,
+        "destinationPort": event.destination_port,
+        "destinationPortName": event.destination_port_name,
+    })
+}
+
+fn expected_process_terminate_node(time: &str) -> Value {
+    let event = sample_process_terminated();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "user": event.user,
+    })
+}
+
+fn expected_image_load_node(time: &str) -> Value {
+    let event = sample_image_loaded();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "imageLoaded": event.image_loaded,
+        "fileVersion": event.file_version,
+        "description": event.description,
+        "product": event.product,
+        "company": event.company,
+        "originalFileName": event.original_file_name,
+        "hashes": event.hashes,
+        "signed": event.signed,
+        "signature": event.signature,
+        "signatureStatus": event.signature_status,
+        "user": event.user,
+    })
+}
+
+fn expected_file_create_node(time: &str) -> Value {
+    let event = sample_file_create();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "targetFilename": event.target_filename,
+        "creationUtcTime": event.creation_utc_time.to_rfc3339(),
+        "user": event.user,
+    })
+}
+
+fn expected_registry_value_set_node(time: &str) -> Value {
+    let event = sample_registry_value_set();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "eventType": event.event_type,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "targetObject": event.target_object,
+        "details": event.details,
+        "user": event.user,
+    })
+}
+
+fn expected_registry_key_rename_node(time: &str) -> Value {
+    let event = sample_registry_key_value_rename();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "eventType": event.event_type,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "targetObject": event.target_object,
+        "newName": event.new_name,
+        "user": event.user,
+    })
+}
+
+fn expected_file_create_stream_hash_node(time: &str) -> Value {
+    let event = sample_file_create_stream_hash();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "targetFilename": event.target_filename,
+        "creationUtcTime": event.creation_utc_time.to_rfc3339(),
+        "hash": event.hash,
+        "contents": event.contents,
+        "user": event.user,
+    })
+}
+
+fn expected_pipe_event_node(time: &str) -> Value {
+    let event = sample_pipe_event();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "eventType": event.event_type,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "pipeName": event.pipe_name,
+        "image": event.image,
+        "user": event.user,
+    })
+}
+
+fn expected_dns_query_node(time: &str) -> Value {
+    let event = sample_dns_event();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "queryName": event.query_name,
+        "queryStatus": event.query_status.to_string(),
+        "queryResults": event.query_results,
+        "image": event.image,
+        "user": event.user,
+    })
+}
+
+fn expected_file_delete_node(time: &str) -> Value {
+    let event = sample_file_delete();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "user": event.user,
+        "image": event.image,
+        "targetFilename": event.target_filename,
+        "hashes": event.hashes,
+        "isExecutable": event.is_executable,
+        "archived": event.archived,
+    })
+}
+
+fn expected_process_tamper_node(time: &str) -> Value {
+    let event = sample_process_tampering();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "image": event.image,
+        "tamperType": event.tamper_type,
+        "user": event.user,
+    })
+}
+
+fn expected_file_delete_detected_node(time: &str) -> Value {
+    let event = sample_file_delete_detected();
+    json!({
+        "time": time,
+        "agentName": event.agent_name,
+        "agentId": event.agent_id,
+        "processGuid": event.process_guid,
+        "processId": event.process_id.to_string(),
+        "user": event.user,
+        "image": event.image,
+        "targetFilename": event.target_filename,
+        "hashes": event.hashes,
+        "isExecutable": event.is_executable,
+    })
+}
+
 fn insert_process_create_event(
     store: &RawEventStore<'_, ProcessCreate>,
     sensor: &str,
@@ -437,23 +691,41 @@ async fn process_create_with_data() {
         ) {
             edges {
                 node {
+                    time,
                     agentName,
+                    agentId,
                     processGuid,
                     processId,
+                    image,
+                    fileVersion,
+                    description,
+                    product,
+                    company,
+                    originalFileName,
+                    commandLine,
+                    currentDirectory,
+                    user,
+                    logonGuid,
+                    logonId,
+                    terminalSessionId,
                     integrityLevel,
                     hashes,
+                    parentProcessGuid,
                     parentProcessId,
+                    parentImage,
+                    parentCommandLine,
+                    parentUser,
                 }
             }
         }
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{processCreateEvents: {edges: [{node: {agentName: \"agent-one\", processGuid: \"process-guid-1\", processId: \"4242\", integrityLevel: \"High\", hashes: [\"SHA1=abc123\"], parentProcessId: \"3000\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "processCreateEvents");
+    assert_eq!(node, expected_process_create_node(SEARCH_TIME_RESPONSE));
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn process_create_with_data_giganto_cluster() {
     let query = r#"
@@ -467,9 +739,30 @@ async fn process_create_with_data_giganto_cluster() {
         ) {
             edges {
                 node {
+                    time,
                     agentName,
+                    agentId,
                     processGuid,
                     processId,
+                    image,
+                    fileVersion,
+                    description,
+                    product,
+                    company,
+                    originalFileName,
+                    commandLine,
+                    currentDirectory,
+                    user,
+                    logonGuid,
+                    logonId,
+                    terminalSessionId,
+                    integrityLevel,
+                    hashes,
+                    parentProcessGuid,
+                    parentProcessId,
+                    parentImage,
+                    parentCommandLine,
+                    parentUser,
                 }
             }
         }
@@ -535,9 +828,36 @@ async fn process_create_with_data_giganto_cluster() {
     let schema = TestSchema::new_with_graphql_peer(peer_port);
 
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "processCreateEvents");
     assert_eq!(
-        res.data.to_string(),
-        "{processCreateEvents: {edges: [{node: {agentName: \"cluster-agent\", processGuid: \"cluster-guid\", processId: \"1010\"}}]}}"
+        node,
+        json!({
+            "time": "2023-11-16T15:03:45.291779203+00:00",
+            "agentName": "cluster-agent",
+            "agentId": "cluster-agent-1",
+            "processGuid": "cluster-guid",
+            "processId": "1010",
+            "image": "/opt/bin/process",
+            "fileVersion": "2.0.0",
+            "description": "Cluster process",
+            "product": "ClusterProduct",
+            "company": "ClusterCompany",
+            "originalFileName": "cluster.exe",
+            "commandLine": "/opt/bin/process --arg",
+            "currentDirectory": "/opt/bin",
+            "user": "cluster-user",
+            "logonGuid": "cluster-logon-guid",
+            "logonId": "100",
+            "terminalSessionId": "2",
+            "integrityLevel": "Medium",
+            "hashes": ["SHA1=deadbeef"],
+            "parentProcessGuid": "cluster-parent-guid",
+            "parentProcessId": "999",
+            "parentImage": "/opt/bin/parent",
+            "parentCommandLine": "/opt/bin/parent --child",
+            "parentUser": "cluster-parent"
+        })
     );
 
     mock.assert_async().await;
@@ -563,18 +883,45 @@ async fn sysmon_events_returns_process_create_node() {
                 node {
                     __typename,
                     ... on ProcessCreateEvent {
+                        time,
+                        agentName,
+                        agentId,
                         processGuid,
                         processId,
+                        image,
+                        fileVersion,
+                        description,
+                        product,
+                        company,
+                        originalFileName,
+                        commandLine,
+                        currentDirectory,
+                        user,
+                        logonGuid,
+                        logonId,
+                        terminalSessionId,
+                        integrityLevel,
+                        hashes,
+                        parentProcessGuid,
+                        parentProcessId,
+                        parentImage,
+                        parentCommandLine,
+                        parentUser,
                     }
                 }
             }
         }
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{sysmonEvents: {edges: [{node: {__typename: \"ProcessCreateEvent\", processGuid: \"process-guid-1\", processId: \"4242\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "sysmonEvents");
+    assert_eq!(node, {
+        let mut expected = expected_process_create_node(SEARCH_TIME_RESPONSE);
+        if let Value::Object(ref mut map) = expected {
+            map.insert("__typename".to_string(), json!("ProcessCreateEvent"));
+        }
+        expected
+    });
 }
 
 #[tokio::test]
@@ -595,20 +942,25 @@ async fn file_create_time_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
                     agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
                     targetFilename,
                     creationUtcTime,
-                    previousCreationUtcTime
+                    previousCreationUtcTime,
+                    user
                 }
             }
         }
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{fileCreateTimeEvents: {edges: [{node: {agentName: \"agent-file-time\", targetFilename: \"/tmp/old.txt\", creationUtcTime: \"2023-01-19T23:59:59+00:00\", previousCreationUtcTime: \"2023-01-10T00:00:00+00:00\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileCreateTimeEvents");
+    assert_eq!(node, expected_file_create_time_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -629,21 +981,34 @@ async fn network_connect_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
+                    user,
                     protocol,
                     initiated,
+                    sourceIsIpv6,
                     sourceIp,
+                    sourceHostname,
                     destinationPort,
-                    destinationPortName
+                    destinationPortName,
+                    sourcePort,
+                    sourcePortName,
+                    destinationIsIpv6,
+                    destinationIp,
+                    destinationHostname
                 }
             }
         }
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{networkConnectEvents: {edges: [{node: {protocol: \"tcp\", initiated: true, sourceIp: \"192.168.1.10\", destinationPort: 443, destinationPortName: \"https\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "networkConnectEvents");
+    assert_eq!(node, expected_network_connect_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -664,6 +1029,11 @@ async fn process_terminate_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
                     image,
                     user
                 }
@@ -672,10 +1042,9 @@ async fn process_terminate_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{processTerminateEvents: {edges: [{node: {image: \"/usr/bin/terminate\", user: \"user-terminate\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "processTerminateEvents");
+    assert_eq!(node, expected_process_terminate_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -696,20 +1065,32 @@ async fn image_load_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
                     imageLoaded,
                     hashes,
+                    fileVersion,
+                    description,
+                    product,
+                    company,
+                    originalFileName,
                     signed,
-                    signatureStatus
+                    signature,
+                    signatureStatus,
+                    user
                 }
             }
         }
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{imageLoadEvents: {edges: [{node: {imageLoaded: \"/usr/lib/libexample.so\", hashes: [\"SHA1=imagehash\"], signed: true, signatureStatus: \"Valid\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "imageLoadEvents");
+    assert_eq!(node, expected_image_load_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -730,6 +1111,12 @@ async fn file_create_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
                     targetFilename,
                     creationUtcTime,
                     user
@@ -739,10 +1126,9 @@ async fn file_create_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{fileCreateEvents: {edges: [{node: {targetFilename: \"/tmp/new.txt\", creationUtcTime: \"2023-01-19T23:58:00+00:00\", user: \"user-file\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileCreateEvents");
+    assert_eq!(node, expected_file_create_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -768,6 +1154,14 @@ async fn file_create_events_time_precision() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
+                    targetFilename,
+                    user,
                     creationUtcTime
                 }
             }
@@ -775,9 +1169,21 @@ async fn file_create_events_time_precision() {
     }"#;
 
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileCreateEvents");
     assert_eq!(
-        res.data.to_string(),
-        "{fileCreateEvents: {edges: [{node: {creationUtcTime: \"2023-01-19T23:58:00.123456789+00:00\"}}]}}"
+        node,
+        json!({
+            "time": SEARCH_TIME_RESPONSE,
+            "agentName": event.agent_name,
+            "agentId": event.agent_id,
+            "processGuid": event.process_guid,
+            "processId": event.process_id.to_string(),
+            "image": event.image,
+            "targetFilename": event.target_filename,
+            "user": event.user,
+            "creationUtcTime": event.creation_utc_time.to_rfc3339(),
+        })
     );
 }
 
@@ -799,7 +1205,14 @@ async fn registry_value_set_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
                     eventType,
+                    processGuid,
+                    processId,
+                    image,
+                    targetObject,
                     details,
                     user
                 }
@@ -808,10 +1221,9 @@ async fn registry_value_set_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{registryValueSetEvents: {edges: [{node: {eventType: \"SetValue\", details: \"Updated value\", user: \"user-reg-value\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "registryValueSetEvents");
+    assert_eq!(node, expected_registry_value_set_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -832,6 +1244,13 @@ async fn registry_key_rename_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    eventType,
+                    processGuid,
+                    processId,
+                    image,
                     targetObject,
                     newName,
                     user
@@ -841,9 +1260,11 @@ async fn registry_key_rename_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "registryKeyRenameEvents");
     assert_eq!(
-        res.data.to_string(),
-        "{registryKeyRenameEvents: {edges: [{node: {targetObject: \"HKCU/Software/Example\", newName: \"ExampleRenamed\", user: \"user-reg-rename\"}}]}}"
+        node,
+        expected_registry_key_rename_node(SEARCH_TIME_RESPONSE)
     );
 }
 
@@ -865,18 +1286,28 @@ async fn file_create_stream_hash_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
                     targetFilename,
+                    creationUtcTime,
                     hash,
-                    contents
+                    contents,
+                    user
                 }
             }
         }
     }"#;
 
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileCreateStreamHashEvents");
     assert_eq!(
-        res.data.to_string(),
-        "{fileCreateStreamHashEvents: {edges: [{node: {targetFilename: \"/tmp/stream.bin\", hash: [\"MD5=1234\", \"SHA1=5678\"], contents: \"binary\"}}]}}"
+        node,
+        expected_file_create_stream_hash_node(SEARCH_TIME_RESPONSE)
     );
 }
 
@@ -898,8 +1329,14 @@ async fn pipe_event_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
                     eventType,
+                    processGuid,
+                    processId,
                     pipeName,
+                    image,
                     user
                 }
             }
@@ -907,10 +1344,9 @@ async fn pipe_event_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{pipeEventEvents: {edges: [{node: {eventType: \"PipeCreated\", pipeName: \"/pipe/example\", user: \"user-pipe\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "pipeEventEvents");
+    assert_eq!(node, expected_pipe_event_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -931,19 +1367,25 @@ async fn dns_query_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
                     queryName,
                     queryStatus,
-                    queryResults
+                    queryResults,
+                    image,
+                    user
                 }
             }
         }
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{dnsQueryEvents: {edges: [{node: {queryName: \"example.com\", queryStatus: \"0\", queryResults: [\"93.184.216.34\"]}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "dnsQueryEvents");
+    assert_eq!(node, expected_dns_query_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -964,6 +1406,13 @@ async fn file_delete_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    user,
+                    image,
                     targetFilename,
                     hashes,
                     isExecutable,
@@ -974,10 +1423,9 @@ async fn file_delete_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{fileDeleteEvents: {edges: [{node: {targetFilename: \"/tmp/delete.txt\", hashes: [\"SHA256=delete\"], isExecutable: true, archived: false}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileDeleteEvents");
+    assert_eq!(node, expected_file_delete_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -998,6 +1446,12 @@ async fn process_tamper_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    image,
                     tamperType,
                     user
                 }
@@ -1006,10 +1460,9 @@ async fn process_tamper_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{processTamperEvents: {edges: [{node: {tamperType: \"ThreadHijack\", user: \"user-tamper\"}}]}}"
-    );
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "processTamperEvents");
+    assert_eq!(node, expected_process_tamper_node(SEARCH_TIME_RESPONSE));
 }
 
 #[tokio::test]
@@ -1030,6 +1483,13 @@ async fn file_delete_detected_events_with_data() {
         ) {
             edges {
                 node {
+                    time,
+                    agentName,
+                    agentId,
+                    processGuid,
+                    processId,
+                    user,
+                    image,
                     targetFilename,
                     hashes,
                     isExecutable
@@ -1039,9 +1499,11 @@ async fn file_delete_detected_events_with_data() {
     }"#;
 
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = first_node(&data, "fileDeleteDetectedEvents");
     assert_eq!(
-        res.data.to_string(),
-        "{fileDeleteDetectedEvents: {edges: [{node: {targetFilename: \"/tmp/delete-detected.txt\", hashes: [\"SHA1=detected\"], isExecutable: true}}]}}"
+        node,
+        expected_file_delete_detected_node(SEARCH_TIME_RESPONSE)
     );
 }
 

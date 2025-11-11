@@ -189,6 +189,7 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
+    use chrono::DateTime;
     use giganto_client::ingest::log::SecuLog;
 
     use crate::bincode_utils;
@@ -213,6 +214,7 @@ mod tests {
             ) {
                 edges {
                     node {
+                        time,
                         contents,
                         version
                     }
@@ -224,7 +226,10 @@ mod tests {
 
         assert_eq!(
             res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\", version: \"V3\"}}]}}"
+            format!(
+                "{{secuLogRawEvents: {{edges: [{{node: {{time: \"{}\", contents: \"secu_log_contents 1\", version: \"V3\"}}}}]}}}}",
+                DateTime::from_timestamp_nanos(1).to_rfc3339()
+            )
         );
     }
 
@@ -240,6 +245,7 @@ mod tests {
             ) {
                 edges {
                     node {
+                        time,
                         contents,
                         version
                     }
@@ -291,7 +297,7 @@ mod tests {
 
         assert_eq!(
             res.data.to_string(),
-            "{secuLogRawEvents: {edges: [{node: {contents: \"peer_giganto_contents 1\", version: \"V3\"}}]}}"
+            "{secuLogRawEvents: {edges: [{node: {time: \"2023-11-16T15:03:45.291779203+00:00\", contents: \"peer_giganto_contents 1\", version: \"V3\"}}]}}"
         );
 
         mock.assert_async().await;

@@ -1,16 +1,48 @@
-use std::mem;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::HashMap,
+    mem,
+    net::{IpAddr, SocketAddr},
+};
 
-use chrono::{TimeZone, Utc};
+use async_graphql::{Request, Variables};
+use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
+use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::bincode_utils::encode_legacy;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
+
+const SENSOR: &str = "src 1";
+
+fn timestamp_ns(timestamp: DateTime<Utc>) -> i64 {
+    timestamp.timestamp_nanos_opt().unwrap()
+}
+
+fn build_key(sensor: &str, timestamp: i64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+    key
+}
+
+fn append_event<T: Serialize>(
+    store: &RawEventStore<'_, T>,
+    sensor: &str,
+    timestamp: i64,
+    event: &T,
+) -> Vec<u8> {
+    let key = build_key(sensor, timestamp);
+    let serialized = encode_legacy(event).unwrap();
+    store.append(&key, &serialized).unwrap();
+    key
+}
 
 #[tokio::test]
 async fn conn_empty() {
@@ -153,14 +185,8 @@ async fn conn_with_data() {
 }
 
 pub(crate) fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let conn_body = create_conn_body(None, None, None, None);
-    let ser_conn_body = encode_legacy(&conn_body).unwrap();
-    store.append(&key, &ser_conn_body).unwrap();
+    let conn_body = sample_conn_event();
+    let _ = append_event(store, sensor, timestamp, &conn_body);
 }
 
 fn create_conn_body(
@@ -188,6 +214,10 @@ fn create_conn_body(
         orig_l2_bytes: 21515,
         resp_l2_bytes: 27889,
     }
+}
+
+fn sample_conn_event() -> Conn {
+    create_conn_body(None, None, None, None)
 }
 
 #[tokio::test]
@@ -430,20 +460,17 @@ async fn dns_with_data() {
     );
 }
 
-pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let dns_body = Dns {
+fn sample_dns_event() -> Dns {
+    let start_time = Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -461,30 +488,25 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         rd_flag: false,
         ra_flag: false,
         ttl: vec![1; 5],
-    };
-    let ser_dns_body = encode_legacy(&dns_body).unwrap();
-
-    store.append(&key, &ser_dns_body).unwrap();
+    }
 }
 
-fn insert_malformed_dns_raw_event(
-    store: &RawEventStore<MalformedDns>,
-    sensor: &str,
-    timestamp: i64,
-) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
+    let dns_body = sample_dns_event();
+    let _ = append_event(store, sensor, timestamp, &dns_body);
+}
 
-    let malformed_dns_body = MalformedDns {
+fn sample_malformed_dns_event() -> MalformedDns {
+    let start_time = Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap();
+    let end_time = start_time + chrono::Duration::seconds(1);
+    MalformedDns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time,
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -502,10 +524,16 @@ fn insert_malformed_dns_raw_event(
         resp_bytes: 64,
         query_body: vec![vec![113]],
         resp_body: vec![vec![114]],
-    };
-    let ser_malformed_dns_body = encode_legacy(&malformed_dns_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_malformed_dns_body).unwrap();
+fn insert_malformed_dns_raw_event(
+    store: &RawEventStore<MalformedDns>,
+    sensor: &str,
+    timestamp: i64,
+) {
+    let malformed_dns_body = sample_malformed_dns_event();
+    let _ = append_event(store, sensor, timestamp, &malformed_dns_body);
 }
 
 #[tokio::test]
@@ -979,14 +1007,9 @@ async fn http_with_data() {
     );
 }
 
-pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+fn sample_http_event() -> Http {
     let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let http_body = Http {
+    Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1019,10 +1042,12 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         mime_types: Vec::new(),
         body: Vec::new(),
         state: String::new(),
-    };
-    let ser_http_body = encode_legacy(&http_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_http_body).unwrap();
+pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+    let http_body = sample_http_event();
+    let _ = append_event(store, sensor, timestamp, &http_body);
 }
 
 #[tokio::test]
@@ -1285,14 +1310,9 @@ async fn rdp_with_data() {
     );
 }
 
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+fn sample_rdp_event() -> Rdp {
     let time = Utc.with_ymd_and_hms(1992, 6, 5, 12, 0, 0).unwrap();
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let rdp_body = Rdp {
+    Rdp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1306,10 +1326,12 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         orig_l2_bytes: 100,
         resp_l2_bytes: 200,
         cookie: "rdp_test".to_string(),
-    };
-    let ser_rdp_body = encode_legacy(&rdp_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_rdp_body).unwrap();
+fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
+    let rdp_body = sample_rdp_event();
+    let _ = append_event(store, sensor, timestamp, &rdp_body);
 }
 
 #[tokio::test]
@@ -1427,20 +1449,16 @@ async fn smtp_with_data() {
     );
 }
 
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let smtp_body = Smtp {
+fn sample_smtp_event() -> Smtp {
+    let start_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+    Smtp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1453,10 +1471,12 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         subject: "subject".to_string(),
         agent: "agent".to_string(),
         state: String::new(),
-    };
-    let ser_smtp_body = encode_legacy(&smtp_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_smtp_body).unwrap();
+fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
+    let smtp_body = sample_smtp_event();
+    let _ = append_event(store, sensor, timestamp, &smtp_body);
 }
 
 #[tokio::test]
@@ -1574,20 +1594,16 @@ async fn ntlm_with_data() {
     );
 }
 
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let ntlm_body = Ntlm {
+fn sample_ntlm_event() -> Ntlm {
+    let start_time = Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1).unwrap();
+    Ntlm {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1598,10 +1614,12 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         domainname: "domain".to_string(),
         success: "tf".to_string(),
         protocol: "protocol".to_string(),
-    };
-    let ser_ntlm_body = encode_legacy(&ntlm_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_ntlm_body).unwrap();
+fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
+    let ntlm_body = sample_ntlm_event();
+    let _ = append_event(store, sensor, timestamp, &ntlm_body);
 }
 
 #[tokio::test]
@@ -1717,20 +1735,16 @@ async fn kerberos_with_data() {
     );
 }
 
-fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let kerberos_body = Kerberos {
+fn sample_kerberos_event() -> Kerberos {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1).unwrap();
+    Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1745,10 +1759,12 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         realm: "realm".to_string(),
         sname_type: 1,
         service_name: vec!["service_name".to_string()],
-    };
-    let ser_kerberos_body = encode_legacy(&kerberos_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_kerberos_body).unwrap();
+fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+    let kerberos_body = sample_kerberos_event();
+    let _ = append_event(store, sensor, timestamp, &kerberos_body);
 }
 
 #[tokio::test]
@@ -1877,20 +1893,16 @@ async fn ssh_with_data() {
     );
 }
 
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let ssh_body = Ssh {
+fn sample_ssh_event() -> Ssh {
+    let start_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
+    Ssh {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1909,10 +1921,12 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         hassh_server: "hassh_server".to_string(),
         client_shka: "client_shka".to_string(),
         server_shka: "server_shka".to_string(),
-    };
-    let ser_ssh_body = encode_legacy(&ssh_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_ssh_body).unwrap();
+fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
+    let ssh_body = sample_ssh_event();
+    let _ = append_event(store, sensor, timestamp, &ssh_body);
 }
 
 #[tokio::test]
@@ -2037,19 +2051,20 @@ async fn dce_rpc_with_data() {
 }
 
 fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+    let dce_rpc_body = sample_dce_rpc_event();
+    let _ = append_event(store, sensor, timestamp, &dce_rpc_body);
+}
 
-    let dce_rpc_body = DceRpc {
+fn sample_dce_rpc_event() -> DceRpc {
+    let start_time = Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0).unwrap();
+    DceRpc {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2059,10 +2074,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         named_pipe: "named_pipe".to_string(),
         endpoint: "endpoint".to_string(),
         operation: "operation".to_string(),
-    };
-    let ser_dce_rpc_body = encode_legacy(&dce_rpc_body).unwrap();
-
-    store.append(&key, &ser_dce_rpc_body).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -2177,20 +2189,16 @@ async fn ftp_with_data() {
     );
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let ftp_body = Ftp {
+fn sample_ftp_event() -> Ftp {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0).unwrap();
+    Ftp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2210,10 +2218,12 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
             file_size: 100,
             file_id: "1".to_string(),
         }],
-    };
-    let ser_ftp_body = encode_legacy(&ftp_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_ftp_body).unwrap();
+fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
+    let ftp_body = sample_ftp_event();
+    let _ = append_event(store, sensor, timestamp, &ftp_body);
 }
 
 #[tokio::test]
@@ -2343,20 +2353,16 @@ async fn mqtt_with_data() {
     );
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let mqtt_body = Mqtt {
+fn sample_mqtt_event() -> Mqtt {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0).unwrap();
+    Mqtt {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2368,10 +2374,12 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         connack_reason: 1,
         subscribe: vec!["subscribe".to_string()],
         suback_reason: vec![1],
-    };
-    let ser_mqtt_body = encode_legacy(&mqtt_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_mqtt_body).unwrap();
+fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
+    let mqtt_body = sample_mqtt_event();
+    let _ = append_event(store, sensor, timestamp, &mqtt_body);
 }
 
 #[tokio::test]
@@ -2493,20 +2501,16 @@ async fn ldap_with_data() {
     );
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let ldap_body = Ldap {
+fn sample_ldap_event() -> Ldap {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0).unwrap();
+    Ldap {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2519,10 +2523,12 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         diagnostic_message: Vec::new(),
         object: Vec::new(),
         argument: Vec::new(),
-    };
-    let ser_ldap_body = encode_legacy(&ldap_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_ldap_body).unwrap();
+fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
+    let ldap_body = sample_ldap_event();
+    let _ = append_event(store, sensor, timestamp, &ldap_body);
 }
 
 #[tokio::test]
@@ -2656,20 +2662,16 @@ async fn tls_with_data() {
     );
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let tls_body = Tls {
+fn sample_tls_event() -> Tls {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0).unwrap();
+    Tls {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2696,10 +2698,12 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         issuer_org_unit_name: "issuer_org_unit".to_string(),
         issuer_common_name: "issuer_comm".to_string(),
         last_alert: 13,
-    };
-    let ser_tls_body = encode_legacy(&tls_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_tls_body).unwrap();
+fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
+    let tls_body = sample_tls_event();
+    let _ = append_event(store, sensor, timestamp, &tls_body);
 }
 
 #[tokio::test]
@@ -2852,20 +2856,16 @@ async fn smb_with_data() {
     );
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let smb_body = Smb {
+fn sample_smb_event() -> Smb {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10).unwrap();
+    Smb {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2882,10 +2882,12 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         access_time: 20_000_000,
         write_time: 10_000_000,
         change_time: 20_000_000,
-    };
-    let ser_smb_body = encode_legacy(&smb_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_smb_body).unwrap();
+fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
+    let smb_body = sample_smb_event();
+    let _ = append_event(store, sensor, timestamp, &smb_body);
 }
 
 #[tokio::test]
@@ -3013,20 +3015,16 @@ async fn nfs_with_data() {
     );
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let nfs_body = Nfs {
+fn sample_nfs_event() -> Nfs {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0).unwrap();
+    Nfs {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3034,10 +3032,12 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_l2_bytes: 200,
         read_files: vec![],
         write_files: vec![],
-    };
-    let ser_nfs_body = encode_legacy(&nfs_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_nfs_body).unwrap();
+fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
+    let nfs_body = sample_nfs_event();
+    let _ = append_event(store, sensor, timestamp, &nfs_body);
 }
 
 #[tokio::test]
@@ -3156,19 +3156,20 @@ async fn bootp_with_data() {
 }
 
 fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+    let bootp_body = sample_bootp_event();
+    let _ = append_event(store, sensor, timestamp, &bootp_body);
+}
 
-    let bootp_body = Bootp {
+fn sample_bootp_event() -> Bootp {
+    let start_time = Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59).unwrap();
+    Bootp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3185,10 +3186,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         chaddr: vec![0, 1, 2],
         sname: "sname".to_string(),
         file: "file".to_string(),
-    };
-    let ser_bootp_body = encode_legacy(&bootp_body).unwrap();
-
-    store.append(&key, &ser_bootp_body).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -3316,19 +3314,20 @@ async fn dhcp_with_data() {
 }
 
 fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+    let dhcp_body = sample_dhcp_event();
+    let _ = append_event(store, sensor, timestamp, &dhcp_body);
+}
 
-    let dhcp_body = Dhcp {
+fn sample_dhcp_event() -> Dhcp {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10).unwrap();
+    Dhcp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3358,10 +3357,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         class_id: vec![0, 1, 2],
         client_id_type: 1,
         client_id: vec![0, 1, 2],
-    };
-    let ser_dhcp_body = encode_legacy(&dhcp_body).unwrap();
-
-    store.append(&key, &ser_dhcp_body).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -3499,19 +3495,20 @@ async fn radius_with_data() {
 }
 
 fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+    let radius_body = sample_radius_event();
+    let _ = append_event(store, sensor, timestamp, &radius_body);
+}
 
-    let radius_body = Radius {
+fn sample_radius_event() -> Radius {
+    let start_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 14, 0).unwrap();
+    Radius {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 1812,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time,
+        end_time: start_time + chrono::Duration::seconds(1),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3531,10 +3528,906 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
         nas_id: "test_nas".to_string().into_bytes(),
         nas_port_type: 15,
         message: "test_message".to_string(),
-    };
-    let ser_radius_body = encode_legacy(&radius_body).unwrap();
+    }
+}
 
-    store.append(&key, &ser_radius_body).unwrap();
+fn expected_conn_node(time: DateTime<Utc>) -> Value {
+    let Conn {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        conn_state,
+        service,
+        start_time,
+        end_time,
+        duration,
+        orig_bytes,
+        resp_bytes,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        ..
+    } = sample_conn_event();
+    json!({
+        "__typename": "ConnRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "connState": conn_state,
+        "service": service,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origBytes": orig_bytes.to_string(),
+        "respBytes": resp_bytes.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string()
+    })
+}
+
+fn expected_dns_node(time: DateTime<Utc>) -> Value {
+    let Dns {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        query,
+        answer,
+        trans_id,
+        rtt,
+        qclass,
+        qtype,
+        rcode,
+        aa_flag,
+        tc_flag,
+        rd_flag,
+        ra_flag,
+        ttl,
+        ..
+    } = sample_dns_event();
+    json!({
+        "__typename": "DnsRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "query": query,
+        "answer": answer,
+        "transId": trans_id,
+        "rtt": rtt.to_string(),
+        "qclass": qclass,
+        "qtype": qtype,
+        "rcode": rcode,
+        "aaFlag": aa_flag,
+        "tcFlag": tc_flag,
+        "rdFlag": rd_flag,
+        "raFlag": ra_flag,
+        "ttl": ttl
+    })
+}
+
+fn expected_http_node(time: DateTime<Utc>) -> Value {
+    let Http {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        method,
+        host,
+        uri,
+        referer,
+        version,
+        user_agent,
+        request_len,
+        response_len,
+        status_code,
+        status_msg,
+        username,
+        password,
+        cookie,
+        content_encoding,
+        content_type,
+        cache_control,
+        filenames,
+        mime_types,
+        body,
+        state,
+        ..
+    } = sample_http_event();
+    json!({
+        "__typename": "HttpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "method": method,
+        "host": host,
+        "uri": uri,
+        "referer": referer,
+        "version": version,
+        "userAgent": user_agent,
+        "requestLen": request_len.to_string(),
+        "responseLen": response_len.to_string(),
+        "statusCode": status_code,
+        "statusMsg": status_msg,
+        "username": username,
+        "password": password,
+        "cookie": cookie,
+        "contentEncoding": content_encoding,
+        "contentType": content_type,
+        "cacheControl": cache_control,
+        "filenames": filenames,
+        "mimeTypes": mime_types,
+        "body": body,
+        "state": state
+    })
+}
+
+fn expected_rdp_node(time: DateTime<Utc>) -> Value {
+    let Rdp {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        cookie,
+        ..
+    } = sample_rdp_event();
+    json!({
+        "__typename": "RdpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "cookie": cookie
+    })
+}
+
+fn expected_ntlm_node(time: DateTime<Utc>) -> Value {
+    let Ntlm {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        username,
+        hostname,
+        domainname,
+        success,
+        protocol,
+        ..
+    } = sample_ntlm_event();
+    json!({
+        "__typename": "NtlmRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "username": username,
+        "hostname": hostname,
+        "domainname": domainname,
+        "success": success,
+        "protocol": protocol
+    })
+}
+
+fn expected_kerberos_node(time: DateTime<Utc>) -> Value {
+    let Kerberos {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        client_time,
+        server_time,
+        error_code,
+        client_realm,
+        cname_type,
+        client_name,
+        realm,
+        sname_type,
+        service_name,
+        ..
+    } = sample_kerberos_event();
+    json!({
+        "__typename": "KerberosRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "clientTime": client_time.to_string(),
+        "serverTime": server_time.to_string(),
+        "errorCode": error_code.to_string(),
+        "clientRealm": client_realm,
+        "cnameType": cname_type,
+        "clientName": client_name,
+        "realm": realm,
+        "snameType": sname_type,
+        "serviceName": service_name
+    })
+}
+
+fn expected_ssh_node(time: DateTime<Utc>) -> Value {
+    let Ssh {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        client,
+        server,
+        cipher_alg,
+        mac_alg,
+        compression_alg,
+        kex_alg,
+        host_key_alg,
+        hassh_algorithms,
+        hassh,
+        hassh_server_algorithms,
+        hassh_server,
+        client_shka,
+        server_shka,
+        ..
+    } = sample_ssh_event();
+    json!({
+        "__typename": "SshRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "client": client,
+        "server": server,
+        "cipherAlg": cipher_alg,
+        "macAlg": mac_alg,
+        "compressionAlg": compression_alg,
+        "kexAlg": kex_alg,
+        "hostKeyAlg": host_key_alg,
+        "hasshAlgorithms": hassh_algorithms,
+        "hassh": hassh,
+        "hasshServerAlgorithms": hassh_server_algorithms,
+        "hasshServer": hassh_server,
+        "clientShka": client_shka,
+        "serverShka": server_shka
+    })
+}
+
+fn expected_dce_rpc_node(time: DateTime<Utc>) -> Value {
+    let DceRpc {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        rtt,
+        named_pipe,
+        endpoint,
+        operation,
+        ..
+    } = sample_dce_rpc_event();
+    json!({
+        "__typename": "DceRpcRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "rtt": rtt.to_string(),
+        "namedPipe": named_pipe,
+        "endpoint": endpoint,
+        "operation": operation
+    })
+}
+
+fn expected_ftp_node(time: DateTime<Utc>) -> Value {
+    let Ftp {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        user,
+        password,
+        commands,
+        ..
+    } = sample_ftp_event();
+    json!({
+        "__typename": "FtpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "user": user,
+        "password": password,
+        "commands": commands.iter().map(|command| {
+            json!({
+                "command": command.command,
+                "replyCode": command.reply_code,
+                "replyMsg": command.reply_msg,
+                "dataPassive": command.data_passive,
+                "dataOrigAddr": command.data_orig_addr.to_string(),
+                "dataRespAddr": command.data_resp_addr.to_string(),
+                "dataRespPort": command.data_resp_port,
+                "file": command.file,
+                "fileSize": command.file_size.to_string(),
+                "fileId": command.file_id
+            })
+        }).collect::<Vec<_>>()
+    })
+}
+
+fn expected_mqtt_node(time: DateTime<Utc>) -> Value {
+    let Mqtt {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        protocol,
+        version,
+        client_id,
+        connack_reason,
+        subscribe,
+        suback_reason,
+        ..
+    } = sample_mqtt_event();
+    json!({
+        "__typename": "MqttRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "protocol": protocol,
+        "version": version,
+        "clientId": client_id,
+        "connackReason": connack_reason,
+        "subscribe": subscribe,
+        "subackReason": suback_reason
+    })
+}
+
+fn expected_ldap_node(time: DateTime<Utc>) -> Value {
+    let Ldap {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        message_id,
+        version,
+        opcode,
+        result,
+        diagnostic_message,
+        object,
+        argument,
+        ..
+    } = sample_ldap_event();
+    json!({
+        "__typename": "LdapRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "messageId": message_id.to_string(),
+        "version": version,
+        "opcode": opcode,
+        "result": result,
+        "diagnosticMessage": diagnostic_message,
+        "object": object,
+        "argument": argument
+    })
+}
+
+fn expected_tls_node(time: DateTime<Utc>) -> Value {
+    let Tls {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        server_name,
+        alpn_protocol,
+        ja3,
+        version,
+        client_cipher_suites,
+        client_extensions,
+        cipher,
+        extensions,
+        ja3s,
+        serial,
+        subject_country,
+        subject_org_name,
+        subject_common_name,
+        validity_not_before,
+        validity_not_after,
+        subject_alt_name,
+        issuer_country,
+        issuer_org_name,
+        issuer_org_unit_name,
+        issuer_common_name,
+        last_alert,
+        ..
+    } = sample_tls_event();
+    json!({
+        "__typename": "TlsRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "serverName": server_name,
+        "alpnProtocol": alpn_protocol,
+        "ja3": ja3,
+        "version": version,
+        "clientCipherSuites": client_cipher_suites,
+        "clientExtensions": client_extensions,
+        "cipher": cipher,
+        "extensions": extensions,
+        "ja3S": ja3s,
+        "serial": serial,
+        "subjectCountry": subject_country,
+        "subjectOrgName": subject_org_name,
+        "subjectCommonName": subject_common_name,
+        "validityNotBefore": validity_not_before.to_string(),
+        "validityNotAfter": validity_not_after.to_string(),
+        "subjectAltName": subject_alt_name,
+        "issuerCountry": issuer_country,
+        "issuerOrgName": issuer_org_name,
+        "issuerOrgUnitName": issuer_org_unit_name,
+        "issuerCommonName": issuer_common_name,
+        "lastAlert": last_alert
+    })
+}
+
+fn expected_smb_node(time: DateTime<Utc>) -> Value {
+    let Smb {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        command,
+        path,
+        service,
+        file_name,
+        file_size,
+        resource_type,
+        fid,
+        create_time,
+        access_time,
+        write_time,
+        change_time,
+        ..
+    } = sample_smb_event();
+    json!({
+        "__typename": "SmbRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "command": command,
+        "path": path,
+        "service": service,
+        "fileName": file_name,
+        "fileSize": file_size.to_string(),
+        "resourceType": resource_type,
+        "fid": fid,
+        "createTime": create_time.to_string(),
+        "accessTime": access_time.to_string(),
+        "writeTime": write_time.to_string(),
+        "changeTime": change_time.to_string()
+    })
+}
+
+fn expected_nfs_node(time: DateTime<Utc>) -> Value {
+    let Nfs {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        read_files,
+        write_files,
+        ..
+    } = sample_nfs_event();
+    json!({
+        "__typename": "NfsRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "readFiles": read_files,
+        "writeFiles": write_files
+    })
+}
+
+fn expected_smtp_node(time: DateTime<Utc>) -> Value {
+    let Smtp {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        mailfrom,
+        date,
+        from,
+        to,
+        subject,
+        agent,
+        state,
+        ..
+    } = sample_smtp_event();
+    json!({
+        "__typename": "SmtpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "mailfrom": mailfrom,
+        "date": date,
+        "from": from,
+        "to": to,
+        "subject": subject,
+        "agent": agent,
+        "state": state
+    })
+}
+
+fn expected_bootp_node(time: DateTime<Utc>) -> Value {
+    let Bootp {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        op,
+        htype,
+        hops,
+        xid,
+        ciaddr,
+        yiaddr,
+        siaddr,
+        giaddr,
+        chaddr,
+        sname,
+        file,
+        ..
+    } = sample_bootp_event();
+    json!({
+        "__typename": "BootpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "op": op,
+        "htype": htype,
+        "hops": hops,
+        "xid": xid.to_string(),
+        "ciaddr": ciaddr.to_string(),
+        "yiaddr": yiaddr.to_string(),
+        "siaddr": siaddr.to_string(),
+        "giaddr": giaddr.to_string(),
+        "chaddr": chaddr,
+        "sname": sname,
+        "file": file
+    })
+}
+
+fn expected_dhcp_node(time: DateTime<Utc>) -> Value {
+    let Dhcp {
+        orig_addr,
+        resp_addr,
+        orig_port,
+        resp_port,
+        proto,
+        start_time,
+        end_time,
+        duration,
+        orig_pkts,
+        resp_pkts,
+        orig_l2_bytes,
+        resp_l2_bytes,
+        msg_type,
+        ciaddr,
+        yiaddr,
+        siaddr,
+        giaddr,
+        subnet_mask,
+        router,
+        domain_name_server,
+        req_ip_addr,
+        lease_time,
+        server_id,
+        param_req_list,
+        message,
+        renewal_time,
+        rebinding_time,
+        class_id,
+        client_id_type,
+        client_id,
+        ..
+    } = sample_dhcp_event();
+    json!({
+        "__typename": "DhcpRawEvent",
+        "time": time.to_rfc3339(),
+        "origAddr": orig_addr.to_string(),
+        "respAddr": resp_addr.to_string(),
+        "origPort": orig_port,
+        "respPort": resp_port,
+        "proto": proto,
+        "startTime": start_time.to_rfc3339(),
+        "endTime": end_time.to_rfc3339(),
+        "duration": duration.to_string(),
+        "origPkts": orig_pkts.to_string(),
+        "respPkts": resp_pkts.to_string(),
+        "origL2Bytes": orig_l2_bytes.to_string(),
+        "respL2Bytes": resp_l2_bytes.to_string(),
+        "msgType": msg_type,
+        "ciaddr": ciaddr.to_string(),
+        "yiaddr": yiaddr.to_string(),
+        "siaddr": siaddr.to_string(),
+        "giaddr": giaddr.to_string(),
+        "subnetMask": subnet_mask.to_string(),
+        "router": router.into_iter().map(|ip| ip.to_string()).collect::<Vec<_>>(),
+        "domainNameServer": domain_name_server.into_iter().map(|ip| ip.to_string()).collect::<Vec<_>>(),
+        "reqIpAddr": req_ip_addr.to_string(),
+        "leaseTime": lease_time.to_string(),
+        "serverId": server_id.to_string(),
+        "paramReqList": param_req_list,
+        "message": message,
+        "renewalTime": renewal_time.to_string(),
+        "rebindingTime": rebinding_time.to_string(),
+        "classId": class_id,
+        "clientIdType": client_id_type,
+        "clientId": client_id
+    })
 }
 
 #[tokio::test]
@@ -3996,215 +4889,158 @@ async fn union() {
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
 
-    insert_conn_raw_event(
-        &conn_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    let bootp_time = Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59).unwrap();
+    insert_bootp_raw_event(&bootp_store, SENSOR, timestamp_ns(bootp_time));
+
+    let ssh_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
+    insert_ssh_raw_event(&ssh_store, SENSOR, timestamp_ns(ssh_time));
+
+    let smtp_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5).unwrap();
+    insert_smtp_raw_event(&smtp_store, SENSOR, timestamp_ns(smtp_time));
+
+    let conn_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
+    insert_conn_raw_event(&conn_store, SENSOR, timestamp_ns(conn_time));
+
+    let rdp_time = Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1).unwrap();
+    insert_rdp_raw_event(&rdp_store, SENSOR, timestamp_ns(rdp_time));
+
+    let dce_rpc_time = Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0).unwrap();
+    insert_dce_rpc_raw_event(&dce_rpc_store, SENSOR, timestamp_ns(dce_rpc_time));
+
+    let http_time = Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1).unwrap();
+    insert_http_raw_event(&http_store, SENSOR, timestamp_ns(http_time));
+
+    let dns_time = Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1).unwrap();
+    insert_dns_raw_event(&dns_store, SENSOR, timestamp_ns(dns_time));
+
+    let ntlm_time = Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1).unwrap();
+    insert_ntlm_raw_event(&ntlm_store, SENSOR, timestamp_ns(ntlm_time));
+
+    let kerberos_time = Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1).unwrap();
+    insert_kerberos_raw_event(&kerberos_store, SENSOR, timestamp_ns(kerberos_time));
+
+    let ftp_time = Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0).unwrap();
+    insert_ftp_raw_event(&ftp_store, SENSOR, timestamp_ns(ftp_time));
+
+    let mqtt_time = Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0).unwrap();
+    insert_mqtt_raw_event(&mqtt_store, SENSOR, timestamp_ns(mqtt_time));
+
+    let tls_time = Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0).unwrap();
+    insert_tls_raw_event(&tls_store, SENSOR, timestamp_ns(tls_time));
+
+    let ldap_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0).unwrap();
+    insert_ldap_raw_event(&ldap_store, SENSOR, timestamp_ns(ldap_time));
+
+    let smb_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10).unwrap();
+    insert_smb_raw_event(&smb_store, SENSOR, timestamp_ns(smb_time));
+
+    let nfs_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0).unwrap();
+    insert_nfs_raw_event(&nfs_store, SENSOR, timestamp_ns(nfs_time));
+
+    let dhcp_time = Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10).unwrap();
+    insert_dhcp_raw_event(&dhcp_store, SENSOR, timestamp_ns(dhcp_time));
+
+    let query = include_str!("../client/schema/network_raw_events.graphql");
+    let request = Request::new(query).variables(Variables::from_json(json!({
+        "filter": {
+            "sensor": SENSOR,
+            "time": {
+                "start": "2019-01-01T00:00:00Z",
+                "end": "2024-01-01T00:00:00Z"
+            }
+        },
+        "after": Value::Null,
+        "before": Value::Null,
+        "last": Value::Null,
+        "first": 20
+    })));
+
+    let res = schema.schema.execute(request).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["networkRawEvents"]["edges"]
+        .as_array()
+        .expect("edges should exist");
+    let mut nodes: HashMap<String, Value> = HashMap::new();
+    for edge in edges {
+        let node = edge["node"].clone();
+        let typename = node["__typename"].as_str().expect("typename").to_string();
+        nodes.insert(typename, node);
+    }
+
+    assert_eq!(
+        nodes.remove("BootpRawEvent").expect("bootp node"),
+        expected_bootp_node(bootp_time)
     );
-    insert_dns_raw_event(
-        &dns_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("SshRawEvent").expect("ssh node"),
+        expected_ssh_node(ssh_time)
     );
-    insert_http_raw_event(
-        &http_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("SmtpRawEvent").expect("smtp node"),
+        expected_smtp_node(smtp_time)
     );
-    insert_rdp_raw_event(
-        &rdp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("ConnRawEvent").expect("conn node"),
+        expected_conn_node(conn_time)
     );
-    insert_ntlm_raw_event(
-        &ntlm_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("RdpRawEvent").expect("rdp node"),
+        expected_rdp_node(rdp_time)
     );
-    insert_kerberos_raw_event(
-        &kerberos_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("DceRpcRawEvent").expect("dce rpc node"),
+        expected_dce_rpc_node(dce_rpc_time)
     );
-    insert_ssh_raw_event(
-        &ssh_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("HttpRawEvent").expect("http node"),
+        expected_http_node(http_time)
     );
-    insert_dce_rpc_raw_event(
-        &dce_rpc_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("DnsRawEvent").expect("dns node"),
+        expected_dns_node(dns_time)
     );
-    insert_ftp_raw_event(
-        &ftp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("NtlmRawEvent").expect("ntlm node"),
+        expected_ntlm_node(ntlm_time)
     );
-    insert_mqtt_raw_event(
-        &mqtt_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("KerberosRawEvent").expect("kerberos node"),
+        expected_kerberos_node(kerberos_time)
     );
-    insert_ldap_raw_event(
-        &ldap_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("FtpRawEvent").expect("ftp node"),
+        expected_ftp_node(ftp_time)
     );
-    insert_tls_raw_event(
-        &tls_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("MqttRawEvent").expect("mqtt node"),
+        expected_mqtt_node(mqtt_time)
     );
-    insert_smb_raw_event(
-        &smb_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("TlsRawEvent").expect("tls node"),
+        expected_tls_node(tls_time)
     );
-    insert_nfs_raw_event(
-        &nfs_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("LdapRawEvent").expect("ldap node"),
+        expected_ldap_node(ldap_time)
     );
-    insert_smtp_raw_event(
-        &smtp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("SmbRawEvent").expect("smb node"),
+        expected_smb_node(smb_time)
     );
-    insert_bootp_raw_event(
-        &bootp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("NfsRawEvent").expect("nfs node"),
+        expected_nfs_node(nfs_time)
     );
-    insert_dhcp_raw_event(
-        &dhcp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+    assert_eq!(
+        nodes.remove("DhcpRawEvent").expect("dhcp node"),
+        expected_dhcp_node(dhcp_time)
     );
 
-    // order: bootp, ssh, smtp, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
-    let query = r#"
-    {
-        networkRawEvents(
-            filter: {
-                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
-                sensor: "src 1"
-            }
-            first: 20
-            ) {
-            edges {
-                node {
-                    ... on ConnRawEvent {
-                        time
-                    }
-                    ... on DnsRawEvent {
-                        time
-                    }
-                    ... on HttpRawEvent {
-                        time
-                    }
-                    ... on RdpRawEvent {
-                        time
-                    }
-                    ... on NtlmRawEvent {
-                        time
-                    }
-                    ... on KerberosRawEvent {
-                        time
-                    }
-                    ... on SshRawEvent {
-                        time
-                    }
-                    ... on DceRpcRawEvent {
-                        time
-                    }
-                    ... on FtpRawEvent {
-                        time
-                    }
-                    ... on MqttRawEvent {
-                        time
-                    }
-                    ... on LdapRawEvent {
-                        time
-                    }
-                    ... on TlsRawEvent {
-                        time
-                    }
-                    ... on SmbRawEvent {
-                        time
-                    }
-                    ... on NfsRawEvent {
-                        time
-                    }
-                    ... on SmtpRawEvent {
-                        time
-                    }
-                    ... on BootpRawEvent {
-                        time
-                    }
-                    ... on DhcpRawEvent {
-                        time
-                    }
-                    __typename
-                }
-            }
-        }
-    }"#;
-    let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
+    assert!(
+        nodes.is_empty(),
+        "unexpected node types present: {:?}",
+        nodes.keys().collect::<Vec<_>>()
     );
 }
 
@@ -4239,10 +5075,10 @@ async fn search_http_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_http_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4275,10 +5111,10 @@ async fn search_conn_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_conn_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4361,10 +5197,10 @@ async fn search_dns_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4447,10 +5283,10 @@ async fn search_malformed_dns_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
 
-    insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4533,10 +5369,10 @@ async fn search_rdp_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_rdp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4619,10 +5455,10 @@ async fn search_smtp_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_smtp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4705,10 +5541,10 @@ async fn search_ntlm_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_ntlm_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4791,10 +5627,10 @@ async fn search_kerberos_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_kerberos_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4876,10 +5712,10 @@ async fn search_ssh_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_ssh_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4912,10 +5748,10 @@ async fn search_dce_rpc_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_dce_rpc_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4948,10 +5784,10 @@ async fn search_ftp_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_ftp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -4984,10 +5820,10 @@ async fn search_mqtt_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_mqtt_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5020,10 +5856,10 @@ async fn search_ldap_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_ldap_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5056,10 +5892,10 @@ async fn search_tls_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_tls_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5092,10 +5928,10 @@ async fn search_smb_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_smb_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5128,10 +5964,10 @@ async fn search_nfs_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_nfs_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5164,10 +6000,10 @@ async fn search_bootp_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_bootp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5200,10 +6036,10 @@ async fn search_dhcp_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_dhcp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
@@ -5236,10 +6072,10 @@ async fn search_radius_with_data() {
     let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
     let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
 
-    insert_radius_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, SENSOR, time1.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, SENSOR, time2.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, SENSOR, time3.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, SENSOR, time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {

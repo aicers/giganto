@@ -234,8 +234,10 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
+    use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
     use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
+    use serde_json::json;
 
     use crate::{
         bincode_utils,
@@ -335,6 +337,7 @@ mod tests {
         assert_eq!(res.data.to_string(), "{packets: {edges: []}}");
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn packets_with_data() {
         let schema = TestSchema::new();
@@ -367,19 +370,56 @@ mod tests {
                 first: 10
             ) {
                 edges {
+                    cursor
                     node {
                         packet
                         packetTime
                         requestTime
                     }
                 }
+                pageInfo {
+                    hasPreviousPage
+                    hasNextPage
+                    startCursor
+                    endCursor
+                }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}"
-        );
+        let packets_json = res.data.into_json().unwrap();
+        let edges = packets_json["packets"]["edges"]
+            .as_array()
+            .expect("edges array");
+        assert_eq!(edges.len(), 2);
+        let expected_nodes = [
+            json!({
+                "packet": "AAECAw==",
+                "packetTime": dt1.to_rfc3339(),
+                "requestTime": dt1.to_rfc3339(),
+            }),
+            json!({
+                "packet": "AAECAw==",
+                "packetTime": dt2.to_rfc3339(),
+                "requestTime": dt1.to_rfc3339(),
+            }),
+        ];
+        let expected_cursors = [
+            packet_cursor("src 1", ts1, ts1),
+            packet_cursor("src 1", ts1, ts2),
+        ];
+        for ((edge, expected_node), expected_cursor) in edges
+            .iter()
+            .zip(expected_nodes.iter())
+            .zip(expected_cursors.iter())
+        {
+            assert_eq!(&edge["node"], expected_node);
+            assert_eq!(edge["cursor"], json!(expected_cursor));
+        }
+        let page_info = &packets_json["packets"]["pageInfo"];
+        assert_eq!(page_info["hasPreviousPage"], json!(false));
+        assert_eq!(page_info["hasNextPage"], json!(false));
+        assert_eq!(page_info["startCursor"], json!(expected_cursors[0]));
+        assert_eq!(page_info["endCursor"], json!(expected_cursors[1]));
 
         let query = r#"
         {
@@ -459,6 +499,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -466,6 +507,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt1.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
         let timestamps: Vec<chrono::NaiveDateTime> = re
@@ -478,8 +523,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:01.404277 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:01.404277Z");
 
         let query = r#"
         {
@@ -489,6 +534,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -496,6 +542,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt1.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
         let timestamps: Vec<chrono::NaiveDateTime> = re
             .find_iter(parsed_pcap)
@@ -507,8 +557,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
 
         let query = r#"
         {
@@ -518,6 +568,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:01Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -525,6 +576,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt2.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
         let timestamps: Vec<chrono::NaiveDateTime> = re
             .find_iter(parsed_pcap)
@@ -536,8 +591,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
     }
 
     fn insert_packet(
@@ -564,9 +619,19 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
+    fn packet_cursor(sensor: &str, request_ts: i64, packet_ts: i64) -> String {
+        let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>() * 2 + 1);
+        key.extend_from_slice(sensor.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&request_ts.to_be_bytes());
+        key.push(0);
+        key.extend_from_slice(&packet_ts.to_be_bytes());
+        base64_engine.encode(key)
+    }
+
     fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
         let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
         let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+        utc_time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
     }
 }

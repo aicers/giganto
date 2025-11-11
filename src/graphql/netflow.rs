@@ -335,10 +335,50 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
     use serde::Serialize;
+    use serde_json::{Value, json};
 
+    use super::{millis_to_secs, tcp_flags};
     use crate::{bincode_utils::encode_legacy, graphql::tests::TestSchema, storage::RawEventStore};
 
     const SENSOR: &str = "src 1";
+    const NETFLOW5_NODE_FIELDS: &str = r"
+                        time
+                        srcAddr
+                        dstAddr
+                        nextHop
+                        input
+                        output
+                        dPkts
+                        dOctets
+                        first
+                        last
+                        srcPort
+                        dstPort
+                        tcpFlags
+                        prot
+                        tos
+                        srcAs
+                        dstAs
+                        srcMask
+                        dstMask
+                        sequence
+                        engineType
+                        engineId
+                        samplingMode
+                        samplingRate
+    ";
+    const NETFLOW9_NODE_FIELDS: &str = r"
+                        time
+                        sequence
+                        sourceId
+                        templateId
+                        origAddr
+                        origPort
+                        respAddr
+                        respPort
+                        proto
+                        contents
+    ";
 
     fn timestamp_ns(timestamp: DateTime<Utc>) -> i64 {
         timestamp.timestamp_nanos_opt().unwrap()
@@ -414,34 +454,100 @@ mod tests {
         append_event(store, sensor, timestamp, &sample_netflow9());
     }
 
+    fn netflow_query(root_field: &str, filter_block: &str, node_fields: &str) -> String {
+        format!(
+            r"
+            {{
+                {root_field}(
+                    filter: {{
+                        {filter_block}
+                    }}
+                    first: 1
+                ) {{
+                    edges {{
+                        node {{
+                            {node_fields}
+                        }}
+                    }}
+                }}
+            }}
+            "
+        )
+    }
+
+    fn first_node(data: &Value, root: &str) -> Value {
+        data[root]["edges"][0]["node"].clone()
+    }
+
+    fn expected_netflow5_node(time: &str) -> Value {
+        let event = sample_netflow5();
+        json!({
+            "time": time,
+            "srcAddr": event.src_addr.to_string(),
+            "dstAddr": event.dst_addr.to_string(),
+            "nextHop": event.next_hop.to_string(),
+            "input": event.input,
+            "output": event.output,
+            "dPkts": event.d_pkts.to_string(),
+            "dOctets": event.d_octets.to_string(),
+            "first": millis_to_secs(event.first),
+            "last": millis_to_secs(event.last),
+            "srcPort": event.src_port,
+            "dstPort": event.dst_port,
+            "tcpFlags": tcp_flags(event.tcp_flags),
+            "prot": event.prot,
+            "tos": format!("{:x}", event.tos),
+            "srcAs": event.src_as,
+            "dstAs": event.dst_as,
+            "srcMask": event.src_mask,
+            "dstMask": event.dst_mask,
+            "sequence": event.sequence.to_string(),
+            "engineType": event.engine_type,
+            "engineId": event.engine_id,
+            "samplingMode": format!("{:x}", event.sampling_mode),
+            "samplingRate": event.sampling_rate,
+        })
+    }
+
+    fn expected_netflow9_node(time: &str) -> Value {
+        let event = sample_netflow9();
+        json!({
+            "time": time,
+            "sequence": event.sequence.to_string(),
+            "sourceId": event.source_id.to_string(),
+            "templateId": event.template_id,
+            "origAddr": event.orig_addr.to_string(),
+            "origPort": event.orig_port,
+            "respAddr": event.resp_addr.to_string(),
+            "respPort": event.resp_port,
+            "proto": event.proto,
+            "contents": event.contents,
+        })
+    }
+
     #[tokio::test]
     async fn netflow5_empty() {
         let schema = TestSchema::new();
-        let query = r#"
-        {
-            netflow5RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow5RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
                     origAddr: { start: "192.168.0.1", end: "192.168.0.255" }
                     respAddr: { start: "203.0.113.1", end: "203.0.113.255" }
                     origPort: { start: 1500, end: 1600 }
                     respPort: { start: 80, end: 90 }
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        srcAddr
-                        dstAddr
-                        srcPort
-                        dstPort
-                    }
-                }
-            }
-        }"#;
-        let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{netflow5RawEvents: {edges: []}}");
+            "#,
+            NETFLOW5_NODE_FIELDS,
+        );
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        assert!(
+            data["netflow5RawEvents"]["edges"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -449,46 +555,27 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.netflow5_store().unwrap();
 
-        insert_netflow5_event(&store, SENSOR, timestamp_ns(sample_timestamp()));
+        let sample_time = sample_timestamp();
+        let expected_time = sample_time.to_rfc3339();
+        insert_netflow5_event(&store, SENSOR, timestamp_ns(sample_time));
 
-        let query = r#"
-        {
-            netflow5RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow5RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
                     origAddr: { start: "192.168.0.1", end: "192.168.0.255" }
                     respAddr: { start: "203.0.113.1", end: "203.0.113.255" }
                     origPort: { start: 1400, end: 1600 }
                     respPort: { start: 70, end: 90 }
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                        srcAddr
-                        dstAddr
-                        srcPort
-                        dstPort
-                        tcpFlags
-                        dPkts
-                        dOctets
-                        first
-                        last
-                        samplingMode
-                        samplingRate
-                        tos
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{netflow5RawEvents: {edges: [{node: {time: \"2023-01-20T00:00:00+00:00\", srcAddr: \"192.168.0.10\", dstAddr: \"203.0.113.5\", srcPort: 1500, dstPort: 80, tcpFlags: \"SYN-ACK\", dPkts: \"42\", dOctets: \"2048\", first: \"1.500\", last: \"2.0\", samplingMode: \"1\", samplingRate: 512, tos: \"1e\"}}]}}"
+            "#,
+            NETFLOW5_NODE_FIELDS,
         );
+
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow5RawEvents");
+        assert_eq!(node, expected_netflow5_node(&expected_time));
     }
 
     #[tokio::test]
@@ -498,53 +585,34 @@ mod tests {
         let store = schema.db.netflow5_store().unwrap();
 
         let ts = sample_timestamp() + Duration::nanoseconds(123_456_789);
+        let expected_time = ts.to_rfc3339();
         insert_netflow5_event(&store, SENSOR, timestamp_ns(ts));
 
-        let query = r#"
-        {
-            netflow5RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow5RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{netflow5RawEvents: {edges: [{node: {time: \"2023-01-20T00:00:00.123456789+00:00\"}}]}}"
+                    "#,
+            "time",
         );
+
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow5RawEvents");
+        assert_eq!(node["time"], json!(expected_time));
     }
 
     #[tokio::test]
     async fn netflow5_with_data_giganto_cluster() {
-        let query = r#"
-        {
-            netflow5RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow5RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "ingest src 2"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        srcAddr
-                        dstAddr
-                        srcPort
-                        dstPort
-                    }
-                }
-            }
-        }"#;
+            "#,
+            NETFLOW5_NODE_FIELDS,
+        );
 
         let mut peer_server = mockito::Server::new_async().await;
         let peer_response_mock_data = r#"
@@ -603,10 +671,37 @@ mod tests {
             .port();
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
-        let res = schema.execute(query).await;
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow5RawEvents");
         assert_eq!(
-            res.data.to_string(),
-            "{netflow5RawEvents: {edges: [{node: {srcAddr: \"192.168.0.20\", dstAddr: \"203.0.113.10\", srcPort: 1234, dstPort: 8080}}]}}"
+            node,
+            json!({
+                "time": "2023-10-11T00:00:00+00:00",
+                "srcAddr": "192.168.0.20",
+                "dstAddr": "203.0.113.10",
+                "nextHop": "192.168.0.1",
+                "input": 1,
+                "output": 2,
+                "dPkts": "10",
+                "dOctets": "1000",
+                "first": "1.0",
+                "last": "2.0",
+                "srcPort": 1234,
+                "dstPort": 8080,
+                "tcpFlags": "SYN",
+                "prot": 6,
+                "tos": "1a",
+                "srcAs": 64512,
+                "dstAs": 64513,
+                "srcMask": 24,
+                "dstMask": 24,
+                "sequence": "99",
+                "engineType": 1,
+                "engineId": 2,
+                "samplingMode": "1",
+                "samplingRate": 128
+            })
         );
 
         mock.assert_async().await;
@@ -615,10 +710,9 @@ mod tests {
     #[tokio::test]
     async fn netflow9_empty() {
         let schema = TestSchema::new();
-        let query = r#"
-        {
-            netflow9RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow9RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
                     origAddr: { start: "10.0.0.1", end: "10.0.0.255" }
@@ -626,20 +720,17 @@ mod tests {
                     origPort: { start: 4000, end: 6000 }
                     respPort: { start: 50, end: 60 }
                     contents: "dns"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        origAddr
-                        respAddr
-                        contents
-                    }
-                }
-            }
-        }"#;
-        let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{netflow9RawEvents: {edges: []}}");
+            "#,
+            NETFLOW9_NODE_FIELDS,
+        );
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        assert!(
+            data["netflow9RawEvents"]["edges"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -647,12 +738,13 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.netflow9_store().unwrap();
 
-        insert_netflow9_event(&store, SENSOR, timestamp_ns(sample_timestamp()));
+        let sample_time = sample_timestamp();
+        let expected_time = sample_time.to_rfc3339();
+        insert_netflow9_event(&store, SENSOR, timestamp_ns(sample_time));
 
-        let query = r#"
-        {
-            netflow9RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow9RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
                     origAddr: { start: "10.0.0.1", end: "10.0.0.255" }
@@ -660,31 +752,14 @@ mod tests {
                     origPort: { start: 4000, end: 6000 }
                     respPort: { start: 50, end: 60 }
                     contents: "dns query"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                        sequence
-                        sourceId
-                        templateId
-                        origAddr
-                        origPort
-                        respAddr
-                        respPort
-                        proto
-                        contents
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{netflow9RawEvents: {edges: [{node: {time: \"2023-01-20T00:00:00+00:00\", sequence: \"11\", sourceId: \"22\", templateId: 256, origAddr: \"10.0.0.10\", origPort: 5000, respAddr: \"198.51.100.3\", respPort: 53, proto: 17, contents: \"dns query response allowed\"}}]}}"
+            "#,
+            NETFLOW9_NODE_FIELDS,
         );
+
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow9RawEvents");
+        assert_eq!(node, expected_netflow9_node(&expected_time));
     }
 
     #[tokio::test]
@@ -694,52 +769,34 @@ mod tests {
         let store = schema.db.netflow9_store().unwrap();
 
         let ts = sample_timestamp() + Duration::nanoseconds(987_654_321);
+        let expected_time = ts.to_rfc3339();
         insert_netflow9_event(&store, SENSOR, timestamp_ns(ts));
 
-        let query = r#"
-        {
-            netflow9RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow9RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "src 1"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{netflow9RawEvents: {edges: [{node: {time: \"2023-01-20T00:00:00.987654321+00:00\"}}]}}"
+            "#,
+            "time",
         );
+
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow9RawEvents");
+        assert_eq!(node["time"], json!(expected_time));
     }
 
     #[tokio::test]
     async fn netflow9_with_data_giganto_cluster() {
-        let query = r#"
-        {
-            netflow9RawEvents(
-                filter: {
+        let query = netflow_query(
+            "netflow9RawEvents",
+            r#"
                     time: { start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }
                     sensor: "ingest src 2"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        sequence
-                        origAddr
-                        respAddr
-                    }
-                }
-            }
-        }"#;
+            "#,
+            NETFLOW9_NODE_FIELDS,
+        );
 
         let mut peer_server = mockito::Server::new_async().await;
         let peer_response_mock_data = r#"
@@ -784,10 +841,23 @@ mod tests {
             .port();
         let schema = TestSchema::new_with_graphql_peer(peer_port);
 
-        let res = schema.execute(query).await;
+        let res = schema.execute(&query).await;
+        let data = res.data.into_json().unwrap();
+        let node = first_node(&data, "netflow9RawEvents");
         assert_eq!(
-            res.data.to_string(),
-            "{netflow9RawEvents: {edges: [{node: {sequence: \"123\", origAddr: \"10.0.1.1\", respAddr: \"198.51.100.10\"}}]}}"
+            node,
+            json!({
+                "time": "2023-10-11T00:00:00+00:00",
+                "sequence": "123",
+                "sourceId": "456",
+                "templateId": 512,
+                "origAddr": "10.0.1.1",
+                "origPort": 5001,
+                "respAddr": "198.51.100.10",
+                "respPort": 53,
+                "proto": 17,
+                "contents": "cluster dns summary"
+            })
         );
 
         mock.assert_async().await;

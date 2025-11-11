@@ -386,6 +386,7 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let expected_timestamp = now.to_string();
         insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
@@ -397,6 +398,7 @@ mod tests {
         ) {
             sensor,
             stats {
+                timestamp,
                 detail {
                     protocol,
                     bps,
@@ -404,11 +406,14 @@ mod tests {
                 }
             }
         }
-    }"#;
+        }"#;
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            format!(
+                "{{statistics: [{{sensor: \"src 1\", stats: [{{timestamp: \"{expected_timestamp}\", detail: \
+                 [{{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}}]}}]}}]}}"
+            )
         );
     }
 
@@ -447,6 +452,7 @@ mod tests {
             ) {
                 sensor,
                 stats {
+                    timestamp,
                     detail {
                         protocol,
                         bps,
@@ -501,7 +507,7 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{sensor: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{sensor: \"src 2\", stats: [{timestamp: \"1702272566\", detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
 
         mock.assert_async().await;

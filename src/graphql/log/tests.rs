@@ -1,9 +1,12 @@
 use std::sync::{Arc, OnceLock};
 
+use async_graphql::connection::Connection;
+use base64::Engine;
 use chrono::DateTime;
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
+use serde_json::json;
 
-use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
+use super::{LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::load_connection;
 use crate::{
@@ -24,372 +27,145 @@ async fn load_time_range() {
     insert_log_raw_event(&store, "src1", 4, "kind1", b"log4");
     insert_log_raw_event(&store, "src1", 5, "kind1", b"log5");
 
-    // backward traversal in `start..end`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
+    let sensor = "src1";
+    let kind = "kind1";
 
-    // backward traversal in `start..`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(3)),
-                end: None,
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log3"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log4"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[2].node.log).unwrap(),
-        b"log5"
-    );
+    let expected_1_2 = [b"log1".as_slice(), b"log2".as_slice()];
+    let expected_2_3 = [b"log2".as_slice(), b"log3".as_slice()];
+    let expected_1_3 = [b"log1".as_slice(), b"log2".as_slice(), b"log3".as_slice()];
+    let expected_3_5 = [b"log3".as_slice(), b"log4".as_slice(), b"log5".as_slice()];
+    let expected_4_5 = [b"log4".as_slice(), b"log5".as_slice()];
+    let expected_1_5 = [
+        b"log1".as_slice(),
+        b"log2".as_slice(),
+        b"log3".as_slice(),
+        b"log4".as_slice(),
+        b"log5".as_slice(),
+    ];
 
-    // backward traversal in `..end`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: None,
-                end: Some(DateTime::from_timestamp_nanos(4)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[2].node.log).unwrap(),
-        b"log3"
-    );
+    let cases = vec![
+        LogPaginationCase::new(
+            "backward start..end",
+            (Some(1), Some(3)),
+            None,
+            None,
+            None,
+            Some(3),
+            &expected_1_2,
+        ),
+        LogPaginationCase::new(
+            "backward start..",
+            (Some(3), None),
+            None,
+            None,
+            None,
+            Some(3),
+            &expected_3_5,
+        ),
+        LogPaginationCase::new(
+            "backward ..end",
+            (None, Some(4)),
+            None,
+            None,
+            None,
+            Some(3),
+            &expected_1_3,
+        ),
+        LogPaginationCase::new(
+            "forward start..end",
+            (Some(1), Some(3)),
+            None,
+            None,
+            Some(3),
+            None,
+            &expected_1_2,
+        ),
+        LogPaginationCase::new(
+            "forward start..",
+            (Some(3), None),
+            None,
+            None,
+            Some(3),
+            None,
+            &expected_3_5,
+        ),
+        LogPaginationCase::new(
+            "forward ..end",
+            (None, Some(3)),
+            None,
+            None,
+            Some(3),
+            None,
+            &expected_1_2,
+        ),
+        LogPaginationCase::new(
+            "backward start..end before cursor",
+            (Some(1), Some(3)),
+            None,
+            Some(log_storage_key(sensor, kind, 3)),
+            None,
+            Some(3),
+            &expected_1_2,
+        ),
+        LogPaginationCase::new(
+            "backward start.. before cursor",
+            (Some(2), None),
+            None,
+            Some(log_storage_key(sensor, kind, 4)),
+            None,
+            Some(3),
+            &expected_2_3,
+        ),
+        LogPaginationCase::new(
+            "backward ..end before cursor",
+            (None, Some(5)),
+            None,
+            Some(log_storage_key(sensor, kind, 4)),
+            None,
+            Some(3),
+            &expected_1_3,
+        ),
+        LogPaginationCase::new(
+            "forward start..end after cursor",
+            (Some(1), Some(4)),
+            Some(log_storage_key(sensor, kind, 1)),
+            None,
+            Some(3),
+            None,
+            &expected_2_3,
+        ),
+        LogPaginationCase::new(
+            "forward start.. after cursor",
+            (Some(2), None),
+            Some(log_storage_key(sensor, kind, 3)),
+            None,
+            None,
+            None,
+            &expected_4_5,
+        ),
+        LogPaginationCase::new(
+            "forward ..end after cursor",
+            (None, Some(4)),
+            Some(log_storage_key(sensor, kind, 1)),
+            None,
+            None,
+            None,
+            &expected_2_3,
+        ),
+        LogPaginationCase::new(
+            "forward ..",
+            (None, None),
+            None,
+            None,
+            None,
+            None,
+            &expected_1_5,
+        ),
+    ];
 
-    // forward traversal in `start..end`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        Some(3),
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
-
-    // forward traversal `start..`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(3)),
-                end: None,
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        Some(3),
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log3"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log4"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[2].node.log).unwrap(),
-        b"log5"
-    );
-
-    // forward traversal `..end`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: None,
-                end: Some(DateTime::from_timestamp_nanos(3)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        Some(3),
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
-
-    // backward traversal in `start..end` and `before cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(3)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03")),
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
-
-    // backward traversal in `start..` and `before cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(2)),
-                end: None,
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04")),
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log2"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log3"
-    );
-
-    // backward traversal in `..end` and `before cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: None,
-                end: Some(DateTime::from_timestamp_nanos(5)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x04")),
-        None,
-        Some(3),
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log2"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[2].node.log).unwrap(),
-        b"log3"
-    );
-
-    // forward traversal in `start..end` and `after cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(4)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
-        None,
-        Some(3),
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log2"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log3"
-    );
-
-    // forward traversal `start..` and `after cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(2)),
-                end: None,
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x03")),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log4"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log5"
-    );
-
-    // forward traversal `..end` and `after cursor`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: None,
-                end: Some(DateTime::from_timestamp_nanos(4)),
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        Some(base64_engine.encode(b"src1\x00kind1\x00\x00\x00\x00\x00\x00\x00\x00\x01")),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log2"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[1].node.log).unwrap(),
-        b"log3"
-    );
-
-    // forward traversal `..`
-    let connection = load_connection::<LogRawEvent, _>(
-        &store,
-        &LogFilter {
-            time: Some(TimeRange {
-                start: None,
-                end: None,
-            }),
-            sensor: "src1".to_string(),
-            kind: Some("kind1".to_string()),
-        },
-        None,
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-    assert_eq!(connection.edges.len(), 5);
-    assert_eq!(
-        base64_engine.decode(&connection.edges[0].node.log).unwrap(),
-        b"log1"
-    );
-    assert_eq!(
-        base64_engine.decode(&connection.edges[4].node.log).unwrap(),
-        b"log5"
-    );
+    for case in &cases {
+        run_log_case(&store, sensor, kind, case);
+    }
 }
 
 #[tokio::test]
@@ -422,21 +198,28 @@ async fn log_with_data() {
             logRawEvents (filter: {sensor: "src 1", kind: "kind 1"}, first: 1) {
                 edges {
                     node {
-                        log
+                        log,
+                        time
                     }
                 }
                 pageInfo {
                     hasPreviousPage
                 }
-            }
-        }"#;
+        }
+    }"#;
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = &data["logRawEvents"]["edges"][0]["node"];
     assert_eq!(
-        res.data.to_string(),
-        format!(
-            "{{logRawEvents: {{edges: [{{node: {{log: \"{}\"}}}}], pageInfo: {{hasPreviousPage: false}}}}}}",
-            base64_engine.encode("log 1")
-        )
+        node,
+        &json!({
+            "log": base64_engine.encode("log 1"),
+            "time": chrono::DateTime::from_timestamp_nanos(1).to_rfc3339()
+        })
+    );
+    assert_eq!(
+        data["logRawEvents"]["pageInfo"]["hasPreviousPage"],
+        json!(false)
     );
 }
 
@@ -471,15 +254,26 @@ async fn oplog_with_data() {
                 edges {
                     node {
                         level,
-                        contents
+                        contents,
+                        time,
+                        agentName,
+                        sensor
                     }
                 }
             }
         }"#;
     let res = schema.execute(query).await;
+    let data = res.data.into_json().unwrap();
+    let node = &data["opLogRawEvents"]["edges"][0]["node"];
     assert_eq!(
-        res.data.to_string(),
-        "{opLogRawEvents: {edges: [{node: {level: \"Info\", contents: \"oplog\"}}]}}"
+        node,
+        &json!({
+            "level": "Info",
+            "contents": "oplog",
+            "time": chrono::DateTime::from_timestamp_nanos(1).to_rfc3339(),
+            "agentName": "giganto@src 1",
+            "sensor": "src1"
+        })
     );
 }
 
@@ -499,27 +293,17 @@ async fn load_oplog() {
     insert_oplog_raw_event(&store, "manager", "src1", 5, &generator);
     insert_oplog_raw_event(&store, "aice", "src1", 5, &generator);
 
+    let range_filter = op_log_filter((Some(5), Some(7)), None, None);
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
-        &OpLogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(5)),
-                end: Some(DateTime::from_timestamp_nanos(7)),
-            }),
-            agent_id: None,
-            log_level: Some("Info".to_string()),
-            contents: Some("oplog".to_string()),
-            sensor: None,
-        },
+        &range_filter,
         None,
         None,
         Some(5),
         None,
     )
     .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
-    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+    assert_oplog_payloads(connection, 3, "window 5..7 without cursors");
 }
 
 #[tokio::test]
@@ -541,97 +325,181 @@ async fn load_connection_by_prefix_timestamp_key() {
         insert_oplog_raw_event(&store, "manager", "src2", 5, &generator),
     ];
 
+    let manager_src1_filter = op_log_filter((Some(1), Some(10)), Some("manager"), Some("src1"));
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
-        &OpLogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
-            }),
-            agent_id: Some("manager".to_string()),
-            log_level: Some("Info".to_string()),
-            contents: Some("oplog".to_string()),
-            sensor: Some("src1".to_string()),
-        },
+        &manager_src1_filter,
         None,
         None,
         Some(10),
         None,
     )
     .unwrap();
-    assert_eq!(connection.edges.len(), 3);
-    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
-    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+    assert_oplog_payloads(connection, 3, "manager@src1 without cursors");
 
     let after = key_list.get(3).unwrap();
     let after = base64_engine.encode(after);
+    let manager_src1_filter = op_log_filter((Some(1), Some(10)), Some("manager"), Some("src1"));
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
-        &OpLogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
-            }),
-            agent_id: Some("manager".to_string()),
-            log_level: Some("Info".to_string()),
-            contents: Some("oplog".to_string()),
-            sensor: Some("src1".to_string()),
-        },
+        &manager_src1_filter,
         Some(after),
         None,
         Some(10),
         None,
     )
     .unwrap();
-    assert_eq!(connection.edges.len(), 1);
-    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
-    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+    assert_oplog_payloads(connection, 1, "manager@src1 after cursor");
 
     let before = key_list.get(8).unwrap();
     let before = base64_engine.encode(before);
+    let manager_src1_filter = op_log_filter((Some(1), Some(10)), Some("manager"), Some("src1"));
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
-        &OpLogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
-            }),
-            agent_id: Some("manager".to_string()),
-            log_level: Some("Info".to_string()),
-            contents: Some("oplog".to_string()),
-            sensor: Some("src1".to_string()),
-        },
+        &manager_src1_filter,
         None,
         Some(before),
         None,
         Some(10),
     )
     .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
-    assert_eq!(connection.edges[1].node.contents.as_str(), "oplog");
+    assert_oplog_payloads(connection, 2, "manager@src1 before cursor");
 
+    let sensor_src2_filter = op_log_filter((Some(1), Some(10)), Some("sensor"), Some("src2"));
     let connection = super::load_connection_by_prefix_timestamp_key::<OpLogRawEvent, _>(
         &store,
-        &OpLogFilter {
-            time: Some(TimeRange {
-                start: Some(DateTime::from_timestamp_nanos(1)),
-                end: Some(DateTime::from_timestamp_nanos(10)),
-            }),
-            agent_id: Some("sensor".to_string()),
-            log_level: Some("Info".to_string()),
-            contents: Some("oplog".to_string()),
-            sensor: Some("src2".to_string()),
-        },
+        &sensor_src2_filter,
         None,
         None,
         None,
         Some(10),
     )
     .unwrap();
-    assert_eq!(connection.edges.len(), 2);
-    assert_eq!(connection.edges[0].node.level.as_str(), "Info");
-    assert_eq!(connection.edges[0].node.contents.as_str(), "oplog");
+    assert_oplog_payloads(connection, 2, "sensor@src2 full range");
+}
+
+struct LogPaginationCase<'a> {
+    name: &'a str,
+    range: (Option<i64>, Option<i64>),
+    after: Option<Vec<u8>>,
+    before: Option<Vec<u8>>,
+    first: Option<usize>,
+    last: Option<usize>,
+    expected: &'a [&'a [u8]],
+}
+
+impl<'a> LogPaginationCase<'a> {
+    fn new(
+        name: &'a str,
+        range: (Option<i64>, Option<i64>),
+        after: Option<Vec<u8>>,
+        before: Option<Vec<u8>>,
+        first: Option<usize>,
+        last: Option<usize>,
+        expected: &'a [&'a [u8]],
+    ) -> Self {
+        Self {
+            name,
+            range,
+            after,
+            before,
+            first,
+            last,
+            expected,
+        }
+    }
+}
+
+fn run_log_case(
+    store: &RawEventStore<Log>,
+    sensor: &str,
+    kind: &str,
+    case: &LogPaginationCase<'_>,
+) {
+    let (start, end) = case.range;
+    let filter = LogFilter {
+        time: Some(make_time_range(start, end)),
+        sensor: sensor.to_string(),
+        kind: Some(kind.to_string()),
+    };
+
+    let after_cursor = case
+        .after
+        .as_ref()
+        .map(|cursor| base64_engine.encode(cursor));
+    let before_cursor = case
+        .before
+        .as_ref()
+        .map(|cursor| base64_engine.encode(cursor));
+
+    let connection = load_connection::<LogRawEvent, _>(
+        store,
+        &filter,
+        after_cursor,
+        before_cursor,
+        case.first,
+        case.last,
+    )
+    .expect(case.name);
+
+    assert_log_payloads(connection, case.expected, case.name);
+}
+
+fn assert_log_payloads(
+    connection: Connection<String, LogRawEvent>,
+    expected: &[&[u8]],
+    label: &str,
+) {
+    let actual: Vec<Vec<u8>> = connection
+        .edges
+        .into_iter()
+        .map(|edge| base64_engine.decode(edge.node.log).unwrap())
+        .collect();
+    let expected_payloads: Vec<Vec<u8>> = expected.iter().map(|payload| payload.to_vec()).collect();
+    assert_eq!(actual, expected_payloads, "case: {label}");
+}
+
+fn assert_oplog_payloads(
+    connection: Connection<String, OpLogRawEvent>,
+    expected_len: usize,
+    label: &str,
+) {
+    assert_eq!(connection.edges.len(), expected_len, "case: {label}");
+    for edge in connection.edges {
+        assert_eq!(edge.node.level.as_str(), "Info", "case: {label}");
+        assert_eq!(edge.node.contents.as_str(), "oplog", "case: {label}");
+    }
+}
+
+fn make_time_range(start: Option<i64>, end: Option<i64>) -> TimeRange {
+    TimeRange {
+        start: start.map(DateTime::from_timestamp_nanos),
+        end: end.map(DateTime::from_timestamp_nanos),
+    }
+}
+
+fn op_log_filter(
+    range: (Option<i64>, Option<i64>),
+    agent_id: Option<&str>,
+    sensor: Option<&str>,
+) -> OpLogFilter {
+    OpLogFilter {
+        time: Some(make_time_range(range.0, range.1)),
+        agent_id: agent_id.map(std::string::ToString::to_string),
+        log_level: Some("Info".to_string()),
+        contents: Some("oplog".to_string()),
+        sensor: sensor.map(std::string::ToString::to_string),
+    }
+}
+
+fn log_storage_key(sensor: &str, kind: &str, timestamp: i64) -> Vec<u8> {
+    let mut key: Vec<u8> = Vec::with_capacity(sensor.len() + kind.len() + 10);
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend_from_slice(kind.as_bytes());
+    key.push(0);
+    key.extend_from_slice(&timestamp.to_be_bytes());
+    key
 }
 
 fn insert_log_raw_event(
@@ -641,12 +509,7 @@ fn insert_log_raw_event(
     kind: &str,
     body: &[u8],
 ) {
-    let mut key: Vec<u8> = Vec::new();
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend_from_slice(kind.as_bytes());
-    key.push(0);
-    key.extend_from_slice(&timestamp.to_be_bytes());
+    let key = log_storage_key(sensor, kind, timestamp);
     let log_body = Log {
         kind: kind.to_string(),
         log: body.to_vec(),
