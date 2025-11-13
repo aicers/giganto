@@ -19,7 +19,7 @@ path = "src/gen_schema.rs"
 anyhow = "1"
 async-graphql = { version = "7", features = ["chrono", "string_number"] }
 base64 = "0.22"
-bincode = { version = "2", features = ["serde"] }
+bincode = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
@@ -27,7 +27,7 @@ ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "e85bcb5" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "a6ad837" }
 graphql_client = "0.14"
 humantime = "2"
 humantime-serde = "1"
@@ -39,14 +39,14 @@ proc-macro2 = "1"
 quinn = { version = "0.11", features = ["ring"] }
 quote = "1"
 reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "json",
+  "rustls-tls",
+  "json",
 ] }
 rocksdb = "0.24"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.5.0" }
 rustls = { version = "0.23", default-features = false, features = [
-    "ring",
-    "std",
+  "ring",
+  "std",
 ] }
 rustls-pemfile = "2"
 semver = "1"

@@ -107,7 +107,7 @@ impl TimeSeriesQuery {
 mod tests {
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
-    use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
     async fn time_series_empty() {
@@ -169,7 +169,7 @@ mod tests {
             id: id.to_string(),
             data,
         };
-        let value = bincode_utils::encode_legacy(&time_series_data).unwrap();
+        let value = bincode::serialize(&time_series_data).unwrap();
         store.append(&key, &value).unwrap();
     }
 }

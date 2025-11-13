@@ -42,15 +42,12 @@ use tokio::{
 use tracing::{error, info};
 use x509_parser::nom::AsBytes;
 
-use crate::bincode_utils::{decode_legacy, encode_legacy};
 use crate::comm::publish::send_direct_stream;
 use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
     subject_from_cert_verbose,
 };
-
-type MessageBuffer = Vec<(i64, Vec<u8>)>;
 use crate::storage::{Database, RawEventStore, StorageKey};
 
 const ACK_INTERVAL_TIME: u64 = 60;
@@ -896,7 +893,7 @@ async fn handle_data<T>(
         buf.clear();
         match recv_raw(&mut recv, &mut buf).await {
             Ok(()) => {
-                let Ok(recv_buf) = decode_legacy::<MessageBuffer>(&buf) else {
+                let Ok(recv_buf) = bincode::deserialize::<Vec<(i64, Vec<u8>)>>(&buf) else {
                     err_msg = Some("Failed to deserialize received message".to_string());
                     break;
                 };
@@ -922,7 +919,7 @@ async fn handle_data<T>(
                     }
                     let storage_key = match raw_event_kind {
                         RawEventKind::Log => {
-                            let Ok(log) = decode_legacy::<Log>(&raw_event) else {
+                            let Ok(log) = bincode::deserialize::<Log>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize Log".to_string());
                                 break;
                             };
@@ -933,7 +930,8 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::PeriodicTimeSeries => {
-                            let Ok(time_series) = decode_legacy::<PeriodicTimeSeries>(&raw_event)
+                            let Ok(time_series) =
+                                bincode::deserialize::<PeriodicTimeSeries>(&raw_event)
                             else {
                                 err_msg =
                                     Some("Failed to deserialize PeriodicTimeSeries".to_string());
@@ -945,12 +943,12 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::OpLog => {
-                            let Ok(mut op_log) = decode_legacy::<OpLog>(&raw_event) else {
+                            let Ok(mut op_log) = bincode::deserialize::<OpLog>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize OpLog".to_string());
                                 break;
                             };
                             op_log.sensor.clone_from(&sensor);
-                            let Ok(op_log) = encode_legacy(&op_log) else {
+                            let Ok(op_log) = bincode::serialize(&op_log) else {
                                 err_msg = Some("Failed to serialize OpLog".to_string());
                                 break;
                             };
@@ -965,7 +963,7 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::Packet => {
-                            let Ok(packet) = decode_legacy::<Packet>(&raw_event) else {
+                            let Ok(packet) = bincode::deserialize::<Packet>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize Packet".to_string());
                                 break;
                             };
@@ -976,7 +974,8 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::Statistics => {
-                            let Ok(statistics) = decode_legacy::<Statistics>(&raw_event) else {
+                            let Ok(statistics) = bincode::deserialize::<Statistics>(&raw_event)
+                            else {
                                 err_msg = Some("Failed to deserialize Statistics".to_string());
                                 break;
                             };
@@ -996,7 +995,7 @@ async fn handle_data<T>(
                                 .build()
                         }
                         RawEventKind::SecuLog => {
-                            let Ok(secu_log) = decode_legacy::<SecuLog>(&raw_event) else {
+                            let Ok(secu_log) = bincode::deserialize::<SecuLog>(&raw_event) else {
                                 err_msg = Some("Failed to deserialize SecuLog".to_string());
                                 break;
                             };

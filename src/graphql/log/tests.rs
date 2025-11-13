@@ -7,7 +7,6 @@ use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_e
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::load_connection;
 use crate::{
-    bincode_utils::encode_legacy,
     graphql::{TimeRange, tests::TestSchema},
     storage::RawEventStore,
 };
@@ -651,7 +650,7 @@ fn insert_log_raw_event(
         kind: kind.to_string(),
         log: body.to_vec(),
     };
-    let value = encode_legacy(&log_body).unwrap();
+    let value = bincode::serialize(&log_body).unwrap();
     store.append(&key, &value).unwrap();
 }
 
@@ -677,7 +676,7 @@ fn insert_oplog_raw_event(
         contents: "oplog".to_string(),
     };
 
-    let value = encode_legacy(&oplog_body).unwrap();
+    let value = bincode::serialize(&oplog_body).unwrap();
     store.append(&key, &value).unwrap();
     key
 }
