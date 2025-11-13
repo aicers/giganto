@@ -999,3 +999,43 @@ impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+
+    #[test]
+    fn rdp_migration_sets_chrono_fields() {
+        let start_time = 1_700_000_000_000_000_000_i64;
+        let end_time = start_time + 2_000;
+
+        let old = RdpBeforeV26 {
+            orig_addr: IpAddr::V4(Ipv4Addr::new(192, 168, 10, 1)),
+            orig_port: 3389,
+            resp_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)),
+            resp_port: 3389,
+            proto: 6,
+            end_time,
+            cookie: "session-cookie".to_string(),
+        };
+
+        let migrated = RdpFromV26::new(old, start_time);
+
+        assert_eq!(
+            migrated.start_time.timestamp_nanos_opt().unwrap(),
+            start_time
+        );
+        assert_eq!(migrated.end_time.timestamp_nanos_opt().unwrap(), end_time);
+        assert_eq!(migrated.duration, end_time - start_time);
+        assert_eq!(
+            migrated.start_time,
+            Utc.timestamp_nanos(start_time),
+            "start_time should use chrono conversion"
+        );
+        assert_eq!(migrated.cookie, "session-cookie");
+    }
+}

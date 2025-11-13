@@ -8,6 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added Chrono regression tests in preparation for Jiff migration. These tests
+  cover DateTime to timestamp conversions, storage key building with timestamp
+  boundaries, and proper handling of boundary conditions (MIN_UTC/MAX_UTC) to
+  ensure behavior consistency during the upcoming migration from Chrono to Jiff.
 - Enhanced raw event structures with packet count and size information:
   - Added `orig_pkts`, `resp_pkts`, `orig_l2_bytes`, `resp_l2_bytes` fields to
     all raw event structures.

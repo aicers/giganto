@@ -134,11 +134,13 @@ mod tests {
         insert_time_series(&store, "src 1", 1, vec![0.0; 12]);
         insert_time_series(&store, "src 1", 2, vec![0.0; 12]);
 
+        let expected_start = chrono::DateTime::from_timestamp_nanos(1).to_rfc3339();
         let query = r#"
         {
             periodicTimeSeries (filter: {id: "src 1"}, first: 1) {
                 edges {
                     node {
+                        start
                         id
                         data
                     }
@@ -151,7 +153,11 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{periodicTimeSeries: {edges: [{node: {id: \"src 1\", data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}}], pageInfo: {hasPreviousPage: false}}}"
+            format!(
+                "{{periodicTimeSeries: {{edges: [{{node: {{start: \"{expected_start}\", id: \"src 1\", data: \
+                 [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}}}}], pageInfo: \
+                 {{hasPreviousPage: false}}}}}}"
+            )
         );
     }
 

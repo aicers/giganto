@@ -234,10 +234,84 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Utc};
+    use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
+    use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
+    use serde_json::json;
 
-    use crate::{bincode_utils, graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{
+        bincode_utils,
+        graphql::{FromKeyValue, TimeRange, tests::TestSchema},
+        storage::{KeyExtractor, RawEventStore, StorageKey},
+    };
+
+    #[test]
+    fn packet_filter_mid_key_contains_request_timestamp() {
+        let request_time = Utc.with_ymd_and_hms(2023, 9, 1, 12, 30, 0).unwrap();
+        let filter = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: None,
+        };
+
+        let mid_key = filter.get_mid_key().expect("mid key present");
+        assert_eq!(
+            mid_key,
+            request_time.timestamp_nanos_opt().unwrap().to_be_bytes()
+        );
+    }
+
+    #[test]
+    fn packet_filter_range_end_key_reflects_packet_time() {
+        let request_time = Utc.with_ymd_and_hms(2023, 9, 1, 12, 30, 0).unwrap();
+        let start = request_time + Duration::seconds(5);
+        let end = start + Duration::seconds(10);
+        let filter = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: Some(TimeRange {
+                start: Some(start),
+                end: Some(end),
+            }),
+        };
+
+        let (range_start, range_end) = filter.get_range_end_key();
+        assert_eq!(range_start, Some(start));
+        assert_eq!(range_end, Some(end));
+
+        let filter_without_range = super::PacketFilter {
+            sensor: "sensor-1".to_string(),
+            request_time,
+            packet_time: None,
+        };
+        let (none_start, none_end) = filter_without_range.get_range_end_key();
+        assert!(none_start.is_none());
+        assert!(none_end.is_none());
+    }
+
+    #[test]
+    fn packet_from_key_value_decodes_timestamps() {
+        let request_time = Utc.with_ymd_and_hms(2023, 5, 10, 6, 0, 0).unwrap();
+        let packet_time = request_time + Duration::milliseconds(750);
+        let request_ts = request_time.timestamp_nanos_opt().unwrap();
+        let packet_ts = packet_time.timestamp_nanos_opt().unwrap();
+
+        let key = StorageKey::builder()
+            .start_key("sensor-1")
+            .mid_key(Some(request_ts.to_be_bytes().to_vec()))
+            .end_key(packet_ts)
+            .build()
+            .key();
+
+        let packet = pk {
+            packet_timestamp: packet_ts,
+            packet: vec![1, 2, 3, 4],
+        };
+
+        let decoded = super::Packet::from_key_value(&key, packet).expect("decode succeeds");
+        assert_eq!(decoded.request_time, request_time);
+        assert_eq!(decoded.packet_time, packet_time);
+    }
 
     #[tokio::test]
     async fn packets_empty() {
@@ -263,6 +337,7 @@ mod tests {
         assert_eq!(res.data.to_string(), "{packets: {edges: []}}");
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn packets_with_data() {
         let schema = TestSchema::new();
@@ -295,19 +370,56 @@ mod tests {
                 first: 10
             ) {
                 edges {
+                    cursor
                     node {
                         packet
                         packetTime
                         requestTime
                     }
                 }
+                pageInfo {
+                    hasPreviousPage
+                    hasNextPage
+                    startCursor
+                    endCursor
+                }
             }
         }"#;
         let res = schema.execute(query).await;
-        assert_eq!(
-            res.data.to_string(),
-            "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}"
-        );
+        let packets_json = res.data.into_json().unwrap();
+        let edges = packets_json["packets"]["edges"]
+            .as_array()
+            .expect("edges array");
+        assert_eq!(edges.len(), 2);
+        let expected_nodes = [
+            json!({
+                "packet": "AAECAw==",
+                "packetTime": dt1.to_rfc3339(),
+                "requestTime": dt1.to_rfc3339(),
+            }),
+            json!({
+                "packet": "AAECAw==",
+                "packetTime": dt2.to_rfc3339(),
+                "requestTime": dt1.to_rfc3339(),
+            }),
+        ];
+        let expected_cursors = [
+            packet_cursor("src 1", ts1, ts1),
+            packet_cursor("src 1", ts1, ts2),
+        ];
+        for ((edge, expected_node), expected_cursor) in edges
+            .iter()
+            .zip(expected_nodes.iter())
+            .zip(expected_cursors.iter())
+        {
+            assert_eq!(&edge["node"], expected_node);
+            assert_eq!(edge["cursor"], json!(expected_cursor));
+        }
+        let page_info = &packets_json["packets"]["pageInfo"];
+        assert_eq!(page_info["hasPreviousPage"], json!(false));
+        assert_eq!(page_info["hasNextPage"], json!(false));
+        assert_eq!(page_info["startCursor"], json!(expected_cursors[0]));
+        assert_eq!(page_info["endCursor"], json!(expected_cursors[1]));
 
         let query = r#"
         {
@@ -387,6 +499,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -394,6 +507,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt1.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
         let timestamps: Vec<chrono::NaiveDateTime> = re
@@ -406,8 +523,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:01.404277 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:01.404277Z");
 
         let query = r#"
         {
@@ -417,6 +534,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:00Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -424,6 +542,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt1.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
         let timestamps: Vec<chrono::NaiveDateTime> = re
             .find_iter(parsed_pcap)
@@ -435,8 +557,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
 
         let query = r#"
         {
@@ -446,6 +568,7 @@ mod tests {
                     requestTime: "2023-01-20T00:00:01Z"
                 }
             ) {
+                requestTime
                 parsedPcap
             }
         }"#;
@@ -453,6 +576,10 @@ mod tests {
 
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
+        assert_eq!(
+            res_json["pcap"]["requestTime"].as_str().unwrap(),
+            dt2.to_rfc3339()
+        );
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
         let timestamps: Vec<chrono::NaiveDateTime> = re
             .find_iter(parsed_pcap)
@@ -464,8 +591,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20T00:00:00.412745Z");
+        assert_eq!(ts2, "2023-01-20T00:00:02.328237Z");
     }
 
     fn insert_packet(
@@ -492,9 +619,19 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
+    fn packet_cursor(sensor: &str, request_ts: i64, packet_ts: i64) -> String {
+        let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>() * 2 + 1);
+        key.extend_from_slice(sensor.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&request_ts.to_be_bytes());
+        key.push(0);
+        key.extend_from_slice(&packet_ts.to_be_bytes());
+        base64_engine.encode(key)
+    }
+
     fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
         let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
         let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+        utc_time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
     }
 }
