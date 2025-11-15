@@ -191,7 +191,6 @@ mod tests {
 
     use giganto_client::ingest::log::SecuLog;
 
-    use crate::bincode_utils;
     use crate::graphql::tests::TestSchema;
     use crate::storage::RawEventStore;
 
@@ -321,7 +320,7 @@ mod tests {
             proto: None,
             contents: format!("secu_log_contents {timestamp}").to_string(),
         };
-        let value = bincode_utils::encode_legacy(&secu_log_body).unwrap();
+        let value = bincode::serialize(&secu_log_body).unwrap();
 
         store.append(&key, &value).unwrap();
     }

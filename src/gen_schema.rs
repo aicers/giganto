@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-mod bincode_utils;
 mod comm;
 mod graphql;
 mod server;

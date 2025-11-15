@@ -1093,7 +1093,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-poem",
  "base64",
- "bincode 2.0.1",
+ "bincode 1.3.3",
  "chrono",
  "clap",
  "config",

@@ -47,7 +47,6 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use self::implement::RequestStreamMessage;
-use crate::bincode_utils::{decode_legacy, encode_legacy};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
@@ -477,7 +476,7 @@ pub async fn send_direct_stream(
             send_buf.extend_from_slice(&timestamp.to_le_bytes());
 
             if req_key.contains("SemiSupervised") {
-                let sensor_bytes = encode_legacy(sensor)?;
+                let sensor_bytes = bincode::serialize(&sensor)?;
                 let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
                 send_buf.extend_from_slice(&sensor_len);
                 send_buf.extend_from_slice(&sensor_bytes);
@@ -637,8 +636,8 @@ async fn handle_request(
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
         MessageCode::ReqRange => {
-            let msg: RequestRange =
-                decode_legacy(&msg_buf).map_err(PublishError::DeserializationError)?;
+            let msg = bincode::deserialize::<RequestRange>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
 
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
@@ -1148,15 +1147,14 @@ async fn handle_request(
             }
         }
         MessageCode::Pcap => {
-            let filters = match decode_legacy::<Vec<PcapFilter>>(&msg_buf) {
+            let filters = match bincode::deserialize::<Vec<PcapFilter>>(&msg_buf) {
                 Ok(filters) => filters,
                 Err(e) => {
                     let mut buf = Vec::new();
-                    send_err(&mut send, &mut buf, &e)
+                    send_err(&mut send, &mut buf, e)
                         .await
                         .context("Failed to send err")?;
-                    let err = PublishError::DeserializationError(e);
-                    return Err(err.into());
+                    bail!("Failed to deserialize Pcapfilters")
                 }
             };
 
@@ -1171,8 +1169,8 @@ async fn handle_request(
             .await?;
         }
         MessageCode::RawData => {
-            let msg: RequestRawData =
-                decode_legacy(&msg_buf).map_err(PublishError::DeserializationError)?;
+            let msg: RequestRawData = bincode::deserialize::<RequestRawData>(&msg_buf)
+                .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
                     process_raw_events::<Conn, u8>(
@@ -1736,8 +1734,8 @@ where
         let event: Option<(i64, String, Vec<I>)> = receive_range_data(&mut peer_recv).await?;
         if let Some(event_data) = event {
             let event_data_again: Option<(i64, String, Vec<I>)> = Some(event_data);
-            let send_buf =
-                encode_legacy(&event_data_again).map_err(PublishError::SerializationError)?;
+            let send_buf = bincode::serialize(&event_data_again)
+                .map_err(PublishError::SerialDeserialFailure)?;
             send_raw(send, &send_buf).await?;
         } else {
             break;
@@ -1832,7 +1830,7 @@ where
     }
 
     for (timestamp, sensor, value) in output {
-        let val: T = decode_legacy(&value).map_err(PublishError::DeserializationError)?;
+        let val = bincode::deserialize::<T>(&value)?;
         send_range_data(send, Some((val, timestamp, &sensor))).await?;
     }
 
@@ -1879,8 +1877,8 @@ where
             while let Some(event) =
                 receive_range_data::<Option<(i64, String, Vec<I>)>>(&mut peer_recv).await?
             {
-                let send_buf =
-                    encode_legacy(&Some(event)).map_err(PublishError::SerializationError)?;
+                let send_buf = bincode::serialize(&Some(event))
+                    .map_err(PublishError::SerialDeserialFailure)?;
                 send_raw(send, &send_buf).await?;
             }
         }
