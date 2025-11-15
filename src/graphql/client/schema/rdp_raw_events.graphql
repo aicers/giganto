@@ -28,7 +28,6 @@ query RdpRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

@@ -28,7 +28,6 @@ query NfsRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

@@ -33,10 +33,6 @@ type BootpRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -206,10 +202,6 @@ type ConnRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -316,10 +308,6 @@ type DceRpcRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -422,10 +410,6 @@ type DhcpRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -627,10 +611,6 @@ type DnsRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -1037,10 +1017,6 @@ type FtpRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -1139,10 +1115,6 @@ type HttpRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -1365,10 +1337,6 @@ type KerberosRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -1491,10 +1459,6 @@ type LdapRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -1651,10 +1615,6 @@ type MalformedDnsRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -1789,10 +1749,6 @@ type MqttRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -2126,10 +2082,6 @@ type NfsRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -2224,10 +2176,6 @@ type NtlmRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -2726,10 +2674,6 @@ type RadiusRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -2872,10 +2816,6 @@ type RdpRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -3118,10 +3058,6 @@ type SmbRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -3253,10 +3189,6 @@ type SmtpRawEvent {
 	"""
 	startTime: DateTime!
 	"""
-	End Time
-	"""
-	endTime: DateTime!
-	"""
 	Duration
 	
 	It is measured in nanoseconds.
@@ -3371,10 +3303,6 @@ type SshRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	
@@ -3624,10 +3552,6 @@ type TlsRawEvent {
 	Start Time
 	"""
 	startTime: DateTime!
-	"""
-	End Time
-	"""
-	endTime: DateTime!
 	"""
 	Duration
 	

@@ -30,7 +30,6 @@ query ConnRawEvents(
         connState
         service
         startTime
-        endTime
         duration
         origBytes
         respBytes

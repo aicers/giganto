@@ -28,7 +28,6 @@ query NtlmRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

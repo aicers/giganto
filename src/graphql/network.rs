@@ -183,8 +183,6 @@ struct ConnRawEvent {
     conn_state: String,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -230,8 +228,6 @@ struct DnsRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -294,8 +290,6 @@ struct MalformedDnsRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -358,8 +352,6 @@ struct HttpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -438,8 +430,6 @@ struct RdpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -480,8 +470,6 @@ struct SmtpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -534,8 +522,6 @@ struct NtlmRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -584,8 +570,6 @@ struct KerberosRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -642,8 +626,6 @@ struct SshRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -708,8 +690,6 @@ struct DceRpcRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -786,8 +766,6 @@ struct FtpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -833,8 +811,6 @@ struct MqttRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -885,8 +861,6 @@ struct LdapRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -939,8 +913,6 @@ struct TlsRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1022,8 +994,6 @@ struct SmbRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1084,8 +1054,6 @@ struct NfsRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1128,8 +1096,6 @@ struct BootpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1214,8 +1180,6 @@ struct DhcpRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1290,8 +1254,6 @@ struct RadiusRawEvent {
     proto: u8,
     /// Start Time
     start_time: DateTime<Utc>,
-    /// End Time
-    end_time: DateTime<Utc>,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1435,8 +1397,7 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
-                    start_time: val.start_time,
-                    end_time: val.end_time,
+                    start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
                     duration: val.duration.into(),
                     orig_pkts: val.orig_pkts.into(),
                     resp_pkts: val.resp_pkts.into(),
@@ -1465,8 +1426,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1505,8 +1465,7 @@ impl FromKeyValue<MalformedDns> for MalformedDnsRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1538,8 +1497,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
@@ -1561,8 +1519,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1599,8 +1556,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1630,8 +1586,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1672,8 +1627,7 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: val.start_time,
-            end_time: val.end_time,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),

@@ -28,7 +28,6 @@ query DhcpRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

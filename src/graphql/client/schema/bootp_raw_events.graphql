@@ -28,7 +28,6 @@ query BootpRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

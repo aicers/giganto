@@ -28,7 +28,6 @@ query RadiusRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

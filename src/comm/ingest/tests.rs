@@ -8,7 +8,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
@@ -64,7 +64,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const HOST: &str = "node1";
 const TEST_PORT: u16 = 60190;
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.6";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.8";
 
 struct TestClient {
     conn: Connection,
@@ -167,8 +167,6 @@ async fn conn() {
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let tmp_dur = Duration::nanoseconds(12345);
-    let start_time = chrono::Utc::now();
-    let end_time = start_time + chrono::Duration::nanoseconds(tmp_dur.num_nanoseconds().unwrap());
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -176,8 +174,11 @@ async fn conn() {
         resp_port: 80,
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time,
-        end_time,
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -217,16 +218,17 @@ async fn dns() {
     let client = TestClient::new().await;
     let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let start_time = chrono::Utc::now();
-    let end_time = start_time + chrono::Duration::seconds(1);
     let dns_body = Dns {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time,
-        end_time,
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000, // 1 second in nanoseconds
         orig_pkts: 1,
         resp_pkts: 1,
@@ -314,8 +316,11 @@ async fn http() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -377,8 +382,11 @@ async fn rdp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -460,8 +468,11 @@ async fn smtp() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -510,8 +521,11 @@ async fn ntlm() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -558,8 +572,11 @@ async fn kerberos() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -610,8 +627,11 @@ async fn ssh() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -666,8 +686,11 @@ async fn dce_rpc() {
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -784,8 +807,11 @@ async fn ftp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -841,8 +867,11 @@ async fn mqtt() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -890,8 +919,11 @@ async fn ldap() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -940,8 +972,11 @@ async fn tls() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1004,8 +1039,11 @@ async fn smb() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1058,8 +1096,11 @@ async fn nfs() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1103,8 +1144,11 @@ async fn bootp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1157,8 +1201,11 @@ async fn dhcp() {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

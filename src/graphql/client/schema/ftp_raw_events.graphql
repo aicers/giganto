@@ -28,7 +28,6 @@ query FtpRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

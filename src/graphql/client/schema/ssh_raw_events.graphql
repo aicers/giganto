@@ -28,7 +28,6 @@ query SshRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

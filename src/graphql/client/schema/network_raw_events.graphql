@@ -32,7 +32,6 @@ query NetworkRawEvents(
           connState
           service
           startTime
-          endTime
           duration
           origBytes
           respBytes
@@ -48,7 +47,6 @@ query NetworkRawEvents(
           origPort
           respPort
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -76,7 +74,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -103,7 +100,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -138,7 +134,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -154,7 +149,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -174,7 +168,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -198,7 +191,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -226,7 +218,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -245,7 +236,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -274,7 +264,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -295,7 +284,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -317,7 +305,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -353,7 +340,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -379,7 +365,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -396,7 +381,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -418,7 +402,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -444,7 +427,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts
@@ -477,7 +459,6 @@ query NetworkRawEvents(
           respPort
           proto
           startTime
-          endTime
           duration
           origPkts
           respPkts

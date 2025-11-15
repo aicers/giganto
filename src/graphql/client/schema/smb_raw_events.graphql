@@ -28,7 +28,6 @@ query SmbRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts
