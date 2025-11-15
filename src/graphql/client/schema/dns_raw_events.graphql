@@ -27,7 +27,6 @@ query DnsRawEvents(
         origPort
         respPort
         startTime
-        endTime
         duration
         origPkts
         respPkts

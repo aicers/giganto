@@ -28,7 +28,6 @@ query HttpRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

@@ -445,8 +445,10 @@ impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
             target_filename: val.target_filename,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
-            previous_creation_utc_time: val.previous_creation_utc_time,
+            creation_utc_time: chrono::DateTime::from_timestamp_nanos(val.creation_utc_time),
+            previous_creation_utc_time: chrono::DateTime::from_timestamp_nanos(
+                val.previous_creation_utc_time,
+            ),
         })
     }
 }
@@ -482,7 +484,7 @@ impl FromKeyValue<FileCreate> for FileCreateEvent {
             target_filename: val.target_filename,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
+            creation_utc_time: chrono::DateTime::from_timestamp_nanos(val.creation_utc_time),
         })
     }
 }
@@ -522,7 +524,7 @@ impl FromKeyValue<FileCreateStreamHash> for FileCreateStreamHashEvent {
             contents: val.contents,
             user: val.user,
             process_id: val.process_id.into(),
-            creation_utc_time: val.creation_utc_time,
+            creation_utc_time: chrono::DateTime::from_timestamp_nanos(val.creation_utc_time),
         })
     }
 }

@@ -13,8 +13,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     all raw event structures.
   - Added `duration` field to all raw event structures to store session
     duration.
-  - Unified time field types to `DateTime<Utc>` for consistent temporal
-    handling.
   - Updated migration functions to handle new event structure fields.
 - Added `compression` configuration option to enable or disable RocksDB
   compression. Defaults to `true` (enabled). Giganto validates the compression
@@ -38,8 +36,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   authentication when communicating with other Giganto instances in a cluster.
 - Added `start_time` field to all protocol event structures for improved
   temporal tracking and consistency.
-  - The `start_time` field represents the session start time and complements
-    the existing `end_time` field.
+  - The `start_time` field represents the session start time.
   - Raw event keys, which previously used the session start time, now use the
     actual raw event creation timestamp provided by the sensor application.
 - Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
@@ -74,19 +71,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Migrated web server from `warp` to `poem` framework for better maintainability
   and future OpenAPI support. The GraphQL endpoint and playground functionality
   remain unchanged.
-- Changed `last_time` field to `end_time` for raw events (Http, Smtp, Ntlm, Ssh,
-  Tls, DceRpc, Ftp, Mqtt, Ldap, Smb, Nfs, Bootp, Dhcp) in GraphQL APIs and data
-  structures to improve clarity and consistency. The field represents the end time
-  of network events and sessions.
-- Changed `duration` field to `end_time` for Conn raw events in GraphQL APIs and
-  data structures to align with other network event structures and provide clearer
-  semantics. This field represents the end time of connection sessions.
 - Consolidated HTTP event fields to improve data structure efficiency and reduce
   redundancy. Changes include:
   - Merged `orig_filenames` and `resp_filenames` into single `filenames` field
   - Merged `orig_mime_types` and `resp_mime_types` into single `mime_types` field
   - Renamed `post_body` field to `body` for consistency
   - Updated migration functionality to handle field consolidation from older versions
+- Removed the `last_time` field from all network raw event structs. The
+  combination of `start_time` and `duration` sufficiently represents the event’s
+  time range, making `last_time` redundant.
 
 ### Removed
 

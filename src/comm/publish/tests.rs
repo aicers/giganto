@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use giganto_client::{
     connection::client_handshake,
     ingest::{
@@ -64,7 +64,7 @@ fn get_token() -> &'static Mutex<u32> {
 }
 
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-const PROTOCOL_VERSION: &str = "0.26.0-alpha.6";
+const PROTOCOL_VERSION: &str = "0.26.0-alpha.8";
 
 const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
 const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
@@ -201,9 +201,11 @@ fn gen_conn_raw_event() -> Vec<u8> {
         resp_port: 80,
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now()
-            + chrono::Duration::nanoseconds(tmp_dur.num_nanoseconds().unwrap()),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -224,8 +226,11 @@ fn gen_dns_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -255,8 +260,11 @@ fn gen_malformed_dns_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -286,8 +294,11 @@ fn gen_rdp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -306,8 +317,11 @@ fn gen_http_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -345,8 +359,11 @@ fn gen_smtp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -371,8 +388,11 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -395,8 +415,11 @@ fn gen_kerberos_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -423,8 +446,11 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -455,8 +481,11 @@ fn gen_dce_rpc_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -496,8 +525,11 @@ fn gen_ftp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -529,8 +561,11 @@ fn gen_mqtt_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -554,8 +589,11 @@ fn gen_ldap_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -580,8 +618,11 @@ fn gen_tls_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -620,8 +661,11 @@ fn gen_smb_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -650,8 +694,11 @@ fn gen_nfs_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -671,8 +718,11 @@ fn gen_bootp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -701,8 +751,11 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(1),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -744,8 +797,11 @@ fn gen_radius_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: chrono::Utc::now(),
-        end_time: chrono::Utc::now() + chrono::Duration::seconds(2),
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
         duration: 2_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

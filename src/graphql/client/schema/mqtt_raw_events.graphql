@@ -28,7 +28,6 @@ query MqttRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

@@ -28,7 +28,6 @@ query DceRpcRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts

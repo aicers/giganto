@@ -28,7 +28,6 @@ query LdapRawEvents(
         respPort
         proto
         startTime
-        endTime
         duration
         origPkts
         respPkts
