@@ -41,7 +41,6 @@ pub(crate) use crate::graphql::standalone::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
 };
 use crate::{
-    bincode_utils::decode_legacy,
     comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
     settings::{ConfigVisible, Settings},
     storage::{
@@ -198,7 +197,7 @@ where
     target_data
         .iter()
         .filter_map(|(time, value)| {
-            decode_legacy::<T>(value).ok().and_then(|raw_event| {
+            bincode::deserialize::<T>(value).ok().and_then(|raw_event| {
                 if *time >= start && *time < end {
                     filter
                         .check(
