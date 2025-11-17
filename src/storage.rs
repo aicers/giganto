@@ -1289,3 +1289,272 @@ pub fn repair_db(
     let dur = start.elapsed();
     info!("DB repair duration: {}", to_hms(dur));
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+
+    use super::{Database, DbOptions, StorageKey};
+    /// Test `SensorStore` insert with `DateTime` conversion
+    #[test]
+    fn test_sensor_store_datetime_to_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let sensor_store = db.sensors_store().unwrap();
+
+        // Test with current time
+        let now = Utc::now();
+        let result = sensor_store.insert("test_sensor", now);
+        assert!(result.is_ok());
+
+        // Test with specific timestamp
+        let specific_time = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+        let result = sensor_store.insert("test_sensor_2", specific_time);
+        assert!(result.is_ok());
+
+        // Test with boundary values
+        let min_time = DateTime::<Utc>::MIN_UTC;
+        let result = sensor_store.insert("test_sensor_min", min_time);
+        assert!(result.is_ok());
+
+        let max_time = DateTime::<Utc>::MAX_UTC;
+        let result = sensor_store.insert("test_sensor_max", max_time);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_batched_multi_get_from_ts_returns_sorted_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let store = db.conn_store().unwrap();
+        let sensor = "batch-sensor";
+        let other_sensor = "ignored-sensor";
+
+        let ts_early = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+        let ts_late = ts_early + Duration::seconds(2);
+        let ts_missing = ts_late + Duration::seconds(2);
+
+        let key_early = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(ts_early.timestamp_nanos_opt().unwrap())
+            .build()
+            .key();
+        store.append(&key_early, b"alpha").unwrap();
+
+        let key_late = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(ts_late.timestamp_nanos_opt().unwrap())
+            .build()
+            .key();
+        store.append(&key_late, b"omega").unwrap();
+
+        // Insert an entry for another sensor to ensure filtering by sensor id.
+        let other_key = StorageKey::builder()
+            .start_key(other_sensor)
+            .end_key(ts_early.timestamp_nanos_opt().unwrap())
+            .build()
+            .key();
+        store.append(&other_key, b"other").unwrap();
+
+        let query_times = [ts_late, ts_missing, ts_early];
+        let results = store.batched_multi_get_from_ts(sensor, &query_times);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, ts_early);
+        assert_eq!(results[0].1, b"alpha");
+        assert_eq!(results[1].0, ts_late);
+        assert_eq!(results[1].1, b"omega");
+    }
+
+    /// Test `StorageKeyBuilder` with timestamp boundaries
+    #[test]
+    fn test_storage_key_builder_lower_bound() {
+        // Test with None (should use 0)
+        let key_none = StorageKey::builder()
+            .start_key("test_source")
+            .lower_closed_bound_end_key(None)
+            .build();
+        let expected_none = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&0_i64.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_none.key(), expected_none);
+
+        // Test with Some(DateTime)
+        let some_time = Utc.timestamp_nanos(1_000_000_000);
+        let key_some = StorageKey::builder()
+            .start_key("test_source")
+            .lower_closed_bound_end_key(Some(some_time))
+            .build();
+        let expected_some = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&1_000_000_000_i64.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_some.key(), expected_some);
+
+        // Test with MIN timestamp
+        let min_time = Utc.timestamp_nanos(i64::MIN);
+        let key_min = StorageKey::builder()
+            .start_key("test_source")
+            .lower_closed_bound_end_key(Some(min_time))
+            .build();
+        let expected_min = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&i64::MIN.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_min.key(), expected_min);
+    }
+
+    /// Test `StorageKeyBuilder` with upper bound edge cases
+    #[test]
+    fn test_storage_key_builder_upper_bound() {
+        // Test upper_closed_bound with None (should use i64::MAX)
+        let key_none = StorageKey::builder()
+            .start_key("test_source")
+            .upper_closed_bound_end_key(None)
+            .build();
+        let expected_none = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&i64::MAX.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_none.key(), expected_none);
+
+        // Test upper_closed_bound with Some(DateTime)
+        // Should subtract 1 if possible
+        let some_time = Utc.timestamp_nanos(2_000_000_000);
+        let key_some = StorageKey::builder()
+            .start_key("test_source")
+            .upper_closed_bound_end_key(Some(some_time))
+            .build();
+        let expected_some = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&1_999_999_999_i64.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_some.key(), expected_some);
+
+        // Test upper_closed_bound with 0 (edge case)
+        // When timestamp is 0, subtracting 1 gives -1, which fails >= 0 check
+        // So it falls through to i64::MAX
+        let zero_time = Utc.timestamp_nanos(0);
+        let key_zero = StorageKey::builder()
+            .start_key("test_source")
+            .upper_closed_bound_end_key(Some(zero_time))
+            .build();
+        let expected_zero = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&i64::MAX.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_zero.key(), expected_zero);
+
+        // Test upper_open_bound with None (should use i64::MAX)
+        let key_open_none = StorageKey::builder()
+            .start_key("test_source")
+            .upper_open_bound_end_key(None)
+            .build();
+        let expected_open_none = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&i64::MAX.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_open_none.key(), expected_open_none);
+
+        // Test upper_open_bound with Some(DateTime)
+        let some_time_open = Utc.timestamp_nanos(3_000_000_000);
+        let key_open_some = StorageKey::builder()
+            .start_key("test_source")
+            .upper_open_bound_end_key(Some(some_time_open))
+            .build();
+        let expected_open_some = {
+            let mut k = b"test_source\0".to_vec();
+            k.extend_from_slice(&3_000_000_000_i64.to_be_bytes());
+            k
+        };
+        assert_eq!(*key_open_some.key(), expected_open_some);
+    }
+
+    #[test]
+    fn test_storage_timestamp_key_builder_lower_bound() {
+        // None uses zero epoch nanos
+        let key_none = StorageKey::timestamp_builder()
+            .start_key(42)
+            .lower_closed_bound_start_key(None)
+            .build()
+            .key();
+        let mut expected_none = 42_i64.to_be_bytes().to_vec();
+        expected_none.extend_from_slice(&0_i64.to_be_bytes());
+        assert_eq!(key_none, expected_none);
+
+        // Specific DateTime should be preserved exactly
+        let some_time = Utc.timestamp_nanos(4_200_000_000);
+        let key_some = StorageKey::timestamp_builder()
+            .start_key(42)
+            .lower_closed_bound_start_key(Some(some_time))
+            .build()
+            .key();
+        let mut expected_some = 42_i64.to_be_bytes().to_vec();
+        expected_some.extend_from_slice(&4_200_000_000_i64.to_be_bytes());
+        assert_eq!(key_some, expected_some);
+
+        // MIN timestamp falls back to i64::MAX when conversion fails
+        let min_time = DateTime::<Utc>::MIN_UTC;
+        let key_min = StorageKey::timestamp_builder()
+            .start_key(42)
+            .lower_closed_bound_start_key(Some(min_time))
+            .build()
+            .key();
+        let mut expected_min = 42_i64.to_be_bytes().to_vec();
+        expected_min.extend_from_slice(&i64::MAX.to_be_bytes());
+        assert_eq!(key_min, expected_min);
+    }
+
+    #[test]
+    fn test_storage_timestamp_key_builder_upper_bound() {
+        // upper_open_bound_start_key with None falls back to i64::MAX
+        let key_open_none = StorageKey::timestamp_builder()
+            .start_key(7)
+            .upper_open_bound_start_key(None)
+            .build()
+            .key();
+        let mut expected_open_none = 7_i64.to_be_bytes().to_vec();
+        expected_open_none.extend_from_slice(&i64::MAX.to_be_bytes());
+        assert_eq!(key_open_none, expected_open_none);
+
+        // upper_open_bound_start_key with Some(DateTime) preserves the timestamp
+        let open_time = Utc.timestamp_nanos(8_000_000_000);
+        let key_open_some = StorageKey::timestamp_builder()
+            .start_key(7)
+            .upper_open_bound_start_key(Some(open_time))
+            .build()
+            .key();
+        let mut expected_open_some = 7_i64.to_be_bytes().to_vec();
+        expected_open_some.extend_from_slice(&8_000_000_000_i64.to_be_bytes());
+        assert_eq!(key_open_some, expected_open_some);
+
+        // upper_closed_bound_start_key subtracts one nanosecond when possible
+        let closed_time = Utc.timestamp_nanos(9_000_000_000);
+        let key_closed_some = StorageKey::timestamp_builder()
+            .start_key(7)
+            .upper_closed_bound_start_key(Some(closed_time))
+            .build()
+            .key();
+        let mut expected_closed_some = 7_i64.to_be_bytes().to_vec();
+        expected_closed_some.extend_from_slice(&8_999_999_999_i64.to_be_bytes());
+        assert_eq!(key_closed_some, expected_closed_some);
+
+        // When subtraction would underflow, it should fall back to i64::MAX
+        let zero_time = Utc.timestamp_nanos(0);
+        let key_zero = StorageKey::timestamp_builder()
+            .start_key(7)
+            .upper_closed_bound_start_key(Some(zero_time))
+            .build()
+            .key();
+        let mut expected_zero = 7_i64.to_be_bytes().to_vec();
+        expected_zero.extend_from_slice(&i64::MAX.to_be_bytes());
+        assert_eq!(key_zero, expected_zero);
+    }
+}
