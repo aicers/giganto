@@ -189,6 +189,7 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
+    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::log::SecuLog;
 
     use crate::graphql::tests::TestSchema;
@@ -225,6 +226,45 @@ mod tests {
             res.data.to_string(),
             "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\", version: \"V3\"}}]}}"
         );
+    }
+
+    #[tokio::test]
+    async fn secu_log_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.secu_log_store().unwrap();
+
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_secu_log_event(&store, "device", "src1", timestamp);
+
+        let query = r#"
+        {
+            secuLogRawEvents(
+                filter: {
+                    kind: "device",
+                    sensor: "src1",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+                },
+                first: 1
+            ) {
+                edges {
+                    node {
+                        time
+                    }
+                }
+            }
+        }"#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let node = res_json["secuLogRawEvents"]["edges"][0]["node"]
+            .as_object()
+            .unwrap();
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
     }
 
     #[tokio::test]

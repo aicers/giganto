@@ -468,6 +468,94 @@ mod tests {
         assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
     }
 
+    #[tokio::test]
+    async fn packets_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.packet_store().unwrap();
+
+        let request_dt = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        let packet_dt = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+
+        insert_packet(&store, "src1", request_dt, packet_dt);
+
+        let query = r#"
+        {
+            packets(
+                filter: {
+                    sensor: "src1"
+                    requestTime: "2024-03-04T05:06:07Z"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        packetTime
+                        requestTime
+                    }
+                }
+            }
+        }"#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let node = res_json["packets"]["edges"][0]["node"].as_object().unwrap();
+        assert_eq!(
+            node["requestTime"].as_str().unwrap(),
+            "2024-03-04T05:06:07+00:00"
+        );
+        assert_eq!(
+            node["packetTime"].as_str().unwrap(),
+            "2024-03-04T05:06:08+00:00"
+        );
+    }
+
+    #[tokio::test]
+    async fn pcap_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.packet_store().unwrap();
+
+        let request_ts = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        let packet_ts = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_packet(&store, "src1", request_ts, packet_ts);
+
+        let query = r#"
+        {
+            pcap(
+                filter: {
+                    sensor: "src1"
+                    requestTime: "2024-03-04T05:06:07Z"
+                }
+            ) {
+                requestTime
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let node = data["pcap"].as_object().unwrap();
+        assert_eq!(
+            node["requestTime"].as_str().unwrap(),
+            "2024-03-04T05:06:07+00:00"
+        );
+    }
+
     fn insert_packet(
         store: &RawEventStore<pk>,
         sensor: &str,
