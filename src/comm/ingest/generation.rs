@@ -35,7 +35,7 @@ impl SequenceGenerator {
         Arc::new(generator)
     }
 
-    pub(crate) fn get_current_date_time() -> u32 {
+    fn get_current_date_time() -> u32 {
         let utc_now = Utc::now();
         utc_now.day()
     }
