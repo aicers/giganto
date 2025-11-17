@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
@@ -7,6 +8,7 @@ use giganto_client::ingest::network::{
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
+use num_traits::cast::ToPrimitive;
 
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
@@ -285,6 +287,150 @@ async fn conn_with_data_giganto_cluster() {
     );
 
     mock.assert_async().await;
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn network_raw_events_timestamp_fomat_stability() {
+    let schema = TestSchema::new();
+    let sensor = "src1";
+    let base_ts = Utc
+        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    let step = 1_000_000;
+
+    let conn_store = schema.db.conn_store().unwrap();
+    let dns_store = schema.db.dns_store().unwrap();
+    let malformed_dns_store = schema.db.malformed_dns_store().unwrap();
+    let http_store = schema.db.http_store().unwrap();
+    let rdp_store = schema.db.rdp_store().unwrap();
+    let ntlm_store = schema.db.ntlm_store().unwrap();
+    let kerberos_store = schema.db.kerberos_store().unwrap();
+    let ssh_store = schema.db.ssh_store().unwrap();
+    let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
+    let ftp_store = schema.db.ftp_store().unwrap();
+    let mqtt_store = schema.db.mqtt_store().unwrap();
+    let ldap_store = schema.db.ldap_store().unwrap();
+    let tls_store = schema.db.tls_store().unwrap();
+    let smb_store = schema.db.smb_store().unwrap();
+    let nfs_store = schema.db.nfs_store().unwrap();
+    let smtp_store = schema.db.smtp_store().unwrap();
+    let bootp_store = schema.db.bootp_store().unwrap();
+    let dhcp_store = schema.db.dhcp_store().unwrap();
+    let radius_store = schema.db.radius_store().unwrap();
+
+    insert_conn_raw_event(&conn_store, sensor, base_ts);
+    insert_dns_raw_event(&dns_store, sensor, base_ts + step);
+    insert_malformed_dns_raw_event(&malformed_dns_store, sensor, base_ts + step * 2);
+    insert_http_raw_event(&http_store, sensor, base_ts + step * 3);
+    insert_rdp_raw_event(&rdp_store, sensor, base_ts + step * 4);
+    insert_ntlm_raw_event(&ntlm_store, sensor, base_ts + step * 5);
+    insert_kerberos_raw_event(&kerberos_store, sensor, base_ts + step * 6);
+    insert_ssh_raw_event(&ssh_store, sensor, base_ts + step * 7);
+    insert_dce_rpc_raw_event(&dce_rpc_store, sensor, base_ts + step * 8);
+    insert_ftp_raw_event(&ftp_store, sensor, base_ts + step * 9);
+    insert_mqtt_raw_event(&mqtt_store, sensor, base_ts + step * 10);
+    insert_ldap_raw_event(&ldap_store, sensor, base_ts + step * 11);
+    insert_tls_raw_event(&tls_store, sensor, base_ts + step * 12);
+    insert_smb_raw_event(&smb_store, sensor, base_ts + step * 13);
+    insert_nfs_raw_event(&nfs_store, sensor, base_ts + step * 14);
+    insert_smtp_raw_event(&smtp_store, sensor, base_ts + step * 15);
+    insert_bootp_raw_event(&bootp_store, sensor, base_ts + step * 16);
+    insert_dhcp_raw_event(&dhcp_store, sensor, base_ts + step * 17);
+    insert_radius_raw_event(&radius_store, sensor, base_ts + step * 18);
+
+    let query = r#"
+    {
+        networkRawEvents(
+            filter: {
+                sensor: "src1",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:07:00Z" }
+            },
+            first: 50
+        ) {
+            edges {
+                node {
+                    __typename
+                    ... on ConnRawEvent { time }
+                    ... on DnsRawEvent { time }
+                    ... on MalformedDnsRawEvent { time }
+                    ... on HttpRawEvent { time }
+                    ... on RdpRawEvent { time }
+                    ... on NtlmRawEvent { time }
+                    ... on KerberosRawEvent { time }
+                    ... on SshRawEvent { time }
+                    ... on DceRpcRawEvent { time }
+                    ... on FtpRawEvent { time }
+                    ... on MqttRawEvent { time }
+                    ... on LdapRawEvent { time }
+                    ... on TlsRawEvent { time }
+                    ... on SmbRawEvent { time }
+                    ... on NfsRawEvent { time }
+                    ... on SmtpRawEvent { time }
+                    ... on BootpRawEvent { time }
+                    ... on DhcpRawEvent { time }
+                    ... on RadiusRawEvent { time }
+                }
+            }
+        }
+    }"#;
+
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["networkRawEvents"]["edges"].as_array().unwrap();
+
+    let expected_types = [
+        "ConnRawEvent",
+        "DnsRawEvent",
+        "MalformedDnsRawEvent",
+        "HttpRawEvent",
+        "RdpRawEvent",
+        "NtlmRawEvent",
+        "KerberosRawEvent",
+        "SshRawEvent",
+        "DceRpcRawEvent",
+        "FtpRawEvent",
+        "MqttRawEvent",
+        "LdapRawEvent",
+        "TlsRawEvent",
+        "SmbRawEvent",
+        "NfsRawEvent",
+        "SmtpRawEvent",
+        "BootpRawEvent",
+        "DhcpRawEvent",
+        "RadiusRawEvent",
+    ];
+
+    let mut expected_times: HashMap<&str, String> = HashMap::new();
+    for (idx, typename) in expected_types.iter().enumerate() {
+        let idx = idx.to_i64().expect("expected_types length fits in i64");
+        expected_times.insert(
+            typename,
+            Utc.timestamp_nanos(base_ts + step * idx).to_rfc3339(),
+        );
+    }
+    let mut seen = HashSet::new();
+
+    for edge in edges {
+        let node = edge["node"].as_object().unwrap();
+        let typename = node["__typename"].as_str().unwrap();
+        seen.insert(typename.to_string());
+        let expected = expected_times
+            .get(typename)
+            .expect("expected network event type");
+        assert_eq!(node["time"].as_str().unwrap(), expected);
+    }
+
+    assert_eq!(seen.len(), expected_types.len());
+    for expected in expected_types {
+        assert!(
+            seen.contains(expected),
+            "Missing network event type {expected}"
+        );
+    }
 }
 
 #[tokio::test]

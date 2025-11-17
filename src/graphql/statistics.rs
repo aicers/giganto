@@ -372,7 +372,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
     #[cfg(feature = "count_events")]
@@ -410,6 +410,35 @@ mod tests {
             res.data.to_string(),
             "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
+    }
+
+    #[tokio::test]
+    async fn statistics_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_statistics_raw_event(&store, timestamp, "src1", 0, 600, 1_000_000, 100_000_000);
+
+        let query = r#"
+        {
+            statistics(sensors: ["src1"]) {
+                stats {
+                    timestamp
+                    detail {
+                        protocol
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let stats = res_json["statistics"][0]["stats"][0].as_object().unwrap();
+        assert_eq!(stats["timestamp"].as_str().unwrap(), timestamp.to_string());
     }
 
     fn insert_statistics_raw_event(

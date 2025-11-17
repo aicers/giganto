@@ -324,3 +324,157 @@ macro_rules! impl_from_giganto_netflow_filter_for_graphql_client {
 impl_from_giganto_range_structs_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);
 #[cfg(feature = "cluster")]
 impl_from_giganto_netflow_filter_for_graphql_client!(netflow5_raw_events, netflow9_raw_events);
+
+#[cfg(test)]
+mod tests {
+    use std::{net::IpAddr, str::FromStr};
+
+    use chrono::{TimeZone, Utc};
+    use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+
+    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+
+    #[tokio::test]
+    async fn netflow5_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.netflow5_store().unwrap();
+
+        let sensor = "src1";
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_netflow5_raw_event(&store, sensor, timestamp, 123_456, 123_789);
+
+        let query = format!(
+            r#"
+            {{
+                netflow5RawEvents(
+                    filter: {{
+                        sensor: "{sensor}",
+                        time: {{ start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }}
+                    }},
+                    first: 1
+                ) {{
+                    edges {{
+                        node {{
+                            time
+                        }}
+                    }}
+                }}
+            }}"#
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let node = res_json["netflow5RawEvents"]["edges"][0]["node"]
+            .as_object()
+            .unwrap();
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+    }
+
+    #[tokio::test]
+    async fn netflow9_timestamp_fomat_stability() {
+        let schema = TestSchema::new();
+        let store = schema.db.netflow9_store().unwrap();
+
+        let sensor = "src1";
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_netflow9_raw_event(&store, sensor, timestamp);
+
+        let query = format!(
+            r#"
+            {{
+                netflow9RawEvents(
+                    filter: {{
+                        sensor: "{sensor}",
+                        time: {{ start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }}
+                    }},
+                    first: 1
+                ) {{
+                    edges {{
+                        node {{
+                            time
+                        }}
+                    }}
+                }}
+            }}"#
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let node = res_json["netflow9RawEvents"]["edges"][0]["node"]
+            .as_object()
+            .unwrap();
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+    }
+
+    fn insert_netflow5_raw_event(
+        store: &RawEventStore<Netflow5>,
+        sensor: &str,
+        timestamp: i64,
+        first: u32,
+        last: u32,
+    ) {
+        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
+        key.extend_from_slice(sensor.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&timestamp.to_be_bytes());
+
+        let event = Netflow5 {
+            src_addr: IpAddr::from_str("10.0.0.1").unwrap(),
+            dst_addr: IpAddr::from_str("10.0.0.2").unwrap(),
+            next_hop: IpAddr::from_str("10.0.0.3").unwrap(),
+            input: 1,
+            output: 2,
+            d_pkts: 10,
+            d_octets: 20,
+            first,
+            last,
+            src_port: 1000,
+            dst_port: 2000,
+            tcp_flags: 0x03,
+            prot: 6,
+            tos: 0x1f,
+            src_as: 12,
+            dst_as: 34,
+            src_mask: 24,
+            dst_mask: 24,
+            sequence: 55,
+            engine_type: 1,
+            engine_id: 2,
+            sampling_mode: 0,
+            sampling_rate: 100,
+        };
+        let value = bincode::serialize(&event).unwrap();
+        store.append(&key, &value).unwrap();
+    }
+
+    fn insert_netflow9_raw_event(store: &RawEventStore<Netflow9>, sensor: &str, timestamp: i64) {
+        let mut key = Vec::with_capacity(sensor.len() + 1 + std::mem::size_of::<i64>());
+        key.extend_from_slice(sensor.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&timestamp.to_be_bytes());
+
+        let event = Netflow9 {
+            sequence: 42,
+            source_id: 7,
+            template_id: 9,
+            orig_addr: IpAddr::from_str("10.1.0.1").unwrap(),
+            orig_port: 345,
+            resp_addr: IpAddr::from_str("10.1.0.2").unwrap(),
+            resp_port: 678,
+            proto: 17,
+            contents: "netflow9_contents".to_string(),
+        };
+        let value = bincode::serialize(&event).unwrap();
+        store.append(&key, &value).unwrap();
+    }
+}

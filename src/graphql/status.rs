@@ -429,6 +429,23 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn config_retention_fomat_stability() {
+        let schema = TestSchema::new();
+        let query = r"
+        {
+            config {
+                retention
+            }
+        }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let config = data["config"].as_object().unwrap();
+        assert_eq!(config["retention"].as_str().unwrap(), "100d");
+    }
+
     fn old_config() -> String {
         toml::toml!(
             ingest_srv_addr = "0.0.0.0:38370"
