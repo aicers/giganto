@@ -1,3 +1,3 @@
-query SearchLdapRawEvents($filter: SearchFilter!){
-    searchLdapRawEvents(filter: $filter)
+query SearchLdapRawEvents($filter: SearchFilter!) {
+  searchLdapRawEvents(filter: $filter)
 }

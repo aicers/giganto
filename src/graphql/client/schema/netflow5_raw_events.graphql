@@ -1,39 +1,51 @@
-query Netflow5RawEvents($filter: NetflowFilter!, $after: String, $before: String, $first: Int, $last: Int){
-    netflow5RawEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                srcAddr
-                dstAddr
-                nextHop
-                input
-                output
-                dPkts
-                dOctets
-                first
-                last
-                srcPort
-                dstPort
-                tcpFlags
-                prot
-                tos
-                srcAs
-                dstAs
-                srcMask
-                dstMask
-                sequence
-                engineType
-                engineId
-                samplingMode
-                samplingRate
-            }
-        }
+query Netflow5RawEvents(
+  $filter: NetflowFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  netflow5RawEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        srcAddr
+        dstAddr
+        nextHop
+        input
+        output
+        dPkts
+        dOctets
+        first
+        last
+        srcPort
+        dstPort
+        tcpFlags
+        prot
+        tos
+        srcAs
+        dstAs
+        srcMask
+        dstMask
+        sequence
+        engineType
+        engineId
+        samplingMode
+        samplingRate
+      }
+    }
+  }
 }

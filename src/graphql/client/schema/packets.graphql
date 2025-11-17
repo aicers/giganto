@@ -1,18 +1,30 @@
-query Packets($filter: PacketFilter!, $first: Int, $after: String, $last: Int, $before: String) {
-    packets(filter: $filter, first: $first, after: $after, last: $last, before: $before) {
-        edges {
-            node {
-                requestTime
-                packetTime
-                packet
-            }
-            cursor
-        }
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
+query Packets(
+  $filter: PacketFilter!
+  $first: Int
+  $after: String
+  $last: Int
+  $before: String
+) {
+  packets(
+    filter: $filter
+    first: $first
+    after: $after
+    last: $last
+    before: $before
+  ) {
+    edges {
+      node {
+        requestTime
+        packetTime
+        packet
+      }
+      cursor
     }
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+  }
 }

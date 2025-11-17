@@ -1,6 +1,6 @@
 query Pcap($filter: PacketFilter!) {
-    pcap(filter: $filter) {
-        requestTime
-        parsedPcap
-    }
+  pcap(filter: $filter) {
+    requestTime
+    parsedPcap
+  }
 }

@@ -1,3 +1,3 @@
-query SearchFileDeleteDetectedEvents($filter: SearchFilter!){
-    searchFileDeleteDetectedEvents(filter: $filter)
+query SearchFileDeleteDetectedEvents($filter: SearchFilter!) {
+  searchFileDeleteDetectedEvents(filter: $filter)
 }
