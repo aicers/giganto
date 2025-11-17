@@ -52,19 +52,18 @@ extern crate proc_macro;
 /// #[derive(GraphQLQuery)]
 /// #[graphql(
 ///     schema_path = "src/graphql/client/schema/schema.graphql",
-///     query_path = "src/graphql/client/schema/conn_raw_events.graphql",
+///     query_path = "src/graphql/client/schema/example_raw_events.graphql",
 ///     response_derives = "Clone, Default, PartialEq"
 /// )]
-/// pub struct ConnRawEvents;
+/// pub struct ExampleRawEvents;
 ///
 /// #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
-/// #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent])]
-/// struct ConnRawEvent {
+/// #[graphql_client_type(names = [example_raw_events::ExampleRawEventsExampleRawEventsEdgesNode, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEvent])]
+/// struct ExampleRawEvent {
 ///     time: DateTime,
 ///     orig_port: Option<u16>,
 ///     proto: u8,
 ///     start_time: i64,
-///     end_time: i64,
 ///     service: String,
 ///     resp_pkts: u64,
 ///     ttl: Vec<i32>,
@@ -74,33 +73,32 @@ extern crate proc_macro;
 ///     #[graphql_client_type(skip = true)]
 ///     some_field: String,
 ///     #[graphql_client_type(recursive_into = true)]
-///     details: Vec<ConnRawEventDetail>,
+///     details: Vec<ExampleRawEventDetail>,
 /// }
 ///
-/// #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetails, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetails])]
-/// pub struct ConnRawEventDetail {
+/// #[graphql_client_type(names = [example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetails, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetails])]
+/// pub struct ExampleRawEventDetail {
 ///     pub protocol: String,
 ///     pub pps: Option<f64>,
 ///     #[graphql_client_type(recursive_into = true)]
-///     pub link: Vec<ConnRawEventHelpLink>,
+///     pub link: Vec<ExampleRawEventHelpLink>,
 /// }
 ///
-/// #[graphql_client_type(names = [conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetailsLink, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetailsLink])]
-/// pub struct ConnRawEventHelpLink {
+/// #[graphql_client_type(names = [example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetailsLink, network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetailsLink])]
+/// pub struct ExampleRawEventHelpLink {
 ///     pub url: String,
 /// }
 ///```
 ///
 /// Above code expands to below.
 /// ```no_run
-/// impl From<conn_raw_events::ConnRawEventsConnRawEventsEdgesNode> for ConnRawEvent {
-///     fn from(node: conn_raw_events::ConnRawEventsConnRawEventsEdgesNode) -> Self {
+/// impl From<example_raw_events::ExampleRawEventsExampleRawEventsEdgesNode> for ExampleRawEvent {
+///     fn from(node: example_raw_events::ExampleRawEventsExampleRawEventsEdgesNode) -> Self {
 ///         Self {
 ///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
 ///             start_time: node.start_time as _,
-///             end_time: node.end_time as _,
 ///             service: node.service as _,
 ///             resp_pkts: node.resp_pkts as _,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
@@ -111,14 +109,13 @@ extern crate proc_macro;
 ///     }
 /// }
 ///
-/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent> for ConnRawEvent {
-///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEvent) -> Self {
+/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEvent> for ExampleRawEvent {
+///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEvent) -> Self {
 ///         Self {
 ///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
 ///             start_time: node.start_time as _,
-///             end_time: node.end_time as _,
 ///             service: node.service as _,
 ///             resp_pkts: node.resp_pkts as _,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
@@ -129,8 +126,8 @@ extern crate proc_macro;
 ///     }
 /// }
 ///
-/// impl From<conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetails> for ConnRawEventDetail {
-///     fn from(node: conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetails) -> Self {
+/// impl From<example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetails> for ExampleRawEventDetail {
+///     fn from(node: example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetails) -> Self {
 ///         Self {
 ///             protocol: node.protocol,
 ///             pps: node.pps,
@@ -139,8 +136,8 @@ extern crate proc_macro;
 ///     }
 /// }
 ///
-/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetails> for ConnRawEventDetail {
-///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetails) -> Self {
+/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetails> for ExampleRawEventDetail {
+///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetails) -> Self {
 ///         Self {
 ///             protocol: node.protocol,
 ///             pps: node.pps,
@@ -149,16 +146,16 @@ extern crate proc_macro;
 ///     }
 /// }
 ///
-/// impl From<conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetailsLink> for ConnRawEventHelpLink {
-///     fn from(node: conn_raw_events::ConnRawEventsConnRawEventsEdgesNodeDetailsLink) -> Self {
+/// impl From<example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetailsLink> for ExampleRawEventHelpLink {
+///     fn from(node: example_raw_events::ExampleRawEventsExampleRawEventsEdgesNodeDetailsLink) -> Self {
 ///         Self {
 ///             url: node.url,
 ///         }
 ///     }
 /// }
 ///
-/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetailsLink> for ConnRawEventHelpLink {
-///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnConnRawEventDetailsLink) -> Self {
+/// impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetailsLink> for ExampleRawEventHelpLink {
+///     fn from(node: network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnExampleRawEventDetailsLink) -> Self {
 ///         Self {
 ///             url: node.url,
 ///         }
