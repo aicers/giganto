@@ -1,3 +1,3 @@
-query SearchDceRpcRawEvents($filter: SearchFilter!){
-    searchDceRpcRawEvents(filter: $filter)
+query SearchDceRpcRawEvents($filter: SearchFilter!) {
+  searchDceRpcRawEvents(filter: $filter)
 }

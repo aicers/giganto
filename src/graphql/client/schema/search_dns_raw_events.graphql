@@ -1,3 +1,3 @@
-query SearchDnsRawEvents($filter: SearchFilter!){
-    searchDnsRawEvents(filter: $filter)
+query SearchDnsRawEvents($filter: SearchFilter!) {
+  searchDnsRawEvents(filter: $filter)
 }

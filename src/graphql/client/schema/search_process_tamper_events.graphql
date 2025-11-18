@@ -1,3 +1,3 @@
-query SearchProcessTamperEvents($filter: SearchFilter!){
-    searchProcessTamperEvents(filter: $filter)
+query SearchProcessTamperEvents($filter: SearchFilter!) {
+  searchProcessTamperEvents(filter: $filter)
 }

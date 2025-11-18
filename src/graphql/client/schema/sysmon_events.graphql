@@ -1,209 +1,221 @@
-query SysmonEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    sysmonEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                __typename
-                ... on ProcessCreateEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    fileVersion
-                    description
-                    product
-                    company
-                    originalFileName
-                    commandLine
-                    currentDirectory
-                    user
-                    logonGuid
-                    logonId
-                    terminalSessionId
-                    integrityLevel
-                    hashes
-                    parentProcessGuid
-                    parentProcessId
-                    parentImage
-                    parentCommandLine
-                    parentUser
-                }
-                ... on FileCreationTimeChangedEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    targetFilename
-                    creationUtcTime
-                    previousCreationUtcTime
-                    user
-                }
-                ... on NetworkConnectionEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    user
-                    protocol
-                    initiated
-                    sourceIsIpv6
-                    sourceIp
-                    sourceHostname
-                    sourcePort
-                    sourcePortName
-                    destinationIsIpv6
-                    destinationIp
-                    destinationHostname
-                    destinationPort
-                    destinationPortName
-                }
-                ... on ProcessTerminatedEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    user
-                }
-                ... on ImageLoadedEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    imageLoaded
-                    fileVersion
-                    description
-                    product
-                    company
-                    originalFileName
-                    hashes
-                    signed
-                    signature
-                    signatureStatus
-                    user
-                }
-                ... on FileCreateEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    targetFilename
-                    creationUtcTime
-                    user
-                }
-                ... on RegistryValueSetEvent {
-                    time
-                    agentName
-                    agentId
-                    eventType
-                    processGuid
-                    processId
-                    image
-                    targetObject
-                    details
-                    user
-                }
-                ... on RegistryKeyValueRenameEvent {
-                    time
-                    agentName
-                    agentId
-                    eventType
-                    processGuid
-                    processId
-                    image
-                    targetObject
-                    newName
-                    user
-                }
-                ... on FileCreateStreamHashEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    targetFilename
-                    creationUtcTime
-                    hash
-                    contents
-                    user
-                }
-                ... on PipeEventEvent {
-                time
-                    agentName
-                    agentId
-                    eventType
-                    processGuid
-                    processId
-                    pipeName
-                    image
-                    user
-                }
-                ... on DnsEventEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    queryName
-                    queryStatus
-                    queryResults
-                    image
-                    user
-                }
-                ... on FileDeleteEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    user
-                    image
-                    targetFilename
-                    hashes
-                    isExecutable
-                    archived
-                }
-                ... on ProcessTamperingEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    image
-                    tamperType
-                    user
-                }
-                ... on FileDeleteDetectedEvent {
-                    time
-                    agentName
-                    agentId
-                    processGuid
-                    processId
-                    user
-                    image
-                    targetFilename
-                    hashes
-                    isExecutable
-                }
-            }
-        }
+query SysmonEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  sysmonEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        __typename
+        ... on ProcessCreateEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          fileVersion
+          description
+          product
+          company
+          originalFileName
+          commandLine
+          currentDirectory
+          user
+          logonGuid
+          logonId
+          terminalSessionId
+          integrityLevel
+          hashes
+          parentProcessGuid
+          parentProcessId
+          parentImage
+          parentCommandLine
+          parentUser
+        }
+        ... on FileCreationTimeChangedEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          targetFilename
+          creationUtcTime
+          previousCreationUtcTime
+          user
+        }
+        ... on NetworkConnectionEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          user
+          protocol
+          initiated
+          sourceIsIpv6
+          sourceIp
+          sourceHostname
+          sourcePort
+          sourcePortName
+          destinationIsIpv6
+          destinationIp
+          destinationHostname
+          destinationPort
+          destinationPortName
+        }
+        ... on ProcessTerminatedEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          user
+        }
+        ... on ImageLoadedEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          imageLoaded
+          fileVersion
+          description
+          product
+          company
+          originalFileName
+          hashes
+          signed
+          signature
+          signatureStatus
+          user
+        }
+        ... on FileCreateEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          targetFilename
+          creationUtcTime
+          user
+        }
+        ... on RegistryValueSetEvent {
+          time
+          agentName
+          agentId
+          eventType
+          processGuid
+          processId
+          image
+          targetObject
+          details
+          user
+        }
+        ... on RegistryKeyValueRenameEvent {
+          time
+          agentName
+          agentId
+          eventType
+          processGuid
+          processId
+          image
+          targetObject
+          newName
+          user
+        }
+        ... on FileCreateStreamHashEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          targetFilename
+          creationUtcTime
+          hash
+          contents
+          user
+        }
+        ... on PipeEventEvent {
+          time
+          agentName
+          agentId
+          eventType
+          processGuid
+          processId
+          pipeName
+          image
+          user
+        }
+        ... on DnsEventEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          queryName
+          queryStatus
+          queryResults
+          image
+          user
+        }
+        ... on FileDeleteEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          user
+          image
+          targetFilename
+          hashes
+          isExecutable
+          archived
+        }
+        ... on ProcessTamperingEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          tamperType
+          user
+        }
+        ... on FileDeleteDetectedEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          user
+          image
+          targetFilename
+          hashes
+          isExecutable
+        }
+      }
+    }
+  }
 }

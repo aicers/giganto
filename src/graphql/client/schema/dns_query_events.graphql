@@ -1,25 +1,37 @@
-query DnsQueryEvents($filter: NetworkFilter!, $after: String, $before: String, $first: Int, $last: Int ){
-    dnsQueryEvents(filter: $filter, after: $after, before: $before, first: $first, last: $last){
-        pageInfo {
-            hasPreviousPage
-            hasNextPage
-            startCursor
-            endCursor
-        }
-        edges {
-            cursor
-            node {
-                time
-                agentName
-                agentId
-                processGuid
-                processId
-                queryName
-                queryStatus
-                queryResults
-                image
-                user
-            }
-        }
+query DnsQueryEvents(
+  $filter: NetworkFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  dnsQueryEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
     }
+    edges {
+      cursor
+      node {
+        time
+        agentName
+        agentId
+        processGuid
+        processId
+        queryName
+        queryStatus
+        queryResults
+        image
+        user
+      }
+    }
+  }
 }
