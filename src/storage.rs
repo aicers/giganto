@@ -508,7 +508,9 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
+        let current = Instant::now();
         self.db.put_cf(self.cf, key, raw_event)?;
+        debug!("appended: {:?}", current.elapsed());
         Ok(())
     }
 
@@ -518,7 +520,15 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     pub fn flush(&self) -> Result<()> {
+        let requested_at = Utc::now();
+        let current = Instant::now();
         self.db.flush_wal(true)?;
+        debug!(
+            "flushed WAL (requested: {}, completed: {}, duration: {:?})",
+            requested_at,
+            Utc::now(),
+            current.elapsed()
+        );
         Ok(())
     }
 

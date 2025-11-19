@@ -6,7 +6,11 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{TimeZone, Utc};
@@ -676,7 +680,18 @@ async fn handle_request(
     match msg_type {
         MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
-                .map_err(|e| anyhow!("Failed to deserialize message: {}", e))?;
+                .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
+            let requested_at = Utc::now();
+            let timer = Instant::now();
+            let sensor = msg.sensor.clone();
+            let kind = msg.kind.clone();
+            let start = msg.start;
+            let end = msg.end;
+            let count = msg.count;
+            debug!(
+                "Range request received at {} (sensor: {}, kind: {}, start: {}, end: {}, count: {})",
+                requested_at, sensor, kind, start, end, count
+            );
 
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
@@ -1157,6 +1172,17 @@ async fn handle_request(
                     warn!("Not expected to reach here");
                 }
             }
+            debug!(
+                "Range request completed at {} (requested at {}, duration: {:?}, sensor: {}, kind: {}, start: {}, end: {}, count: {})",
+                Utc::now(),
+                requested_at,
+                timer.elapsed(),
+                sensor,
+                kind,
+                start,
+                end,
+                count
+            );
         }
         MessageCode::Pcap => {
             process_pcap_extract(
