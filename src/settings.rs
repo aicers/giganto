@@ -25,7 +25,7 @@ const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
 const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
-const DEFAULT_SECONDARY_SYNC_INTERVAL: &str = "5s";
+const DEFAULT_SECONDARY_SYNC_INTERVAL: &str = "1s";
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -105,16 +105,12 @@ pub struct ConfigVisible {
     pub compression: bool,
 
     /// Interval for syncing RocksDB secondary databases with the primary.
-    #[serde(with = "humantime_serde", default = "default_secondary_sync_interval")]
+    #[serde(with = "humantime_serde")]
     pub secondary_sync_interval: Duration,
 }
 
 fn default_compression() -> bool {
     true
-}
-
-fn default_secondary_sync_interval() -> Duration {
-    Duration::from_secs(5)
 }
 
 impl Settings {
