@@ -18,6 +18,7 @@ use std::{
     path::PathBuf,
     process::Command,
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::anyhow;
@@ -36,7 +37,7 @@ use serde::Deserialize;
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::NamedTempFile;
 use tokio::sync::{Notify, mpsc::Sender};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
     IngestSensors, PcapSensors,
@@ -271,7 +272,9 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() && key.as_ref() == cursor {
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
             iter.next();
         }
         let (mut records, has_previous) = collect_records(iter, last, filter);
@@ -305,7 +308,9 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() && key.as_ref() == cursor {
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
             iter.next();
         }
         let (records, has_next) = collect_records(iter, first, filter);
@@ -392,7 +397,9 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() && key.as_ref() == cursor {
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
             iter.next();
         }
         let (mut records, has_previous) = collect_records(iter, last, filter);
@@ -424,7 +431,9 @@ where
         let mut iter = store
             .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
             .peekable();
-        if let Some(Ok((key, _))) = iter.peek() && key.as_ref() == cursor {
+        if let Some(Ok((key, _))) = iter.peek()
+            && key.as_ref() == cursor
+        {
             iter.next();
         }
         let (records, has_next) = collect_records(iter, first, filter);
@@ -829,7 +838,11 @@ where
     N: FromKeyValue<T> + OutputType,
     T: DeserializeOwned + EventFilter,
 {
-    query(
+    let requested_at = Utc::now();
+    let timer = Instant::now();
+    let (range_start, range_end) = filter.get_range_end_key();
+
+    let result = query(
         after,
         before,
         first,
@@ -838,7 +851,32 @@ where
             load_connection::<N, T>(&*store, &filter, after, before, first, last)
         },
     )
-    .await
+    .await;
+
+    match &result {
+        Ok(connection) => {
+            debug!(
+                "Query request completed at {} (requested at {}, duration: {:?}, range_start: {:?}, range_end: {:?}, items: {})",
+                Utc::now(),
+                requested_at,
+                timer.elapsed(),
+                range_start,
+                range_end,
+                connection.edges.len()
+            );
+        }
+        Err(e) => {
+            error!(
+                "Query request failed at {} (requested at {}, duration: {:?}): {:?}",
+                Utc::now(),
+                requested_at,
+                timer.elapsed(),
+                e
+            );
+        }
+    }
+
+    result
 }
 
 // This macro helps to reduce boilerplate for handling
