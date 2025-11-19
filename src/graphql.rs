@@ -14,7 +14,9 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
+use std::{
+    collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc, time::Instant,
+};
 
 use anyhow::anyhow;
 use async_graphql::async_trait::async_trait;
@@ -32,7 +34,7 @@ use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::NamedTempFile;
 use tokio::sync::{Notify, mpsc::Sender};
-use tracing::error;
+use tracing::{debug, error};
 
 #[cfg(feature = "cluster")]
 pub(crate) use crate::graphql::client::cluster::{
@@ -874,7 +876,11 @@ where
     N: FromKeyValue<T> + OutputType,
     T: DeserializeOwned + EventFilter,
 {
-    query(
+    let requested_at = Utc::now();
+    let timer = Instant::now();
+    let (range_start, range_end) = filter.get_range_end_key();
+
+    let result = query(
         after,
         before,
         first,
@@ -883,7 +889,32 @@ where
             load_connection::<N, T>(store.as_ref(), &filter, after, before, first, last)
         },
     )
-    .await
+    .await;
+
+    match &result {
+        Ok(connection) => {
+            debug!(
+                "Query request completed at {} (requested at {}, duration: {:?}, range_start: {:?}, range_end: {:?}, items: {})",
+                Utc::now(),
+                requested_at,
+                timer.elapsed(),
+                range_start,
+                range_end,
+                connection.edges.len()
+            );
+        }
+        Err(e) => {
+            error!(
+                "Query request failed at {} (requested at {}, duration: {:?}): {:?}",
+                Utc::now(),
+                requested_at,
+                timer.elapsed(),
+                e
+            );
+        }
+    }
+
+    result
 }
 
 /// Generates the GraphQL schema.
