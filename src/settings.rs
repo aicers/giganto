@@ -105,7 +105,7 @@ pub struct ConfigVisible {
     pub compression: bool,
 
     /// Interval for syncing RocksDB secondary databases with the primary.
-    #[serde(with = "humantime_serde", default = "default_secondary_sync_interval")]
+    #[serde(with = "humantime_serde", default = "default_csecondary_sync_interval")]
     pub secondary_sync_interval: Duration,
 }
 
@@ -113,7 +113,7 @@ fn default_compression() -> bool {
     true
 }
 
-fn default_secondary_sync_interval() -> Duration {
+fn default_csecondary_sync_interval() -> Duration {
     Duration::from_secs(5)
 }
 
