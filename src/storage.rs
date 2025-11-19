@@ -521,9 +521,16 @@ impl Database {
 
     fn catch_up_if_secondary(&self) -> Result<()> {
         if self.mode == DatabaseMode::Secondary {
+            let requested_at = Utc::now();
+            let timer = Instant::now();
             self.db
                 .try_catch_up_with_primary()
                 .context("failed to synchronize secondary database with primary")?;
+            debug!(
+                "catch up with primary completed (requested at {}, duration: {:?})",
+                requested_at,
+                timer.elapsed()
+            );
         }
         Ok(())
     }
@@ -692,7 +699,9 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     fn append_impl(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
+        let current = Instant::now();
         self.db.put_cf(self.cf, key, raw_event)?;
+        debug!("appended: {:?}", current.elapsed());
         Ok(())
     }
 
@@ -702,7 +711,15 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     fn flush_impl(&self) -> Result<()> {
+        let requested_at = Utc::now();
+        let current = Instant::now();
         self.db.flush_wal(true)?;
+        debug!(
+            "flushed WAL (requested: {}, completed: {}, duration: {:?})",
+            requested_at,
+            Utc::now(),
+            current.elapsed()
+        );
         Ok(())
     }
 
