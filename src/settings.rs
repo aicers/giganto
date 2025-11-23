@@ -124,13 +124,22 @@ impl Settings {
     }
 
     pub fn update_config_file(&mut self, new_config: &ConfigVisible) -> anyhow::Result<()> {
-        self.config.visible = new_config.clone();
+        // Create a temporary config with the new visible settings to serialize
+        let temp_config = Config {
+            addr_to_peers: self.config.addr_to_peers,
+            peers: self.config.peers.clone(),
+            visible: new_config.clone(),
+        };
 
-        let toml_str = toml::to_string(&self.config)?;
+        let toml_str = toml::to_string(&temp_config)?;
         let doc = toml_str.parse::<DocumentMut>()?;
 
+        // Perform persistence operations first; only update in-memory state if both succeed
         backup_toml_file(&self.cfg_path)?;
         write_toml_file(&doc, &self.cfg_path)?;
+
+        // Only update in-memory config after successful persistence
+        self.config.visible = temp_config.visible;
 
         Ok(())
     }
@@ -228,4 +237,198 @@ where
             })?))
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{fs, io::Write};
+
+    use super::*;
+
+    /// Helper function to create a temporary test config file
+    fn create_test_config() -> (tempfile::NamedTempFile, ConfigVisible) {
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("Failed to create temp file");
+
+        let config_content = r#"
+graphql_srv_addr = "[::]:8443"
+ingest_srv_addr = "[::]:38370"
+publish_srv_addr = "[::]:38371"
+retention = "100d"
+data_dir = "/tmp/test_data"
+export_dir = "/tmp/test_export"
+max_open_files = 8000
+max_mb_of_level_base = 512
+num_of_thread = 8
+max_subcompactions = 2
+ack_transmission = 1024
+"#;
+
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config");
+        temp_file.flush().expect("Failed to flush");
+
+        // Create the required directories
+        fs::create_dir_all("/tmp/test_data").expect("Failed to create test_data dir");
+        fs::create_dir_all("/tmp/test_export").expect("Failed to create test_export dir");
+
+        let config_visible = ConfigVisible {
+            graphql_srv_addr: "[::]:8443".parse().unwrap(),
+            ingest_srv_addr: "[::]:38370".parse().unwrap(),
+            publish_srv_addr: "[::]:38371".parse().unwrap(),
+            retention: Duration::from_secs(100 * 24 * 60 * 60),
+            data_dir: PathBuf::from("/tmp/test_data"),
+            export_dir: PathBuf::from("/tmp/test_export"),
+            max_open_files: 8000,
+            max_mb_of_level_base: 512,
+            num_of_thread: 8,
+            max_subcompactions: 2,
+            ack_transmission: 1024,
+            compression: true,
+        };
+
+        (temp_file, config_visible)
+    }
+
+    #[test]
+    fn test_update_config_file_readonly_failure_preserves_state() {
+        let (temp_file, original_config) = create_test_config();
+        let config_path = temp_file.path().to_str().unwrap();
+
+        // Load settings from the temporary config file
+        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+
+        // Store the original config for comparison
+        let original_visible = settings.config.visible.clone();
+
+        // Create a new config with different values
+        let new_config = ConfigVisible {
+            graphql_srv_addr: "[::]:9999".parse().unwrap(),
+            ingest_srv_addr: original_config.ingest_srv_addr,
+            publish_srv_addr: original_config.publish_srv_addr,
+            retention: original_config.retention,
+            data_dir: original_config.data_dir.clone(),
+            export_dir: original_config.export_dir.clone(),
+            max_open_files: original_config.max_open_files,
+            max_mb_of_level_base: original_config.max_mb_of_level_base,
+            num_of_thread: original_config.num_of_thread,
+            max_subcompactions: original_config.max_subcompactions,
+            ack_transmission: original_config.ack_transmission,
+            compression: original_config.compression,
+        };
+
+        // Make the file read-only to force a write failure
+        let mut permissions = fs::metadata(config_path)
+            .expect("Failed to get metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(config_path, permissions).expect("Failed to set read-only");
+
+        // Attempt to update the config file, which should fail
+        let result = settings.update_config_file(&new_config);
+
+        // Make the file writable again for cleanup
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(config_path)
+                .expect("Failed to get metadata")
+                .permissions();
+            permissions.set_mode(0o644); // rw-r--r--
+            fs::set_permissions(config_path, permissions).expect("Failed to set writable");
+        }
+        #[cfg(not(unix))]
+        {
+            let mut permissions = fs::metadata(config_path)
+                .expect("Failed to get metadata")
+                .permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(config_path, permissions).expect("Failed to set writable");
+        }
+
+        // Verify that the update failed
+        assert!(
+            result.is_err(),
+            "Expected update_config_file to fail on read-only file"
+        );
+
+        // Verify that the in-memory config was NOT changed
+        assert_eq!(
+            settings.config.visible, original_visible,
+            "In-memory config should remain unchanged after failed update"
+        );
+    }
+
+    #[test]
+    fn test_update_config_file_success_updates_both_memory_and_disk() {
+        let (temp_file, original_config) = create_test_config();
+        let config_path = temp_file.path().to_str().unwrap();
+
+        // Load settings from the temporary config file
+        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+
+        // Create a new config with different values
+        let new_config = ConfigVisible {
+            graphql_srv_addr: "[::]:9999".parse().unwrap(),
+            ingest_srv_addr: "[::]:12345".parse().unwrap(),
+            publish_srv_addr: original_config.publish_srv_addr,
+            retention: Duration::from_secs(200 * 24 * 60 * 60), // 200 days
+            data_dir: original_config.data_dir.clone(),
+            export_dir: original_config.export_dir.clone(),
+            max_open_files: 9000,
+            max_mb_of_level_base: original_config.max_mb_of_level_base,
+            num_of_thread: original_config.num_of_thread,
+            max_subcompactions: original_config.max_subcompactions,
+            ack_transmission: original_config.ack_transmission,
+            compression: original_config.compression,
+        };
+
+        // Update the config file, which should succeed
+        let result = settings.update_config_file(&new_config);
+        assert!(result.is_ok(), "Expected update_config_file to succeed");
+
+        // Verify that the in-memory config was updated
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr, new_config.graphql_srv_addr,
+            "In-memory graphql_srv_addr should be updated"
+        );
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr, new_config.ingest_srv_addr,
+            "In-memory ingest_srv_addr should be updated"
+        );
+        assert_eq!(
+            settings.config.visible.max_open_files, new_config.max_open_files,
+            "In-memory max_open_files should be updated"
+        );
+
+        // Reload settings from disk to verify persistence
+        let reloaded_settings =
+            Settings::from_file(config_path).expect("Failed to reload settings from disk");
+
+        // Verify that the persisted config matches the new config
+        assert_eq!(
+            reloaded_settings.config.visible.graphql_srv_addr, new_config.graphql_srv_addr,
+            "Persisted graphql_srv_addr should match new config"
+        );
+        assert_eq!(
+            reloaded_settings.config.visible.ingest_srv_addr, new_config.ingest_srv_addr,
+            "Persisted ingest_srv_addr should match new config"
+        );
+        assert_eq!(
+            reloaded_settings.config.visible.max_open_files, new_config.max_open_files,
+            "Persisted max_open_files should match new config"
+        );
+
+        // Verify that a backup file was created
+        let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
+        assert!(
+            backup_path.exists(),
+            "Backup file should be created at {}",
+            backup_path.display()
+        );
+    }
 }

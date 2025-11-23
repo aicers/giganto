@@ -89,6 +89,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed config update consistency issue where in-memory settings could diverge
+  from the persisted config file if backup or write operations failed.
+  `Settings::update_config_file` now defers in-memory state mutation until
+  after both backup and file write operations succeed, ensuring memory and disk
+  remain synchronized.
 - Fixed packet extraction request routing to ensure requests are only sent to
   actual sensor connections. Connection information is now stored in
   `pcap_sensors` only when the connected agent is identified as a sensor
