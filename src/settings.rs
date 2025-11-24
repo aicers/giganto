@@ -241,49 +241,55 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::{fs, io::Write};
 
     use super::*;
 
     /// Helper function to create a temporary test config file
-    fn create_test_config() -> (tempfile::NamedTempFile, ConfigVisible) {
+    fn create_test_config() -> (
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        ConfigVisible,
+    ) {
         let mut temp_file = tempfile::Builder::new()
             .suffix(".toml")
             .tempfile()
             .expect("Failed to create temp file");
 
-        let config_content = r#"
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
+
+        let config_content = format!(
+            r#"
 graphql_srv_addr = "[::]:8443"
 ingest_srv_addr = "[::]:38370"
 publish_srv_addr = "[::]:38371"
 retention = "100d"
-data_dir = "/tmp/test_data"
-export_dir = "/tmp/test_export"
+data_dir = "{}"
+export_dir = "{}"
 max_open_files = 8000
 max_mb_of_level_base = 512
 num_of_thread = 8
 max_subcompactions = 2
 ack_transmission = 1024
-"#;
+"#,
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
 
         temp_file
             .write_all(config_content.as_bytes())
             .expect("Failed to write config");
         temp_file.flush().expect("Failed to flush");
 
-        // Create the required directories
-        fs::create_dir_all("/tmp/test_data").expect("Failed to create test_data dir");
-        fs::create_dir_all("/tmp/test_export").expect("Failed to create test_export dir");
-
         let config_visible = ConfigVisible {
             graphql_srv_addr: "[::]:8443".parse().unwrap(),
             ingest_srv_addr: "[::]:38370".parse().unwrap(),
             publish_srv_addr: "[::]:38371".parse().unwrap(),
             retention: Duration::from_secs(100 * 24 * 60 * 60),
-            data_dir: PathBuf::from("/tmp/test_data"),
-            export_dir: PathBuf::from("/tmp/test_export"),
+            data_dir: data_dir.path().to_path_buf(),
+            export_dir: export_dir.path().to_path_buf(),
             max_open_files: 8000,
             max_mb_of_level_base: 512,
             num_of_thread: 8,
@@ -292,12 +298,12 @@ ack_transmission = 1024
             compression: true,
         };
 
-        (temp_file, config_visible)
+        (temp_file, data_dir, export_dir, config_visible)
     }
 
     #[test]
     fn test_update_config_file_readonly_failure_preserves_state() {
-        let (temp_file, original_config) = create_test_config();
+        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config();
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
@@ -332,24 +338,6 @@ ack_transmission = 1024
         // Attempt to update the config file, which should fail
         let result = settings.update_config_file(&new_config);
 
-        // Make the file writable again for cleanup
-        #[cfg(unix)]
-        {
-            let mut permissions = fs::metadata(config_path)
-                .expect("Failed to get metadata")
-                .permissions();
-            permissions.set_mode(0o644); // rw-r--r--
-            fs::set_permissions(config_path, permissions).expect("Failed to set writable");
-        }
-        #[cfg(not(unix))]
-        {
-            let mut permissions = fs::metadata(config_path)
-                .expect("Failed to get metadata")
-                .permissions();
-            permissions.set_readonly(false);
-            fs::set_permissions(config_path, permissions).expect("Failed to set writable");
-        }
-
         // Verify that the update failed
         assert!(
             result.is_err(),
@@ -361,11 +349,15 @@ ack_transmission = 1024
             settings.config.visible, original_visible,
             "In-memory config should remain unchanged after failed update"
         );
+
+        // Remove any backup file created during the failed update attempt
+        let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
+        fs::remove_file(backup_path).expect("Failed to remove backup file");
     }
 
     #[test]
     fn test_update_config_file_success_updates_both_memory_and_disk() {
-        let (temp_file, original_config) = create_test_config();
+        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config();
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
@@ -430,5 +422,8 @@ ack_transmission = 1024
             "Backup file should be created at {}",
             backup_path.display()
         );
+
+        // Clean up the backup file created during the test
+        fs::remove_file(backup_path).expect("Failed to remove backup file");
     }
 }
