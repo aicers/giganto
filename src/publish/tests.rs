@@ -40,8 +40,8 @@ use crate::{
     new_pcap_sensors, new_peers_data, new_stream_direct_channels,
     peer::{PeerIdentity, PeerInfo},
     server::Certs,
-    to_cert_chain, to_private_key, to_root_cert,
     storage::{Database, DbOptions, WritableRawEventStore},
+    to_cert_chain, to_private_key, to_root_cert,
 };
 
 fn get_token() -> &'static Mutex<u32> {
@@ -593,7 +593,6 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
 
     bincode::serialize(&dhcp_body).unwrap()
 }
-
 
 fn insert_conn_raw_event(
     store: &dyn WritableRawEventStore<Conn>,

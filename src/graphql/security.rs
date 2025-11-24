@@ -189,8 +189,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.secu_log_store_writable().unwrap();
 
-        insert_secu_log_event(store.as_ref(), "device", "src1", 1);
-        insert_secu_log_event(store.as_ref(), "device", "src 1", 2);
+        insert_secu_log_event(&*store, "device", "src1", 1);
+        insert_secu_log_event(&*store, "device", "src 1", 2);
 
         let query = r#"
         {

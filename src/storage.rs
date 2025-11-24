@@ -289,7 +289,7 @@ impl Database {
     }
 
     /// Returns the raw event store for all type.
-    pub fn retain_period_store(&self) -> Result<RetentionStores<()>> {
+    pub fn retain_period_store(&self) -> Result<RetentionStores<'_, ()>> {
         let mut stores = RetentionStores::new();
 
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
@@ -337,29 +337,6 @@ impl Database {
             .cf_handle(cf_name)
             .context("cannot access {cf_name} column family")
     }
-
-    /// Creates a snapshot-based iterator for counting entries in a column family.
-    /// This is intended for precise counting operations that require consistency.
-    #[cfg(feature = "count_events")]
-    pub fn count_cf_entries(&self, cf_name: &str) -> Result<i32> {
-        let cf = self.get_cf_handle(cf_name)?;
-        let snap = self.db.snapshot();
-
-        let mut ro = rocksdb::ReadOptions::default();
-        ro.set_total_order_seek(true);
-        let iter = snap.iterator_cf_opt(cf, ro, rocksdb::IteratorMode::Start);
-
-        let mut count = 0i32;
-        for item in iter {
-            item.context("failed to read from database")?;
-            count = count
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("count overflow"))?;
-        }
-
-        Ok(count)
-    }
-
     impl_store!(conn_store, conn_store_writable, "conn", Conn);
     impl_store!(dns_store, dns_store_writable, "dns", Dns);
     impl_store!(log_store, log_store_writable, "log", Log);
@@ -551,10 +528,6 @@ impl<'db, T> ReadableRawEventStoreHandle<'db, T> {
     fn new(inner: Box<dyn ReadableRawEventStore<'db, T> + 'db>) -> Self {
         Self(inner)
     }
-
-    pub fn as_ref(&self) -> &(dyn ReadableRawEventStore<'db, T> + 'db) {
-        &*self.0
-    }
 }
 
 impl<'db, T> Deref for ReadableRawEventStoreHandle<'db, T> {
@@ -570,10 +543,6 @@ pub struct WritableRawEventStoreHandle<'db, T>(Box<dyn WritableRawEventStore<'db
 impl<'db, T> WritableRawEventStoreHandle<'db, T> {
     fn new(inner: Box<dyn WritableRawEventStore<'db, T> + 'db>) -> Self {
         Self(inner)
-    }
-
-    pub fn as_ref(&self) -> &(dyn WritableRawEventStore<'db, T> + 'db) {
-        &*self.0
     }
 }
 
@@ -994,11 +963,11 @@ impl StorageKeyBuilder {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
-            if let Some(ns) = ns.checked_sub(1) {
-                if ns >= 0 {
-                    self.pre_key.extend_from_slice(&ns.to_be_bytes());
-                    return self;
-                }
+            if let Some(ns) = ns.checked_sub(1)
+                && ns >= 0
+            {
+                self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                return self;
             }
         }
         self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
@@ -1056,11 +1025,11 @@ impl StorageTimestampKeyBuilder {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
-            if let Some(ns) = ns.checked_sub(1) {
-                if ns >= 0 {
-                    self.pre_key.extend_from_slice(&ns.to_be_bytes());
-                    return self;
-                }
+            if let Some(ns) = ns.checked_sub(1)
+                && ns >= 0
+            {
+                self.pre_key.extend_from_slice(&ns.to_be_bytes());
+                return self;
             }
         }
         self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
@@ -1364,75 +1333,6 @@ pub(crate) fn data_dir_to_db_path(data_dir: &Path) -> PathBuf {
 
 pub(crate) fn data_dir_to_secondary_path(data_dir: &Path) -> PathBuf {
     data_dir.join("db-secondary")
-}
-
-/// Stores the compression setting to a metadata file.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be created or written to.
-fn store_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
-    let metadata_path = data_dir.join("COMPRESSION");
-    let content = if compression { "enabled" } else { "disabled" };
-    std::fs::write(metadata_path, content).context("failed to write compression metadata")?;
-    Ok(())
-}
-
-/// Reads the compression setting from the metadata file.
-///
-/// Returns `None` if the file doesn't exist (first run).
-///
-/// # Errors
-///
-/// Returns an error if the file exists but cannot be read or contains invalid data.
-fn read_compression_metadata(data_dir: &Path) -> Result<Option<bool>> {
-    let metadata_path = data_dir.join("COMPRESSION");
-    if !metadata_path.exists() {
-        return Ok(None);
-    }
-
-    let content =
-        std::fs::read_to_string(&metadata_path).context("failed to read compression metadata")?;
-    match content.trim() {
-        "enabled" => Ok(Some(true)),
-        "disabled" => Ok(Some(false)),
-        other => Err(anyhow!("invalid compression metadata: {other}")),
-    }
-}
-
-/// Validates that the compression setting matches the stored metadata.
-///
-/// If this is the first run (no metadata file), the setting is stored.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The metadata file cannot be read
-/// - The compression setting doesn't match the stored metadata
-pub fn validate_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
-    if let Some(stored_compression) = read_compression_metadata(data_dir)? {
-        if stored_compression != compression {
-            let stored_str = if stored_compression {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            let current_str = if compression { "enabled" } else { "disabled" };
-            bail!(
-                "Compression scheme mismatch: database was created with compression {stored_str}, \
-                 but current configuration has compression {current_str}. \
-                 Changing compression settings is not supported for existing databases. \
-                 Please restore the original compression setting or create a new database."
-            );
-        }
-        Ok(())
-    } else {
-        info!(
-            "First run: storing compression metadata (compression: {})",
-            compression
-        );
-        store_compression_metadata(data_dir, compression)
-    }
 }
 
 pub fn db_path_and_option(

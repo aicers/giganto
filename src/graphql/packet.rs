@@ -74,7 +74,6 @@ impl RawEventFilter for PacketFilter {
 #[allow(clippy::struct_field_names)]
 #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
-#[allow(clippy::struct_field_names)]
 struct Packet {
     request_time: DateTime<Utc>,
     packet_time: DateTime<Utc>,
@@ -258,14 +257,14 @@ mod tests {
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
         let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
-        insert_packet(store.as_ref(), "src 1", ts1, ts1);
-        insert_packet(store.as_ref(), "src 1", ts1, ts2);
+        insert_packet(&*store, "src 1", ts1, ts1);
+        insert_packet(&*store, "src 1", ts1, ts2);
 
-        insert_packet(store.as_ref(), "ingest src 1", ts1, ts1);
-        insert_packet(store.as_ref(), "ingest src 1", ts1, ts3);
+        insert_packet(&*store, "ingest src 1", ts1, ts1);
+        insert_packet(&*store, "ingest src 1", ts1, ts3);
 
-        insert_packet(store.as_ref(), "src 1", ts2, ts1);
-        insert_packet(store.as_ref(), "src 1", ts2, ts3);
+        insert_packet(&*store, "src 1", ts2, ts1);
+        insert_packet(&*store, "src 1", ts2, ts3);
 
         let query = r#"
         {
@@ -352,14 +351,14 @@ mod tests {
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
         let ts3 = dt3.timestamp_nanos_opt().unwrap();
 
-        insert_packet(store.as_ref(), "src 1", ts1, ts1);
-        insert_packet(store.as_ref(), "src 1", ts1, ts2);
+        insert_packet(&*store, "src 1", ts1, ts1);
+        insert_packet(&*store, "src 1", ts1, ts2);
 
-        insert_packet(store.as_ref(), "ingest src 1", ts1, ts1);
-        insert_packet(store.as_ref(), "ingest src 1", ts1, ts3);
+        insert_packet(&*store, "ingest src 1", ts1, ts1);
+        insert_packet(&*store, "ingest src 1", ts1, ts3);
 
-        insert_packet(store.as_ref(), "src 1", ts2, ts1);
-        insert_packet(store.as_ref(), "src 1", ts2, ts3);
+        insert_packet(&*store, "src 1", ts2, ts1);
+        insert_packet(&*store, "src 1", ts2, ts3);
 
         let query = r#"
         {

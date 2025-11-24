@@ -105,6 +105,7 @@ pub struct BootpRawEvents;
 )]
 pub struct DhcpRawEvents;
 
+#[allow(dead_code)]
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/graphql/client/schema/schema.graphql",

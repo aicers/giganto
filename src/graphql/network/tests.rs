@@ -652,9 +652,22 @@ async fn http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store_writable().unwrap();
 
-    insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-
+    insert_http_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
+    insert_http_raw_event(
+        &store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
     let query = r#"
     {
         httpRawEvents(
@@ -946,34 +959,34 @@ async fn rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store_writable().unwrap();
 
-    insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
+    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
+    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
+    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+
+    insert_rdp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
 
     let query = r#"
     {
-        rdpRawEvents(
+        searchRdpRawEvents(
             filter: {
-                time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
                 sensor: "src 1"
                 origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
                 origPort: { start: 46377, end: 46380 }
-                respPort: { start: 0, end: 200 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
             }
-        first: 1
-        ) {
-            edges {
-                node {
-                    origAddr,
-                    respAddr,
-                    origPort,
-                }
-            }
-        }
+        )
     }"#;
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{searchRdpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
 }
 

@@ -1582,7 +1582,7 @@ async fn handle_network_raw_events(
         |after, before, first, last| async move {
             let conn_store = db.conn_store()?;
             let (conn_iter, size) = get_peekable_iter(
-                conn_store.as_ref(),
+                &*conn_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1592,7 +1592,7 @@ async fn handle_network_raw_events(
 
             let dns_store = db.dns_store()?;
             let (dns_iter, _) = get_peekable_iter(
-                dns_store.as_ref(),
+                &*dns_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1600,8 +1600,9 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let http_store = db.http_store()?;
             let (http_iter, _) = get_peekable_iter(
-                http_store.as_ref(),
+                &*http_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1611,7 +1612,7 @@ async fn handle_network_raw_events(
 
             let rdp_store = db.rdp_store()?;
             let (rdp_iter, _) = get_peekable_iter(
-                rdp_store.as_ref(),
+                &*rdp_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1621,7 +1622,7 @@ async fn handle_network_raw_events(
 
             let ntlm_store = db.ntlm_store()?;
             let (ntlm_iter, _) = get_peekable_iter(
-                ntlm_store.as_ref(),
+                &*ntlm_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1631,7 +1632,7 @@ async fn handle_network_raw_events(
 
             let kerberos_store = db.kerberos_store()?;
             let (kerberos_iter, _) = get_peekable_iter(
-                kerberos_store.as_ref(),
+                &*kerberos_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1641,7 +1642,7 @@ async fn handle_network_raw_events(
 
             let ssh_store = db.ssh_store()?;
             let (ssh_iter, _) = get_peekable_iter(
-                ssh_store.as_ref(),
+                &*ssh_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1651,7 +1652,7 @@ async fn handle_network_raw_events(
 
             let dce_rpc_store = db.dce_rpc_store()?;
             let (dce_rpc_iter, _) = get_peekable_iter(
-                dce_rpc_store.as_ref(),
+                &*dce_rpc_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1661,7 +1662,7 @@ async fn handle_network_raw_events(
 
             let ftp_store = db.ftp_store()?;
             let (ftp_iter, _) = get_peekable_iter(
-                ftp_store.as_ref(),
+                &*ftp_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1671,7 +1672,7 @@ async fn handle_network_raw_events(
 
             let mqtt_store = db.mqtt_store()?;
             let (mqtt_iter, _) = get_peekable_iter(
-                mqtt_store.as_ref(),
+                &*mqtt_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1681,7 +1682,7 @@ async fn handle_network_raw_events(
 
             let ldap_store = db.ldap_store()?;
             let (ldap_iter, _) = get_peekable_iter(
-                ldap_store.as_ref(),
+                &*ldap_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1691,7 +1692,7 @@ async fn handle_network_raw_events(
 
             let tls_store = db.tls_store()?;
             let (tls_iter, _) = get_peekable_iter(
-                tls_store.as_ref(),
+                &*tls_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1701,7 +1702,7 @@ async fn handle_network_raw_events(
 
             let smb_store = db.smb_store()?;
             let (smb_iter, _) = get_peekable_iter(
-                smb_store.as_ref(),
+                &*smb_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1711,7 +1712,7 @@ async fn handle_network_raw_events(
 
             let nfs_store = db.nfs_store()?;
             let (nfs_iter, _) = get_peekable_iter(
-                nfs_store.as_ref(),
+                &*nfs_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1721,7 +1722,7 @@ async fn handle_network_raw_events(
 
             let smtp_store = db.smtp_store()?;
             let (smtp_iter, _) = get_peekable_iter(
-                smtp_store.as_ref(),
+                &*smtp_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1731,7 +1732,7 @@ async fn handle_network_raw_events(
 
             let bootp_store = db.bootp_store()?;
             let (bootp_iter, _) = get_peekable_iter(
-                bootp_store.as_ref(),
+                &*bootp_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),
@@ -1741,7 +1742,7 @@ async fn handle_network_raw_events(
 
             let dhcp_store = db.dhcp_store()?;
             let (dhcp_iter, _) = get_peekable_iter(
-                dhcp_store.as_ref(),
+                &*dhcp_store,
                 &filter,
                 after.as_deref(),
                 before.as_deref(),

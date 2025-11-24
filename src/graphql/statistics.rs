@@ -102,7 +102,7 @@ async fn handle_statistics(
     for sensor in sensors {
         for core in 0..MAX_CORE_SIZE {
             let store = db.statistics_store()?;
-            let stats_iter = get_statistics_iter(store.as_ref(), core, sensor, time);
+            let stats_iter = get_statistics_iter(&*store, core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
             if peek_stats_iter.peek().is_some() {
                 stats_iters.push(peek_stats_iter);
@@ -304,9 +304,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store_writable().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(store.as_ref(), now, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(store.as_ref(), now, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(store.as_ref(), now, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event(&*store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(&*store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(&*store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         let query = r#"
     {
@@ -520,33 +520,9 @@ mod tests {
         let store = schema.db.statistics_store_writable().unwrap();
         let timestamp: i64 = 1_702_272_560;
 
-        insert_statistics_raw_event(
-            store.as_ref(),
-            timestamp,
-            "src 1",
-            0,
-            600,
-            1_000_000,
-            300_000_000,
-        );
-        insert_statistics_raw_event(
-            store.as_ref(),
-            timestamp,
-            "src 1",
-            1,
-            600,
-            2_000_000,
-            600_000_000,
-        );
-        insert_statistics_raw_event(
-            store.as_ref(),
-            timestamp,
-            "src 1",
-            2,
-            600,
-            3_000_000,
-            900_000_000,
-        );
+        insert_statistics_raw_event(&*store, timestamp, "src 1", 0, 600, 1_000_000, 300_000_000);
+        insert_statistics_raw_event(&*store, timestamp, "src 1", 1, 600, 2_000_000, 600_000_000);
+        insert_statistics_raw_event(&*store, timestamp, "src 1", 2, 600, 3_000_000, 900_000_000);
 
         // when
         let res = schema.execute(query).await;
@@ -565,5 +541,4 @@ mod tests {
 
         mock.assert_async().await;
     }
-
 }

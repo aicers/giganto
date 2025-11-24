@@ -249,12 +249,7 @@ impl LogQuery {
             last,
             |after, before, first, last| async move {
                 load_connection_by_prefix_timestamp_key(
-                    store.as_ref(),
-                    &filter,
-                    after,
-                    before,
-                    first,
-                    last,
+                    &*store, &filter, after, before, first, last,
                 )
             },
         )

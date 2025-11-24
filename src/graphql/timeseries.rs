@@ -131,8 +131,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store_writable().unwrap();
 
-        insert_time_series(store.as_ref(), "src 1", 1, vec![0.0; 12]);
-        insert_time_series(store.as_ref(), "src 1", 2, vec![0.0; 12]);
+        insert_time_series(&*store, "src 1", 1, vec![0.0; 12]);
+        insert_time_series(&*store, "src 1", 2, vec![0.0; 12]);
 
         let query = r#"
         {

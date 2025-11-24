@@ -48,8 +48,6 @@ use crate::{
         events_in_cluster, impl_from_giganto_range_structs_for_graphql_client,
     },
     ingest::implement::EventFilter,
-    storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
-    comm::ingest::implement::EventFilter,
     storage::{BoundaryIter, Database, Direction, KeyExtractor, ReadableRawEventStore, StorageKey},
 };
 
@@ -2008,15 +2006,14 @@ where
     Ok(())
 }
 
-fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
-    if let Some(pos) = key.iter().position(|x| *x == 0) {
-        if let Some(s) = key.get(..pos) {
-            let sensor = String::from_utf8_lossy(s);
-            if let Some(t) = key.get(key.len() - 8..) {
-                let timestamp = i64::from_be_bytes(t.try_into()?);
-                return Ok((sensor, timestamp));
-            }
-        }
+fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
+    if let Some(pos) = key.iter().position(|x| *x == 0)
+        && let Some(sensor_bytes) = key.get(..pos)
+        && let Some(timestamp_bytes) = key.get(key.len().saturating_sub(8)..)
+    {
+        let sensor = String::from_utf8_lossy(sensor_bytes);
+        let timestamp = i64::from_be_bytes(timestamp_bytes.try_into()?);
+        return Ok((sensor, timestamp));
     }
     Err(anyhow!("Invalid key"))
 }

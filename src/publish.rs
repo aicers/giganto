@@ -1621,8 +1621,7 @@ where
     I: DeserializeOwned + Serialize,
 {
     if is_current_giganto_in_charge(ingest_sensors, &request_range.sensor).await {
-        process_range_data_in_current_giganto(send, store.as_ref(), request_range, availed_kind)
-            .await?;
+        process_range_data_in_current_giganto(send, &*store, request_range, availed_kind).await?;
     } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
         process_range_data_in_peer_giganto::<I>(send, peer_idents, peer_addr, certs, request_range)
@@ -1759,8 +1758,7 @@ where
         req_inputs_by_gigantos_in_charge(ingest_sensors, req.input).await;
 
     if !handle_by_current_giganto.is_empty() {
-        process_raw_event_in_current_giganto(send, store.as_ref(), handle_by_current_giganto)
-            .await?;
+        process_raw_event_in_current_giganto(send, &*store, handle_by_current_giganto).await?;
     }
 
     if !handle_by_peer_gigantos.is_empty() {

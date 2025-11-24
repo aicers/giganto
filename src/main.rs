@@ -46,7 +46,7 @@ use crate::{
     graphql::NodeName,
     server::{Certs, SERVER_REBOOT_DELAY, subject_from_cert},
     settings::Args,
-    storage::migrate_data_dir,
+    storage::{Database, migrate_data_dir},
 };
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
