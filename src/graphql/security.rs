@@ -66,7 +66,7 @@ impl RawEventFilter for SecuLogFilter {
         log_contents: Option<String>,
         _text: Option<String>,
         _sensor: Option<String>,
-        _agent_id: Option<String>,
+        _agent_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?

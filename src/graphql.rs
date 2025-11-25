@@ -134,7 +134,7 @@ pub trait RawEventFilter {
         log_contents: Option<String>,
         text: Option<String>,
         sensor: Option<String>,
-        agent_id: Option<String>,
+        agent_name: Option<String>,
     ) -> Result<bool>;
 }
 
@@ -209,7 +209,7 @@ where
                             raw_event.log_contents(),
                             raw_event.text(),
                             raw_event.sensor(),
-                            raw_event.agent_id(),
+                            raw_event.agent_name(),
                         )
                         .map_or(None, |c| c.then_some(*time))
                 } else {
@@ -565,7 +565,7 @@ where
             item.1.log_contents(),
             item.1.text(),
             item.1.sensor(),
-            item.1.agent_id(),
+            item.1.agent_name(),
         ) {
             records.push(item);
         }

@@ -31,7 +31,7 @@ pub trait EventFilter {
     fn sensor(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         None
     }
 }
@@ -329,7 +329,7 @@ impl EventFilter for OpLog {
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_name.clone())
     }
 
@@ -648,7 +648,7 @@ impl EventFilter for ProcessCreate {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -675,7 +675,7 @@ impl EventFilter for FileCreationTimeChanged {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -702,7 +702,7 @@ impl EventFilter for NetworkConnection {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -729,7 +729,7 @@ impl EventFilter for ProcessTerminated {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -756,7 +756,7 @@ impl EventFilter for ImageLoaded {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -783,7 +783,7 @@ impl EventFilter for FileCreate {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -810,7 +810,7 @@ impl EventFilter for RegistryValueSet {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -837,7 +837,7 @@ impl EventFilter for RegistryKeyValueRename {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -864,7 +864,7 @@ impl EventFilter for FileCreateStreamHash {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -891,7 +891,7 @@ impl EventFilter for PipeEvent {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -918,7 +918,7 @@ impl EventFilter for DnsEvent {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -945,7 +945,7 @@ impl EventFilter for FileDelete {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -972,7 +972,7 @@ impl EventFilter for ProcessTampering {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }
@@ -999,7 +999,7 @@ impl EventFilter for FileDeleteDetected {
     fn log_contents(&self) -> Option<String> {
         None
     }
-    fn agent_id(&self) -> Option<String> {
+    fn agent_name(&self) -> Option<String> {
         Some(self.agent_id.clone())
     }
 }

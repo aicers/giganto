@@ -487,7 +487,7 @@ async fn oplog_empty() {
     let schema = TestSchema::new();
     let query = r#"
         {
-            opLogRawEvents (filter: {agentId: "giganto@src 1", logLevel: "Info", contents: ""}, first: 1) {
+            opLogRawEvents (filter: {agentName: "giganto@src 1", logLevel: "Info", contents: ""}, first: 1) {
                 edges {
                     node {
                         level,
@@ -509,7 +509,7 @@ async fn oplog_with_data() {
 
     let query = r#"
         {
-            opLogRawEvents (filter: {agentId: "giganto@src 1", logLevel: "Info"}, first: 1) {
+            opLogRawEvents (filter: {agentName: "giganto@src 1", logLevel: "Info"}, first: 1) {
                 edges {
                     node {
                         level,
@@ -542,7 +542,7 @@ async fn oplog_timestamp_fomat_stability() {
         {
             opLogRawEvents(
                 filter: {
-                    agentId: "giganto@src 1",
+                    agentName: "giganto@src 1",
                     logLevel: "Info",
                     time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
                 },
@@ -587,7 +587,7 @@ async fn load_oplog() {
                 start: Some(DateTime::from_timestamp_nanos(5)),
                 end: Some(DateTime::from_timestamp_nanos(7)),
             }),
-            agent_id: None,
+            agent_name: None,
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: None,
@@ -629,7 +629,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            agent_name: Some("manager@src 1".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -653,7 +653,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            agent_name: Some("manager@src 1".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -677,7 +677,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            agent_name: Some("manager@src 1".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -699,7 +699,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("sensor".to_string()),
+            agent_name: Some("sensor@src 1".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src2".to_string()),

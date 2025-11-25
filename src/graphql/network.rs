@@ -89,13 +89,13 @@ impl RawEventFilter for NetworkFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _sensor: Option<String>,
-        agent_id: Option<String>,
+        agent_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref())
+            && check_agent_id(self.agent_id.as_deref(), agent_name.as_deref())
         {
             return Ok(true);
         }
@@ -114,7 +114,7 @@ impl RawEventFilter for SearchFilter {
         _log_contents: Option<String>,
         text: Option<String>,
         _sensor: Option<String>,
-        agent_id: Option<String>,
+        agent_name: Option<String>,
     ) -> Result<bool> {
         if let Some(keyword) = &self.keyword {
             if let Some(text) = text {
@@ -129,7 +129,7 @@ impl RawEventFilter for SearchFilter {
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref())
+            && check_agent_id(self.agent_id.as_deref(), agent_name.as_deref())
         {
             return Ok(true);
         }

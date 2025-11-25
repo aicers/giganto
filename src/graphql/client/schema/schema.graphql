@@ -2252,7 +2252,7 @@ type NtlmRawEventEdge {
 input OpLogFilter {
 	time: TimeRange
 	sensor: String
-	agentId: String
+	agentName: String
 	logLevel: String
 	contents: String
 }

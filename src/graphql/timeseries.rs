@@ -53,7 +53,7 @@ impl RawEventFilter for TimeSeriesFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _sensor: Option<String>,
-        _agent_id: Option<String>,
+        _agent_name: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }

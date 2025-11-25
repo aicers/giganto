@@ -69,7 +69,7 @@ impl RawEventFilter for LogFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _sensor: Option<String>,
-        _agent_id: Option<String>,
+        _agent_name: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }
@@ -79,7 +79,7 @@ impl RawEventFilter for LogFilter {
 pub struct OpLogFilter {
     time: Option<TimeRange>,
     sensor: Option<String>,
-    agent_id: Option<String>,
+    agent_name: Option<String>,
     log_level: Option<String>,
     contents: Option<String>,
 }
@@ -105,7 +105,7 @@ impl RawEventFilter for OpLogFilter {
         log_contents: Option<String>,
         _text: Option<String>,
         sensor: Option<String>,
-        agent_id: Option<String>,
+        agent_name: Option<String>,
     ) -> Result<bool> {
         if let Some(filter_level) = &self.log_level {
             let log_level = if let Some(log_level) = log_level {
@@ -127,13 +127,13 @@ impl RawEventFilter for OpLogFilter {
                 return Ok(false);
             }
         }
-        if let Some(filter_agent_id) = &self.agent_id {
-            let is_agent_id_mismatch = if let Some(agent_id) = agent_id {
-                !agent_id.contains(filter_agent_id)
+        if let Some(filter_agent_name) = &self.agent_name {
+            let is_agent_name_mismatch = if let Some(agent_name) = agent_name {
+                filter_agent_name != &agent_name
             } else {
                 false
             };
-            if is_agent_id_mismatch {
+            if is_agent_name_mismatch {
                 return Ok(false);
             }
         }

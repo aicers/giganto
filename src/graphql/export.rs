@@ -1854,13 +1854,13 @@ impl RawEventFilter for ExportFilter {
         _log_contents: Option<String>,
         _text: Option<String>,
         _sensor: Option<String>,
-        agent_id: Option<String>,
+        agent_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref())
+            && check_agent_id(self.agent_id.as_deref(), agent_name.as_deref())
         {
             return Ok(true);
         }
@@ -2243,7 +2243,7 @@ where
         value.log_contents(),
         value.text(),
         value.sensor(),
-        value.agent_id(),
+        value.agent_name(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp)

@@ -49,6 +49,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Standardized `agentId` / `agentName` terminology for consistency:
+  - Renamed `EventFilter::agent_id()` method to `agent_name()` to reflect
+    that it returns the agent name value.
+  - Changed `OpLogFilter` GraphQL input parameter from `agentId` to
+    `agentName` to match the `OpLogRawEvent` response field.
+  - Updated filter logic to use exact match comparison for `agent_name`
+    instead of substring matching for improved precision.
+
 - Renamed configuration field `max_sub_compactions` to `max_subcompactions` to
   align with RocksDB naming conventions.
 - Modified FTP event structure to store multiple commands as `Vec<FtpCommand>`

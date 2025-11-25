@@ -920,7 +920,7 @@ where
                 elem.1.log_contents(),
                 elem.1.text(),
                 elem.1.sensor(),
-                elem.1.agent_id(),
+                elem.1.agent_name(),
             ) {
                 return Some(elem);
             }
