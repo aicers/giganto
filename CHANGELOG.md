@@ -103,6 +103,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   non-standard key formats. `oplog` now uses timestamp-based range deletion
   instead of sensor-based iteration. `periodic time series` retention is
   temporarily disabled until proper policy-based retention logic is implemented.
+- Fixed config update consistency issue where in-memory settings could diverge
+  from the persisted config file if backup or write operations failed.
+  `Settings::update_config_file` now defers in-memory state mutation until
+  after both backup and file write operations succeed, ensuring memory and disk
+  remain synchronized.
 
 ### Security
 
