@@ -3,31 +3,27 @@
 # Count connRawEvents whose source IP falls in a given range by paging through the GraphQL API.
 # Requirements: bash, curl, jq.
 # Usage:
-#   scripts/count_conn_by_orig_range.sh <GRAPHQL_URL> <SENSOR> <ORIG_START_IP> <ORIG_END_IP> [PAGE_SIZE]
+#   scripts/count_conn_by_orig_range.sh <SENSOR> <ORIG_START_IP> <ORIG_END_IP> [-- curl opts]
 # Example:
-#   scripts/count_conn_by_orig_range.sh https://127.0.0.1:8443/graphql ingest_sensor_1 192.168.4.0 192.168.4.255 500 \
+#   scripts/count_conn_by_orig_range.sh ingest_sensor_1 192.168.4.0 192.168.4.255 \
 #     --cert /path/cert.pem --key /path/key.pem --cacert /path/ca.pem
 #
 # Extra curl options can be passed after the positional arguments (e.g., TLS certs).
 
 set -euo pipefail
 
-if [[ $# -lt 4 ]]; then
-  echo "usage: $0 <GRAPHQL_URL> <SENSOR> <ORIG_START_IP> <ORIG_END_IP> [PAGE_SIZE] [-- curl opts]" >&2
+if [[ $# -lt 3 ]]; then
+  echo "usage: $0 <SENSOR> <ORIG_START_IP> <ORIG_END_IP> [-- curl opts]" >&2
   exit 1
 fi
 
-GRAPHQL_URL=$1
-SENSOR=$2
-ORIG_START=$3
-ORIG_END=$4
+GRAPHQL_URL="https://127.0.0.1:8443/graphql"
+SENSOR=$1
+ORIG_START=$2
+ORIG_END=$3
 
-shift 4
-PAGE_SIZE=500
-if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
-  PAGE_SIZE=$1
-  shift
-fi
+shift 3
+PAGE_SIZE=100  # Server-side maximum page size enforced by get_connection (src/graphql.rs).
 
 EXTRA_CURL_ARGS=("$@")
 
