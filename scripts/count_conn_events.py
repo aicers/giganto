@@ -28,7 +28,7 @@ Optional arguments (IP/Port 필터는 하나 이상 지정 필요; `--no-filter`
   --time-start RFC3339         Start time (inclusive)
   --time-end RFC3339           End time (exclusive)
   --max-requests N             Stop after N requests/pages (for testing or chunked runs)
-  --no-filter                  IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (주의)
+  --no-filter                  IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (긴 러닝타임 및 리소스 소모 주의)
 """
 
 import argparse
@@ -124,22 +124,31 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  # Source IP+Port range over a time range\n"
             "  python3 scripts/count_conn_events.py \\\n"
             "    --sensor sensor \\\n"
             "    --orig-ip-start 192.168.0.0 --orig-ip-end 192.169.0.0 \\\n"
             "    --orig-port-start 443 --orig-port-end 444 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
-            "    --checkpoint ./origin-ip.chk\n"
+            "    --checkpoint ./origin-ip-port.chk\n"
+            "\n"
+            "  # Total count (no filters) for a sensor over a time range\n"
+            "  python3 scripts/count_conn_events.py \\\n"
+            "    --sensor sensor \\\n"
+            "    --time-start 2025-10-14T00:00:00Z \\\n"
+            "    --time-end 2025-11-15T15:00:00Z \\\n"
+            "    --no-filter \\\n"
+            "    --checkpoint ./no-filter.chk\n"
             "\n"
             "  # Destination IP+Port, limit to 10 requests/pages for a quick test\n"
             "  python3 scripts/count_conn_events.py \\\n"
             "    --sensor sensor \\\n"
-            "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.0.255.255 \\\n"
+            "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.1.0.0 \\\n"
             "    --resp-port-start 443 --resp-port-end 444 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
-            "    --checkpoint ./resp-ip.chk \\\n"
+            "    --checkpoint ./resp-ip-port-test.chk \\\n"
             "    --max-requests 10\n"
         ),
     )
@@ -157,7 +166,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-filter",
         action="store_true",
-        help="IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (주의)",
+        help="IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (긴 러닝타임 및 리소스 소모 주의)",
     )
     parser.add_argument(
         "--checkpoint",
