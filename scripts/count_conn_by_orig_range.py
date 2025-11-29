@@ -6,7 +6,7 @@ Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
   python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP \
-    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-requests N] [TLS options]
+    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-requests N]
 
 Required arguments:
   --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
@@ -18,12 +18,6 @@ Optional arguments:
   --time-start RFC3339         Start time (inclusive)
   --time-end RFC3339           End time (exclusive)
   --max-requests N             Stop after N requests/pages (for testing or chunked runs)
-
-TLS options:
-  --cacert /path/ca.pem         CA bundle for server verification
-  --cert /path/client_cert.pem  Client certificate (optionally with key)
-  --key /path/client_key.pem    Client private key (if not in cert)
-  --insecure                    Disable TLS verification (not recommended)
 """
 
 import argparse
@@ -51,14 +45,9 @@ query ConnRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
 """
 
 
-def build_ssl_context(args: argparse.Namespace) -> ssl.SSLContext:
-    if args.insecure:
-        ctx = ssl._create_unverified_context()
-    else:
-        ctx = ssl.create_default_context(cafile=args.cacert)
-    if args.cert or args.key:
-        ctx.load_cert_chain(certfile=args.cert, keyfile=args.key)
-    return ctx
+def build_ssl_context() -> ssl.SSLContext:
+    # Always run in insecure mode as per current requirements.
+    return ssl._create_unverified_context()
 
 
 def build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
@@ -171,10 +160,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="N번 요청(페이지) 처리 후 종료 (테스트/분할 실행용)",
     )
-    parser.add_argument("--cacert", help="CA bundle for TLS verification")
-    parser.add_argument("--cert", help="Client certificate (optionally with key)")
-    parser.add_argument("--key", help="Client private key (if not bundled with cert)")
-    parser.add_argument("--insecure", action="store_true", help="Disable TLS verification")
     return parser.parse_args()
 
 
@@ -205,7 +190,7 @@ def log(msg: str) -> None:
 
 def main() -> int:
     args = parse_args()
-    ctx = build_ssl_context(args)
+    ctx = build_ssl_context()
     opener = build_opener(ctx)
 
     total = 0
