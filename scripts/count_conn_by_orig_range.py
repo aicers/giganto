@@ -6,7 +6,7 @@ Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
   python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP \
-    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-pages N] [TLS options]
+    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-requests N] [TLS options]
 
 Required arguments:
   --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
@@ -17,7 +17,7 @@ Required arguments:
 Optional arguments:
   --time-start RFC3339         Start time (inclusive)
   --time-end RFC3339           End time (exclusive)
-  --max-pages N                Stop after N pages (for testing or chunked runs)
+  --max-requests N             Stop after N requests/pages (for testing or chunked runs)
 
 TLS options:
   --cacert /path/ca.pem         CA bundle for server verification
@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
             "    --time-end 2025-11-15T15:00:00Z \\\n"
             "    --checkpoint /tmp/conn_cursor.chk\n"
             "\n"
-            "  # Limit to 10 pages for a quick test\n"
+            "  # Limit to 10 requests/pages for a quick test\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
             "    --sensor sensor \\\n"
             "    --orig-start 192.168.4.0 \\\n"
@@ -142,7 +142,7 @@ def parse_args() -> argparse.Namespace:
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
             "    --checkpoint /tmp/conn_cursor.chk \\\n"
-            "    --max-pages 10\n"
+            "    --max-requests 10\n"
         ),
     )
     parser.add_argument("--sensor", required=True, help="sensor 호스트네임")
@@ -165,9 +165,9 @@ def parse_args() -> argparse.Namespace:
         help="페이지 커서를 저장/재개할 파일 경로",
     )
     parser.add_argument(
-        "--max-pages",
+        "--max-requests",
         type=int,
-        help="N 페이지만 처리 후 종료 (테스트/분할 실행용)",
+        help="N번 요청(페이지) 처리 후 종료 (테스트/분할 실행용)",
     )
     parser.add_argument("--cacert", help="CA bundle for TLS verification")
     parser.add_argument("--cert", help="Client certificate (optionally with key)")
@@ -205,7 +205,7 @@ def main() -> int:
     after: str | None = None
     after, total = load_checkpoint(args.checkpoint)
 
-    pages = 0
+    requests = 0
 
     while True:
         count, after, has_next = fetch_page(
@@ -218,12 +218,12 @@ def main() -> int:
             args.time_end,
         )
         total += count
-        pages += 1
+        requests += 1
 
         args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
         save_checkpoint(args.checkpoint, after, total)
 
-        if args.max_pages and pages >= args.max_pages:
+        if args.max_requests and requests >= args.max_requests:
             break
 
         if not has_next or not after:
