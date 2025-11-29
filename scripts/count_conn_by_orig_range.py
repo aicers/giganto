@@ -30,11 +30,13 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 GRAPHQL_URL = "https://127.0.0.1:8443/graphql"
 PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.rs).
 LOG_INTERVAL = 100  # Emit progress logs every N requests.
 REQUEST_TIMEOUT = 30 * 60  # Seconds to wait for each HTTP response.
+MAX_SLICE = timedelta(days=1)  # Split long time ranges into <=1 day slices.
 
 GQL_QUERY = """
 query ConnRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
@@ -164,23 +166,57 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int]:
+def parse_rfc3339(ts: str | None) -> datetime | None:
+    if ts is None:
+        return None
+    try:
+        if ts.endswith("Z"):
+            return datetime.fromisoformat(ts[:-1]).replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(ts)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Invalid RFC3339 time: {ts}") from exc
+
+
+def isoformat(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int, int, datetime | None]:
     try:
         data = json.loads(path.read_text())
         cursor = data.get("cursor")
         total = int(data.get("total", 0))
-        return cursor, total
+        requests = int(data.get("requests", 0))
+        next_start_raw = data.get("next_start")
+        next_start = parse_rfc3339(next_start_raw) if next_start_raw else None
+        return cursor, total, requests, next_start
     except FileNotFoundError:
-        return None, 0
+        return None, 0, 0, None
     except Exception:
-        return None, 0
+        return None, 0, 0, None
 
 
-def save_checkpoint(path: pathlib.Path, cursor: str | None, total: int) -> None:
+def save_checkpoint(
+    path: pathlib.Path,
+    cursor: str | None,
+    total: int,
+    requests: int,
+    next_start: datetime | None,
+) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".tmp.")
     tmp = pathlib.Path(tmp_path)
     with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-        json.dump({"cursor": cursor, "total": total}, f)
+        json.dump(
+            {
+                "cursor": cursor,
+                "total": total,
+                "requests": requests,
+                "next_start": isoformat(next_start),
+            },
+            f,
+        )
     tmp.replace(path)
 
 
@@ -194,53 +230,98 @@ def main() -> int:
     ctx = build_ssl_context()
     opener = build_opener(ctx)
 
-    total = 0
-    after: str | None = None
-    after, total = load_checkpoint(args.checkpoint)
+    time_start_dt = parse_rfc3339(args.time_start)
+    time_end_dt = parse_rfc3339(args.time_end)
+    if time_start_dt and time_end_dt and time_start_dt >= time_end_dt:
+        raise SystemExit("time-start must be earlier than time-end")
 
-    requests = 0
+    after: str | None
+    total: int
+    requests: int
+    next_start: datetime | None
+    after, total, requests, next_start = load_checkpoint(args.checkpoint)
+
+    if next_start is None:
+        next_start = time_start_dt
 
     log(
         f"[start] sensor={args.sensor}, orig-start={args.orig_start}, "
-        f"orig-end={args.orig_end}, time-start={args.time_start}, time-end={args.time_end}, "
-        f"checkpoint={args.checkpoint}"
+        f"orig-end={args.orig_end}, time-start={isoformat(time_start_dt)}, time-end={isoformat(time_end_dt)}, "
+        f"checkpoint={args.checkpoint}, next-start={isoformat(next_start)}"
     )
     if after:
-        log(f"[resume] loaded cursor={after}, loaded total={total}")
+        log(f"[resume] loaded cursor={after}, loaded total={total}, requests={requests}")
     else:
         log("[resume] no cursor found, starting from beginning")
 
+    should_stop = False
+
     while True:
-        count, after, has_next = fetch_page(
-            opener,
-            args.sensor,
-            args.orig_start,
-            args.orig_end,
-            after,
-            args.time_start,
-            args.time_end,
+        # Determine slice boundaries
+        if time_start_dt and time_end_dt:
+            if next_start is None:
+                next_start = time_start_dt
+            if next_start >= time_end_dt:
+                break
+            slice_start = next_start
+            slice_end = min(next_start + MAX_SLICE, time_end_dt)
+        else:
+            # No time slicing if time range not provided
+            slice_start = next_start or time_start_dt
+            slice_end = time_end_dt
+
+        log(
+            f"[slice] start={isoformat(slice_start)}, end={isoformat(slice_end)}, "
+            f"cursor={after}, total={total}, requests={requests}"
         )
-        total += count
-        requests += 1
 
-        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        save_checkpoint(args.checkpoint, after, total)
-
-        if (
-            requests == 1
-            or requests % LOG_INTERVAL == 0
-            or (args.max_requests and requests >= args.max_requests)
-            or (not has_next or not after)
-        ):
-            log(
-                f"[request {requests}] page_count={count}, total={total}, "
-                f"has_next={has_next}, cursor={after}"
+        while True:
+            count, after, has_next = fetch_page(
+                opener,
+                args.sensor,
+                args.orig_start,
+                args.orig_end,
+                after,
+                isoformat(slice_start),
+                isoformat(slice_end),
             )
+            total += count
+            requests += 1
 
-        if args.max_requests and requests >= args.max_requests:
+            args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            save_checkpoint(args.checkpoint, after, total, requests, slice_start)
+
+            if (
+                requests == 1
+                or requests % LOG_INTERVAL == 0
+                or (args.max_requests and requests >= args.max_requests)
+                or (not has_next or not after)
+            ):
+                log(
+                    f"[request {requests}] page_count={count}, total={total}, "
+                    f"has_next={has_next}, cursor={after}"
+                )
+
+            if args.max_requests and requests >= args.max_requests:
+                should_stop = True
+                break
+
+            if not has_next or not after:
+                break
+
+        # move to next slice
+        after = None
+        next_start = slice_end if slice_end else None
+        save_checkpoint(args.checkpoint, after, total, requests, next_start)
+
+        if should_stop:
             break
 
-        if not has_next or not after:
+        if time_start_dt and time_end_dt:
+            if next_start and next_start >= time_end_dt:
+                break
+        else:
+            # no slicing; processed one iteration
             break
 
     log(f"[done] total={total}, requests={requests}, checkpoint={args.checkpoint}")
