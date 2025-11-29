@@ -183,7 +183,7 @@ def isoformat(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int, int, datetime | None]:
+def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int, int, datetime | None, dict]:
     try:
         data = json.loads(path.read_text())
         cursor = data.get("cursor")
@@ -191,11 +191,12 @@ def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int, int, datetime 
         requests = int(data.get("requests", 0))
         next_start_raw = data.get("next_start")
         next_start = parse_rfc3339(next_start_raw) if next_start_raw else None
-        return cursor, total, requests, next_start
+        params = data.get("params") or {}
+        return cursor, total, requests, next_start, params
     except FileNotFoundError:
-        return None, 0, 0, None
+        return None, 0, 0, None, {}
     except Exception:
-        return None, 0, 0, None
+        return None, 0, 0, None, {}
 
 
 def save_checkpoint(
@@ -204,6 +205,7 @@ def save_checkpoint(
     total: int,
     requests: int,
     next_start: datetime | None,
+    params: dict,
 ) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".tmp.")
     tmp = pathlib.Path(tmp_path)
@@ -214,6 +216,7 @@ def save_checkpoint(
                 "total": total,
                 "requests": requests,
                 "next_start": isoformat(next_start),
+                "params": params,
             },
             f,
         )
@@ -239,7 +242,22 @@ def main() -> int:
     total: int
     requests: int
     next_start: datetime | None
-    after, total, requests, next_start = load_checkpoint(args.checkpoint)
+    saved_params: dict
+    after, total, requests, next_start, saved_params = load_checkpoint(args.checkpoint)
+
+    run_params = {
+        "sensor": args.sensor,
+        "orig_start": args.orig_start,
+        "orig_end": args.orig_end,
+        "time_start": isoformat(time_start_dt),
+        "time_end": isoformat(time_end_dt),
+    }
+
+    if saved_params and saved_params != run_params:
+        raise SystemExit(
+            f"checkpoint params mismatch: saved={saved_params}, current={run_params}. "
+            "Delete or use a different checkpoint file."
+        )
 
     if next_start is None:
         next_start = time_start_dt
@@ -289,7 +307,7 @@ def main() -> int:
             requests += 1
 
             args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
-            save_checkpoint(args.checkpoint, after, total, requests, slice_start)
+            save_checkpoint(args.checkpoint, after, total, requests, slice_start, run_params)
 
             if (
                 requests == 1
@@ -312,7 +330,7 @@ def main() -> int:
         # move to next slice
         after = None
         next_start = slice_end if slice_end else None
-        save_checkpoint(args.checkpoint, after, total, requests, next_start)
+        save_checkpoint(args.checkpoint, after, total, requests, next_start, run_params)
 
         if should_stop:
             break
