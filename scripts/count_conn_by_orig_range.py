@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
 """
-Count connRawEvents whose source IP falls in a given range by paging through the GraphQL API.
+Count connRawEvents with optional IP/port filters by paging through the GraphQL API.
 
 Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
-  python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP \
-    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-requests N]
+  python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --checkpoint /path/file \
+    [--orig-ip-start START_IP] [--orig-ip-end END_IP] \
+    [--orig-port-start N] [--orig-port-end N] \
+    [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
+    [--resp-port-start N] [--resp-port-end N] \
+    [--time-start RFC3339] [--time-end RFC3339] [--max-requests N]
 
 Required arguments:
   --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
-  --orig-start START_IP        출발지 IP - start (inclusive)
-  --orig-end END_IP            출발지 IP - end (exclusive)
   --checkpoint /path/file      Cursor checkpoint 파일
 
-Optional arguments:
+Optional arguments (IP/Port 필터는 하나 이상 지정 필요):
+  --orig-ip-start START_IP     출발지 IP - start (inclusive)
+  --orig-ip-end END_IP         출발지 IP - end (exclusive)
+  --orig-port-start N          출발지 포트 - start (inclusive)
+  --orig-port-end N            출발지 포트 - end (exclusive)
+  --resp-ip-start START_IP     도착지 IP - start (inclusive)
+  --resp-ip-end END_IP         도착지 IP - end (exclusive)
+  --resp-port-start N          도착지 포트 - start (inclusive)
+  --resp-port-end N            도착지 포트 - end (exclusive)
   --time-start RFC3339         Start time (inclusive)
   --time-end RFC3339           End time (exclusive)
   --max-requests N             Stop after N requests/pages (for testing or chunked runs)
@@ -59,29 +69,22 @@ def build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
 
 def fetch_page(
     opener: urllib.request.OpenerDirector,
-    sensor: str,
-    orig_start: str,
-    orig_end: str,
+    base_filter: dict,
     after: str | None,
     time_start: str | None,
     time_end: str | None,
 ) -> tuple[int, str | None, bool]:
+    filt = dict(base_filter)
+    if time_start or time_end:
+        filt["time"] = {"start": time_start, "end": time_end}
     payload = {
         "query": GQL_QUERY,
         "variables": {
-            "filter": {
-                "sensor": sensor,
-                "origAddr": {"start": orig_start, "end": orig_end},
-            },
+            "filter": filt,
             "first": PAGE_SIZE,
             "after": after,
         },
     }
-    if time_start or time_end:
-        payload["variables"]["filter"]["time"] = {
-            "start": time_start,
-            "end": time_end,
-        }
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
     req = urllib.request.Request(
@@ -116,40 +119,38 @@ def fetch_page(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Count connRawEvents by source IP range.",
+        description="Count connRawEvents with optional IP/port filters.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
             "    --sensor sensor \\\n"
-            "    --orig-start 192.168.0.0 \\\n"
-            "    --orig-end 192.169.0.0 \\\n"
+            "    --orig-ip-start 192.168.0.0 --orig-ip-end 192.169.0.0 \\\n"
+            "    --orig-port-start 443 --orig-port-end 444 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
             "    --checkpoint ./origin-ip.chk\n"
             "\n"
-            "  # Limit to 10 requests/pages for a quick test\n"
+            "  # Destination IP+Port, limit to 10 requests/pages for a quick test\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
             "    --sensor sensor \\\n"
-            "    --orig-start 192.168.0.0 \\\n"
-            "    --orig-end 192.169.0.0 \\\n"
+            "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.0.255.255 \\\n"
+            "    --resp-port-start 443 --resp-port-end 444 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
-            "    --checkpoint ./origin-ip.chk \\\n"
+            "    --checkpoint ./resp-ip.chk \\\n"
             "    --max-requests 10\n"
         ),
     )
     parser.add_argument("--sensor", required=True, help="sensor 호스트네임")
-    parser.add_argument(
-        "--orig-start",
-        required=True,
-        help="출발지 IP - start (inclusive)",
-    )
-    parser.add_argument(
-        "--orig-end",
-        required=True,
-        help="출발지 IP - end (exclusive)",
-    )
+    parser.add_argument("--orig-ip-start", help="출발지 IP - start (inclusive)")
+    parser.add_argument("--orig-ip-end", help="출발지 IP - end (exclusive)")
+    parser.add_argument("--resp-ip-start", help="도착지 IP - start (inclusive)")
+    parser.add_argument("--resp-ip-end", help="도착지 IP - end (exclusive)")
+    parser.add_argument("--orig-port-start", type=int, help="출발지 포트 - start (inclusive)")
+    parser.add_argument("--orig-port-end", type=int, help="출발지 포트 - end (exclusive)")
+    parser.add_argument("--resp-port-start", type=int, help="도착지 포트 - start (inclusive)")
+    parser.add_argument("--resp-port-end", type=int, help="도착지 포트 - end (exclusive)")
     parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339 예: 2025-10-14T15:00:00Z)")
     parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339 예: 2025-11-15T15:00:00Z)")
     parser.add_argument(
@@ -228,6 +229,27 @@ def log(msg: str) -> None:
     print(f"[{now}] {msg}")
 
 
+def build_base_filter(args: argparse.Namespace) -> dict:
+    base = {"sensor": args.sensor}
+    has_filter = False
+
+    def add_range(key: str, start, end):
+        nonlocal has_filter
+        if start is not None or end is not None:
+            base[key] = {"start": start, "end": end}
+            has_filter = True
+
+    add_range("origAddr", args.orig_ip_start, args.orig_ip_end)
+    add_range("respAddr", args.resp_ip_start, args.resp_ip_end)
+    add_range("origPort", args.orig_port_start, args.orig_port_end)
+    add_range("respPort", args.resp_port_start, args.resp_port_end)
+
+    if not has_filter:
+        raise SystemExit("At least one IP or port range must be provided.")
+
+    return base
+
+
 def main() -> int:
     args = parse_args()
     ctx = build_ssl_context()
@@ -238,20 +260,28 @@ def main() -> int:
     if time_start_dt and time_end_dt and time_start_dt >= time_end_dt:
         raise SystemExit("time-start must be earlier than time-end")
 
+    base_filter = build_base_filter(args)
+
+    run_params = {
+        "sensor": args.sensor,
+        "orig_ip_start": args.orig_ip_start,
+        "orig_ip_end": args.orig_ip_end,
+        "orig_port_start": args.orig_port_start,
+        "orig_port_end": args.orig_port_end,
+        "resp_ip_start": args.resp_ip_start,
+        "resp_ip_end": args.resp_ip_end,
+        "resp_port_start": args.resp_port_start,
+        "resp_port_end": args.resp_port_end,
+        "time_start": isoformat(time_start_dt),
+        "time_end": isoformat(time_end_dt),
+    }
+
     after: str | None
     total: int
     requests: int
     next_start: datetime | None
     saved_params: dict
     after, total, requests, next_start, saved_params = load_checkpoint(args.checkpoint)
-
-    run_params = {
-        "sensor": args.sensor,
-        "orig_start": args.orig_start,
-        "orig_end": args.orig_end,
-        "time_start": isoformat(time_start_dt),
-        "time_end": isoformat(time_end_dt),
-    }
 
     if saved_params and saved_params != run_params:
         raise SystemExit(
@@ -263,8 +293,12 @@ def main() -> int:
         next_start = time_start_dt
 
     log(
-        f"[start] sensor={args.sensor}, orig-start={args.orig_start}, "
-        f"orig-end={args.orig_end}, time-start={isoformat(time_start_dt)}, time-end={isoformat(time_end_dt)}, "
+        f"[start] sensor={args.sensor}, "
+        f"orig-ip-start={args.orig_ip_start}, orig-ip-end={args.orig_ip_end}, "
+        f"orig-port-start={args.orig_port_start}, orig-port-end={args.orig_port_end}, "
+        f"resp-ip-start={args.resp_ip_start}, resp-ip-end={args.resp_ip_end}, "
+        f"resp-port-start={args.resp_port_start}, resp-port-end={args.resp_port_end}, "
+        f"time-start={isoformat(time_start_dt)}, time-end={isoformat(time_end_dt)}, "
         f"checkpoint={args.checkpoint}, next-start={isoformat(next_start)}"
     )
     if after:
@@ -296,9 +330,7 @@ def main() -> int:
         while True:
             count, after, has_next = fetch_page(
                 opener,
-                args.sensor,
-                args.orig_start,
-                args.orig_end,
+                base_filter,
                 after,
                 isoformat(slice_start),
                 isoformat(slice_end),
