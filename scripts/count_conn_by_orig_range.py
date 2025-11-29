@@ -38,6 +38,7 @@ import urllib.request
 
 GRAPHQL_URL = "https://127.0.0.1:8443/graphql"
 PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.rs).
+LOG_INTERVAL = 100  # Emit progress logs every N requests.
 
 GQL_QUERY = """
 query ConnRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
@@ -207,6 +208,16 @@ def main() -> int:
 
     requests = 0
 
+    print(
+        f"[start] sensor={args.sensor}, orig-start={args.orig_start}, "
+        f"orig-end={args.orig_end}, time-start={args.time_start}, time-end={args.time_end}, "
+        f"checkpoint={args.checkpoint}"
+    )
+    if after:
+        print(f"[resume] loaded cursor={after}, loaded total={total}")
+    else:
+        print("[resume] no cursor found, starting from beginning")
+
     while True:
         count, after, has_next = fetch_page(
             opener,
@@ -223,12 +234,24 @@ def main() -> int:
         args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
         save_checkpoint(args.checkpoint, after, total)
 
+        if (
+            requests == 1
+            or requests % LOG_INTERVAL == 0
+            or (args.max_requests and requests >= args.max_requests)
+            or (not has_next or not after)
+        ):
+            print(
+                f"[request {requests}] page_count={count}, total={total}, "
+                f"has_next={has_next}, cursor={after}"
+            )
+
         if args.max_requests and requests >= args.max_requests:
             break
 
         if not has_next or not after:
             break
 
+    print(f"[done] total={total}, requests={requests}, checkpoint={args.checkpoint}")
     print(total)
     return 0
 
