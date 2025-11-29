@@ -5,7 +5,7 @@ Count connRawEvents with optional IP/port filters by paging through the GraphQL 
 Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
-  python3 scripts/count_conn_events.py --sensor SENSOR --checkpoint /path/file \
+  python3 scripts/count_conn_events.py --graphql-url https://HOST:PORT/graphql --sensor SENSOR --checkpoint /path/file \
     [--orig-ip-start START_IP] [--orig-ip-end END_IP] \
     [--orig-port-start N] [--orig-port-end N] \
     [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
@@ -13,6 +13,7 @@ Usage:
     [--time-start RFC3339] [--time-end RFC3339] [--max-requests N] [--no-filter]
 
 Required arguments:
+  --graphql-url URL            Giganto GraphQL 엔드포인트 (예: https://127.0.0.1:8443/graphql)
   --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
   --checkpoint /path/file      Cursor checkpoint 파일
 
@@ -43,7 +44,6 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-GRAPHQL_URL = "https://127.0.0.1:8443/graphql"
 PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.rs).
 LOG_INTERVAL = 100  # Emit progress logs every N requests.
 REQUEST_TIMEOUT = 30 * 60  # Seconds to wait for each HTTP response.
@@ -74,6 +74,7 @@ def fetch_page(
     after: str | None,
     time_start: str | None,
     time_end: str | None,
+    graphql_url: str,
 ) -> tuple[int, str | None, bool]:
     filt = dict(base_filter)
     if time_start or time_end:
@@ -88,12 +89,7 @@ def fetch_page(
     }
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
-    req = urllib.request.Request(
-        GRAPHQL_URL,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    req = urllib.request.Request(graphql_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
 
     try:
         with opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
@@ -126,6 +122,7 @@ def parse_args() -> argparse.Namespace:
             "Examples:\n"
             "  # Source IP+Port range over a time range\n"
             "  python3 scripts/count_conn_events.py \\\n"
+            "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --orig-ip-start 192.168.0.0 --orig-ip-end 192.169.0.0 \\\n"
             "    --orig-port-start 443 --orig-port-end 444 \\\n"
@@ -135,6 +132,7 @@ def parse_args() -> argparse.Namespace:
             "\n"
             "  # Total count (no filters) for a sensor over a time range\n"
             "  python3 scripts/count_conn_events.py \\\n"
+            "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --time-start 2025-10-14T00:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
@@ -143,6 +141,7 @@ def parse_args() -> argparse.Namespace:
             "\n"
             "  # Destination IP+Port, limit to 10 requests/pages for a quick test\n"
             "  python3 scripts/count_conn_events.py \\\n"
+            "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.1.0.0 \\\n"
             "    --resp-port-start 443 --resp-port-end 444 \\\n"
@@ -152,6 +151,7 @@ def parse_args() -> argparse.Namespace:
             "    --max-requests 10\n"
         ),
     )
+    parser.add_argument("--graphql-url", required=True, help="Giganto GraphQL 엔드포인트 (예: https://127.0.0.1:8443/graphql)")
     parser.add_argument("--sensor", required=True, help="sensor 호스트네임")
     parser.add_argument("--orig-ip-start", help="출발지 IP - start (inclusive)")
     parser.add_argument("--orig-ip-end", help="출발지 IP - end (exclusive)")
@@ -350,6 +350,7 @@ def main() -> int:
                 after,
                 isoformat(slice_start),
                 isoformat(slice_end),
+                args.graphql_url,
             )
             total += count
             requests += 1
