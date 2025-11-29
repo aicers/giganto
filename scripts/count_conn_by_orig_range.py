@@ -91,8 +91,16 @@ def fetch_page(ctx: ssl.SSLContext, sensor: str, orig_start: str, orig_end: str,
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Count connRawEvents by source IP range.")
     parser.add_argument("--sensor", required=True, help="Sensor name (NetworkFilter.sensor)")
-    parser.add_argument("--orig-start", required=True, help="Start IP (inclusive)")
-    parser.add_argument("--orig-end", required=True, help="End IP (inclusive)")
+    parser.add_argument(
+        "--orig-start",
+        required=True,
+        help="출발지 IP - start (inclusive)",
+    )
+    parser.add_argument(
+        "--orig-end",
+        required=True,
+        help="출발지 IP - end (exclusive)",
+    )
     parser.add_argument("--cacert", help="CA bundle for TLS verification")
     parser.add_argument("--cert", help="Client certificate (optionally with key)")
     parser.add_argument("--key", help="Client private key (if not bundled with cert)")
