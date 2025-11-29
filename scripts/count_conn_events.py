@@ -53,7 +53,7 @@ GQL_QUERY = """
 query ConnRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
   connRawEvents(filter: $filter, first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
-    edges { node { origAddr } }
+    edges { cursor }
   }
 }
 """
