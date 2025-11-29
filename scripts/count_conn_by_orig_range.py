@@ -127,7 +127,7 @@ def parse_args() -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
-            "    --sensor ingest_sensor_1 \\\n"
+            "    --sensor sensor \\\n"
             "    --orig-start 192.168.4.0 \\\n"
             "    --orig-end 192.168.4.255 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
             "\n"
             "  # Limit to 10 pages for a quick test\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
-            "    --sensor ingest_sensor_1 \\\n"
+            "    --sensor sensor \\\n"
             "    --orig-start 192.168.4.0 \\\n"
             "    --orig-end 192.168.4.255 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
