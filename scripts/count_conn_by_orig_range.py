@@ -5,7 +5,14 @@ Count connRawEvents whose source IP falls in a given range by paging through the
 Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
-  python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP [TLS options]
+  python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP \
+    [--time-start RFC3339] [--time-end RFC3339] [--checkpoint /path/file] [--max-pages N] [TLS options]
+
+Options:
+  --time-start RFC3339          Start time (inclusive) to shrink the scan window
+  --time-end RFC3339            End time (exclusive)
+  --checkpoint /path/file       Cursor checkpoint file to resume long scans
+  --max-pages N                 Stop after N pages (for testing or chunked runs)
 
 TLS options (optional):
   --cacert /path/ca.pem         CA bundle for server verification
@@ -16,6 +23,7 @@ TLS options (optional):
 
 import argparse
 import json
+import pathlib
 import ssl
 import sys
 import urllib.error
@@ -44,7 +52,19 @@ def build_ssl_context(args: argparse.Namespace) -> ssl.SSLContext:
     return ctx
 
 
-def fetch_page(ctx: ssl.SSLContext, sensor: str, orig_start: str, orig_end: str, after: str | None) -> tuple[int, str | None, bool]:
+def build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+
+
+def fetch_page(
+    opener: urllib.request.OpenerDirector,
+    sensor: str,
+    orig_start: str,
+    orig_end: str,
+    after: str | None,
+    time_start: str | None,
+    time_end: str | None,
+) -> tuple[int, str | None, bool]:
     payload = {
         "query": GQL_QUERY,
         "variables": {
@@ -56,6 +76,11 @@ def fetch_page(ctx: ssl.SSLContext, sensor: str, orig_start: str, orig_end: str,
             "after": after,
         },
     }
+    if time_start or time_end:
+        payload["variables"]["filter"]["time"] = {
+            "start": time_start,
+            "end": time_end,
+        }
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
     req = urllib.request.Request(
@@ -66,7 +91,7 @@ def fetch_page(ctx: ssl.SSLContext, sensor: str, orig_start: str, orig_end: str,
     )
 
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+        with opener.open(req, timeout=30) as resp:
             body = resp.read()
     except urllib.error.URLError as exc:
         raise RuntimeError(f"HTTP request failed: {exc}") from exc
@@ -101,6 +126,18 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="출발지 IP - end (exclusive)",
     )
+    parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339)")
+    parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339)")
+    parser.add_argument(
+        "--checkpoint",
+        type=pathlib.Path,
+        help="페이지 커서를 저장/재개할 파일 경로 (TB급 긴 스캔 시 유용)",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        help="N 페이지만 처리 후 종료 (테스트/분할 실행용)",
+    )
     parser.add_argument("--cacert", help="CA bundle for TLS verification")
     parser.add_argument("--cert", help="Client certificate (optionally with key)")
     parser.add_argument("--key", help="Client private key (if not bundled with cert)")
@@ -111,13 +148,34 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     ctx = build_ssl_context(args)
+    opener = build_opener(ctx)
 
     total = 0
     after: str | None = None
+    if args.checkpoint and args.checkpoint.exists():
+        after = args.checkpoint.read_text().strip() or None
+
+    pages = 0
 
     while True:
-        count, after, has_next = fetch_page(ctx, args.sensor, args.orig_start, args.orig_end, after)
+        count, after, has_next = fetch_page(
+            opener,
+            args.sensor,
+            args.orig_start,
+            args.orig_end,
+            after,
+            args.time_start,
+            args.time_end,
+        )
         total += count
+        pages += 1
+
+        if args.checkpoint and after:
+            args.checkpoint.write_text(after)
+
+        if args.max_pages and pages >= args.max_pages:
+            break
+
         if not has_next or not after:
             break
 
