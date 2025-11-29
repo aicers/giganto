@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
             "    --orig-end 192.168.4.255 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
-            "    --checkpoint /tmp/conn_cursor.chk\n"
+            "    --checkpoint ./origin-ip.chk\n"
             "\n"
             "  # Limit to 10 requests/pages for a quick test\n"
             "  python3 scripts/count_conn_by_orig_range.py \\\n"
@@ -143,7 +143,7 @@ def parse_args() -> argparse.Namespace:
             "    --orig-end 192.168.4.255 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
-            "    --checkpoint /tmp/conn_cursor.chk \\\n"
+            "    --checkpoint ./origin-ip.chk \\\n"
             "    --max-requests 10\n"
         ),
     )
