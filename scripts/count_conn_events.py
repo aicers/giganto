@@ -10,7 +10,7 @@ Usage:
     [--orig-port-start N] [--orig-port-end N] \
     [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
     [--resp-port-start N] [--resp-port-end N] \
-    [--time-start RFC3339] [--time-end RFC3339] [--max-requests N] [--no-filter]
+    [--time-start RFC3339(UTC)] [--time-end RFC3339(UTC)] [--max-requests N] [--no-filter]
 
 Required arguments:
   --graphql-url URL            Giganto GraphQL 엔드포인트 (예: https://127.0.0.1:8443/graphql)
@@ -26,8 +26,8 @@ Optional arguments (IP/Port 필터는 하나 이상 지정 필요; `--no-filter`
   --resp-ip-end END_IP         도착지 IP - end (exclusive)
   --resp-port-start N          도착지 포트 - start (inclusive)
   --resp-port-end N            도착지 포트 - end (exclusive)
-  --time-start RFC3339         Start time (inclusive)
-  --time-end RFC3339           End time (exclusive)
+  --time-start RFC3339(UTC)    Start time (inclusive, UTC)
+  --time-end RFC3339(UTC)      End time (exclusive, UTC)
   --max-requests N             Stop after N requests/pages (for testing or chunked runs)
   --no-filter                  IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (긴 러닝타임 및 리소스 소모 주의)
 """
@@ -161,8 +161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orig-port-end", type=int, help="출발지 포트 - end (exclusive)")
     parser.add_argument("--resp-port-start", type=int, help="도착지 포트 - start (inclusive)")
     parser.add_argument("--resp-port-end", type=int, help="도착지 포트 - end (exclusive)")
-    parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339 예: 2025-10-14T15:00:00Z)")
-    parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339 예: 2025-11-15T15:00:00Z)")
+    parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339(UTC) 예: 2025-10-14T15:00:00Z)")
+    parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339(UTC) 예: 2025-11-15T15:00:00Z)")
     parser.add_argument(
         "--no-filter",
         action="store_true",
