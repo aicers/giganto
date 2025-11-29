@@ -33,6 +33,7 @@ import pathlib
 import ssl
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -197,6 +198,11 @@ def save_checkpoint(path: pathlib.Path, cursor: str | None, total: int) -> None:
     tmp.replace(path)
 
 
+def log(msg: str) -> None:
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"[{now}] {msg}")
+
+
 def main() -> int:
     args = parse_args()
     ctx = build_ssl_context(args)
@@ -208,15 +214,15 @@ def main() -> int:
 
     requests = 0
 
-    print(
+    log(
         f"[start] sensor={args.sensor}, orig-start={args.orig_start}, "
         f"orig-end={args.orig_end}, time-start={args.time_start}, time-end={args.time_end}, "
         f"checkpoint={args.checkpoint}"
     )
     if after:
-        print(f"[resume] loaded cursor={after}, loaded total={total}")
+        log(f"[resume] loaded cursor={after}, loaded total={total}")
     else:
-        print("[resume] no cursor found, starting from beginning")
+        log("[resume] no cursor found, starting from beginning")
 
     while True:
         count, after, has_next = fetch_page(
@@ -240,7 +246,7 @@ def main() -> int:
             or (args.max_requests and requests >= args.max_requests)
             or (not has_next or not after)
         ):
-            print(
+            log(
                 f"[request {requests}] page_count={count}, total={total}, "
                 f"has_next={has_next}, cursor={after}"
             )
@@ -251,7 +257,7 @@ def main() -> int:
         if not has_next or not after:
             break
 
-    print(f"[done] total={total}, requests={requests}, checkpoint={args.checkpoint}")
+    log(f"[done] total={total}, requests={requests}, checkpoint={args.checkpoint}")
     print(total)
     return 0
 
