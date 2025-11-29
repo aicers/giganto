@@ -10,13 +10,13 @@ Usage:
     [--orig-port-start N] [--orig-port-end N] \
     [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
     [--resp-port-start N] [--resp-port-end N] \
-    [--time-start RFC3339] [--time-end RFC3339] [--max-requests N]
+    [--time-start RFC3339] [--time-end RFC3339] [--max-requests N] [--no-filter]
 
 Required arguments:
   --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
   --checkpoint /path/file      Cursor checkpoint 파일
 
-Optional arguments (IP/Port 필터는 하나 이상 지정 필요):
+Optional arguments (IP/Port 필터는 하나 이상 지정 필요; `--no-filter`로 무시 가능):
   --orig-ip-start START_IP     출발지 IP - start (inclusive)
   --orig-ip-end END_IP         출발지 IP - end (exclusive)
   --orig-port-start N          출발지 포트 - start (inclusive)
@@ -28,6 +28,7 @@ Optional arguments (IP/Port 필터는 하나 이상 지정 필요):
   --time-start RFC3339         Start time (inclusive)
   --time-end RFC3339           End time (exclusive)
   --max-requests N             Stop after N requests/pages (for testing or chunked runs)
+  --no-filter                  IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (주의)
 """
 
 import argparse
@@ -154,6 +155,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339 예: 2025-10-14T15:00:00Z)")
     parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339 예: 2025-11-15T15:00:00Z)")
     parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="IP/Port 필터 없이 시간만 필터링하여 전체 카운트 (주의)",
+    )
+    parser.add_argument(
         "--checkpoint",
         required=True,
         type=pathlib.Path,
@@ -244,8 +250,8 @@ def build_base_filter(args: argparse.Namespace) -> dict:
     add_range("origPort", args.orig_port_start, args.orig_port_end)
     add_range("respPort", args.resp_port_start, args.resp_port_end)
 
-    if not has_filter:
-        raise SystemExit("At least one IP or port range must be provided.")
+    if not has_filter and not args.no_filter:
+        raise SystemExit("At least one IP or port range must be provided (or use --no-filter).")
 
     return base
 
@@ -274,6 +280,7 @@ def main() -> int:
         "resp_port_end": args.resp_port_end,
         "time_start": isoformat(time_start_dt),
         "time_end": isoformat(time_end_dt),
+        "no_filter": args.no_filter,
     }
 
     after: str | None
