@@ -34,6 +34,7 @@ import urllib.request
 GRAPHQL_URL = "https://127.0.0.1:8443/graphql"
 PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.rs).
 LOG_INTERVAL = 100  # Emit progress logs every N requests.
+REQUEST_TIMEOUT = 30 * 60  # Seconds to wait for each HTTP response.
 
 GQL_QUERY = """
 query ConnRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
@@ -89,7 +90,7 @@ def fetch_page(
     )
 
     try:
-        with opener.open(req, timeout=30) as resp:
+        with opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
             body = resp.read()
     except urllib.error.URLError as exc:
         raise RuntimeError(f"HTTP request failed: {exc}") from exc
