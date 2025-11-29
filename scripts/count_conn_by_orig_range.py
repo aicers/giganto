@@ -114,8 +114,30 @@ def fetch_page(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Count connRawEvents by source IP range.")
-    parser.add_argument("--sensor", required=True, help="Sensor name (NetworkFilter.sensor)")
+    parser = argparse.ArgumentParser(
+        description="Count connRawEvents by source IP range.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python3 scripts/count_conn_by_orig_range.py \\\n"
+            "    --sensor ingest_sensor_1 \\\n"
+            "    --orig-start 192.168.4.0 \\\n"
+            "    --orig-end 192.168.4.255 \\\n"
+            "    --time-start 2025-10-14T15:00:00Z \\\n"
+            "    --time-end 2025-11-15T15:00:00Z \\\n"
+            "    --checkpoint /tmp/conn_cursor.chk\n"
+            "\n"
+            "  # Limit to 10 pages for a quick test\n"
+            "  python3 scripts/count_conn_by_orig_range.py \\\n"
+            "    --sensor ingest_sensor_1 \\\n"
+            "    --orig-start 192.168.4.0 \\\n"
+            "    --orig-end 192.168.4.255 \\\n"
+            "    --time-start 2025-10-14T15:00:00Z \\\n"
+            "    --time-end 2025-11-15T15:00:00Z \\\n"
+            "    --max-pages 10\n"
+        ),
+    )
+    parser.add_argument("--sensor", required=True, help="sensor 호스트네임")
     parser.add_argument(
         "--orig-start",
         required=True,
@@ -126,8 +148,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="출발지 IP - end (exclusive)",
     )
-    parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339)")
-    parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339)")
+    parser.add_argument("--time-start", help="시작 시각 (inclusive, RFC3339 예: 2025-10-14T15:00:00Z)")
+    parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339 예: 2025-11-15T15:00:00Z)")
     parser.add_argument(
         "--checkpoint",
         type=pathlib.Path,
