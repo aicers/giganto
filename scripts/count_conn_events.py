@@ -45,7 +45,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.rs).
-LOG_INTERVAL = 100  # Emit progress logs every N requests.
+LOG_INTERVAL = 1000  # Emit progress logs every N requests.
 REQUEST_TIMEOUT = 30 * 60  # Seconds to wait for each HTTP response.
 MAX_SLICE = timedelta(days=1)  # Split long time ranges into <=1 day slices.
 
