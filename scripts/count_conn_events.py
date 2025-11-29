@@ -5,7 +5,7 @@ Count connRawEvents with optional IP/port filters by paging through the GraphQL 
 Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
-  python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --checkpoint /path/file \
+  python3 scripts/count_conn_events.py --sensor SENSOR --checkpoint /path/file \
     [--orig-ip-start START_IP] [--orig-ip-end END_IP] \
     [--orig-port-start N] [--orig-port-end N] \
     [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
@@ -123,7 +123,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python3 scripts/count_conn_by_orig_range.py \\\n"
+            "  python3 scripts/count_conn_events.py \\\n"
             "    --sensor sensor \\\n"
             "    --orig-ip-start 192.168.0.0 --orig-ip-end 192.169.0.0 \\\n"
             "    --orig-port-start 443 --orig-port-end 444 \\\n"
@@ -132,7 +132,7 @@ def parse_args() -> argparse.Namespace:
             "    --checkpoint ./origin-ip.chk\n"
             "\n"
             "  # Destination IP+Port, limit to 10 requests/pages for a quick test\n"
-            "  python3 scripts/count_conn_by_orig_range.py \\\n"
+            "  python3 scripts/count_conn_events.py \\\n"
             "    --sensor sensor \\\n"
             "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.0.255.255 \\\n"
             "    --resp-port-start 443 --resp-port-end 444 \\\n"
