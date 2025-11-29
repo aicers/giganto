@@ -5,7 +5,7 @@ Count connRawEvents with optional IP/port filters by paging through the GraphQL 
 Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
-  python3 scripts/count_conn_events.py --graphql-url https://HOST:PORT/graphql --sensor SENSOR --checkpoint /path/file \
+  python3 count_conn_events.py --graphql-url https://HOST:PORT/graphql --sensor SENSOR --checkpoint /path/file \
     [--orig-ip-start START_IP] [--orig-ip-end END_IP] \
     [--orig-port-start N] [--orig-port-end N] \
     [--resp-ip-start START_IP] [--resp-ip-end END_IP] \
@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  # Source IP+Port range over a time range\n"
-            "  python3 scripts/count_conn_events.py \\\n"
+            "  python3 count_conn_events.py \\\n"
             "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --orig-ip-start 192.168.0.0 --orig-ip-end 192.169.0.0 \\\n"
@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
             "    --checkpoint ./origin-ip-port.chk\n"
             "\n"
             "  # Total count (no filters) for a sensor over a time range\n"
-            "  python3 scripts/count_conn_events.py \\\n"
+            "  python3 count_conn_events.py \\\n"
             "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --time-start 2025-10-14T00:00:00Z \\\n"
@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
             "    --checkpoint ./no-filter.chk\n"
             "\n"
             "  # Destination IP+Port, limit to 10 requests/pages for a quick test\n"
-            "  python3 scripts/count_conn_events.py \\\n"
+            "  python3 count_conn_events.py \\\n"
             "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
             "    --resp-ip-start 10.0.0.0 --resp-ip-end 10.1.0.0 \\\n"
