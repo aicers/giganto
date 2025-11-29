@@ -6,15 +6,20 @@ Requirements: Python 3 (stdlib only: urllib, ssl, json).
 
 Usage:
   python3 scripts/count_conn_by_orig_range.py --sensor SENSOR --orig-start START_IP --orig-end END_IP \
-    [--time-start RFC3339] [--time-end RFC3339] [--checkpoint /path/file] [--max-pages N] [TLS options]
+    --checkpoint /path/file [--time-start RFC3339] [--time-end RFC3339] [--max-pages N] [TLS options]
 
-Options:
-  --time-start RFC3339          Start time (inclusive) to shrink the scan window
-  --time-end RFC3339            End time (exclusive)
-  --checkpoint /path/file       Cursor checkpoint file to resume long scans
-  --max-pages N                 Stop after N pages (for testing or chunked runs)
+Required arguments:
+  --sensor SENSOR              Sensor 이름 (NetworkFilter.sensor)
+  --orig-start START_IP        출발지 IP - start (inclusive)
+  --orig-end END_IP            출발지 IP - end (exclusive)
+  --checkpoint /path/file      Cursor checkpoint 파일
 
-TLS options (optional):
+Optional arguments:
+  --time-start RFC3339         Start time (inclusive)
+  --time-end RFC3339           End time (exclusive)
+  --max-pages N                Stop after N pages (for testing or chunked runs)
+
+TLS options:
   --cacert /path/ca.pem         CA bundle for server verification
   --cert /path/client_cert.pem  Client certificate (optionally with key)
   --key /path/client_key.pem    Client private key (if not in cert)
@@ -23,9 +28,11 @@ TLS options (optional):
 
 import argparse
 import json
+import os
 import pathlib
 import ssl
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -134,6 +141,7 @@ def parse_args() -> argparse.Namespace:
             "    --orig-end 192.168.4.255 \\\n"
             "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
+            "    --checkpoint /tmp/conn_cursor.chk \\\n"
             "    --max-pages 10\n"
         ),
     )
@@ -152,8 +160,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-end", help="종료 시각 (exclusive, RFC3339 예: 2025-11-15T15:00:00Z)")
     parser.add_argument(
         "--checkpoint",
+        required=True,
         type=pathlib.Path,
-        help="페이지 커서를 저장/재개할 파일 경로 (TB급 긴 스캔 시 유용)",
+        help="페이지 커서를 저장/재개할 파일 경로",
     )
     parser.add_argument(
         "--max-pages",
@@ -167,6 +176,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int]:
+    try:
+        data = json.loads(path.read_text())
+        cursor = data.get("cursor")
+        total = int(data.get("total", 0))
+        return cursor, total
+    except FileNotFoundError:
+        return None, 0
+    except Exception:
+        return None, 0
+
+
+def save_checkpoint(path: pathlib.Path, cursor: str | None, total: int) -> None:
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".tmp.")
+    tmp = pathlib.Path(tmp_path)
+    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+        json.dump({"cursor": cursor, "total": total}, f)
+    tmp.replace(path)
+
+
 def main() -> int:
     args = parse_args()
     ctx = build_ssl_context(args)
@@ -174,8 +203,7 @@ def main() -> int:
 
     total = 0
     after: str | None = None
-    if args.checkpoint and args.checkpoint.exists():
-        after = args.checkpoint.read_text().strip() or None
+    after, total = load_checkpoint(args.checkpoint)
 
     pages = 0
 
@@ -192,8 +220,8 @@ def main() -> int:
         total += count
         pages += 1
 
-        if args.checkpoint and after:
-            args.checkpoint.write_text(after)
+        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        save_checkpoint(args.checkpoint, after, total)
 
         if args.max_pages and pages >= args.max_pages:
             break
