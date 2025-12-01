@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
             "  python3 count_conn_events.py \\\n"
             "    --graphql-url https://127.0.0.1:8443/graphql \\\n"
             "    --sensor sensor \\\n"
-            "    --time-start 2025-10-14T00:00:00Z \\\n"
+            "    --time-start 2025-10-14T15:00:00Z \\\n"
             "    --time-end 2025-11-15T15:00:00Z \\\n"
             "    --no-filter \\\n"
             "    --checkpoint ./no-filter.chk\n"
