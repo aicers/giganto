@@ -43,7 +43,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
 ] }
 rocksdb = "0.24"
-roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.5.0" }
+roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.5.1" }
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
