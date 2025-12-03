@@ -48,6 +48,7 @@ PAGE_SIZE = 100  # Server-side maximum enforced by get_connection (src/graphql.r
 LOG_INTERVAL = 1000  # Emit progress logs every N requests.
 REQUEST_TIMEOUT = 30 * 60  # Seconds to wait for each HTTP response.
 MAX_SLICE = timedelta(days=1)  # Split long time ranges into <=1 day slices.
+CHECKPOINT_KIND = "count_http_events"
 
 GQL_QUERY = """
 query HttpRawEvents($filter: NetworkFilter!, $first: Int, $after: String) {
@@ -199,9 +200,20 @@ def isoformat(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[str | None, int, int, datetime | None, dict]:
+def load_checkpoint(path: pathlib.Path, expected_kind: str) -> tuple[str | None, int, int, datetime | None, dict]:
     try:
         data = json.loads(path.read_text())
+        kind = data.get("checkpoint_kind")
+        if kind is None:
+            raise SystemExit(
+                "checkpoint missing checkpoint_kind; it may have been created by an older version or another script. "
+                "Please supply a fresh checkpoint file."
+            )
+        if kind != expected_kind:
+            raise SystemExit(
+                f"checkpoint kind mismatch: saved={kind}, expected={expected_kind}. "
+                "Use a different checkpoint file."
+            )
         cursor = data.get("cursor")
         total = int(data.get("total", 0))
         requests = int(data.get("requests", 0))
@@ -228,6 +240,7 @@ def save_checkpoint(
     with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
         json.dump(
             {
+                "checkpoint_kind": CHECKPOINT_KIND,
                 "cursor": cursor,
                 "total": total,
                 "requests": requests,
@@ -297,7 +310,7 @@ def main() -> int:
     requests: int
     next_start: datetime | None
     saved_params: dict
-    after, total, requests, next_start, saved_params = load_checkpoint(args.checkpoint)
+    after, total, requests, next_start, saved_params = load_checkpoint(args.checkpoint, CHECKPOINT_KIND)
 
     if saved_params and saved_params != run_params:
         raise SystemExit(
