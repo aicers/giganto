@@ -18,16 +18,16 @@ use self::migration_structures::{
     ConnBeforeV21, HttpFromV12BeforeV21, Netflow5BeforeV23, Netflow9BeforeV23, NtlmBeforeV21,
     SecuLogBeforeV23, SmtpBeforeV21, SshBeforeV21, TlsBeforeV21,
 };
-use super::{Database, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
+use super::{Database, DatabaseMode, RAW_DATA_COLUMN_FAMILY_NAMES, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::OpLogBeforeV24;
 use crate::{
     graphql::TIMESTAMP_SIZE,
     ingest::implement::EventFilter,
     storage::{
         Conn as ConnFromV21, DbOptions, Http as HttpFromV21, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24, WritableRawEventStore,
+        Netflow9 as Netflow9FromV23, Ntlm as NtlmFromV21, OpLog as OpLogFromV24,
         SecuLog as SecuLogFromV23, Smtp as SmtpFromV21, Ssh as SshFromV21, StorageKey,
-        Tls as TlsFromV21, rocksdb_options,
+        Tls as TlsFromV21, WritableRawEventStoreHandle, rocksdb_options,
     },
 };
 
@@ -123,7 +123,6 @@ fn read_version_file(path: &Path) -> Result<Version> {
     Version::parse(&ver).context("cannot parse VERSION")
 }
 
-const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
 impl Database {
     fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Database {
         const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
@@ -149,15 +148,15 @@ impl Database {
 
 // Delete the netflow5/netflow5/secuLog data in the old key and insert it with the new key.
 fn migrate_0_13_to_0_19_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open_with_old_cfs(db_path, db_opts)?;
+    let db = Database::open_with_old_cfs(db_path, db_opts);
 
-    let netflow5_store: RawEventStore<'_, Netflow5FromV23> = db.netflow5_store()?;
+    let netflow5_store = db.netflow5_store_writable()?;
     migrate_netflow_from_0_13_to_0_19_0::<Netflow5FromV23, Netflow5BeforeV23>(&netflow5_store)?;
 
-    let netflow9_store = db.netflow9_store()?;
+    let netflow9_store = db.netflow9_store_writable()?;
     migrate_netflow_from_0_13_to_0_19_0::<Netflow9FromV23, Netflow9BeforeV23>(&netflow9_store)?;
 
-    let secu_log_store = db.secu_log_store()?;
+    let secu_log_store = db.secu_log_store_writable()?;
     for raw_event in secu_log_store.iter_forward() {
         let Ok((key, value)) = raw_event else {
             continue;
@@ -181,10 +180,12 @@ fn migrate_0_13_to_0_19_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
-fn migrate_netflow_from_0_13_to_0_19_0<S, T>(store: &RawEventStore<'_, S>) -> Result<()>
+fn migrate_netflow_from_0_13_to_0_19_0<S, T>(
+    store: &WritableRawEventStoreHandle<'_, S>,
+) -> Result<()>
 where
     T: DeserializeOwned + EventFilter,
-    S: DeserializeOwned,
+    S: DeserializeOwned + Sync,
 {
     for raw_event in store.iter_forward() {
         let Ok((key, value)) = raw_event else {
@@ -209,11 +210,11 @@ where
 
 #[allow(clippy::too_many_lines)]
 fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open_with_old_cfs(db_path, db_opts)?;
+    let db = Database::open_with_old_cfs(db_path, db_opts);
 
     // migration ntlm raw event
     info!("start migration for ntlm");
-    let store = db.ntlm_store()?;
+    let store = db.ntlm_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<NtlmBeforeV21>(&val)?;
@@ -225,7 +226,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
     // migration http raw event
     info!("start migration for http");
-    let store = db.http_store()?;
+    let store = db.http_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<HttpFromV12BeforeV21>(&val)?;
@@ -237,7 +238,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
     // migration ssh raw event
     info!("start migration for ssh");
-    let store = db.ssh_store()?;
+    let store = db.ssh_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<SshBeforeV21>(&val)?;
@@ -249,7 +250,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
     // migration tls raw event
     info!("start migration for tls");
-    let store = db.tls_store()?;
+    let store = db.tls_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<TlsBeforeV21>(&val)?;
@@ -261,7 +262,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
     // migration smtp raw event
     info!("start migration for smtp");
-    let store = db.smtp_store()?;
+    let store = db.smtp_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<SmtpBeforeV21>(&val)?;
@@ -273,7 +274,7 @@ fn migrate_0_19_to_0_21_0(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
     // migration conn raw event
     info!("start migration for conn");
-    let store = db.conn_store()?;
+    let store = db.conn_store_writable()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<ConnBeforeV21>(&val)?;
@@ -447,7 +448,6 @@ mod tests {
     use semver::{Version, VersionReq};
     use tempfile::TempDir;
 
-    use super::super::DatabaseMode;
     use super::COMPATIBLE_VERSION_REQ;
     use crate::storage::migration::migration_structures::OpLogBeforeV24;
     use crate::storage::{
@@ -576,22 +576,22 @@ mod tests {
         let serialized_secu_log = bincode::serialize(&secu_log_body).unwrap();
 
         {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default());
 
             // insert netflow5 data using the old key.
-            let netflow5_store = db.netflow5_store().unwrap();
+            let netflow5_store = db.netflow5_store_writable().unwrap();
             netflow5_store
                 .append(&netflow5_old_key, &serialized_netflow5)
                 .unwrap();
 
             // insert netflow9 data using the old key.
-            let netflow9_store = db.netflow9_store().unwrap();
+            let netflow9_store = db.netflow9_store_writable().unwrap();
             netflow9_store
                 .append(&netflow9_old_key, &serialized_netflow9)
                 .unwrap();
 
             // insert secuLog data using the old key.
-            let secu_log_store = db.secu_log_store().unwrap();
+            let secu_log_store = db.secu_log_store_writable().unwrap();
 
             secu_log_store
                 .append(&secu_log_old_key, &serialized_secu_log)
@@ -603,7 +603,7 @@ mod tests {
 
         // check netflow5/9 migration
 
-        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default());
 
         let netflow_new_key = StorageKey::builder()
             .start_key(TEST_SENSOR)
@@ -796,31 +796,31 @@ mod tests {
         let ser_old_tls = bincode::serialize(&old_tls).unwrap();
 
         {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default());
 
-            let conn_store = db.conn_store().unwrap();
+            let conn_store = db.conn_store_writable().unwrap();
             conn_store.append(&key, &ser_old_conn).unwrap();
 
-            let http_store = db.http_store().unwrap();
+            let http_store = db.http_store_writable().unwrap();
             http_store.append(&key, &ser_old_http).unwrap();
 
-            let smtp_store = db.smtp_store().unwrap();
+            let smtp_store = db.smtp_store_writable().unwrap();
             smtp_store.append(&key, &ser_old_smtp).unwrap();
 
-            let ntlm_store = db.ntlm_store().unwrap();
+            let ntlm_store = db.ntlm_store_writable().unwrap();
             ntlm_store.append(&key, &ser_old_ntlm).unwrap();
 
-            let ssh_store = db.ssh_store().unwrap();
+            let ssh_store = db.ssh_store_writable().unwrap();
             ssh_store.append(&key, &ser_old_ssh).unwrap();
 
-            let tls_store = db.tls_store().unwrap();
+            let tls_store = db.tls_store_writable().unwrap();
             tls_store.append(&key, &ser_old_tls).unwrap();
         }
 
         // migration 0.19.0 to 0.21.0
         super::migrate_0_19_to_0_21_0(&db_path, &DbOptions::default()).unwrap();
 
-        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+        let db = Database::open_with_old_cfs(&db_path, &DbOptions::default());
 
         // check conn migration
         let conn_store = db.conn_store().unwrap();
@@ -1074,7 +1074,7 @@ mod tests {
         let serialized_secu_log_old = bincode::serialize(&secu_log_old).unwrap();
 
         {
-            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default()).unwrap();
+            let db = Database::open_with_old_cfs(&db_path, &DbOptions::default());
 
             // insert netflow5 data using the old key.
             let netflow5_store = db.netflow5_store_writable().unwrap();

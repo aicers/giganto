@@ -1686,7 +1686,7 @@ async fn peer_in_charge_publish_addr(peers: Peers, sensor: &str) -> Option<Socke
 
 async fn process_range_data_in_current_giganto<T>(
     send: &mut SendStream,
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     request_range: RequestRange,
     availed_kind: bool,
 ) -> Result<()>
@@ -1827,7 +1827,7 @@ async fn req_inputs_by_gigantos_in_charge(
 
 async fn process_raw_event_in_current_giganto<T>(
     send: &mut SendStream,
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     handle_by_current_giganto: Vec<(String, Vec<i64>)>,
 ) -> Result<()>
 where

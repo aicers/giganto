@@ -17,7 +17,7 @@ use crate::{
         events_in_cluster, impl_from_giganto_time_range_struct_for_graphql_client,
         paged_events_in_cluster,
     },
-    storage::{Database, KeyExtractor, StorageKey},
+    storage::{Database, KeyExtractor, ReadableRawEventStore, StorageKey},
 };
 
 #[derive(Default)]
@@ -74,7 +74,6 @@ impl RawEventFilter for PacketFilter {
 #[allow(clippy::struct_field_names)]
 #[derive(SimpleObject, ConvertGraphQLEdgesNode)]
 #[graphql_client_type(names = [packets::PacketsPacketsEdgesNode, ])]
-#[allow(clippy::struct_field_names)]
 struct Packet {
     request_time: DateTime<Utc>,
     packet_time: DateTime<Utc>,

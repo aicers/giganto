@@ -106,6 +106,7 @@ pub struct ConfigVisible {
     pub secondary_sync_interval: Duration,
 }
 
+#[allow(dead_code)]
 fn default_compression() -> bool {
     true
 }
@@ -191,7 +192,7 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default max mb of level base")
         .set_default("num_of_thread", DEFAULT_NUM_OF_THREAD)
         .expect("default number of thread")
-        .set_default("max_sub_compactions", DEFAULT_MAX_SUB_COMPACTIONS)
+        .set_default("max_sub_compactions", DEFAULT_MAX_SUBCOMPACTIONS)
         .expect("default max subcompactions")
         .set_default("secondary_sync_interval", DEFAULT_SECONDARY_SYNC_INTERVAL)
         .expect("default secondary sync interval")

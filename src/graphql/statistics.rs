@@ -146,7 +146,7 @@ impl StatisticsQuery {
 impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 
 fn get_statistics_iter<'c, T>(
-    store: &dyn ReadableRawEventStore<'c, T>,
+    store: &(dyn ReadableRawEventStore<'c, T> + Send + Sync),
     core_id: u32,
     sensor: &str,
     time: Option<&TimeRange>,
@@ -297,7 +297,7 @@ mod tests {
     use chrono::Utc;
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use crate::{graphql::tests::TestSchema, storage::WritableRawEventStore};
 
     #[tokio::test]
     async fn test_statistics() {

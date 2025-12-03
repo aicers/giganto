@@ -23,8 +23,10 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::async_trait::async_trait;
+use async_graphql::extensions::{Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest};
 use async_graphql::{
-    Context, EmptySubscription, Error, InputObject, MergedObject, OutputType, Result,
+    Context, EmptySubscription, Error, InputObject, MergedObject, OutputType, Request, Result,
+    ServerError, ServerResult,
     connection::{Connection, Edge, EmptyFields, query},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
@@ -265,7 +267,7 @@ fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) 
 
 #[allow(clippy::too_many_lines)]
 fn get_connection<T>(
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -392,7 +394,7 @@ where
 
 #[allow(clippy::too_many_lines)]
 fn get_connection_by_prefix_timestamp_key<T>(
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -510,7 +512,7 @@ where
 }
 
 fn load_connection<N, T>(
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     filter: &(impl RawEventFilter + KeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -528,7 +530,7 @@ where
 }
 
 fn load_connection_by_prefix_timestamp_key<N, T>(
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     after: Option<String>,
     before: Option<String>,
@@ -632,7 +634,7 @@ pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
 }
 
 fn get_peekable_iter<'c, T>(
-    store: &dyn ReadableRawEventStore<'c, T>,
+    store: &(dyn ReadableRawEventStore<'c, T> + Send + Sync),
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -656,7 +658,7 @@ where
 }
 
 fn get_filtered_iter<'c, T>(
-    store: &dyn ReadableRawEventStore<'c, T>,
+    store: &(dyn ReadableRawEventStore<'c, T> + Send + Sync),
     filter: &'c NetworkFilter,
     after: Option<&str>,
     before: Option<&str>,
@@ -1776,8 +1778,6 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
     };
 }
 pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
-
-use crate::storage::TimestampKeyExtractor;
 
 #[cfg(test)]
 mod tests {

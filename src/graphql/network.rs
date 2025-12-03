@@ -1600,6 +1600,7 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let http_store = db.http_store()?;
             let (http_iter, _) = get_peekable_iter(
                 http_store.as_ref(),
                 &filter,

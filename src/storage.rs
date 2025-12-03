@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
@@ -23,8 +23,7 @@ use giganto_client::ingest::{
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
     network::{
-        Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, MalformedDns as ClientMalformedDns, Mqtt,
-        Nfs, Radius, Rdp, Smb,
+        Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, Mqtt, Nfs, Rdp, Smb,
     },
     statistics::Statistics,
     sysmon::{
@@ -262,6 +261,16 @@ impl Database {
         Ok(())
     }
 
+    pub fn try_catch_up_with_primary(&self) -> Result<()> {
+        if self.mode == DatabaseMode::Secondary {
+            self.db
+                .try_catch_up_with_primary()
+                .context("failed to catch up with primary database")
+        } else {
+            Ok(())
+        }
+    }
+
     #[cfg(debug_assertions)]
     pub fn properties_cf(&self, cf_name: &str) -> Result<CfProperties> {
         let stats = if let Some(s) = self
@@ -292,7 +301,7 @@ impl Database {
     }
 
     /// Returns the raw event store for all type.
-    pub fn retain_period_store(&self) -> Result<RetentionStores<()>> {
+    pub fn retain_period_store(&self) -> Result<RetentionStores<'_, ()>> {
         let mut stores = RetentionStores::new();
 
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
@@ -317,10 +326,11 @@ impl Database {
         cf_name: &str,
     ) -> Result<ReadableRawEventStoreHandle<'a, T>> {
         let store = self.raw_store_for(cf_name)?;
-        let handle: Box<dyn ReadableRawEventStore<'_, T> + '_> = match self.mode {
-            DatabaseMode::Primary => Box::new(store),
-            DatabaseMode::Secondary => Box::new(ReadOnlyRawEventStore::new(store)),
-        };
+        let handle: Box<dyn ReadableRawEventStore<'_, T> + Send + Sync + '_> =
+            match self.mode {
+                DatabaseMode::Primary => Box::new(store),
+                DatabaseMode::Secondary => Box::new(ReadOnlyRawEventStore::new(store)),
+            };
         Ok(ReadableRawEventStoreHandle::new(handle))
     }
 
@@ -332,7 +342,8 @@ impl Database {
             bail!("write operations are not supported on secondary databases");
         }
         let store = self.raw_store_for(cf_name)?;
-        Ok(WritableRawEventStoreHandle::new(Box::new(store)))
+        let boxed: Box<dyn WritableRawEventStore<'a, T> + Send + Sync + 'a> = Box::new(store);
+        Ok(WritableRawEventStoreHandle::new(boxed))
     }
 
     fn get_cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
@@ -341,256 +352,110 @@ impl Database {
             .context("cannot access {cf_name} column family")
     }
 
-    /// Returns the raw event store for connections.
-    pub fn conn_store(&self) -> Result<RawEventStore<'_, Conn>> {
-        let cf = self.get_cf_handle("conn")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for dns.
-    pub fn dns_store(&self) -> Result<RawEventStore<'_, Dns>> {
-        let cf = self.get_cf_handle("dns")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for `malformed_dns`.
-    pub fn malformed_dns_store(&self) -> Result<RawEventStore<'_, ClientMalformedDns>> {
-        let cf = self.get_cf_handle("malformed_dns")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for log.
-    pub fn log_store(&self) -> Result<RawEventStore<'_, Log>> {
-        let cf = self.get_cf_handle("log")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for http.
-    pub fn http_store(&self) -> Result<RawEventStore<'_, Http>> {
-        let cf = self.get_cf_handle("http")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for rdp.
-    pub fn rdp_store(&self) -> Result<RawEventStore<'_, Rdp>> {
-        let cf = self.get_cf_handle("rdp")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for periodic time series.
-    pub fn periodic_time_series_store(&self) -> Result<RawEventStore<'_, PeriodicTimeSeries>> {
-        let cf = self.get_cf_handle("periodic time series")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for smtp.
-    pub fn smtp_store(&self) -> Result<RawEventStore<'_, Smtp>> {
-        let cf = self.get_cf_handle("smtp")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for ntlm.
-    pub fn ntlm_store(&self) -> Result<RawEventStore<'_, Ntlm>> {
-        let cf = self.get_cf_handle("ntlm")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for kerberos.
-    pub fn kerberos_store(&self) -> Result<RawEventStore<'_, Kerberos>> {
-        let cf = self.get_cf_handle("kerberos")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for ssh.
-    pub fn ssh_store(&self) -> Result<RawEventStore<'_, Ssh>> {
-        let cf = self.get_cf_handle("ssh")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the raw event store for dce rpc.
-    pub fn dce_rpc_store(&self) -> Result<RawEventStore<'_, DceRpc>> {
-        let cf = self.get_cf_handle("dce rpc")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for statistics
-    pub fn statistics_store(&self) -> Result<RawEventStore<'_, Statistics>> {
-        let cf = self.get_cf_handle("statistics")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for operation log
-    pub fn op_log_store(&self) -> Result<RawEventStore<'_, OpLog>> {
-        let cf = self.get_cf_handle("oplog")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for packet
-    pub fn packet_store(&self) -> Result<RawEventStore<'_, Packet>> {
-        let cf = self.get_cf_handle("packet")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
+    impl_store!(conn_store, conn_store_writable, "conn", Conn);
+    impl_store!(dns_store, dns_store_writable, "dns", Dns);
+    impl_store!(log_store, log_store_writable, "log", Log);
+    impl_store!(http_store, http_store_writable, "http", Http);
+    impl_store!(rdp_store, rdp_store_writable, "rdp", Rdp);
+    impl_store!(
+        periodic_time_series_store,
+        periodic_time_series_store_writable,
+        "periodic time series",
+        PeriodicTimeSeries
+    );
+    impl_store!(smtp_store, smtp_store_writable, "smtp", Smtp);
+    impl_store!(ntlm_store, ntlm_store_writable, "ntlm", Ntlm);
+    impl_store!(kerberos_store, kerberos_store_writable, "kerberos", Kerberos);
+    impl_store!(ssh_store, ssh_store_writable, "ssh", Ssh);
+    impl_store!(dce_rpc_store, dce_rpc_store_writable, "dce rpc", DceRpc);
+    impl_store!(statistics_store, statistics_store_writable, "statistics", Statistics);
+    impl_store!(op_log_store, op_log_store_writable, "oplog", OpLog);
+    impl_store!(packet_store, packet_store_writable, "packet", Packet);
+    impl_store!(ftp_store, ftp_store_writable, "ftp", Ftp);
+    impl_store!(mqtt_store, mqtt_store_writable, "mqtt", Mqtt);
+    impl_store!(ldap_store, ldap_store_writable, "ldap", Ldap);
+    impl_store!(tls_store, tls_store_writable, "tls", Tls);
+    impl_store!(smb_store, smb_store_writable, "smb", Smb);
+    impl_store!(nfs_store, nfs_store_writable, "nfs", Nfs);
+    impl_store!(bootp_store, bootp_store_writable, "bootp", Bootp);
+    impl_store!(dhcp_store, dhcp_store_writable, "dhcp", Dhcp);
+    impl_store!(
+        process_create_store,
+        process_create_store_writable,
+        "process create",
+        ProcessCreate
+    );
+    impl_store!(
+        file_create_time_store,
+        file_create_time_store_writable,
+        "file create time",
+        FileCreationTimeChanged
+    );
+    impl_store!(
+        network_connect_store,
+        network_connect_store_writable,
+        "network connect",
+        NetworkConnection
+    );
+    impl_store!(
+        process_terminate_store,
+        process_terminate_store_writable,
+        "process terminate",
+        ProcessTerminated
+    );
+    impl_store!(
+        image_load_store,
+        image_load_store_writable,
+        "image load",
+        ImageLoaded
+    );
+    impl_store!(file_create_store, file_create_store_writable, "file create", FileCreate);
+    impl_store!(
+        registry_value_set_store,
+        registry_value_set_store_writable,
+        "registry value set",
+        RegistryValueSet
+    );
+    impl_store!(
+        registry_key_rename_store,
+        registry_key_rename_store_writable,
+        "registry key rename",
+        RegistryKeyValueRename
+    );
+    impl_store!(
+        file_create_stream_hash_store,
+        file_create_stream_hash_store_writable,
+        "file create stream hash",
+        FileCreateStreamHash
+    );
+    impl_store!(
+        pipe_event_store,
+        pipe_event_store_writable,
+        "pipe event",
+        PipeEvent
+    );
+    impl_store!(dns_query_store, dns_query_store_writable, "dns query", DnsEvent);
+    impl_store!(file_delete_store, file_delete_store_writable, "file delete", FileDelete);
+    impl_store!(
+        process_tamper_store,
+        process_tamper_store_writable,
+        "process tamper",
+        ProcessTampering
+    );
+    impl_store!(
+        file_delete_detected_store,
+        file_delete_detected_store_writable,
+        "file delete detected",
+        FileDeleteDetected
+    );
+    impl_store!(netflow5_store, netflow5_store_writable, "netflow5", Netflow5);
+    impl_store!(netflow9_store, netflow9_store_writable, "netflow9", Netflow9);
+    impl_store!(secu_log_store, secu_log_store_writable, "seculog", SecuLog);
 
     /// Returns the store for connection sensors
     pub fn sensors_store(&self) -> Result<SensorStore<'_>> {
         let cf = self.get_cf_handle("sensors")?;
         Ok(SensorStore { db: &self.db, cf })
-    }
-
-    /// Returns the store for Ftp
-    pub fn ftp_store(&self) -> Result<RawEventStore<'_, Ftp>> {
-        let cf = self.get_cf_handle("ftp")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for Mqtt
-    pub fn mqtt_store(&self) -> Result<RawEventStore<'_, Mqtt>> {
-        let cf = self.get_cf_handle("mqtt")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for ldap
-    pub fn ldap_store(&self) -> Result<RawEventStore<'_, Ldap>> {
-        let cf = self.get_cf_handle("ldap")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for tls
-    pub fn tls_store(&self) -> Result<RawEventStore<'_, Tls>> {
-        let cf = self.get_cf_handle("tls")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for smb
-    pub fn smb_store(&self) -> Result<RawEventStore<'_, Smb>> {
-        let cf = self.get_cf_handle("smb")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for nfs
-    pub fn nfs_store(&self) -> Result<RawEventStore<'_, Nfs>> {
-        let cf = self.get_cf_handle("nfs")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for bootp
-    pub fn bootp_store(&self) -> Result<RawEventStore<'_, Bootp>> {
-        let cf = self.get_cf_handle("bootp")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for dhcp
-    pub fn dhcp_store(&self) -> Result<RawEventStore<'_, Dhcp>> {
-        let cf = self.get_cf_handle("dhcp")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for radius
-    pub fn radius_store(&self) -> Result<RawEventStore<'_, Radius>> {
-        let cf = self.get_cf_handle("radius")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `ProcessCreate` (#1).
-    pub fn process_create_store(&self) -> Result<RawEventStore<'_, ProcessCreate>> {
-        let cf = self.get_cf_handle("process create")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `FileCreateTime` (#2).
-    pub fn file_create_time_store(&self) -> Result<RawEventStore<'_, FileCreationTimeChanged>> {
-        let cf = self.get_cf_handle("file create time")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `NetworkConnect` (#3).
-    pub fn network_connect_store(&self) -> Result<RawEventStore<'_, NetworkConnection>> {
-        let cf = self.get_cf_handle("network connect")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `ProcessTerminate` (#5).
-    pub fn process_terminate_store(&self) -> Result<RawEventStore<'_, ProcessTerminated>> {
-        let cf = self.get_cf_handle("process terminate")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `ImageLoad` (#7).
-    pub fn image_load_store(&self) -> Result<RawEventStore<'_, ImageLoaded>> {
-        let cf = self.get_cf_handle("image load")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `FileCreate` (#11).
-    pub fn file_create_store(&self) -> Result<RawEventStore<'_, FileCreate>> {
-        let cf = self.get_cf_handle("file create")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `RegistryValueSet` (#13).
-    pub fn registry_value_set_store(&self) -> Result<RawEventStore<'_, RegistryValueSet>> {
-        let cf = self.get_cf_handle("registry value set")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `RegistryKeyRename` (#14).
-    pub fn registry_key_rename_store(&self) -> Result<RawEventStore<'_, RegistryKeyValueRename>> {
-        let cf = self.get_cf_handle("registry key rename")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `FileCreateStreamHash` (#15).
-    pub fn file_create_stream_hash_store(&self) -> Result<RawEventStore<'_, FileCreateStreamHash>> {
-        let cf = self.get_cf_handle("file create stream hash")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `PipeEvent` (#17).
-    pub fn pipe_event_store(&self) -> Result<RawEventStore<'_, PipeEvent>> {
-        let cf = self.get_cf_handle("pipe event")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `DnsQuery` (#22).
-    pub fn dns_query_store(&self) -> Result<RawEventStore<'_, DnsEvent>> {
-        let cf = self.get_cf_handle("dns query")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `FileDelete` (#23).
-    pub fn file_delete_store(&self) -> Result<RawEventStore<'_, FileDelete>> {
-        let cf = self.get_cf_handle("file delete")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `ProcessTamper` (#25).
-    pub fn process_tamper_store(&self) -> Result<RawEventStore<'_, ProcessTampering>> {
-        let cf = self.get_cf_handle("process tamper")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for sysmon event `FileDeleteDetected` (#26).
-    pub fn file_delete_detected_store(&self) -> Result<RawEventStore<'_, FileDeleteDetected>> {
-        let cf = self.get_cf_handle("file delete detected")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for event `netflow5`.
-    pub fn netflow5_store(&self) -> Result<RawEventStore<'_, Netflow5>> {
-        let cf = self.get_cf_handle("netflow5")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for event `netflow9`.
-    pub fn netflow9_store(&self) -> Result<RawEventStore<'_, Netflow9>> {
-        let cf = self.get_cf_handle("netflow9")?;
-        Ok(RawEventStore::new(&self.db, cf))
-    }
-
-    /// Returns the store for security log.
-    pub fn secu_log_store(&self) -> Result<RawEventStore<'_, SecuLog>> {
-        let cf = self.get_cf_handle("seculog")?;
-        Ok(RawEventStore::new(&self.db, cf))
     }
 }
 
@@ -603,6 +468,7 @@ pub struct RawEventStore<'db, T> {
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
 unsafe impl<T> Send for RawEventStore<'_, T> {}
+unsafe impl<T: Sync> Sync for RawEventStore<'_, T> {}
 
 impl<'db, T> RawEventStore<'db, T> {
     fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<'db, T> {
@@ -614,8 +480,9 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
+        let start = Instant::now();
         self.db.put_cf(self.cf, key, raw_event)?;
-        debug!("appended: {:?}", current.elapsed());
+        debug!("appended: {:?}", start.elapsed());
         Ok(())
     }
 
@@ -625,12 +492,14 @@ impl<'db, T> RawEventStore<'db, T> {
     }
 
     pub fn flush(&self) -> Result<()> {
+        let requested_at = Utc::now();
+        let start = Instant::now();
         self.db.flush_wal(true)?;
         debug!(
             "flushed WAL (requested: {}, completed: {}, duration: {:?})",
             requested_at,
             Utc::now(),
-            current.elapsed()
+            start.elapsed()
         );
         Ok(())
     }
@@ -736,6 +605,163 @@ impl<'db, T> ReadOnlyRawEventStore<'db, T> {
     }
 }
 
+pub trait ReadableRawEventStore<'db, T> {
+    fn batched_multi_get_from_ts(
+        &self,
+        sensor: &str,
+        times: &[DateTime<Utc>],
+    ) -> Vec<(DateTime<Utc>, Vec<u8>)>;
+
+    fn batched_multi_get_with_sensor(
+        &self,
+        sensor: &str,
+        timestamps: &[i64],
+    ) -> Vec<(i64, String, Vec<u8>)>;
+
+    fn boundary_iter(&self, from: &[u8], to: &[u8], direction: Direction) -> BoundaryIter<'db, T>
+    where
+        T: DeserializeOwned;
+
+    fn iter_forward(&self) -> Iter<'db>;
+}
+
+pub trait WritableRawEventStore<'db, T>: ReadableRawEventStore<'db, T> {
+    fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()>;
+    fn delete(&self, key: &[u8]) -> Result<()>;
+    fn flush(&self) -> Result<()>;
+}
+
+pub struct ReadableRawEventStoreHandle<'db, T> {
+    inner: Box<dyn ReadableRawEventStore<'db, T> + Send + Sync + 'db>,
+}
+
+impl<'db, T> ReadableRawEventStoreHandle<'db, T> {
+    fn new(inner: Box<dyn ReadableRawEventStore<'db, T> + Send + Sync + 'db>) -> Self {
+        Self { inner }
+    }
+
+    pub fn as_ref(&self) -> &(dyn ReadableRawEventStore<'db, T> + Send + Sync + 'db) {
+        self.inner.as_ref()
+    }
+}
+
+impl<'db, T> Deref for ReadableRawEventStoreHandle<'db, T> {
+    type Target = dyn ReadableRawEventStore<'db, T> + Send + Sync + 'db;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+pub struct WritableRawEventStoreHandle<'db, T> {
+    inner: Box<dyn WritableRawEventStore<'db, T> + Send + Sync + 'db>,
+}
+
+impl<'db, T> WritableRawEventStoreHandle<'db, T> {
+    fn new(inner: Box<dyn WritableRawEventStore<'db, T> + Send + Sync + 'db>) -> Self {
+        Self { inner }
+    }
+
+    pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
+        self.inner.append(key, raw_event)
+    }
+
+    pub fn delete(&self, key: &[u8]) -> Result<()> {
+        self.inner.delete(key)
+    }
+
+    pub fn flush(&self) -> Result<()> {
+        self.inner.flush()
+    }
+
+    #[allow(dead_code)]
+    pub fn as_ref(&self) -> &(dyn WritableRawEventStore<'db, T> + Send + Sync + 'db) {
+        self.inner.as_ref()
+    }
+}
+
+impl<'db, T> Deref for WritableRawEventStoreHandle<'db, T> {
+    type Target = dyn WritableRawEventStore<'db, T> + Send + Sync + 'db;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl<'db, T> ReadableRawEventStore<'db, T> for ReadableRawEventStoreHandle<'db, T> {
+    fn batched_multi_get_from_ts(
+        &self,
+        sensor: &str,
+        times: &[DateTime<Utc>],
+    ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
+        self.inner.batched_multi_get_from_ts(sensor, times)
+    }
+
+    fn batched_multi_get_with_sensor(
+        &self,
+        sensor: &str,
+        timestamps: &[i64],
+    ) -> Vec<(i64, String, Vec<u8>)> {
+        self.inner
+            .batched_multi_get_with_sensor(sensor, timestamps)
+    }
+
+    fn boundary_iter(&self, from: &[u8], to: &[u8], direction: Direction) -> BoundaryIter<'db, T>
+    where
+        T: DeserializeOwned,
+    {
+        self.inner.boundary_iter(from, to, direction)
+    }
+
+    fn iter_forward(&self) -> Iter<'db> {
+        self.inner.iter_forward()
+    }
+}
+
+impl<'db, T> ReadableRawEventStore<'db, T> for WritableRawEventStoreHandle<'db, T> {
+    fn batched_multi_get_from_ts(
+        &self,
+        sensor: &str,
+        times: &[DateTime<Utc>],
+    ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
+        self.inner.batched_multi_get_from_ts(sensor, times)
+    }
+
+    fn batched_multi_get_with_sensor(
+        &self,
+        sensor: &str,
+        timestamps: &[i64],
+    ) -> Vec<(i64, String, Vec<u8>)> {
+        self.inner
+            .batched_multi_get_with_sensor(sensor, timestamps)
+    }
+
+    fn boundary_iter(&self, from: &[u8], to: &[u8], direction: Direction) -> BoundaryIter<'db, T>
+    where
+        T: DeserializeOwned,
+    {
+        self.inner.boundary_iter(from, to, direction)
+    }
+
+    fn iter_forward(&self) -> Iter<'db> {
+        self.inner.iter_forward()
+    }
+}
+
+impl<'db, T> WritableRawEventStore<'db, T> for WritableRawEventStoreHandle<'db, T> {
+    fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
+        self.inner.append(key, raw_event)
+    }
+
+    fn delete(&self, key: &[u8]) -> Result<()> {
+        self.inner.delete(key)
+    }
+
+    fn flush(&self) -> Result<()> {
+        self.inner.flush()
+    }
+}
+
 impl<'db, T: Sync> ReadableRawEventStore<'db, T> for RawEventStore<'db, T> {
     fn batched_multi_get_from_ts(
         &self,
@@ -767,7 +793,7 @@ impl<'db, T: Sync> ReadableRawEventStore<'db, T> for RawEventStore<'db, T> {
 
 impl<'db, T: Sync> WritableRawEventStore<'db, T> for RawEventStore<'db, T> {
     fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
-        self.append_impl(key, raw_event)
+        self.append(key, raw_event)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
@@ -775,7 +801,7 @@ impl<'db, T: Sync> WritableRawEventStore<'db, T> for RawEventStore<'db, T> {
     }
 
     fn flush(&self) -> Result<()> {
-        self.flush_impl()
+        self.flush()
     }
 }
 
@@ -1280,11 +1306,16 @@ pub(crate) fn data_dir_to_db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("db")
 }
 
+pub fn data_dir_to_secondary_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("secondary")
+}
+
 /// Stores the compression setting to a metadata file.
 ///
 /// # Errors
 ///
 /// Returns an error if the file cannot be created or written to.
+#[allow(dead_code)]
 fn store_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
     let metadata_path = data_dir.join("COMPRESSION");
     let content = if compression { "enabled" } else { "disabled" };
@@ -1299,6 +1330,7 @@ fn store_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> 
 /// # Errors
 ///
 /// Returns an error if the file exists but cannot be read or contains invalid data.
+#[allow(dead_code)]
 fn read_compression_metadata(data_dir: &Path) -> Result<Option<bool>> {
     let metadata_path = data_dir.join("COMPRESSION");
     if !metadata_path.exists() {
@@ -1323,6 +1355,7 @@ fn read_compression_metadata(data_dir: &Path) -> Result<Option<bool>> {
 /// Returns an error if:
 /// - The metadata file cannot be read
 /// - The compression setting doesn't match the stored metadata
+#[allow(dead_code)]
 pub fn validate_compression_metadata(data_dir: &Path, compression: bool) -> Result<()> {
     if let Some(stored_compression) = read_compression_metadata(data_dir)? {
         if stored_compression != compression {

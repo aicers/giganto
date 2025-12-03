@@ -26,7 +26,7 @@ use peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use settings::{ConfigVisible, Settings};
-use storage::{data_dir_to_secondary_path, db_path_and_option, repair_db};
+use storage::{Database, data_dir_to_secondary_path, db_path_and_option, repair_db};
 use tokio::{
     runtime, select,
     sync::{

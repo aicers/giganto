@@ -1781,7 +1781,7 @@ fn export_by_protocol(
 }
 
 fn process_export<T, N>(
-    store: &dyn ReadableRawEventStore<'_, T>,
+    store: &(dyn ReadableRawEventStore<'_, T> + Send + Sync),
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     export_done_path: &Path,
@@ -1814,7 +1814,7 @@ where
 }
 
 fn process_statistics_export(
-    store: &dyn ReadableRawEventStore<'_, Statistics>,
+    store: &(dyn ReadableRawEventStore<'_, Statistics> + Send + Sync),
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     export_done_path: &Path,
@@ -2006,7 +2006,7 @@ where
     Ok(())
 }
 
-fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<str>, i64)> {
+fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
     if let Some(pos) = key.iter().position(|x| *x == 0) {
         if let Some(s) = key.get(..pos) {
             let sensor = String::from_utf8_lossy(s);
