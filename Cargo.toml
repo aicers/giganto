@@ -1,6 +1,6 @@
 [package]
 name = "giganto"
-version = "0.26.0-alpha.8"
+version = "0.26.0"
 edition = "2024"
 default-run = "giganto"
 

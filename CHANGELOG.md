@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.26.0] - 2025-12-03
 
 ### Added
 
@@ -79,6 +79,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed the `last_time` field from all network raw event structs. The
   combination of `start_time` and `duration` sufficiently represents the event’s
   time range, making `last_time` redundant.
+- Updated compatibility versions:
+  - Updated `INGEST_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `PUBLISH_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `COMPATIBLE_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `PEER_VERSION_REQ` to ">=0.26.0,<0.27.0".
 
 ### Removed
 
@@ -878,7 +883,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.25.1...main
+[0.26.0]: https://github.com/aicers/giganto/compare/0.25.1...0.26.0
 [0.25.1]: https://github.com/aicers/giganto/compare/0.25.0...0.25.1
 [0.25.0]: https://github.com/aicers/giganto/compare/0.24.3...0.25.0
 [0.24.3]: https://github.com/aicers/giganto/compare/0.24.2...0.24.3
