@@ -777,7 +777,7 @@ pub mod tests {
     const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
     const HOST: &str = "node1";
     const TEST_PORT: u16 = 60191;
-    const PROTOCOL_VERSION: &str = "0.26.0-alpha.8";
+    const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     pub struct TestClient {
         send: SendStream,
