@@ -79,6 +79,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed the `last_time` field from all network raw event structs. The
   combination of `start_time` and `duration` sufficiently represents the event’s
   time range, making `last_time` redundant.
+- Updated compatibility versions:
+  - Updated `INGEST_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `PUBLISH_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `COMPATIBLE_VERSION_REQ` to ">=0.26.0,<0.27.0".
+  - Updated `PEER_VERSION_REQ` to ">=0.26.0,<0.27.0".
 
 ### Removed
 
