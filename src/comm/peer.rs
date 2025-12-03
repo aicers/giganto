@@ -46,7 +46,7 @@ use crate::{
 //   within the cluster.
 // - Updates of event protocol structures: Any changes to giganto-client's event protocols require
 //   all Gigantos in the cluster to use the same protocol version for compatibility.
-const PEER_VERSION_REQ: &str = ">=0.26.0-alpha.8,<0.26.0-alpha.9";
+const PEER_VERSION_REQ: &str = ">=0.26.0,<0.27.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
