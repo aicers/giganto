@@ -898,6 +898,7 @@ async fn handle_data<T>(
                     break;
                 };
                 let mut recv_events_cnt: u16 = 0;
+                #[cfg(feature = "benchmark")]
                 let mut recv_events_len = 0;
                 #[cfg(feature = "benchmark")]
                 let mut packet_size = 0_u64;
@@ -1012,7 +1013,10 @@ async fn handle_data<T>(
                     };
 
                     recv_events_cnt += 1;
-                    recv_events_len += raw_event.len();
+                    #[cfg(feature = "benchmark")]
+                    {
+                        recv_events_len += raw_event.len();
+                    }
                     store.append(&storage_key.key(), &raw_event)?;
                     if let Some(network_key) = network_key.as_ref()
                         && let Err(e) = send_direct_stream(
