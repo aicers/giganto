@@ -1010,6 +1010,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Run only in the schema check step"]
     fn schema_should_be_up_to_date() {
         let expect = super::generate_schema();
         let actual = std::fs::read_to_string(super::SCHEMA_PATH).unwrap();

@@ -57,8 +57,10 @@ jobs:
           sudo apt-get install libpcap-dev libpcap0.8
       - name: Build
         run: cargo build --verbose
+      - name: Schema snapshot check
+        run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --all-features --verbose
 
   coverage:
     runs-on: ubuntu-latest
