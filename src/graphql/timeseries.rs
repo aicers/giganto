@@ -1,10 +1,10 @@
 use std::{fmt::Debug, net::IpAddr};
 
+use super::DateTime;
 use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
 use super::{FromKeyValue, get_time_from_key, load_connection};
@@ -33,7 +33,7 @@ impl KeyExtractor for TimeSeriesFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -61,7 +61,7 @@ impl RawEventFilter for TimeSeriesFilter {
 
 #[derive(SimpleObject, Debug)]
 struct TimeSeries {
-    start: DateTime<Utc>,
+    start: DateTime,
     id: String,
     data: Vec<f64>,
 }
@@ -105,7 +105,9 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
+
+    use crate::graphql::DateTime;
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -161,11 +163,14 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store().unwrap();
 
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_time_series(&store, "sensor", timestamp, vec![1.0, 2.0, 3.0]);
 
         let query = r#"

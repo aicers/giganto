@@ -15,7 +15,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     Packet,
@@ -46,7 +45,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     comm::ingest::implement::EventFilter,
-    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
+    graphql::{DateTime, NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
 };
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 41] = [
@@ -568,8 +567,8 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn batched_multi_get_from_ts(
         &self,
         sensor: &str,
-        times: &[DateTime<Utc>],
-    ) -> Vec<(DateTime<Utc>, Vec<u8>)> {
+        times: &[DateTime],
+    ) -> Vec<(DateTime, Vec<u8>)> {
         let mut times = times.to_vec();
         times.sort_unstable();
         let keys = times
@@ -584,7 +583,7 @@ impl<'db, T> RawEventStore<'db, T> {
             .collect::<Vec<Vec<u8>>>();
         let keys = keys.iter().map(std::vec::Vec::as_slice);
 
-        let result_vector: Vec<(DateTime<Utc>, Vec<u8>)> = times
+        let result_vector: Vec<(DateTime, Vec<u8>)> = times
             .iter()
             .zip(self.db.batched_multi_get_cf(&self.cf, keys, true))
             .filter_map(|(time, result_value)| {
@@ -667,7 +666,7 @@ impl SensorStore<'_> {
     /// Inserts a sensor name and its last active time.
     ///
     /// If the sensor already exists, its last active time is updated.
-    pub fn insert(&self, name: &str, last_active: DateTime<Utc>) -> Result<()> {
+    pub fn insert(&self, name: &str, last_active: DateTime) -> Result<()> {
         self.db.put_cf(
             self.cf,
             name,
@@ -724,11 +723,11 @@ impl StorageKey {
 pub trait KeyExtractor {
     fn get_start_key(&self) -> &str;
     fn get_mid_key(&self) -> Option<Vec<u8>>;
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>);
 }
 
 pub trait TimestampKeyExtractor {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+    fn get_range_start_key(&self) -> (Option<DateTime>, Option<DateTime>);
 }
 
 #[allow(clippy::module_name_repetitions)]
@@ -761,7 +760,7 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns = if let Some(time) = time {
             time.timestamp_nanos_opt().unwrap_or(i64::MAX)
@@ -772,7 +771,7 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn upper_open_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_open_bound_end_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns = if let Some(time) = time {
             time.timestamp_nanos_opt().unwrap_or(i64::MAX)
@@ -783,7 +782,7 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
@@ -823,7 +822,7 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn lower_closed_bound_start_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns = if let Some(time) = time {
             time.timestamp_nanos_opt().unwrap_or(i64::MAX)
@@ -834,7 +833,7 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn upper_open_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_open_bound_start_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         let ns = if let Some(time) = time {
             time.timestamp_nanos_opt().unwrap_or(i64::MAX)
@@ -845,7 +844,7 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn upper_closed_bound_start_key(mut self, time: Option<DateTime<Utc>>) -> Self {
+    pub fn upper_closed_bound_start_key(mut self, time: Option<DateTime>) -> Self {
         self.pre_key.reserve(TIMESTAMP_SIZE);
         if let Some(time) = time {
             let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
@@ -1002,7 +1001,7 @@ pub async fn retain_periodically(
                 info!("Begin to cleanup the database based on retention period.");
                 running_flag.store(true, Ordering::Relaxed);
 
-                let now = Utc::now();
+                let now = DateTime::now();
                 let mut retention_timestamp = now
                     .timestamp_nanos_opt()
                     .unwrap_or(retention_duration)
@@ -1292,7 +1291,7 @@ pub fn repair_db(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use crate::graphql::DateTime;
 
     use super::{Database, DbOptions, StorageKey};
     /// Test `SensorStore` insert with `DateTime` conversion
@@ -1303,21 +1302,21 @@ mod tests {
         let sensor_store = db.sensors_store().unwrap();
 
         // Test with current time
-        let now = Utc::now();
+        let now = DateTime::now();
         let result = sensor_store.insert("test_sensor", now);
         assert!(result.is_ok());
 
         // Test with specific timestamp
-        let specific_time = Utc.timestamp_nanos(1_700_000_000_000_000_000);
+        let specific_time = DateTime::from_timestamp_nanos(1_700_000_000_000_000_000);
         let result = sensor_store.insert("test_sensor_2", specific_time);
         assert!(result.is_ok());
 
         // Test with boundary values
-        let min_time = DateTime::<Utc>::MIN_UTC;
+        let min_time = DateTime::MIN;
         let result = sensor_store.insert("test_sensor_min", min_time);
         assert!(result.is_ok());
 
-        let max_time = DateTime::<Utc>::MAX_UTC;
+        let max_time = DateTime::MAX;
         let result = sensor_store.insert("test_sensor_max", max_time);
         assert!(result.is_ok());
     }
@@ -1330,9 +1329,9 @@ mod tests {
         let sensor = "batch-sensor";
         let other_sensor = "ignored-sensor";
 
-        let ts_early = Utc.timestamp_nanos(1_700_000_000_000_000_000);
-        let ts_late = ts_early + Duration::seconds(2);
-        let ts_missing = ts_late + Duration::seconds(2);
+        let ts_early = DateTime::from_timestamp_nanos(1_700_000_000_000_000_000);
+        let ts_late = DateTime::from_timestamp_nanos(1_700_000_000_000_000_000 + 2_000_000_000);
+        let ts_missing = DateTime::from_timestamp_nanos(1_700_000_000_000_000_000 + 4_000_000_000);
 
         let key_early = StorageKey::builder()
             .start_key(sensor)
@@ -1381,7 +1380,7 @@ mod tests {
         assert_eq!(*key_none.key(), expected_none);
 
         // Test with Some(DateTime)
-        let some_time = Utc.timestamp_nanos(1_000_000_000);
+        let some_time = DateTime::from_timestamp_nanos(1_000_000_000);
         let key_some = StorageKey::builder()
             .start_key("test_source")
             .lower_closed_bound_end_key(Some(some_time))
@@ -1394,7 +1393,7 @@ mod tests {
         assert_eq!(*key_some.key(), expected_some);
 
         // Test with MIN timestamp
-        let min_time = Utc.timestamp_nanos(i64::MIN);
+        let min_time = DateTime::from_timestamp_nanos(i64::MIN);
         let key_min = StorageKey::builder()
             .start_key("test_source")
             .lower_closed_bound_end_key(Some(min_time))
@@ -1424,7 +1423,7 @@ mod tests {
 
         // Test upper_closed_bound with Some(DateTime)
         // Should subtract 1 if possible
-        let some_time = Utc.timestamp_nanos(2_000_000_000);
+        let some_time = DateTime::from_timestamp_nanos(2_000_000_000);
         let key_some = StorageKey::builder()
             .start_key("test_source")
             .upper_closed_bound_end_key(Some(some_time))
@@ -1439,7 +1438,7 @@ mod tests {
         // Test upper_closed_bound with 0 (edge case)
         // When timestamp is 0, subtracting 1 gives -1, which fails >= 0 check
         // So it falls through to i64::MAX
-        let zero_time = Utc.timestamp_nanos(0);
+        let zero_time = DateTime::from_timestamp_nanos(0);
         let key_zero = StorageKey::builder()
             .start_key("test_source")
             .upper_closed_bound_end_key(Some(zero_time))
@@ -1464,7 +1463,7 @@ mod tests {
         assert_eq!(*key_open_none.key(), expected_open_none);
 
         // Test upper_open_bound with Some(DateTime)
-        let some_time_open = Utc.timestamp_nanos(3_000_000_000);
+        let some_time_open = DateTime::from_timestamp_nanos(3_000_000_000);
         let key_open_some = StorageKey::builder()
             .start_key("test_source")
             .upper_open_bound_end_key(Some(some_time_open))
@@ -1490,7 +1489,7 @@ mod tests {
         assert_eq!(key_none, expected_none);
 
         // Specific DateTime should be preserved exactly
-        let some_time = Utc.timestamp_nanos(4_200_000_000);
+        let some_time = DateTime::from_timestamp_nanos(4_200_000_000);
         let key_some = StorageKey::timestamp_builder()
             .start_key(42)
             .lower_closed_bound_start_key(Some(some_time))
@@ -1501,7 +1500,7 @@ mod tests {
         assert_eq!(key_some, expected_some);
 
         // MIN timestamp falls back to i64::MAX when conversion fails
-        let min_time = DateTime::<Utc>::MIN_UTC;
+        let min_time = DateTime::MIN;
         let key_min = StorageKey::timestamp_builder()
             .start_key(42)
             .lower_closed_bound_start_key(Some(min_time))
@@ -1525,7 +1524,7 @@ mod tests {
         assert_eq!(key_open_none, expected_open_none);
 
         // upper_open_bound_start_key with Some(DateTime) preserves the timestamp
-        let open_time = Utc.timestamp_nanos(8_000_000_000);
+        let open_time = DateTime::from_timestamp_nanos(8_000_000_000);
         let key_open_some = StorageKey::timestamp_builder()
             .start_key(7)
             .upper_open_bound_start_key(Some(open_time))
@@ -1536,7 +1535,7 @@ mod tests {
         assert_eq!(key_open_some, expected_open_some);
 
         // upper_closed_bound_start_key subtracts one nanosecond when possible
-        let closed_time = Utc.timestamp_nanos(9_000_000_000);
+        let closed_time = DateTime::from_timestamp_nanos(9_000_000_000);
         let key_closed_some = StorageKey::timestamp_builder()
             .start_key(7)
             .upper_closed_bound_start_key(Some(closed_time))
@@ -1547,7 +1546,7 @@ mod tests {
         assert_eq!(key_closed_some, expected_closed_some);
 
         // When subtraction would underflow, it should fall back to i64::MAX
-        let zero_time = Utc.timestamp_nanos(0);
+        let zero_time = DateTime::from_timestamp_nanos(0);
         let key_zero = StorageKey::timestamp_builder()
             .start_key(7)
             .upper_closed_bound_start_key(Some(zero_time))
