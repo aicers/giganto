@@ -49,24 +49,29 @@ jobs:
 
             if [ -z "$NEXT_SECTION" ]; then
               # No next section, read to end of file, but skip the first line (version header)
-              RELEASE_NOTES=$(tail -n +$((SECTION_START + 1)) CHANGELOG.md)
+              # Write directly to temp file to avoid shell interpretation of backticks
+              tail -n +$((SECTION_START + 1)) CHANGELOG.md > /tmp/release_notes_temp.txt
             else
               # Read until next section, but skip the first line (version header)
-              RELEASE_NOTES=$(tail -n +$((SECTION_START + 1)) CHANGELOG.md | head -n $((NEXT_SECTION - 2)))
+              # Write directly to temp file to avoid shell interpretation of backticks
+              tail -n +$((SECTION_START + 1)) CHANGELOG.md | head -n $((NEXT_SECTION - 2)) > /tmp/release_notes_temp.txt
             fi
 
-            # Clean up the notes (remove empty lines at start/end)
-            RELEASE_NOTES=$(echo "$RELEASE_NOTES" | sed '/^$/d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
-            echo "release_notes<<EOF" >> $GITHUB_OUTPUT
-            echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            # Clean up the notes (remove empty lines at start/end) directly in the file
+            sed -i '/^$/d' /tmp/release_notes_temp.txt
+            sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /tmp/release_notes_temp.txt
+
+            # Use base64 encoding to safely pass the content through GitHub Actions
+            RELEASE_NOTES_B64=$(base64 -w 0 < /tmp/release_notes_temp.txt)
+            echo "release_notes_b64=$RELEASE_NOTES_B64" >> $GITHUB_OUTPUT
           fi
+      - name: Decode release notes
+        run: |
+          # Decode the base64-encoded release notes
+          echo "${{ steps.release_notes.outputs.release_notes_b64 }}" | base64 -d > release_notes.txt
       - name: Create a Release and Upload Assets
         run: |
-          # Write release notes to a temporary file to handle special characters
-          cat > release_notes.txt << RELEASE_NOTES_EOF
-          ${{ steps.release_notes.outputs.release_notes }}
-          RELEASE_NOTES_EOF
+          # Read the decoded release notes
           NOTES=$(< ./release_notes.txt)
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
