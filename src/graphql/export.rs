@@ -13,8 +13,6 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-
-use super::DateTime;
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -38,6 +36,7 @@ use graphql_client::GraphQLQuery;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{error, info, warn};
 
+use super::DateTime;
 use super::{
     IpRange, NodeName, PortRange, RawEventFilter, TIMESTAMP_SIZE, TimeRange, check_address,
     check_agent_id, check_port,

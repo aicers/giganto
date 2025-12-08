@@ -3,7 +3,6 @@ pub(crate) mod tests;
 
 use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
-use super::DateTime;
 use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
@@ -18,6 +17,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
+use super::DateTime;
 use super::{
     FromKeyValue, NetworkFilter, RawEventFilter, SearchFilter, StringNumberI64, StringNumberU32,
     StringNumberU64, StringNumberUsize, base64_engine, check_address, check_agent_id, check_port,
