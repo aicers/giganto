@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Duration, Utc};
 use giganto_client::{
     connection::client_handshake,
     ingest::{
@@ -201,7 +201,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
         resp_port: 80,
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -222,7 +222,7 @@ fn gen_dns_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -252,7 +252,7 @@ fn gen_malformed_dns_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -282,7 +282,7 @@ fn gen_rdp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -301,7 +301,7 @@ fn gen_http_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -339,7 +339,7 @@ fn gen_smtp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -364,7 +364,7 @@ fn gen_ntlm_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -387,7 +387,7 @@ fn gen_kerberos_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -414,7 +414,7 @@ fn gen_ssh_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -445,7 +445,7 @@ fn gen_dce_rpc_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -485,7 +485,7 @@ fn gen_ftp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -517,7 +517,7 @@ fn gen_mqtt_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -541,7 +541,7 @@ fn gen_ldap_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -566,7 +566,7 @@ fn gen_tls_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -605,7 +605,7 @@ fn gen_smb_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -634,7 +634,7 @@ fn gen_nfs_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -654,7 +654,7 @@ fn gen_bootp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -683,7 +683,7 @@ fn gen_dhcp_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -725,7 +725,7 @@ fn gen_radius_raw_event() -> Vec<u8> {
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: 1740787200000000000,
+        start_time: 1_740_787_200_000_000_000,
         duration: 2_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -996,7 +996,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(CONN_KIND),
@@ -1045,7 +1045,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(DNS_KIND),
@@ -1095,7 +1095,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(MALFORMED_DNS_KIND),
@@ -1147,7 +1147,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(HTTP_KIND),
@@ -1196,7 +1196,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(RDP_KIND),
@@ -1248,7 +1248,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(SMTP_KIND),
@@ -1300,7 +1300,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(NTLM_KIND),
@@ -1352,7 +1352,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(KERBEROS_KIND),
@@ -1402,7 +1402,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(SSH_KIND),
@@ -1454,7 +1454,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(DCE_RPC_KIND),
@@ -1505,7 +1505,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(FTP_KIND),
@@ -1557,7 +1557,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(MQTT_KIND),
@@ -1609,7 +1609,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(LDAP_KIND),
@@ -1658,7 +1658,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(TLS_KIND),
@@ -1707,7 +1707,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(SMB_KIND),
@@ -1756,7 +1756,7 @@ async fn request_range_data_with_protocol() {
                 .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(NFS_KIND),
@@ -1808,7 +1808,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(BOOTP_KIND),
@@ -1860,7 +1860,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(DHCP_KIND),
@@ -1912,7 +1912,7 @@ async fn request_range_data_with_protocol() {
         .unwrap();
 
         let start = DateTime::from_timestamp_nanos(0);
-        let end = DateTime::from_timestamp_nanos(2556143999000000000);
+        let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
         let message = RequestRange {
             sensor: String::from(SENSOR),
             kind: String::from(RADIUS_KIND),
@@ -2012,7 +2012,7 @@ async fn request_range_data_with_log() {
     .unwrap();
 
     let start = DateTime::from_timestamp_nanos(0);
-    let end = DateTime::from_timestamp_nanos(2556143999000000000);
+    let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
     let message = RequestRange {
         sensor: String::from(SENSOR),
         kind: String::from(KIND),
@@ -2108,7 +2108,7 @@ async fn request_range_data_with_period_time_series() {
         .unwrap();
 
     let start = DateTime::from_timestamp_nanos(0);
-    let end = DateTime::from_timestamp_nanos(2556143999000000000);
+    let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
     let message = RequestRange {
         sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
         kind: String::from(KIND),
@@ -4573,7 +4573,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let start = DateTime::from_timestamp_nanos(0);
-    let end = DateTime::from_timestamp_nanos(2556143999000000000);
+    let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
     let message = RequestRange {
         sensor: String::from(SENSOR),
         kind: String::from(CONN_KIND),
@@ -4769,7 +4769,7 @@ async fn request_range_data_with_log_giganto_cluster() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let start = DateTime::from_timestamp_nanos(0);
-    let end = DateTime::from_timestamp_nanos(2556143999000000000);
+    let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
     let message = RequestRange {
         sensor: String::from(SENSOR),
         kind: String::from(KIND),
@@ -4970,7 +4970,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let start = DateTime::from_timestamp_nanos(0);
-    let end = DateTime::from_timestamp_nanos(2556143999000000000);
+    let end = DateTime::from_timestamp_nanos(2_556_143_999_000_000_000);
     let message = RequestRange {
         sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
         kind: String::from(KIND),

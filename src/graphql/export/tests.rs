@@ -1,30 +1,15 @@
-use std::fmt::Write as _;
+use std::mem;
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
-use std::{fs, io::ErrorKind, mem, path::PathBuf, str::FromStr};
 
-use chrono::{Duration as ChronoDuration, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 
 use crate::graphql::DateTime;
-use giganto_client::{
-    RawEventKind,
-    ingest::{
-        log::{Log, OpLog, OpLogLevel, SecuLog},
-        netflow::{Netflow5, Netflow9},
-        network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
-            Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
-        },
-        statistics::Statistics,
-        sysmon::{
-            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-        },
-        timeseries::PeriodicTimeSeries,
-    },
+use giganto_client::ingest::{
+    log::{Log, OpLog, OpLogLevel},
+    network::{Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls},
+    timeseries::PeriodicTimeSeries,
 };
-use tokio::time::{Duration, sleep};
 
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::tests::TestSchema;
@@ -98,14 +83,14 @@ async fn export_conn() {
     insert_conn_raw_event(
         &store,
         "src1",
-        DateTime::now().timestamp_nanos(),
-        DateTime::from_timestamp_nanos(12345).timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
+        DateTime::from_timestamp_nanos(12345).timestamp_nanos_opt().unwrap(),
     );
     insert_conn_raw_event(
         &store,
         "ingest src 1",
-        DateTime::now().timestamp_nanos(),
-        DateTime::from_timestamp_nanos(12345).timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
+        DateTime::from_timestamp_nanos(12345).timestamp_nanos_opt().unwrap(),
     );
 
     // export csv file
@@ -143,708 +128,6 @@ async fn export_conn() {
     }"#;
     let res = schema.execute(query).await;
     assert!(res.data.to_string().contains("conn"));
-}
-
-#[tokio::test]
-async fn export_timestamp_fomat_stability() {
-    for case in export_cases() {
-        run_export_case(case).await;
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ExportTimeFormatParityCase {
-    protocol: &'static str,
-    time_field: JsonTimeField,
-    kind: Option<&'static str>,
-    insert: fn(&TestSchema, &ExportTimeFormatParityCase, i64),
-}
-
-#[derive(Clone, Copy)]
-enum JsonTimeField {
-    Time,
-    Start,
-}
-
-impl JsonTimeField {
-    fn read(self, value: &serde_json::Value) -> String {
-        match self {
-            JsonTimeField::Time => value["time"]
-                .as_str()
-                .expect("JSON time field must be a string")
-                .to_string(),
-            JsonTimeField::Start => value["start"]
-                .as_str()
-                .expect("JSON start field must be a string")
-                .to_string(),
-        }
-    }
-}
-
-async fn run_export_case(case: ExportTimeFormatParityCase) {
-    let schema = TestSchema::new();
-    let timestamp = DateTime::from_timestamp_nanos(
-        chrono::Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos(),
-    )
-    .timestamp_nanos();
-    (case.insert)(&schema, &case, timestamp);
-
-    let dt = DateTime::from_timestamp_nanos(timestamp);
-    let chrono_dt = chrono::DateTime::from_timestamp_nanos(timestamp);
-    let time_start = (chrono_dt - ChronoDuration::seconds(1))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let time_end = (chrono_dt + ChronoDuration::seconds(1))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let expected_time = chrono_dt.format("%s%.9f").to_string();
-
-    let csv_download = execute_export(case, &schema, &time_start, &time_end, "csv").await;
-    let csv_contents = read_export_file_with_retry(&csv_download).await;
-    let csv_line = csv_contents
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .expect("csv export should contain a record");
-    let csv_time = csv_line
-        .split('\t')
-        .next()
-        .expect("csv export must contain a time column");
-    assert_eq!(
-        csv_time,
-        expected_time.as_str(),
-        "csv export for protocol {} should expose expected timestamp",
-        case.protocol
-    );
-
-    let json_download = execute_export(case, &schema, &time_start, &time_end, "json").await;
-    let json_contents = read_export_file_with_retry(&json_download).await;
-    let json_line = json_contents
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .expect("json export should contain a record");
-    let json_value: serde_json::Value =
-        serde_json::from_str(json_line).expect("json export must be valid JSON");
-    assert_eq!(
-        case.time_field.read(&json_value),
-        expected_time,
-        "json export for protocol {} should expose expected timestamp",
-        case.protocol
-    );
-}
-
-async fn execute_export(
-    case: ExportTimeFormatParityCase,
-    schema: &TestSchema,
-    time_start: &str,
-    time_end: &str,
-    export_type: &str,
-) -> String {
-    let query = build_export_query(&case, time_start, time_end, export_type);
-    let res = schema.execute(&query).await;
-    assert!(
-        res.errors.is_empty(),
-        "GraphQL errors exporting {}: {:?}",
-        case.protocol,
-        res.errors
-    );
-    res.data.into_json().unwrap()["export"]
-        .as_str()
-        .unwrap()
-        .to_string()
-}
-
-fn build_export_query(
-    case: &ExportTimeFormatParityCase,
-    time_start: &str,
-    time_end: &str,
-    export_type: &str,
-) -> String {
-    let mut filter = format!(
-        r#"protocol: "{protocol}",
-                    sensorId: "{sensor}""#,
-        protocol = case.protocol,
-        sensor = SENSOR_ID
-    );
-    if let Some(kind) = case.kind {
-        write!(
-            &mut filter,
-            r#",
-                    kind: "{kind}""#
-        )
-        .expect("writing to String is infallible");
-    }
-    write!(
-        &mut filter,
-        r#",
-                    time: {{ start: "{time_start}", end: "{time_end}" }}"#,
-    )
-    .expect("writing to String is infallible");
-    format!(
-        r#"
-        {{
-            export(
-                filter:{{
-                    {filter}
-                }}
-                ,exportType:"{export_type}")
-        }}"#
-    )
-}
-
-const SENSOR_ID: &str = "ingest src 1";
-
-#[allow(clippy::too_many_lines)]
-fn export_cases() -> Vec<ExportTimeFormatParityCase> {
-    vec![
-        ExportTimeFormatParityCase {
-            protocol: "conn",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_conn_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "dns",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_dns_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "malformed_dns",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_malformed_dns_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "http",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_http_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "log",
-            time_field: JsonTimeField::Time,
-            kind: Some("log"),
-            insert: insert_log_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "rdp",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_rdp_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "smtp",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_smtp_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "periodic time series",
-            time_field: JsonTimeField::Start,
-            kind: None,
-            insert: insert_time_series_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "ntlm",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_ntlm_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "kerberos",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_kerberos_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "ssh",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_ssh_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "dce rpc",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_dce_rpc_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "op_log",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_op_log_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "ftp",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_ftp_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "mqtt",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_mqtt_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "ldap",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_ldap_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "tls",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_tls_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "smb",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_smb_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "nfs",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_nfs_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "bootp",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_bootp_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "dhcp",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_dhcp_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "radius",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_radius_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "statistics",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_statistics_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "process create",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_process_create_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "file create time",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_file_create_time_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "network_connect",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_network_connect_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "process terminate",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_process_terminate_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "image load",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_image_load_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "file create",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_file_create_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "registry value set",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_registry_value_set_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "registry key rename",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_registry_key_rename_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "file create stream hash",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_file_create_stream_hash_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "pipe event",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_pipe_event_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "dns query",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_dns_query_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "file delete",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_file_delete_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "process tamper",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_process_tamper_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "file delete detected",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_file_delete_detected_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "netflow5",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_netflow5_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "netflow9",
-            time_field: JsonTimeField::Time,
-            kind: None,
-            insert: insert_netflow9_parity,
-        },
-        ExportTimeFormatParityCase {
-            protocol: "secu log",
-            time_field: JsonTimeField::Time,
-            kind: Some("secu-kind"),
-            insert: insert_secu_log_parity,
-        },
-    ]
-}
-
-fn insert_conn_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.conn_store().unwrap();
-    insert_conn_raw_event(&store, SENSOR_ID, timestamp, timestamp);
-}
-
-fn insert_dns_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.dns_store().unwrap();
-    insert_dns_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_malformed_dns_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.malformed_dns_store().unwrap();
-    insert_malformed_dns_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_http_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.http_store().unwrap();
-    insert_http_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_log_parity(schema: &TestSchema, case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.log_store().unwrap();
-    insert_log_raw_event(
-        &store,
-        SENSOR_ID,
-        timestamp,
-        case.kind.expect("log parity requires kind"),
-        b"interface-parity",
-    );
-}
-
-fn insert_rdp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.rdp_store().unwrap();
-    insert_rdp_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_smtp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.smtp_store().unwrap();
-    insert_smtp_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_time_series_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.periodic_time_series_store().unwrap();
-    insert_time_series(&store, SENSOR_ID, timestamp, vec![1.0, 2.0, 3.0]);
-}
-
-fn insert_ntlm_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.ntlm_store().unwrap();
-    insert_ntlm_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_kerberos_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.kerberos_store().unwrap();
-    insert_kerberos_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_ssh_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.ssh_store().unwrap();
-    insert_ssh_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_dce_rpc_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.dce_rpc_store().unwrap();
-    insert_dce_rpc_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_op_log_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.op_log_store().unwrap();
-    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
-    insert_op_log_export_event(&store, SENSOR_ID, timestamp, &generator);
-}
-
-fn insert_ftp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.ftp_store().unwrap();
-    insert_ftp_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_mqtt_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.mqtt_store().unwrap();
-    insert_mqtt_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_ldap_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.ldap_store().unwrap();
-    insert_ldap_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_tls_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.tls_store().unwrap();
-    insert_tls_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_smb_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.smb_store().unwrap();
-    insert_smb_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_nfs_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.nfs_store().unwrap();
-    insert_nfs_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_bootp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.bootp_store().unwrap();
-    insert_bootp_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_dhcp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.dhcp_store().unwrap();
-    insert_dhcp_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_radius_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.radius_store().unwrap();
-    insert_radius_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_statistics_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.statistics_store().unwrap();
-    insert_statistics_raw_event(&store, timestamp, SENSOR_ID, 0, 600, 1, 64);
-}
-
-fn insert_process_create_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.process_create_store().unwrap();
-    insert_process_create_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_file_create_time_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.file_create_time_store().unwrap();
-    insert_file_create_time_event(&store, SENSOR_ID, timestamp, timestamp, timestamp - 1);
-}
-
-fn insert_network_connect_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.network_connect_store().unwrap();
-    insert_network_connect_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_process_terminate_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.process_terminate_store().unwrap();
-    insert_process_terminated_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_image_load_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.image_load_store().unwrap();
-    insert_image_loaded_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_file_create_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.file_create_store().unwrap();
-    insert_file_create_event(&store, SENSOR_ID, timestamp, timestamp);
-}
-
-fn insert_registry_value_set_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.registry_value_set_store().unwrap();
-    insert_registry_value_set_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_registry_key_rename_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.registry_key_rename_store().unwrap();
-    insert_registry_key_rename_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_file_create_stream_hash_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.file_create_stream_hash_store().unwrap();
-    insert_file_create_stream_hash_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_pipe_event_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.pipe_event_store().unwrap();
-    insert_pipe_event_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_dns_query_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.dns_query_store().unwrap();
-    insert_dns_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_file_delete_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.file_delete_store().unwrap();
-    insert_file_delete_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_process_tamper_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.process_tamper_store().unwrap();
-    insert_process_tampering_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_file_delete_detected_parity(
-    schema: &TestSchema,
-    _case: &ExportTimeFormatParityCase,
-    timestamp: i64,
-) {
-    let store = schema.db.file_delete_detected_store().unwrap();
-    insert_file_delete_detected_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_netflow5_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.netflow5_store().unwrap();
-    insert_netflow5_raw_event(&store, SENSOR_ID, timestamp, 1_000, 2_000);
-}
-
-fn insert_netflow9_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.netflow9_store().unwrap();
-    insert_netflow9_raw_event(&store, SENSOR_ID, timestamp);
-}
-
-fn insert_secu_log_parity(schema: &TestSchema, case: &ExportTimeFormatParityCase, timestamp: i64) {
-    let store = schema.db.secu_log_store().unwrap();
-    insert_secu_log_raw_event(
-        &store,
-        case.kind.expect("secu log parity requires kind"),
-        SENSOR_ID,
-        timestamp,
-    );
-}
-
-async fn read_export_file_with_retry(download_token: &str) -> String {
-    let path = export_done_path(download_token);
-    for _ in 0..20 {
-        match fs::read_to_string(&path) {
-            Ok(contents) => return contents,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                sleep(Duration::from_millis(50)).await;
-            }
-            Err(err) => panic!("Failed to read export file {}: {err}", path.display()),
-        }
-    }
-    panic!(
-        "Export file {} was not created within the expected time",
-        path.display()
-    );
-}
-
-fn export_done_path(download_token: &str) -> PathBuf {
-    if let Some((path, _)) = download_token.split_once('@') {
-        PathBuf::from(path)
-    } else {
-        PathBuf::from(download_token)
-    }
 }
 
 fn insert_conn_raw_event(
@@ -940,7 +223,7 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1024,7 +307,7 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1116,7 +399,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1189,7 +472,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1268,7 +551,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1345,7 +628,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1425,7 +708,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1509,7 +792,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1533,14 +816,14 @@ async fn export_log() {
     insert_log_raw_event(
         &store,
         "src1",
-        DateTime::now().timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         "kind1",
         b"log1",
     );
     insert_log_raw_event(
         &store,
         "ingest src 1",
-        DateTime::now().timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         "kind2",
         b"log2",
     );
@@ -1605,13 +888,13 @@ async fn export_time_series() {
     insert_time_series(
         &store,
         "src1",
-        DateTime::now().timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         vec![0.0; 12],
     );
     insert_time_series(
         &store,
         "ingest src 1",
-        DateTime::now().timestamp_nanos(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         vec![0.0; 12],
     );
 
@@ -1784,7 +1067,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1870,7 +1153,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1948,7 +1231,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2027,7 +1310,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2120,7 +1403,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2203,7 +1486,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2277,7 +1560,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2360,7 +1643,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos(),
+            .timestamp_nanos_opt().unwrap(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

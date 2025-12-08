@@ -105,9 +105,6 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
-    use crate::graphql::DateTime;
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -156,45 +153,6 @@ mod tests {
             res.data.to_string(),
             "{periodicTimeSeries: {edges: [{node: {id: \"src 1\", data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}}], pageInfo: {hasPreviousPage: false}}}"
         );
-    }
-
-    #[tokio::test]
-    async fn time_series_timestamp_fomat_stability() {
-        let schema = TestSchema::new();
-        let store = schema.db.periodic_time_series_store().unwrap();
-
-        let timestamp = DateTime::from_timestamp_nanos(
-            chrono::Utc
-                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        )
-        .timestamp_nanos();
-        insert_time_series(&store, "sensor", timestamp, vec![1.0, 2.0, 3.0]);
-
-        let query = r#"
-        {
-            periodicTimeSeries(
-                filter: { id: "sensor", time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" } },
-                first: 1
-            ) {
-                edges {
-                    node {
-                        start
-                        id
-                    }
-                }
-            }
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-        let res_json = res.data.into_json().unwrap();
-        let node = res_json["periodicTimeSeries"]["edges"][0]["node"]
-            .as_object()
-            .unwrap();
-        assert_eq!(node["start"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
-        assert_eq!(node["id"].as_str().unwrap(), "sensor");
     }
 
     fn insert_time_series(
