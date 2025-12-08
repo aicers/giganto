@@ -3,7 +3,6 @@
 use graphql_client::GraphQLQuery;
 
 use crate::graphql::DateTime;
-
 use crate::graphql::{StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize};
 
 #[derive(GraphQLQuery)]

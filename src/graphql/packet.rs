@@ -1,6 +1,5 @@
 use std::net::IpAddr;
 
-use super::DateTime;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
@@ -10,6 +9,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 use tracing::info;
 
+use super::DateTime;
 use super::{
     Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
     get_time_from_key, handle_paged_events, write_run_tcpdump,
@@ -244,10 +244,9 @@ mod tests {
     use std::mem;
 
     use chrono::{TimeZone, Timelike, Utc};
-
-    use crate::graphql::DateTime;
     use giganto_client::ingest::Packet as pk;
 
+    use crate::graphql::DateTime;
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]

@@ -372,9 +372,9 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::net::SocketAddr;
 
-    use crate::graphql::DateTime;
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
+    use crate::graphql::DateTime;
     #[cfg(feature = "count_events")]
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,

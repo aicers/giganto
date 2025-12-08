@@ -2,14 +2,13 @@ use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
-
-use super::DateTime;
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 
+use super::DateTime;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
 

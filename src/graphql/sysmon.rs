@@ -1,6 +1,5 @@
 use std::{collections::BTreeSet, iter::Peekable};
 
-use super::DateTime;
 use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
@@ -15,6 +14,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
+use super::DateTime;
 use super::{
     Engine, FromKeyValue, NetworkFilter, SearchFilter, base64_engine, collect_exist_times,
     events_vec_in_cluster, get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
@@ -2193,4 +2193,3 @@ impl_from_giganto_search_filter_for_graphql_client!(
     search_registry_key_rename_events,
     search_registry_value_set_events
 );
-
