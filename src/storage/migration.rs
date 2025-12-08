@@ -424,7 +424,6 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 mod tests {
     use std::{fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
-    use chrono::Utc;
     use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
     use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
@@ -746,7 +745,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn migrate_0_24_to_0_26_0_raw_event() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = crate::graphql::DateTime::now().timestamp_nanos();
         let sensor = "src1";
 
         // open temp db & store

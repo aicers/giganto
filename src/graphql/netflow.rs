@@ -1,7 +1,7 @@
 use std::{fmt::Debug, net::IpAddr};
 
+use super::DateTime;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -57,7 +57,7 @@ impl KeyExtractor for NetflowFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -98,7 +98,7 @@ impl RawEventFilter for NetflowFilter {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -162,7 +162,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     sequence: StringNumberU32,
     source_id: StringNumberU32,
     template_id: u16,
@@ -329,7 +329,9 @@ impl_from_giganto_netflow_filter_for_graphql_client!(netflow5_raw_events, netflo
 mod tests {
     use std::{net::IpAddr, str::FromStr};
 
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
+
+    use crate::graphql::DateTime;
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -340,11 +342,14 @@ mod tests {
         let store = schema.db.netflow5_store().unwrap();
 
         let sensor = "src1";
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_netflow5_raw_event(&store, sensor, timestamp, 123_456, 123_789);
 
         let query = format!(
@@ -381,11 +386,14 @@ mod tests {
         let store = schema.db.netflow9_store().unwrap();
 
         let sensor = "src1";
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_netflow9_raw_event(&store, sensor, timestamp);
 
         let query = format!(

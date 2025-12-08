@@ -23,8 +23,8 @@ use async_graphql::{
     connection::{Connection, Edge, query},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
+use jiff::Timestamp;
 use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
@@ -56,6 +56,161 @@ pub const TIMESTAMP_SIZE: usize = 8;
 #[allow(unused)]
 pub(crate) const SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
 
+/// A wrapper around `jiff::Timestamp` that implements GraphQL scalar.
+///
+/// This type provides compatibility with the RFC3339 formatted `DateTime` scalar
+/// used in the GraphQL schema. The input/output is a string in RFC3339 format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct DateTime(pub Timestamp);
+
+/// Formats a `jiff::Timestamp` as RFC3339 with chrono-compatible formatting.
+///
+/// This matches chrono's RFC3339 `to_rfc3339()` behavior with `SecondsFormat::AutoSi`:
+/// - If subsecond nanoseconds are 0: no fractional seconds (e.g., `2024-01-01T00:00:00+00:00`)
+/// - Otherwise: shows appropriate precision with trailing zeros trimmed
+///   (e.g., `.001` for 1ms, `.000001` for 1µs, `.000000001` for 1ns)
+fn format_timestamp_rfc3339(ts: &Timestamp) -> String {
+    let zoned = ts.to_zoned(jiff::tz::TimeZone::UTC);
+    let nanos = zoned.subsec_nanosecond();
+    if nanos == 0 {
+        zoned.strftime("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+    } else {
+        // Use %.9f for nanosecond precision, then trim trailing zeros
+        let formatted = zoned.strftime("%Y-%m-%dT%H:%M:%S%.9f+00:00").to_string();
+        // Remove trailing zeros from the fractional part, but keep at least 3 digits
+        trim_fractional_zeros(&formatted)
+    }
+}
+
+/// Trims trailing zeros from the fractional seconds part of an RFC3339 timestamp.
+/// Keeps at least 3 decimal places (milliseconds) when there are fractional seconds.
+fn trim_fractional_zeros(s: &str) -> String {
+    // Find the decimal point position
+    if let Some(dot_pos) = s.find('.') {
+        // Find the timezone offset position (+00:00 at the end)
+        if let Some(plus_pos) = s.rfind('+') {
+            let frac = &s[dot_pos + 1..plus_pos];
+            let trimmed = frac.trim_end_matches('0');
+            // Ensure at least 3 digits for compatibility
+            let min_len = 3.min(frac.len());
+            let final_len = trimmed.len().max(min_len);
+            format!("{}.{}{}", &s[..dot_pos], &frac[..final_len], &s[plus_pos..])
+        } else {
+            s.to_string()
+        }
+    } else {
+        s.to_string()
+    }
+}
+
+impl DateTime {
+    /// The minimum representable `DateTime`.
+    pub const MIN: Self = Self(Timestamp::MIN);
+
+    /// The maximum representable `DateTime`.
+    pub const MAX: Self = Self(Timestamp::MAX);
+
+    /// Creates a new `DateTime` from the given timestamp in nanoseconds since the Unix epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the nanoseconds are out of range.
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn from_timestamp_nanos(nanos: i64) -> Self {
+        Self(
+            Timestamp::from_nanosecond(i128::from(nanos)).unwrap_or(if nanos < 0 {
+                Timestamp::MIN
+            } else {
+                Timestamp::MAX
+            }),
+        )
+    }
+
+    /// Returns the timestamp in nanoseconds since the Unix epoch.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn timestamp_nanos(&self) -> i64 {
+        self.0.as_nanosecond() as i64
+    }
+
+    /// Returns the timestamp in nanoseconds since the Unix epoch, or `None` if the value
+    /// would overflow an i64.
+    #[must_use]
+    pub fn timestamp_nanos_opt(&self) -> Option<i64> {
+        i64::try_from(self.0.as_nanosecond()).ok()
+    }
+
+    /// Returns the current time.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(Timestamp::now())
+    }
+
+    /// Returns the timestamp formatted as an RFC3339 string.
+    #[must_use]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn to_rfc3339(&self) -> String {
+        format_timestamp_rfc3339(&self.0)
+    }
+}
+
+impl std::fmt::Display for DateTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_timestamp_rfc3339(&self.0))
+    }
+}
+
+impl From<Timestamp> for DateTime {
+    fn from(ts: Timestamp) -> Self {
+        Self(ts)
+    }
+}
+
+impl From<DateTime> for Timestamp {
+    fn from(dt: DateTime) -> Self {
+        dt.0
+    }
+}
+
+impl Serialize for DateTime {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format_timestamp_rfc3339(&self.0))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DateTime {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<Timestamp>()
+            .map(DateTime)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[Scalar(name = "DateTime")]
+impl ScalarType for DateTime {
+    fn parse(value: Value) -> InputValueResult<Self> {
+        if let Value::String(value) = &value {
+            value
+                .parse::<Timestamp>()
+                .map(DateTime)
+                .map_err(InputValueError::custom)
+        } else {
+            Err(InputValueError::expected_type(value))
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(format_timestamp_rfc3339(&self.0))
+    }
+}
+
 #[derive(Default, MergedObject)]
 pub struct Query(
     log::LogQuery,
@@ -76,8 +231,8 @@ pub struct Mutation(status::ConfigMutation);
 
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    start: Option<DateTime>,
+    end: Option<DateTime>,
 }
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
@@ -117,7 +272,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<DateTime<Utc>>,
+    pub times: Vec<DateTime>,
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -197,9 +352,9 @@ fn timestamp_to_sec_nsec(timestamp_ns: i64) -> (i64, i64) {
 }
 
 fn collect_exist_times<T>(
-    target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
+    target_data: &BTreeSet<(DateTime, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<DateTime<Utc>>
+) -> Vec<DateTime>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -230,14 +385,14 @@ where
         .collect::<Vec<_>>()
 }
 
-fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn time_range(time_range: Option<&TimeRange>) -> (DateTime, DateTime) {
     let (start, end) = if let Some(time) = time_range {
         (time.start, time.end)
     } else {
         (None, None)
     };
-    let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
-    let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
+    let start = start.unwrap_or(DateTime::from_timestamp_nanos(i64::MIN));
+    let end = end.unwrap_or(DateTime::from_timestamp_nanos(i64::MAX));
     (start, end)
 }
 
@@ -593,18 +748,18 @@ where
     (records, has_more)
 }
 
-pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
-        return Ok(Utc.timestamp_nanos(timestamp));
+        return Ok(DateTime::from_timestamp_nanos(timestamp));
     }
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<DateTime, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        return Ok(Utc.timestamp_nanos(nanos));
+        return Ok(DateTime::from_timestamp_nanos(nanos));
     }
     Err(anyhow!("invalid database key length"))
 }
@@ -832,11 +987,11 @@ fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     })
 }
 
-fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+fn min_max_time(is_forward: bool) -> DateTime {
     if is_forward {
-        DateTime::<Utc>::MAX_UTC
+        DateTime::MAX
     } else {
-        DateTime::<Utc>::MIN_UTC
+        DateTime::MIN
     }
 }
 
