@@ -1291,9 +1291,8 @@ pub fn repair_db(
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::DateTime;
-
     use super::{Database, DbOptions, StorageKey};
+    use crate::graphql::DateTime;
     /// Test `SensorStore` insert with `DateTime` conversion
     #[test]
     fn test_sensor_store_datetime_to_timestamp() {
