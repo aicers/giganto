@@ -1,12 +1,12 @@
 use std::{fmt::Debug, net::IpAddr};
 
-use super::DateTime;
 use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
+use super::DateTime;
 use super::{FromKeyValue, get_time_from_key, load_connection};
 use crate::{
     graphql::{RawEventFilter, TimeRange},
