@@ -3,6 +3,8 @@ use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
+
+use super::DateTime;
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
@@ -110,8 +112,8 @@ async fn conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_conn_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -541,8 +543,8 @@ async fn dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -586,7 +588,7 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -626,7 +628,7 @@ fn insert_malformed_dns_raw_event(
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -849,8 +851,8 @@ async fn malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_malformed_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1544,8 +1546,8 @@ async fn smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_smtp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1581,7 +1583,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1689,8 +1691,8 @@ async fn ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ntlm_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1726,7 +1728,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1830,8 +1832,8 @@ async fn kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_kerberos_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1867,7 +1869,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1988,8 +1990,8 @@ async fn ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ssh_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2025,7 +2027,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2145,8 +2147,8 @@ async fn dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dce_rpc_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2182,7 +2184,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2284,8 +2286,8 @@ async fn ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ftp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2321,7 +2323,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2448,8 +2450,8 @@ async fn mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_mqtt_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2485,7 +2487,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2596,8 +2598,8 @@ async fn ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ldap_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2633,7 +2635,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2757,8 +2759,8 @@ async fn tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_tls_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2794,7 +2796,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2944,8 +2946,8 @@ async fn smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_smb_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2988,7 +2990,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3110,8 +3112,8 @@ async fn nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_nfs_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3147,7 +3149,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3249,8 +3251,8 @@ async fn bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_bootp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3287,7 +3289,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3404,8 +3406,8 @@ async fn dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dhcp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3445,7 +3447,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3584,8 +3586,8 @@ async fn radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_radius_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3626,7 +3628,7 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3755,7 +3757,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.70".parse::<IpAddr>().ok(),
         Some(100),
         "192.168.4.80".parse::<IpAddr>().ok(),
@@ -3764,7 +3766,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.71".parse::<IpAddr>().ok(),
         Some(101),
         "192.168.4.81".parse::<IpAddr>().ok(),
@@ -3773,7 +3775,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.72".parse::<IpAddr>().ok(),
         Some(102),
         "192.168.4.82".parse::<IpAddr>().ok(),

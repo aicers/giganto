@@ -1,9 +1,8 @@
 use std::sync::{Arc, OnceLock};
 
-use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
-use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
+use super::{DateTime, Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::load_connection;
 use crate::{
@@ -446,11 +445,10 @@ async fn log_timestamp_fomat_stability() {
 
     let sensor = "src1";
     let kind = "kind1";
-    let timestamp = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+    let timestamp = "2024-03-04T05:06:07Z"
+        .parse::<jiff::Timestamp>()
         .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+        .as_nanosecond() as i64;
     insert_log_raw_event(&store, sensor, timestamp, kind, b"interface");
 
     let query = format!(
@@ -531,11 +529,10 @@ async fn oplog_timestamp_fomat_stability() {
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    let timestamp = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+    let timestamp = "2024-03-04T05:06:07Z"
+        .parse::<jiff::Timestamp>()
         .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+        .as_nanosecond() as i64;
     insert_oplog_raw_event(&store, "giganto", "src1", timestamp, &generator);
 
     let query = r#"

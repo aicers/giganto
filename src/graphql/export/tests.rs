@@ -4,6 +4,8 @@ use std::sync::{Arc, OnceLock};
 use std::{fs, io::ErrorKind, mem, path::PathBuf, str::FromStr};
 
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
+
+use crate::graphql::DateTime;
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -96,18 +98,14 @@ async fn export_conn() {
     insert_conn_raw_event(
         &store,
         "src1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        chrono::DateTime::from_timestamp_nanos(12345)
-            .timestamp_nanos_opt()
-            .unwrap(),
+        DateTime::now().timestamp_nanos(),
+        DateTime::from_timestamp_nanos(12345).timestamp_nanos(),
     );
     insert_conn_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        chrono::DateTime::from_timestamp_nanos(12345)
-            .timestamp_nanos_opt()
-            .unwrap(),
+        DateTime::now().timestamp_nanos(),
+        DateTime::from_timestamp_nanos(12345).timestamp_nanos(),
     );
 
     // export csv file
@@ -185,21 +183,24 @@ impl JsonTimeField {
 
 async fn run_export_case(case: ExportTimeFormatParityCase) {
     let schema = TestSchema::new();
-    let timestamp = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let timestamp = DateTime::from_timestamp_nanos(
+        chrono::Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos(),
+    )
+    .timestamp_nanos();
     (case.insert)(&schema, &case, timestamp);
 
-    let dt = chrono::DateTime::from_timestamp_nanos(timestamp);
-    let time_start = (dt - ChronoDuration::seconds(1))
+    let dt = DateTime::from_timestamp_nanos(timestamp);
+    let chrono_dt = chrono::DateTime::from_timestamp_nanos(timestamp);
+    let time_start = (chrono_dt - ChronoDuration::seconds(1))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-    let time_end = (dt + ChronoDuration::seconds(1))
+    let time_end = (chrono_dt + ChronoDuration::seconds(1))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-    let expected_time = dt.format("%s%.9f").to_string();
+    let expected_time = chrono_dt.format("%s%.9f").to_string();
 
     let csv_download = execute_export(case, &schema, &time_start, &time_end, "csv").await;
     let csv_contents = read_export_file_with_retry(&csv_download).await;
@@ -884,12 +885,8 @@ async fn export_dns() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_dns_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_dns_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -943,8 +940,7 @@ fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -973,12 +969,8 @@ async fn export_http() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_http_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_http_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1032,8 +1024,7 @@ fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1070,12 +1061,8 @@ async fn export_rdp() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_rdp_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_rdp_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1129,8 +1116,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1148,12 +1134,8 @@ async fn export_smtp() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_smtp_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_smtp_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1207,8 +1189,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1232,12 +1213,8 @@ async fn export_ntlm() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_ntlm_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_ntlm_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1291,8 +1268,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1314,12 +1290,8 @@ async fn export_kerberos() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_kerberos_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_kerberos_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1373,8 +1345,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1400,12 +1371,8 @@ async fn export_ssh() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_ssh_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_ssh_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1458,8 +1425,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1489,12 +1455,8 @@ async fn export_dce_rpc() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_dce_rpc_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_dce_rpc_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1547,8 +1509,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1572,14 +1533,14 @@ async fn export_log() {
     insert_log_raw_event(
         &store,
         "src1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "kind1",
         b"log1",
     );
     insert_log_raw_event(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "kind2",
         b"log2",
     );
@@ -1644,13 +1605,13 @@ async fn export_time_series() {
     insert_time_series(
         &store,
         "src1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         vec![0.0; 12],
     );
     insert_time_series(
         &store,
         "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         vec![0.0; 12],
     );
 
@@ -1768,12 +1729,8 @@ async fn export_ftp() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_ftp_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_ftp_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1827,8 +1784,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1859,12 +1815,8 @@ async fn export_mqtt() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_mqtt_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_mqtt_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -1918,8 +1870,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1942,12 +1893,8 @@ async fn export_ldap() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_ldap_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_ldap_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2001,8 +1948,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2026,12 +1972,8 @@ async fn export_tls() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_tls_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_tls_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2085,8 +2027,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2124,12 +2065,8 @@ async fn export_smb() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_smb_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_smb_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2183,8 +2120,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2212,12 +2148,8 @@ async fn export_nfs() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_nfs_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_nfs_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2271,8 +2203,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2291,12 +2222,8 @@ async fn export_bootp() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_bootp_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_bootp_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2350,8 +2277,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2379,12 +2305,8 @@ async fn export_dhcp() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(
-        &store,
-        "ingest src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
-    );
+    insert_dhcp_raw_event(&store, "src1", DateTime::now().timestamp_nanos());
+    insert_dhcp_raw_event(&store, "ingest src 1", DateTime::now().timestamp_nanos());
 
     // export csv file
     let query = r#"
@@ -2438,8 +2360,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         start_time: Utc
             .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+            .timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,

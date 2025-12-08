@@ -892,13 +892,13 @@ mod tests {
         SimpleObject,
         connection::{Edge, EmptyFields},
     };
-    use chrono::{DateTime, Utc};
 
     use super::{ClusterSortKey, sort_and_trunk_edges};
+    use crate::graphql::DateTime;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        time: DateTime<Utc>,
+        time: DateTime,
     }
 
     impl ClusterSortKey for TestNode {
@@ -909,12 +909,42 @@ mod tests {
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
         vec![
-            Edge::new("warn_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_003".to_string(), TestNode { time: Utc::now() }),
+            Edge::new(
+                "warn_001".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
+            Edge::new(
+                "danger_001".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
+            Edge::new(
+                "danger_002".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
+            Edge::new(
+                "info_001".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
+            Edge::new(
+                "info_002".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
+            Edge::new(
+                "info_003".to_string(),
+                TestNode {
+                    time: DateTime::now(),
+                },
+            ),
         ]
     }
 

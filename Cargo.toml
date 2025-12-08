@@ -17,10 +17,9 @@ path = "src/gen_schema.rs"
 
 [dependencies]
 anyhow = "1"
-async-graphql = { version = "7", features = ["chrono", "string_number"] }
+async-graphql = { version = "7", features = ["string_number"] }
 base64 = "0.22"
 bincode = "1"
-chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
 ctrlc = { version = "3", features = ["termination"] }
@@ -64,8 +63,10 @@ x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
 tokio-rustls = "0.26"
 async-graphql-poem = "7"
+jiff = { version = "0.2.16", features = ["serde"] }
 
 [dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 mockito = "1"
 regex = "1"
 serial_test = "3"

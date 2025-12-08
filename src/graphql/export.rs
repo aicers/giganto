@@ -13,7 +13,8 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, Utc};
+
+use super::DateTime;
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -1837,7 +1838,7 @@ impl KeyExtractor for ExportFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -1902,7 +1903,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
             .kind
             .as_ref()
             .map_or(String::new(), |k| format!("{k}_")),
-        Local::now().format("%Y%m%d_%H%M%S"),
+        jiff::Zoned::now().strftime("%Y%m%d_%H%M%S"),
     );
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));
@@ -2315,7 +2316,8 @@ where
     ) {
         let (sensor, timestamp) = parse_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
+            .0
+            .strftime("%s%.9f")
             .to_string();
 
         match export_type {

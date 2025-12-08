@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
+use super::DateTime;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
 #[cfg(feature = "cluster")]
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     packet_time: Option<TimeRange>,
 }
 
@@ -49,7 +49,7 @@ impl KeyExtractor for PacketFilter {
         )
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.packet_time {
             (time.start, time.end)
         } else {
@@ -82,19 +82,28 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: DateTime<Utc>,
-    packet_time: DateTime<Utc>,
+    request_time: DateTime,
+    packet_time: DateTime,
     packet: String,
 }
 
-#[derive(SimpleObject, Debug, Default)]
+#[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
 #[cfg_attr(feature = "cluster", graphql_client_type(names = [
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     parsed_pcap: String,
+}
+
+impl Default for Pcap {
+    fn default() -> Self {
+        Self {
+            request_time: DateTime::from_timestamp_nanos(0),
+            parsed_pcap: String::new(),
+        }
+    }
 }
 
 impl Pcap {
@@ -234,7 +243,9 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
+    use chrono::{TimeZone, Timelike, Utc};
+
+    use crate::graphql::DateTime;
     use giganto_client::ingest::Packet as pk;
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -268,13 +279,31 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let dt2 = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let dt3 = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.timestamp_nanos();
+        let ts2 = dt2.timestamp_nanos();
+        let ts3 = dt3.timestamp_nanos();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -362,25 +391,34 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .with_nanosecond(123_456_789)
-            .unwrap();
-        let dt2 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-            .unwrap()
-            .with_nanosecond(234_567_890)
-            .unwrap();
-        let dt3 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-            .unwrap()
-            .with_nanosecond(345_678_901)
-            .unwrap();
+        let dt1 = DateTime::from_timestamp_nanos(
+            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_456_789)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let dt2 = DateTime::from_timestamp_nanos(
+            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
+                .unwrap()
+                .with_nanosecond(234_567_890)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let dt3 = DateTime::from_timestamp_nanos(
+            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
+                .unwrap()
+                .with_nanosecond(345_678_901)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.timestamp_nanos();
+        let ts2 = dt2.timestamp_nanos();
+        let ts3 = dt3.timestamp_nanos();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -485,16 +523,22 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_dt = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
+        let packet_dt = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
 
         insert_packet(&store, "src1", request_dt, packet_dt);
 
@@ -535,16 +579,22 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_ts = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
+        let packet_ts = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_packet(&store, "src1", request_ts, packet_ts);
 
         let query = r#"
@@ -592,7 +642,7 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
+    fn convert_to_utc_timezone(timestamp: chrono::NaiveDateTime) -> String {
         let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
         let utc_time = local_datetime.with_timezone(&chrono::Utc);
         utc_time.to_string()

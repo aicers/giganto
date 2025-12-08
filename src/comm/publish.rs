@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{TimeZone, Utc};
 use giganto_client::connection::client_handshake;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
@@ -52,7 +51,7 @@ use crate::comm::{
     ingest::{NetworkKey, implement::EventFilter},
     peer::{PeerIdents, Peers},
 };
-use crate::graphql::TIMESTAMP_SIZE;
+use crate::graphql::{DateTime, TIMESTAMP_SIZE};
 use crate::server::{
     Certs, config_client, config_server, extract_cert_from_conn, subject_from_cert_verbose,
 };
@@ -545,7 +544,7 @@ where
             .mid_key(kind.map(|s| s.as_bytes().to_vec()));
         let from_key = key_builder
             .clone()
-            .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(msg.start_time())))
+            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
             .build();
         let to_key = key_builder.upper_open_bound_end_key(None).build();
         let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
@@ -1694,10 +1693,10 @@ where
 
     let from_key = key_builder
         .clone()
-        .lower_closed_bound_end_key(Some(Utc.timestamp_nanos(request_range.start)))
+        .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(request_range.start)))
         .build();
     let to_key = key_builder
-        .upper_open_bound_end_key(Some(Utc.timestamp_nanos(request_range.end)))
+        .upper_open_bound_end_key(Some(DateTime::from_timestamp_nanos(request_range.end)))
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);

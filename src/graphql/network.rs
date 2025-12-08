@@ -3,12 +3,12 @@ pub(crate) mod tests;
 
 use std::{collections::BTreeSet, fmt::Debug, iter::Peekable, net::IpAddr};
 
+use super::DateTime;
 use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
     connection::{Connection, Edge, query},
 };
 use base64::Engine;
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
     Radius, Rdp, Smb, Smtp, Ssh, Tls,
@@ -69,7 +69,7 @@ impl KeyExtractor for NetworkFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -146,7 +146,7 @@ impl RawEventFilter for SearchFilter {
 ]))]
 struct ConnRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -182,7 +182,7 @@ struct ConnRawEvent {
     /// For example, `ShDdAaFf` indicates a session without packet loss.
     conn_state: String,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -213,7 +213,7 @@ struct ConnRawEvent {
 ]))]
 struct DnsRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP address
     orig_addr: String,
     /// Source Port Number
@@ -227,7 +227,7 @@ struct DnsRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -275,7 +275,7 @@ struct DnsRawEvent {
 ]))]
 struct MalformedDnsRawEvent {
     /// Time the event started transmitting from a sensor
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP address
     orig_addr: String,
     /// Source Port Number
@@ -289,7 +289,7 @@ struct MalformedDnsRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -337,7 +337,7 @@ struct MalformedDnsRawEvent {
 ]))]
 struct HttpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -351,7 +351,7 @@ struct HttpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -415,7 +415,7 @@ struct HttpRawEvent {
 ]))]
 struct RdpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -429,7 +429,7 @@ struct RdpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -455,7 +455,7 @@ struct RdpRawEvent {
 ]))]
 struct SmtpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -469,7 +469,7 @@ struct SmtpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -507,7 +507,7 @@ struct SmtpRawEvent {
 ]))]
 struct NtlmRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -521,7 +521,7 @@ struct NtlmRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -555,7 +555,7 @@ struct NtlmRawEvent {
 ]))]
 struct KerberosRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -569,7 +569,7 @@ struct KerberosRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -611,7 +611,7 @@ struct KerberosRawEvent {
 ]))]
 struct SshRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -625,7 +625,7 @@ struct SshRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -675,7 +675,7 @@ struct SshRawEvent {
 ]))]
 struct DceRpcRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -689,7 +689,7 @@ struct DceRpcRawEvent {
     /// TCP is 6, UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -751,7 +751,7 @@ struct FtpCommandRawEvent {
 ]))]
 struct FtpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -765,7 +765,7 @@ struct FtpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -796,7 +796,7 @@ struct FtpRawEvent {
 ]))]
 struct MqttRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -810,7 +810,7 @@ struct MqttRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -846,7 +846,7 @@ struct MqttRawEvent {
 ]))]
 struct LdapRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -860,7 +860,7 @@ struct LdapRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -898,7 +898,7 @@ struct LdapRawEvent {
 ]))]
 struct TlsRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -912,7 +912,7 @@ struct TlsRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -979,7 +979,7 @@ struct TlsRawEvent {
 ]))]
 struct SmbRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -993,7 +993,7 @@ struct SmbRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1039,7 +1039,7 @@ struct SmbRawEvent {
 ]))]
 struct NfsRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -1053,7 +1053,7 @@ struct NfsRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1081,7 +1081,7 @@ struct NfsRawEvent {
 ]))]
 struct BootpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -1095,7 +1095,7 @@ struct BootpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1165,7 +1165,7 @@ impl From<usize> for StringNumberUsize {
 ]))]
 struct DhcpRawEvent {
     /// Start Time
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -1179,7 +1179,7 @@ struct DhcpRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1239,7 +1239,7 @@ struct DhcpRawEvent {
 ]))]
 struct RadiusRawEvent {
     /// Time the event started transmitting from a sensor
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Source Port Number
@@ -1253,7 +1253,7 @@ struct RadiusRawEvent {
     /// TCP is 6, and UDP is 17.
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1397,7 +1397,7 @@ macro_rules! from_key_value {
                     orig_port: val.orig_port,
                     resp_port: val.resp_port,
                     proto: val.proto,
-                    start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+                    start_time: DateTime::from_timestamp_nanos(val.start_time),
                     duration: val.duration.into(),
                     orig_pkts: val.orig_pkts.into(),
                     resp_pkts: val.resp_pkts.into(),
@@ -1426,7 +1426,7 @@ impl FromKeyValue<Http> for HttpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1465,7 +1465,7 @@ impl FromKeyValue<MalformedDns> for MalformedDnsRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1497,7 +1497,7 @@ impl FromKeyValue<Conn> for ConnRawEvent {
             resp_port: val.resp_port,
             proto: val.proto,
             conn_state: val.conn_state,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             service: val.service,
             orig_bytes: val.orig_bytes.into(),
@@ -1519,7 +1519,7 @@ impl FromKeyValue<Ftp> for FtpRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1556,7 +1556,7 @@ impl FromKeyValue<Bootp> for BootpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1586,7 +1586,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -1627,7 +1627,7 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             resp_addr: val.resp_addr.to_string(),
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -2827,14 +2827,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.conn_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Conn>(&exist_data, filter))
         };
 
@@ -2854,14 +2854,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dns_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Dns>(&exist_data, filter))
         };
 
@@ -2881,14 +2881,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.malformed_dns_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<MalformedDns>(&exist_data, filter))
         };
 
@@ -2908,14 +2908,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.http_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Http>(&exist_data, filter))
         };
         events_vec_in_cluster!(
@@ -2934,14 +2934,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.rdp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Rdp>(&exist_data, filter))
         };
 
@@ -2961,14 +2961,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.smtp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Smtp>(&exist_data, filter))
         };
 
@@ -2988,14 +2988,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ntlm_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
             Ok(collect_exist_times::<Ntlm>(&exist_data, filter))
         };
 
@@ -3015,14 +3015,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.kerberos_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Kerberos>(&exist_data, filter))
         };
@@ -3042,14 +3042,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ssh_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Ssh>(&exist_data, filter))
         };
@@ -3070,14 +3070,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dce_rpc_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<DceRpc>(&exist_data, filter))
         };
@@ -3098,14 +3098,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ftp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Ftp>(&exist_data, filter))
         };
@@ -3126,14 +3126,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.mqtt_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Mqtt>(&exist_data, filter))
         };
@@ -3154,14 +3154,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.ldap_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Ldap>(&exist_data, filter))
         };
@@ -3182,14 +3182,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.tls_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Tls>(&exist_data, filter))
         };
@@ -3210,7 +3210,7 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
 
@@ -3218,7 +3218,7 @@ impl NetworkQuery {
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Smb>(&exist_data, filter))
         };
@@ -3239,14 +3239,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.nfs_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Nfs>(&exist_data, filter))
         };
@@ -3267,14 +3267,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.bootp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Bootp>(&exist_data, filter))
         };
@@ -3295,14 +3295,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.dhcp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Dhcp>(&exist_data, filter))
         };
@@ -3323,14 +3323,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.radius_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Radius>(&exist_data, filter))
         };
