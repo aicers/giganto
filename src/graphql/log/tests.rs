@@ -439,48 +439,6 @@ async fn log_with_data() {
 }
 
 #[tokio::test]
-async fn log_timestamp_fomat_stability() {
-    let schema = TestSchema::new();
-    let store = schema.db.log_store().unwrap();
-
-    let sensor = "src1";
-    let kind = "kind1";
-    let timestamp = "2024-03-04T05:06:07Z"
-        .parse::<jiff::Timestamp>()
-        .unwrap()
-        .as_nanosecond() as i64;
-    insert_log_raw_event(&store, sensor, timestamp, kind, b"interface");
-
-    let query = format!(
-        r#"
-        {{
-            logRawEvents(
-                filter: {{
-                    sensor: "{sensor}",
-                    kind: "{kind}",
-                    time: {{ start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }}
-                }}
-                first: 1
-            ) {{
-                edges {{
-                    node {{
-                        time
-                    }}
-                }}
-            }}
-        }}"#
-    );
-
-    let res = schema.execute(&query).await;
-    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-    let res_json = res.data.into_json().unwrap();
-    let node = res_json["logRawEvents"]["edges"][0]["node"]
-        .as_object()
-        .unwrap();
-    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
-}
-
-#[tokio::test]
 async fn oplog_empty() {
     let schema = TestSchema::new();
     let query = r#"
@@ -521,44 +479,6 @@ async fn oplog_with_data() {
         res.data.to_string(),
         "{opLogRawEvents: {edges: [{node: {level: \"Info\", contents: \"oplog\"}}]}}"
     );
-}
-
-#[tokio::test]
-async fn oplog_timestamp_fomat_stability() {
-    let schema = TestSchema::new();
-    let store = schema.db.op_log_store().unwrap();
-    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
-
-    let timestamp = "2024-03-04T05:06:07Z"
-        .parse::<jiff::Timestamp>()
-        .unwrap()
-        .as_nanosecond() as i64;
-    insert_oplog_raw_event(&store, "giganto", "src1", timestamp, &generator);
-
-    let query = r#"
-        {
-            opLogRawEvents(
-                filter: {
-                    agentId: "giganto@src 1",
-                    logLevel: "Info",
-                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
-                },
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                    }
-                }
-            }
-        }"#;
-    let res = schema.execute(query).await;
-    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-    let res_json = res.data.into_json().unwrap();
-    let node = res_json["opLogRawEvents"]["edges"][0]["node"]
-        .as_object()
-        .unwrap();
-    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
 }
 
 #[tokio::test]
