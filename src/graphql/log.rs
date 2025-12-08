@@ -8,7 +8,6 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{Log, OpLog};
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -16,7 +15,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, base64_engine, get_time_from_key, get_time_from_key_prefix,
+    DateTime, Engine, FromKeyValue, base64_engine, get_time_from_key, get_time_from_key_prefix,
     handle_paged_events, load_connection_by_prefix_timestamp_key, paged_events_in_cluster,
 };
 #[cfg(feature = "cluster")]
@@ -49,7 +48,7 @@ impl KeyExtractor for LogFilter {
         self.kind.as_ref().map(|kind| kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -85,7 +84,7 @@ pub struct OpLogFilter {
 }
 
 impl TimestampKeyExtractor for OpLogFilter {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_start_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -157,7 +156,7 @@ impl RawEventFilter for OpLogFilter {
     log_raw_events::LogRawEventsLogRawEventsEdgesNode
 ]))]
 struct LogRawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     log: String,
 }
 
@@ -172,7 +171,7 @@ impl FromKeyValue<Log> for LogRawEvent {
 
 #[derive(SimpleObject, Debug)]
 struct OpLogRawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     level: String,
     contents: String,
     agent_name: String,

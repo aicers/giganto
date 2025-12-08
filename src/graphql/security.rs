@@ -1,7 +1,7 @@
 use std::{fmt::Debug, net::IpAddr};
 
+use super::DateTime;
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -46,7 +46,7 @@ impl KeyExtractor for SecuLogFilter {
         Some(self.kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -86,7 +86,7 @@ impl RawEventFilter for SecuLogFilter {
     secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
 ]))]
 struct SecuLogRawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -189,7 +189,9 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
+
+    use crate::graphql::DateTime;
     use giganto_client::ingest::log::SecuLog;
 
     use crate::graphql::tests::TestSchema;
@@ -233,11 +235,14 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.secu_log_store().unwrap();
 
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_secu_log_event(&store, "device", "src1", timestamp);
 
         let query = r#"

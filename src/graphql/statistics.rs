@@ -372,7 +372,9 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
+
+    use crate::graphql::DateTime;
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
     #[cfg(feature = "count_events")]
@@ -385,7 +387,7 @@ mod tests {
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos();
         insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
@@ -416,11 +418,14 @@ mod tests {
     async fn statistics_timestamp_fomat_stability() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = DateTime::from_timestamp_nanos(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        )
+        .timestamp_nanos();
         insert_statistics_raw_event(&store, timestamp, "src1", 0, 600, 1_000_000, 100_000_000);
 
         let query = r#"
@@ -717,7 +722,7 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
 
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos();
 
         // Insert into each CF:
         //   SESSION -> 5 events
