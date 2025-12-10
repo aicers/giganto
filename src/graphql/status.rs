@@ -1,7 +1,7 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
-use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info};
@@ -9,7 +9,6 @@ use tracing::{error, info};
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::graphql::{StringNumberU32, StringNumberU64};
 use crate::settings::ConfigVisible;
-#[cfg(debug_assertions)]
 use crate::storage::Database;
 use crate::{comm::peer::PeerIdentity, settings::Settings};
 
@@ -42,6 +41,35 @@ struct Properties {
     estimate_live_data_size: u64,
     estimate_num_keys: u64,
     stats: String,
+}
+
+/// Input type for the `deleteSamplingPolicy` mutation.
+#[derive(InputObject)]
+pub struct DeleteSamplingPolicyInput {
+    /// The unique identifier of the sampling policy to delete.
+    pub policy_id: String,
+}
+
+/// Status of the sampling policy deletion operation.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum DeletionStatus {
+    /// Deletion completed successfully.
+    Ok,
+    /// Policy was not found.
+    NotFound,
+    /// Deletion failed due to an error.
+    Failed,
+}
+
+/// Response payload for the `deleteSamplingPolicy` mutation.
+#[derive(SimpleObject, Debug)]
+pub struct DeleteSamplingPolicyPayload {
+    /// Whether the deletion was successful.
+    pub success: bool,
+    /// The status of the deletion operation.
+    pub status: DeletionStatus,
+    /// The number of time series records deleted.
+    pub deleted_count: u64,
 }
 
 #[Object(name = "Config")]
@@ -114,6 +142,9 @@ pub(super) struct StatusQuery;
 
 #[derive(Default)]
 pub(super) struct ConfigMutation;
+
+#[derive(Default)]
+pub(super) struct SamplingPolicyMutation;
 
 #[Object]
 impl StatusQuery {
@@ -250,6 +281,73 @@ impl ConfigMutation {
         power_off_notify.0.notify_one();
 
         Ok(true)
+    }
+}
+
+#[Object]
+impl SamplingPolicyMutation {
+    /// Deletes a sampling policy and its associated time series data.
+    ///
+    /// This mutation removes all periodic time series data associated with the given policy ID
+    /// from the database. The deletion is performed synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails. If no data exists for the given policy
+    /// ID, the mutation succeeds with `deleted_count` of 0 and `status` of `NOT_FOUND`.
+    #[allow(clippy::unused_async)]
+    async fn delete_sampling_policy(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteSamplingPolicyInput,
+    ) -> Result<DeleteSamplingPolicyPayload> {
+        info!(
+            "Received request to delete sampling policy: {}",
+            input.policy_id
+        );
+
+        if input.policy_id.is_empty() {
+            return Err("Policy ID cannot be empty".into());
+        }
+
+        let db = ctx.data::<Database>()?;
+
+        match db.delete_time_series_by_policy_id(&input.policy_id) {
+            Ok(deleted_count) => {
+                if deleted_count == 0 {
+                    info!(
+                        "No time series data found for policy ID: {}",
+                        input.policy_id
+                    );
+                    Ok(DeleteSamplingPolicyPayload {
+                        success: true,
+                        status: DeletionStatus::NotFound,
+                        deleted_count: 0,
+                    })
+                } else {
+                    info!(
+                        "Successfully deleted {} time series records for policy ID: {}",
+                        deleted_count, input.policy_id
+                    );
+                    Ok(DeleteSamplingPolicyPayload {
+                        success: true,
+                        status: DeletionStatus::Ok,
+                        deleted_count,
+                    })
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Failed to delete time series for policy ID {}: {}",
+                    input.policy_id, e
+                );
+                Ok(DeleteSamplingPolicyPayload {
+                    success: false,
+                    status: DeletionStatus::Failed,
+                    deleted_count: 0,
+                })
+            }
+        }
     }
 }
 
@@ -462,5 +560,214 @@ mod tests {
             max_subcompactions = 2
         )
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_delete_sampling_policy_not_found() {
+        let schema = TestSchema::new();
+
+        let query = r#"
+            mutation {
+                deleteSamplingPolicy(input: { policyId: "non_existent_policy" }) {
+                    success
+                    status
+                    deletedCount
+                }
+            }
+        "#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let data = res.data.into_json().unwrap();
+        let payload = &data["deleteSamplingPolicy"];
+        assert!(payload["success"].as_bool().unwrap());
+        assert_eq!(payload["status"].as_str().unwrap(), "NOT_FOUND");
+        assert_eq!(payload["deletedCount"].as_u64().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_sampling_policy_empty_id() {
+        let schema = TestSchema::new();
+
+        let query = r#"
+            mutation {
+                deleteSamplingPolicy(input: { policyId: "" }) {
+                    success
+                    status
+                    deletedCount
+                }
+            }
+        "#;
+
+        let res = schema.execute(query).await;
+        assert!(!res.errors.is_empty(), "Expected error for empty policy ID");
+    }
+
+    #[tokio::test]
+    async fn test_delete_sampling_policy_with_data() {
+        let schema = TestSchema::new();
+        let store = schema.db.periodic_time_series_store().unwrap();
+
+        // Insert test time series data
+        let policy_id = "test_policy_123";
+        for i in 1..=5 {
+            insert_time_series(&store, policy_id, i, vec![1.0, 2.0, 3.0]);
+        }
+
+        // Verify data was inserted
+        let query = format!(
+            r#"
+            {{
+                periodicTimeSeries(filter: {{ id: "{policy_id}" }}, first: 10) {{
+                    edges {{
+                        node {{
+                            id
+                        }}
+                    }}
+                }}
+            }}
+        "#
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty());
+        let data = res.data.into_json().unwrap();
+        assert_eq!(
+            data["periodicTimeSeries"]["edges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+
+        // Delete the policy
+        let delete_query = format!(
+            r#"
+            mutation {{
+                deleteSamplingPolicy(input: {{ policyId: "{policy_id}" }}) {{
+                    success
+                    status
+                    deletedCount
+                }}
+            }}
+        "#
+        );
+
+        let res = schema.execute(&delete_query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let data = res.data.into_json().unwrap();
+        let payload = &data["deleteSamplingPolicy"];
+        assert!(payload["success"].as_bool().unwrap());
+        assert_eq!(payload["status"].as_str().unwrap(), "OK");
+        assert_eq!(payload["deletedCount"].as_u64().unwrap(), 5);
+
+        // Verify data was deleted
+        let query = format!(
+            r#"
+            {{
+                periodicTimeSeries(filter: {{ id: "{policy_id}" }}, first: 10) {{
+                    edges {{
+                        node {{
+                            id
+                        }}
+                    }}
+                }}
+            }}
+        "#
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty());
+        let data = res.data.into_json().unwrap();
+        assert_eq!(
+            data["periodicTimeSeries"]["edges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_sampling_policy_does_not_affect_other_policies() {
+        let schema = TestSchema::new();
+        let store = schema.db.periodic_time_series_store().unwrap();
+
+        // Insert data for two different policies
+        let policy_a = "policy_a";
+        let policy_b = "policy_b";
+
+        for i in 1..=3 {
+            insert_time_series(&store, policy_a, i, vec![1.0]);
+        }
+        for i in 1..=2 {
+            insert_time_series(&store, policy_b, i, vec![2.0]);
+        }
+
+        // Delete policy_a
+        let delete_query = format!(
+            r#"
+            mutation {{
+                deleteSamplingPolicy(input: {{ policyId: "{policy_a}" }}) {{
+                    success
+                    status
+                    deletedCount
+                }}
+            }}
+        "#
+        );
+
+        let res = schema.execute(&delete_query).await;
+        assert!(res.errors.is_empty());
+
+        let data = res.data.into_json().unwrap();
+        let payload = &data["deleteSamplingPolicy"];
+        assert!(payload["success"].as_bool().unwrap());
+        assert_eq!(payload["deletedCount"].as_u64().unwrap(), 3);
+
+        // Verify policy_b data still exists
+        let query = format!(
+            r#"
+            {{
+                periodicTimeSeries(filter: {{ id: "{policy_b}" }}, first: 10) {{
+                    edges {{
+                        node {{
+                            id
+                        }}
+                    }}
+                }}
+            }}
+        "#
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty());
+        let data = res.data.into_json().unwrap();
+        assert_eq!(
+            data["periodicTimeSeries"]["edges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    fn insert_time_series(
+        store: &crate::storage::RawEventStore<
+            giganto_client::ingest::timeseries::PeriodicTimeSeries,
+        >,
+        id: &str,
+        start: i64,
+        data: Vec<f64>,
+    ) {
+        let mut key: Vec<u8> = Vec::new();
+        key.extend_from_slice(id.as_bytes());
+        key.push(0);
+        key.extend_from_slice(&start.to_be_bytes());
+        let time_series_data = giganto_client::ingest::timeseries::PeriodicTimeSeries {
+            id: id.to_string(),
+            data,
+        };
+        let value = bincode::serialize(&time_series_data).unwrap();
+        store.append(&key, &value).unwrap();
     }
 }

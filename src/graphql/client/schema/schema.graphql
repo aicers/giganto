@@ -377,6 +377,52 @@ type DceRpcRawEventEdge {
 }
 
 """
+Input type for the `deleteSamplingPolicy` mutation.
+"""
+input DeleteSamplingPolicyInput {
+	"""
+	The unique identifier of the sampling policy to delete.
+	"""
+	policyId: String!
+}
+
+"""
+Response payload for the `deleteSamplingPolicy` mutation.
+"""
+type DeleteSamplingPolicyPayload {
+	"""
+	Whether the deletion was successful.
+	"""
+	success: Boolean!
+	"""
+	The status of the deletion operation.
+	"""
+	status: DeletionStatus!
+	"""
+	The number of time series records deleted.
+	"""
+	deletedCount: Int!
+}
+
+"""
+Status of the sampling policy deletion operation.
+"""
+enum DeletionStatus {
+	"""
+	Deletion completed successfully.
+	"""
+	OK
+	"""
+	Policy was not found.
+	"""
+	NOT_FOUND
+	"""
+	Deletion failed due to an error.
+	"""
+	FAILED
+}
+
+"""
 Represents an event extracted from the DHCP protocol.
 """
 type DhcpRawEvent {
@@ -1843,6 +1889,18 @@ type Mutation {
 	stop: Boolean!
 	reboot: Boolean!
 	shutdown: Boolean!
+	"""
+	Deletes a sampling policy and its associated time series data.
+	
+	This mutation removes all periodic time series data associated with the given policy ID
+	from the database. The deletion is performed synchronously.
+	
+	# Errors
+	
+	Returns an error if the database operation fails. If no data exists for the given policy
+	ID, the mutation succeeds with `deleted_count` of 0 and `status` of `NOT_FOUND`.
+	"""
+	deleteSamplingPolicy(input: DeleteSamplingPolicyInput!): DeleteSamplingPolicyPayload!
 }
 
 type Netflow5RawEvent {

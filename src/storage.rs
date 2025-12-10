@@ -529,6 +529,36 @@ impl Database {
         let cf = self.get_cf_handle("seculog")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
+
+    /// Deletes all periodic time series data associated with the given policy ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The periodic time series column family cannot be accessed.
+    /// * The database operation fails.
+    pub fn delete_time_series_by_policy_id(&self, policy_id: &str) -> Result<u64> {
+        let cf = self.get_cf_handle("periodic time series")?;
+        let mut prefix: Vec<u8> = policy_id.as_bytes().to_vec();
+        prefix.push(0x00);
+
+        let mut deleted_count = 0u64;
+        let iterator = self.db.prefix_iterator_cf(cf, &prefix).flatten();
+
+        for (key, _) in iterator {
+            // Verify this key belongs to the policy_id (prefix match)
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            self.db.delete_cf(cf, &key)?;
+            deleted_count = deleted_count.saturating_add(1);
+        }
+
+        // Flush to ensure deletions are persisted
+        self.db.flush_wal(true)?;
+
+        Ok(deleted_count)
+    }
 }
 
 pub struct RawEventStore<'db, T> {
