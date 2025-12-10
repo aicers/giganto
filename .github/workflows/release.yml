@@ -65,12 +65,10 @@ jobs:
             RELEASE_NOTES_B64=$(base64 -w 0 < /tmp/release_notes_temp.txt)
             echo "release_notes_b64=$RELEASE_NOTES_B64" >> $GITHUB_OUTPUT
           fi
-      - name: Decode release notes
+      - name: Create a Release and Upload Assets
         run: |
           # Decode the base64-encoded release notes
           echo "${{ steps.release_notes.outputs.release_notes_b64 }}" | base64 -d > release_notes.txt
-      - name: Create a Release and Upload Assets
-        run: |
           # Read the decoded release notes
           NOTES=$(< ./release_notes.txt)
           curl -X POST \
