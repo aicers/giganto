@@ -9,19 +9,19 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Utc};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
 
 use crate::{
     comm::peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
+    graphql::DateTime,
     storage::Database,
 };
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
-pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 pub(crate) fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
@@ -76,7 +76,7 @@ pub(crate) fn new_ingest_sensors(db: &Database) -> IngestSensors {
 }
 
 pub(crate) fn new_runtime_ingest_sensors() -> RunTimeIngestSensors {
-    Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
+    Arc::new(RwLock::new(HashMap::<String, DateTime>::new()))
 }
 
 pub(crate) fn new_stream_direct_channels() -> StreamDirectChannels {
