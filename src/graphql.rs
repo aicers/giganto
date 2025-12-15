@@ -127,10 +127,14 @@ impl DateTime {
     }
 
     /// Returns the timestamp in nanoseconds since the Unix epoch.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the timestamp is outside the range representable by `i64` nanoseconds
+    /// (approximately years 1677 to 2262).
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn timestamp_nanos(&self) -> i64 {
-        self.0.as_nanosecond() as i64
+        i64::try_from(self.0.as_nanosecond()).expect("timestamp out of i64 nanosecond range")
     }
 
     /// Returns the timestamp in nanoseconds since the Unix epoch, or `None` if the value
