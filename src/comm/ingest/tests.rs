@@ -30,8 +30,8 @@ use giganto_client::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-            Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, Mqtt, Nfs,
+            Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
@@ -477,6 +477,7 @@ fn read_raw_event_from_db(db: &Database, kind: RawEventKind) -> Option<Vec<u8>> 
         RawEventKind::Netflow5 => read_single_raw_event(&db.netflow5_store().unwrap()),
         RawEventKind::Netflow9 => read_single_raw_event(&db.netflow9_store().unwrap()),
         RawEventKind::SecuLog => read_single_raw_event(&db.secu_log_store().unwrap()),
+        RawEventKind::Icmp => read_single_raw_event(&db.icmp_store().unwrap()),
         _ => panic!("no test storage mapping for {kind:?}"),
     }
 }
@@ -1662,6 +1663,50 @@ async fn ack_interval_sends_last_timestamp() {
     send_log.finish().expect("failed to shutdown stream");
     harness.shutdown(b"log_done").await;
     assert_eq!(base_timestamp + 1023, recv_timestamp);
+}
+
+#[tokio::test]
+async fn icmp() {
+    let harness = TestHarness::new().await;
+    let (mut send_icmp, _) = harness.open_bi().await;
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+
+    send_record_header(&mut send_icmp, RawEventKind::Icmp)
+        .await
+        .unwrap();
+    send_events(
+        &mut send_icmp,
+        next_timestamp(),
+        icmp_body,
+    )
+    .await
+    .unwrap();
+
+    send_icmp.finish().expect("failed to shutdown stream");
+    let stored = wait_for_raw_event(&harness.db, RawEventKind::Icmp).await;
+    harness.shutdown(b"icmp_done").await;
+    assert!(!stored.is_empty());
 }
 
 #[tokio::test]

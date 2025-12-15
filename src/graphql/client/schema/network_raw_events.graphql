@@ -479,6 +479,24 @@ query NetworkRawEvents(
           nasPortType
           message
         }
+        ... on IcmpRawEvent {
+          time
+          origAddr
+          respAddr
+          proto
+          startTime
+          duration
+          origPkts
+          respPkts
+          origL2Bytes
+          respL2Bytes
+          icmpType
+          icmpCode
+          id
+          seqNum
+          dataLen
+          payload
+        }
       }
     }
   }

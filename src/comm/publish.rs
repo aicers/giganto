@@ -454,6 +454,7 @@ where
         RequestStreamRecord::Bootp => handle_store!(bootp_store, "bootp"),
         RequestStreamRecord::Dhcp => handle_store!(dhcp_store, "dhcp"),
         RequestStreamRecord::Radius => handle_store!(radius_store, "radius"),
+        RequestStreamRecord::Icmp => handle_store!(icmp_store, "icmp"),
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
         RequestStreamRecord::MalformedDns => handle_store!(malformed_dns_store, "malformed_dns"),

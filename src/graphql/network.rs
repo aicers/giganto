@@ -10,7 +10,7 @@ use async_graphql::{
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
     Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 #[cfg(feature = "cluster")]
@@ -1296,6 +1296,49 @@ struct RadiusRawEvent {
     message: String,
 }
 
+/// Represents an event extracted from the ICMP protocol.
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnIcmpRawEvent
+]))]
+struct IcmpRawEvent {
+    /// Time the event started transmitting from a sensor
+    time: DateTime<Utc>,
+    /// Source IP Address
+    orig_addr: String,
+    /// Destination IP Address
+    resp_addr: String,
+    /// Protocol Number
+    proto: u8,
+    /// Start Time
+    start_time: DateTime<Utc>,
+    /// Duration
+    ///
+    /// It is measured in nanoseconds.
+    duration: StringNumberI64,
+    /// Packets Sent by Source
+    orig_pkts: StringNumberU64,
+    /// Packets Received by Destination
+    resp_pkts: StringNumberU64,
+    /// Layer 2 Bytes Sent by Source
+    orig_l2_bytes: StringNumberU64,
+    /// Layer 2 Bytes Received by Destination
+    resp_l2_bytes: StringNumberU64,
+    /// ICMP Type
+    icmp_type: u8,
+    /// ICMP Code
+    icmp_code: u8,
+    /// Identifier
+    id: u16,
+    /// Sequence Number
+    seq_num: u16,
+    /// Data Length
+    data_len: u16,
+    /// Payload
+    payload: Vec<u8>,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Union)]
 enum NetworkRawEvents {
@@ -1318,6 +1361,7 @@ enum NetworkRawEvents {
     BootpRawEvent(BootpRawEvent),
     DhcpRawEvent(DhcpRawEvent),
     RadiusRawEvent(RadiusRawEvent),
+    IcmpRawEvent(IcmpRawEvent),
 }
 
 #[cfg(feature = "cluster")]
@@ -1381,6 +1425,9 @@ impl From<network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode> for Net
             network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::RadiusRawEvent(
                 event,
             ) => NetworkRawEvents::RadiusRawEvent(event.into()),
+            network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNode::IcmpRawEvent(event) => {
+                NetworkRawEvents::IcmpRawEvent(event.into())
+            }
         }
     }
 }
@@ -1647,6 +1694,29 @@ impl FromKeyValue<Radius> for RadiusRawEvent {
             nas_id: val.nas_id.clone(),
             nas_port_type: StringNumberU32(val.nas_port_type),
             message: val.message.clone(),
+        })
+    }
+}
+
+impl FromKeyValue<Icmp> for IcmpRawEvent {
+    fn from_key_value(key: &[u8], val: Icmp) -> Result<Self> {
+        Ok(IcmpRawEvent {
+            time: get_time_from_key(key)?,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            proto: val.proto,
+            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
+            icmp_type: val.icmp_type,
+            icmp_code: val.icmp_code,
+            id: val.id,
+            seq_num: val.seq_num,
+            data_len: val.data_len,
+            payload: val.payload.clone(),
         })
     }
 }
@@ -2060,6 +2130,20 @@ async fn handle_paged_radius_raw_events(
 ) -> Result<Connection<String, RadiusRawEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.radius_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_paged_icmp_raw_events(
+    ctx: &Context<'_>,
+    filter: NetworkFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, IcmpRawEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.icmp_store()?;
 
     handle_paged_events(store, filter, after, before, first, last).await
 }
@@ -2796,6 +2880,18 @@ impl NetworkQuery {
         )
     }
 
+    async fn icmp_raw_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: NetworkFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, IcmpRawEvent>> {
+        handle_paged_icmp_raw_events(ctx, filter, after, before, first, last).await
+    }
+
     async fn network_raw_events(
         &self,
         ctx: &Context<'_>,
@@ -3345,6 +3441,21 @@ impl NetworkQuery {
             search_radius_raw_events::ResponseData,
             search_radius_raw_events
         )
+    }
+
+    async fn search_icmp_raw_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime<Utc>>> {
+        let db = ctx.data::<Database>()?;
+        let store = db.icmp_store()?;
+        let exist_data = store
+            .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+            .into_iter()
+            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+
+        Ok(collect_exist_times::<Icmp>(&exist_data, &filter))
     }
 }
 
