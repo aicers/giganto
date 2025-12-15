@@ -1248,6 +1248,107 @@ type HttpRawEventEdge {
 	cursor: String!
 }
 
+"""
+Represents an event extracted from the ICMP protocol.
+"""
+type IcmpRawEvent {
+	"""
+	Time the event started transmitting from a sensor
+	"""
+	time: DateTime!
+	"""
+	Source IP Address
+	"""
+	origAddr: String!
+	"""
+	Destination IP Address
+	"""
+	respAddr: String!
+	"""
+	Protocol Number
+	"""
+	proto: Int!
+	"""
+	Start Time
+	"""
+	startTime: DateTime!
+	"""
+	Duration
+	
+	It is measured in nanoseconds.
+	"""
+	duration: StringNumberI64!
+	"""
+	Packets Sent by Source
+	"""
+	origPkts: StringNumberU64!
+	"""
+	Packets Received by Destination
+	"""
+	respPkts: StringNumberU64!
+	"""
+	Layer 2 Bytes Sent by Source
+	"""
+	origL2Bytes: StringNumberU64!
+	"""
+	Layer 2 Bytes Received by Destination
+	"""
+	respL2Bytes: StringNumberU64!
+	"""
+	ICMP Type
+	"""
+	icmpType: Int!
+	"""
+	ICMP Code
+	"""
+	icmpCode: Int!
+	"""
+	Identifier
+	"""
+	id: Int!
+	"""
+	Sequence Number
+	"""
+	seqNum: Int!
+	"""
+	Data Length
+	"""
+	dataLen: Int!
+	"""
+	Payload
+	"""
+	payload: [Int!]!
+}
+
+type IcmpRawEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [IcmpRawEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [IcmpRawEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type IcmpRawEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: IcmpRawEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 type ImageLoadedEvent {
 	time: DateTime!
 	agentName: String!
@@ -2016,7 +2117,7 @@ input NetworkFilter {
 	agentId: String
 }
 
-union NetworkRawEvents = ConnRawEvent | DnsRawEvent | MalformedDnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent
+union NetworkRawEvents = ConnRawEvent | DnsRawEvent | MalformedDnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent | IcmpRawEvent
 
 type NetworkRawEventsConnection {
 	"""
@@ -2575,6 +2676,7 @@ type Query {
 	bootpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): BootpRawEventConnection!
 	dhcpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DhcpRawEventConnection!
 	radiusRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RadiusRawEventConnection!
+	icmpRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): IcmpRawEventConnection!
 	networkRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkRawEventsConnection!
 	searchConnRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchDnsRawEvents(filter: SearchFilter!): [DateTime!]!
@@ -2595,6 +2697,7 @@ type Query {
 	searchBootpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchRadiusRawEvents(filter: SearchFilter!): [DateTime!]!
+	searchIcmpRawEvents(filter: SearchFilter!): [DateTime!]!
 	export(exportType: String!, filter: ExportFilter!): String!
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!

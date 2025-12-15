@@ -17,8 +17,8 @@ use giganto_client::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-            Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, Mqtt, Nfs,
+            Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
@@ -1331,6 +1331,57 @@ async fn ack_info() {
     client.conn.close(0u32.into(), b"log_done");
     client.endpoint.wait_idle().await;
     assert_eq!(timestamp + 1023, recv_timestamp);
+}
+
+#[tokio::test]
+async fn icmp() {
+    init_crypto();
+    const RAW_EVENT_KIND_ICMP: RawEventKind = RawEventKind::Icmp;
+
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(&db_dir);
+
+    let client = TestClient::new().await;
+    let (mut send_icmp, _) = client.conn.open_bi().await.expect("failed to open stream");
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+
+    send_record_header(&mut send_icmp, RAW_EVENT_KIND_ICMP)
+        .await
+        .unwrap();
+    send_events(
+        &mut send_icmp,
+        Utc::now().timestamp_nanos_opt().unwrap(),
+        icmp_body,
+    )
+    .await
+    .unwrap();
+
+    send_icmp.finish().expect("failed to shutdown stream");
+
+    client.conn.close(0u32.into(), b"icmp_done");
+    client.endpoint.wait_idle().await;
 }
 
 #[tokio::test]

@@ -4,8 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
+    Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 use num_traits::cast::ToPrimitive;
@@ -5373,5 +5373,98 @@ async fn search_radius_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+}
+
+#[tokio::test]
+async fn icmp_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    insert_icmp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_icmp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        icmpRawEvents(
+            filter: {
+                sensor: "src 1"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    icmpType,
+                    icmpCode,
+                    id,
+                    seqNum,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
+        icmpType: 8, icmpCode: 0, id: 12345, seqNum: 1}}]}}"
+    );
+}
+
+fn insert_icmp_raw_event(store: &RawEventStore<Icmp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+    let ser_icmp_body = bincode::serialize(&icmp_body).unwrap();
+
+    store.append(&key, &ser_icmp_body).unwrap();
+}
+
+#[tokio::test]
+async fn search_icmp_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
+    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
+
+    insert_icmp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
+    insert_icmp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        searchIcmpRawEvents(
+            filter: {
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
 }
