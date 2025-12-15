@@ -33,9 +33,8 @@ impl SequenceGenerator {
         Arc::new(generator)
     }
 
-    #[allow(clippy::cast_sign_loss)]
     fn get_current_date_time() -> u32 {
         let utc_now = jiff::Zoned::now();
-        utc_now.day() as u32
+        u32::try_from(utc_now.day()).expect("day is always 1-31")
     }
 }
