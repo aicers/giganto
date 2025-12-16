@@ -134,7 +134,8 @@ impl DateTime {
     /// (approximately years 1677 to 2262).
     #[must_use]
     pub fn timestamp_nanos(&self) -> i64 {
-        i64::try_from(self.0.as_nanosecond()).expect("timestamp out of i64 nanosecond range")
+        i64::try_from(self.0.as_nanosecond())
+            .expect("timestamp is guaranteed to fit within i64 nanoseconds")
     }
 
     /// Returns the timestamp in nanoseconds since the Unix epoch, or `None` if the value
