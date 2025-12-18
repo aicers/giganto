@@ -8,7 +8,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::Duration;
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
@@ -25,6 +24,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+use jiff::SignedDuration;
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -166,7 +166,7 @@ async fn conn() {
     let client = TestClient::new().await;
     let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
-    let tmp_dur = Duration::nanoseconds(12345);
+    let tmp_dur = SignedDuration::from_nanos(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -175,7 +175,7 @@ async fn conn() {
         proto: 6,
         conn_state: "sf".to_string(),
         start_time: 1_740_787_200_000_000_000,
-        duration: tmp_dur.num_nanoseconds().unwrap(),
+        duration: tmp_dur.as_nanos().try_into().expect("duration fits in i64"),
         service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,

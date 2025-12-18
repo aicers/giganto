@@ -9,7 +9,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, Utc};
 use giganto_client::{
     connection::client_handshake,
     ingest::{
@@ -32,6 +31,7 @@ use giganto_client::{
         },
     },
 };
+use jiff::SignedDuration;
 use quinn::{Connection, Endpoint, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
@@ -193,7 +193,7 @@ fn gen_network_event_key(sensor: &str, kind: Option<&str>, timestamp: i64) -> Ve
 }
 
 fn gen_conn_raw_event() -> Vec<u8> {
-    let tmp_dur = Duration::nanoseconds(12345);
+    let tmp_dur = SignedDuration::from_nanos(12345);
     let conn_body = Conn {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
@@ -202,7 +202,7 @@ fn gen_conn_raw_event() -> Vec<u8> {
         proto: 6,
         conn_state: "sf".to_string(),
         start_time: 1_740_787_200_000_000_000,
-        duration: tmp_dur.num_nanoseconds().unwrap(),
+        duration: tmp_dur.as_nanos().try_into().expect("duration fits in i64"),
         service: "-".to_string(),
         orig_bytes: 77,
         resp_bytes: 295,
@@ -987,7 +987,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let conn_store = db.conn_store().unwrap();
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
             &conn_store,
             SENSOR,
@@ -1039,7 +1039,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let dns_store = db.dns_store().unwrap();
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dns_time = DateTime::now().timestamp_nanos();
         let dns_data =
             bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time))
                 .unwrap();
@@ -1088,7 +1088,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let malformed_dns_store = db.malformed_dns_store().unwrap();
-        let send_malformed_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_malformed_dns_time = DateTime::now().timestamp_nanos();
         let malformed_dns_data: MalformedDns = bincode::deserialize::<MalformedDns>(
             &insert_malformed_dns_raw_event(&malformed_dns_store, SENSOR, send_malformed_dns_time),
         )
@@ -1138,7 +1138,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let http_store = db.http_store().unwrap();
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_http_time = DateTime::now().timestamp_nanos();
         let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
             &http_store,
             SENSOR,
@@ -1190,7 +1190,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let rdp_store = db.rdp_store().unwrap();
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_rdp_time = DateTime::now().timestamp_nanos();
         let rdp_data =
             bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time))
                 .unwrap();
@@ -1239,7 +1239,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let smtp_store = db.smtp_store().unwrap();
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smtp_time = DateTime::now().timestamp_nanos();
         let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
             &smtp_store,
             SENSOR,
@@ -1291,7 +1291,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ntlm_store = db.ntlm_store().unwrap();
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ntlm_time = DateTime::now().timestamp_nanos();
         let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
             &ntlm_store,
             SENSOR,
@@ -1343,7 +1343,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let kerberos_store = db.kerberos_store().unwrap();
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_kerberos_time = DateTime::now().timestamp_nanos();
         let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
             &kerberos_store,
             SENSOR,
@@ -1396,7 +1396,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ssh_store = db.ssh_store().unwrap();
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ssh_time = DateTime::now().timestamp_nanos();
         let ssh_data =
             bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time))
                 .unwrap();
@@ -1445,7 +1445,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let dce_rpc_store = db.dce_rpc_store().unwrap();
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dce_rpc_time = DateTime::now().timestamp_nanos();
         let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
             &dce_rpc_store,
             SENSOR,
@@ -1499,7 +1499,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ftp_store = db.ftp_store().unwrap();
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ftp_time = DateTime::now().timestamp_nanos();
         let ftp_data =
             bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time))
                 .unwrap();
@@ -1548,7 +1548,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let mqtt_store = db.mqtt_store().unwrap();
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_mqtt_time = DateTime::now().timestamp_nanos();
         let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
             &mqtt_store,
             SENSOR,
@@ -1600,7 +1600,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let ldap_store = db.ldap_store().unwrap();
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ldap_time = DateTime::now().timestamp_nanos();
         let ldap_data = bincode::deserialize::<Ldap>(&insert_ldap_raw_event(
             &ldap_store,
             SENSOR,
@@ -1652,7 +1652,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let tls_store = db.tls_store().unwrap();
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_tls_time = DateTime::now().timestamp_nanos();
         let tls_data =
             bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time))
                 .unwrap();
@@ -1701,7 +1701,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let smb_store = db.smb_store().unwrap();
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smb_time = DateTime::now().timestamp_nanos();
         let smb_data =
             bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time))
                 .unwrap();
@@ -1750,7 +1750,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let nfs_store = db.nfs_store().unwrap();
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_nfs_time = DateTime::now().timestamp_nanos();
         let nfs_data =
             bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time))
                 .unwrap();
@@ -1799,7 +1799,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let bootp_store = db.bootp_store().unwrap();
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_bootp_time = DateTime::now().timestamp_nanos();
         let bootp_data = bincode::deserialize::<Bootp>(&insert_bootp_raw_event(
             &bootp_store,
             SENSOR,
@@ -1851,7 +1851,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let dhcp_store = db.dhcp_store().unwrap();
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dhcp_time = DateTime::now().timestamp_nanos();
         let dhcp_data = bincode::deserialize::<Dhcp>(&insert_dhcp_raw_event(
             &dhcp_store,
             SENSOR,
@@ -1903,7 +1903,7 @@ async fn request_range_data_with_protocol() {
         let (mut send_pub_req, mut recv_pub_resp) =
             publish.conn.open_bi().await.expect("failed to open stream");
         let radius_store = db.radius_store().unwrap();
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_radius_time = DateTime::now().timestamp_nanos();
         let radius_data = bincode::deserialize::<Radius>(&insert_radius_raw_event(
             &radius_store,
             SENSOR,
@@ -2002,7 +2002,7 @@ async fn request_range_data_with_log() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let log_store = db.log_store().unwrap();
-    let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
+    let send_log_time = DateTime::now().timestamp_nanos();
     let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
         &log_store,
         SENSOR,
@@ -2098,7 +2098,7 @@ async fn request_range_data_with_period_time_series() {
         publish.conn.open_bi().await.expect("failed to open stream");
 
     let time_series_store = db.periodic_time_series_store().unwrap();
-    let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
+    let send_time_series_time = DateTime::now().timestamp_nanos();
     let time_series_data =
         bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
             &time_series_store,
@@ -2252,7 +2252,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
 
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2270,7 +2270,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(conn_data, recv_data[20..]);
 
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "conn");
         let conn_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2288,7 +2288,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_data, recv_data[20..]);
 
         // database conn network event for the Time Series Generator
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let conn_data = insert_conn_raw_event(
             &conn_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2318,7 +2318,7 @@ async fn request_network_event_stream() {
         assert_eq!(conn_data, recv_data);
 
         // direct conn network event for the Time Series Generator
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "conn");
         let conn_data = gen_conn_raw_event();
 
@@ -2360,7 +2360,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
 
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dns_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2378,7 +2378,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dns_data, recv_data[20..]);
 
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dns_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dns");
         let dns_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2397,7 +2397,7 @@ async fn request_network_event_stream() {
         assert_eq!(dns_data, recv_data[20..]);
 
         // database dns network event for the Time Series Generator
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dns_time = DateTime::now().timestamp_nanos();
         let dns_data = insert_dns_raw_event(
             &dns_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2429,7 +2429,7 @@ async fn request_network_event_stream() {
         assert_eq!(dns_data, recv_data);
 
         // direct dns network event for the Time Series Generator
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dns_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dns");
         let dns_data = gen_dns_raw_event();
 
@@ -2471,7 +2471,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
 
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_rdp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2489,7 +2489,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(rdp_data, recv_data[20..]);
 
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_rdp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "rdp");
         let rdp_data = gen_conn_raw_event();
         send_direct_stream(
@@ -2508,7 +2508,7 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_data, recv_data[20..]);
 
         // database rdp network event for the Time Series Generator
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_rdp_time = DateTime::now().timestamp_nanos();
         let rdp_data = insert_rdp_raw_event(
             &rdp_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2540,7 +2540,7 @@ async fn request_network_event_stream() {
         assert_eq!(rdp_data, recv_data);
 
         // direct rdp network event for the Time Series Generator
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_rdp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "rdp");
         let rdp_data = gen_rdp_raw_event();
         send_direct_stream(
@@ -2581,7 +2581,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
 
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_http_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "http");
         let http_data = gen_conn_raw_event();
 
@@ -2600,7 +2600,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(http_data, recv_data[20..]);
 
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_http_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "http");
         let http_data = gen_conn_raw_event();
 
@@ -2620,7 +2620,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_data, recv_data[20..]);
 
         // database http network event for the Time Series Generator
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_http_time = DateTime::now().timestamp_nanos();
         let http_data = insert_http_raw_event(
             &http_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2652,7 +2652,7 @@ async fn request_network_event_stream() {
         assert_eq!(http_data, recv_data);
 
         // direct http network event for the Time Series Generator
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_http_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "http");
         let http_data = gen_http_raw_event();
         send_direct_stream(
@@ -2693,7 +2693,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
 
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smtp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
@@ -2712,7 +2712,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smtp_data, recv_data[20..]);
 
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smtp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smtp");
         let smtp_data = gen_smtp_raw_event();
 
@@ -2732,7 +2732,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_data, recv_data[20..]);
 
         // database smtp network event for the Time Series Generator
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smtp_time = DateTime::now().timestamp_nanos();
         let smtp_data = insert_smtp_raw_event(
             &smtp_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2764,7 +2764,7 @@ async fn request_network_event_stream() {
         assert_eq!(smtp_data, recv_data);
 
         // direct smtp network event for the Time Series Generator
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smtp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smtp");
         let smtp_data = gen_smtp_raw_event();
         send_direct_stream(
@@ -2805,7 +2805,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
 
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ntlm_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
@@ -2824,7 +2824,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ntlm_data, recv_data[20..]);
 
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ntlm_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
 
@@ -2844,7 +2844,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_data, recv_data[20..]);
 
         // database ntlm network event for the Time Series Generator
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ntlm_time = DateTime::now().timestamp_nanos();
         let ntlm_data = insert_ntlm_raw_event(
             &ntlm_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2876,7 +2876,7 @@ async fn request_network_event_stream() {
         assert_eq!(ntlm_data, recv_data);
 
         // direct ntlm network event for the Time Series Generator
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ntlm_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ntlm");
         let ntlm_data = gen_ntlm_raw_event();
         send_direct_stream(
@@ -2917,7 +2917,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
 
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_kerberos_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
@@ -2936,7 +2936,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(kerberos_data, recv_data[20..]);
 
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_kerberos_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
 
@@ -2956,7 +2956,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_data, recv_data[20..]);
 
         // database kerberos network event for the Time Series Generator
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_kerberos_time = DateTime::now().timestamp_nanos();
         let kerberos_data = insert_kerberos_raw_event(
             &kerberos_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -2989,7 +2989,7 @@ async fn request_network_event_stream() {
         assert_eq!(kerberos_data, recv_data);
 
         // direct kerberos network event for the Time Series Generator
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_kerberos_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "kerberos");
         let kerberos_data = gen_kerberos_raw_event();
         send_direct_stream(
@@ -3031,7 +3031,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
 
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ssh_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
@@ -3050,7 +3050,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ssh_data, recv_data[20..]);
 
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ssh_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ssh");
         let ssh_data = gen_ssh_raw_event();
 
@@ -3070,7 +3070,7 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_data, recv_data[20..]);
 
         // database ssh network event for the Time Series Generator
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ssh_time = DateTime::now().timestamp_nanos();
         let ssh_data = insert_ssh_raw_event(
             &ssh_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3102,7 +3102,7 @@ async fn request_network_event_stream() {
         assert_eq!(ssh_data, recv_data);
 
         // direct ssh network event for the Time Series Generator
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ssh_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ssh");
         let ssh_data = gen_ssh_raw_event();
         send_direct_stream(
@@ -3144,7 +3144,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
 
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dce_rpc_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
@@ -3163,7 +3163,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dce_rpc_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
 
@@ -3183,7 +3183,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_data, recv_data[20..]);
 
         // database dce_rpc network event for the Time Series Generator
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dce_rpc_time = DateTime::now().timestamp_nanos();
         let dce_rpc_data = insert_dce_rpc_raw_event(
             &dce_rpc_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3216,7 +3216,7 @@ async fn request_network_event_stream() {
         assert_eq!(dce_rpc_data, recv_data);
 
         // direct dce_rpc network event for the Time Series Generator
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dce_rpc_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dce rpc");
         let dce_rpc_data = gen_dce_rpc_raw_event();
         send_direct_stream(
@@ -3258,7 +3258,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
 
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ftp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
@@ -3277,7 +3277,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ftp_data, recv_data[20..]);
 
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ftp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ftp");
         let ftp_data = gen_ftp_raw_event();
 
@@ -3297,7 +3297,7 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_data, recv_data[20..]);
 
         // database ftp network event for the Time Series Generator
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ftp_time = DateTime::now().timestamp_nanos();
         let ftp_data = insert_ftp_raw_event(
             &ftp_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3329,7 +3329,7 @@ async fn request_network_event_stream() {
         assert_eq!(ftp_data, recv_data);
 
         // direct ftp network event for the Time Series Generator
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ftp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ftp");
         let ftp_data = gen_ftp_raw_event();
         send_direct_stream(
@@ -3370,7 +3370,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
 
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_mqtt_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
@@ -3389,7 +3389,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(mqtt_data, recv_data[20..]);
 
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_mqtt_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
 
@@ -3409,7 +3409,7 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_data, recv_data[20..]);
 
         // database mqtt network event for the Time Series Generator
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_mqtt_time = DateTime::now().timestamp_nanos();
         let mqtt_data = insert_mqtt_raw_event(
             &mqtt_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3441,7 +3441,7 @@ async fn request_network_event_stream() {
         assert_eq!(mqtt_data, recv_data);
 
         // direct mqtt network event for the Time Series Generator
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_mqtt_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "mqtt");
         let mqtt_data = gen_mqtt_raw_event();
         send_direct_stream(
@@ -3482,7 +3482,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
 
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ldap_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
@@ -3501,7 +3501,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(ldap_data, recv_data[20..]);
 
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ldap_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ldap");
         let ldap_data = gen_ldap_raw_event();
 
@@ -3521,7 +3521,7 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_data, recv_data[20..]);
 
         // database ldap network event for the Time Series Generator
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ldap_time = DateTime::now().timestamp_nanos();
         let ldap_data = insert_ldap_raw_event(
             &ldap_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3553,7 +3553,7 @@ async fn request_network_event_stream() {
         assert_eq!(ldap_data, recv_data);
 
         // direct ldap network event for the Time Series Generator
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_ldap_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ldap");
         let ldap_data = gen_ldap_raw_event();
         send_direct_stream(
@@ -3594,7 +3594,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
 
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_tls_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "tls");
         let tls_data = gen_tls_raw_event();
 
@@ -3613,7 +3613,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(tls_data, recv_data[20..]);
 
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_tls_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "tls");
         let tls_data = gen_tls_raw_event();
 
@@ -3633,7 +3633,7 @@ async fn request_network_event_stream() {
         assert_eq!(tls_data, recv_data[20..]);
 
         // database tls network event for the Time Series Generator
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_tls_time = DateTime::now().timestamp_nanos();
         let tls_data = insert_tls_raw_event(
             &tls_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3665,7 +3665,7 @@ async fn request_network_event_stream() {
         assert_eq!(tls_data, recv_data);
 
         // direct tls network event for the Time Series Generator
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_tls_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "tls");
         let tls_data = gen_tls_raw_event();
         send_direct_stream(
@@ -3706,7 +3706,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
 
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smb_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smb");
         let smb_data = gen_smb_raw_event();
 
@@ -3725,7 +3725,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(smb_data, recv_data[20..]);
 
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smb_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smb");
         let smb_data = gen_smb_raw_event();
 
@@ -3745,7 +3745,7 @@ async fn request_network_event_stream() {
         assert_eq!(smb_data, recv_data[20..]);
 
         // database smb network event for the Time Series Generator
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smb_time = DateTime::now().timestamp_nanos();
         let smb_data = insert_smb_raw_event(
             &smb_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3777,7 +3777,7 @@ async fn request_network_event_stream() {
         assert_eq!(smb_data, recv_data);
 
         // direct smb network event for the Time Series Generator
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_smb_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smb");
         let smb_data = gen_smb_raw_event();
         send_direct_stream(
@@ -3818,7 +3818,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
 
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_nfs_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
@@ -3837,7 +3837,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(nfs_data, recv_data[20..]);
 
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_nfs_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "nfs");
         let nfs_data = gen_nfs_raw_event();
 
@@ -3857,7 +3857,7 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_data, recv_data[20..]);
 
         // database nfs network event for the Time Series Generator
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_nfs_time = DateTime::now().timestamp_nanos();
         let nfs_data = insert_nfs_raw_event(
             &nfs_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -3889,7 +3889,7 @@ async fn request_network_event_stream() {
         assert_eq!(nfs_data, recv_data);
 
         // direct nfs network event for the Time Series Generator
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_nfs_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "nfs");
         let nfs_data = gen_nfs_raw_event();
         send_direct_stream(
@@ -3930,7 +3930,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
 
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_bootp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
@@ -3949,7 +3949,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(bootp_data, recv_data[20..]);
 
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_bootp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "bootp");
         let bootp_data = gen_bootp_raw_event();
 
@@ -3969,7 +3969,7 @@ async fn request_network_event_stream() {
         assert_eq!(bootp_data, recv_data[20..]);
 
         // database bootp network event for the Time Series Generator
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_bootp_time = DateTime::now().timestamp_nanos();
         let bootp_data = insert_bootp_raw_event(
             &bootp_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -4002,7 +4002,7 @@ async fn request_network_event_stream() {
         assert_eq!(bootp_data, recv_data);
 
         // direct bootp network event for the Time Series Generator
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_bootp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "bootp");
         let bootp_data = gen_bootp_raw_event();
         send_direct_stream(
@@ -4044,7 +4044,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
 
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dhcp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
@@ -4063,7 +4063,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(dhcp_data, recv_data[20..]);
 
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dhcp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
 
@@ -4083,7 +4083,7 @@ async fn request_network_event_stream() {
         assert_eq!(dhcp_data, recv_data[20..]);
 
         // database dhcp network event for the Time Series Generator
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dhcp_time = DateTime::now().timestamp_nanos();
         let dhcp_data = insert_dhcp_raw_event(
             &dhcp_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -4115,7 +4115,7 @@ async fn request_network_event_stream() {
         assert_eq!(dhcp_data, recv_data);
 
         // direct dhcp network event for the Time Series Generator
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_dhcp_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dhcp");
         let dhcp_data = gen_dhcp_raw_event();
         send_direct_stream(
@@ -4157,7 +4157,7 @@ async fn request_network_event_stream() {
                 .unwrap();
         assert_eq!(radius_start_msg, NETWORK_STREAM_RADIUS);
 
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_radius_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "radius");
         let radius_data = gen_radius_raw_event();
 
@@ -4176,7 +4176,7 @@ async fn request_network_event_stream() {
             .unwrap();
         assert_eq!(radius_data, recv_data[20..]);
 
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_radius_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "radius");
         let radius_data = gen_radius_raw_event();
 
@@ -4196,7 +4196,7 @@ async fn request_network_event_stream() {
         assert_eq!(radius_data, recv_data[20..]);
 
         // database radius network event for the Time Series Generator
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_radius_time = DateTime::now().timestamp_nanos();
         let radius_data = insert_radius_raw_event(
             &radius_store,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
@@ -4229,7 +4229,7 @@ async fn request_network_event_stream() {
         assert_eq!(radius_data, recv_data);
 
         // direct radius network event for the Time Series Generator
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_radius_time = DateTime::now().timestamp_nanos();
         let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "radius");
         let radius_data = gen_radius_raw_event();
         send_direct_stream(
@@ -4479,7 +4479,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
         // prepare data in node2 database
         let conn_store = db.conn_store().unwrap();
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_conn_time = DateTime::now().timestamp_nanos();
         let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
             &conn_store,
             SENSOR,
@@ -4676,7 +4676,7 @@ async fn request_range_data_with_log_giganto_cluster() {
 
         // prepare data in node2 database
         let log_store = db.log_store().unwrap();
-        let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_log_time = DateTime::now().timestamp_nanos();
         let log_data = bincode::deserialize::<Log>(&insert_log_raw_event(
             &log_store,
             SENSOR,
@@ -4872,7 +4872,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
 
         // prepare data in node2 database
         let time_series_store = db.periodic_time_series_store().unwrap();
-        let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let send_time_series_time = DateTime::now().timestamp_nanos();
         let time_series_data =
             bincode::deserialize::<PeriodicTimeSeries>(&insert_periodic_time_series_raw_event(
                 &time_series_store,

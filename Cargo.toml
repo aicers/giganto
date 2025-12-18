@@ -66,7 +66,6 @@ async-graphql-poem = "7"
 jiff = { version = "0.2", features = ["serde"] }
 
 [dev-dependencies]
-chrono = { version = "0.4", features = ["serde"] }
 mockito = "1"
 regex = "1"
 serial_test = "3"
