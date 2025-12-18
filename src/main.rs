@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
             settings.config.visible.max_subcompactions,
-            settings.config.visible.compression,
+            settings.config.compression,
         );
         exit(0);
     }
@@ -176,13 +176,13 @@ async fn main() -> Result<()> {
             settings.config.visible.max_mb_of_level_base,
             settings.config.visible.num_of_thread,
             settings.config.visible.max_subcompactions,
-            settings.config.visible.compression,
+            settings.config.compression,
         );
 
         // Validate compression metadata before migration
         if let Err(e) = validate_compression_metadata(
             &settings.config.visible.data_dir,
-            settings.config.visible.compression,
+            settings.config.compression,
         ) {
             error!("Compression validation failed: {e}");
             bail!("compression validation failed")
