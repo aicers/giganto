@@ -243,11 +243,35 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
     use crate::graphql::DateTime;
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+
+    /// Helper function to create a UTC timestamp in nanoseconds from date/time components.
+    fn utc_to_nanos(year: i16, month: i8, day: i8, hour: i8, min: i8, sec: i8) -> i64 {
+        utc_to_nanos_with_subsec(year, month, day, hour, min, sec, 0)
+    }
+
+    /// Helper function to create a UTC timestamp with subsecond nanoseconds.
+    fn utc_to_nanos_with_subsec(
+        year: i16,
+        month: i8,
+        day: i8,
+        hour: i8,
+        min: i8,
+        sec: i8,
+        subsec_nanos: i32,
+    ) -> i64 {
+        jiff::civil::date(year, month, day)
+            .at(hour, min, sec, subsec_nanos)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .expect("valid datetime")
+            .timestamp()
+            .as_nanosecond()
+            .try_into()
+            .expect("timestamp fits in i64")
+    }
 
     #[tokio::test]
     async fn packets_empty() {
@@ -278,27 +302,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = DateTime::from_timestamp_nanos(
-            chrono::Utc
-                .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        let dt2 = DateTime::from_timestamp_nanos(
-            chrono::Utc
-                .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        let dt3 = DateTime::from_timestamp_nanos(
-            chrono::Utc
-                .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
+        let dt1 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 0));
+        let dt2 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 1));
+        let dt3 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 2));
 
         let ts1 = dt1.timestamp_nanos();
         let ts2 = dt2.timestamp_nanos();
@@ -391,30 +397,12 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = DateTime::from_timestamp_nanos(
-            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-                .unwrap()
-                .with_nanosecond(123_456_789)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        let dt2 = DateTime::from_timestamp_nanos(
-            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-                .unwrap()
-                .with_nanosecond(234_567_890)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        let dt3 = DateTime::from_timestamp_nanos(
-            Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-                .unwrap()
-                .with_nanosecond(345_678_901)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
+        let dt1 =
+            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 0, 123_456_789));
+        let dt2 =
+            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 1, 234_567_890));
+        let dt3 =
+            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 2, 345_678_901));
 
         let ts1 = dt1.timestamp_nanos();
         let ts2 = dt2.timestamp_nanos();
@@ -446,10 +434,10 @@ mod tests {
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -475,10 +463,10 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -504,10 +492,10 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -542,9 +530,11 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: chrono::NaiveDateTime) -> String {
-        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
-        let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+    fn convert_to_utc_timezone(timestamp: jiff::civil::DateTime) -> String {
+        // Convert to local timezone, then to UTC
+        let local_tz = jiff::tz::TimeZone::system();
+        let zoned = timestamp.to_zoned(local_tz).unwrap();
+        let utc = zoned.with_time_zone(jiff::tz::TimeZone::UTC);
+        utc.strftime("%Y-%m-%d %H:%M:%S%.6f UTC").to_string()
     }
 }
