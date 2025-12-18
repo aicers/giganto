@@ -75,6 +75,10 @@ pub struct Config {
 
     #[serde(flatten)]
     pub visible: ConfigVisible,
+
+    // RocksDB compression
+    #[serde(default)]
+    pub compression: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,14 +102,6 @@ pub struct ConfigVisible {
 
     // ack transmission interval
     pub ack_transmission: u16,
-
-    // RocksDB compression
-    #[serde(default = "default_compression")]
-    pub compression: bool,
-}
-
-fn default_compression() -> bool {
-    true
 }
 
 impl Settings {
@@ -129,6 +125,7 @@ impl Settings {
             addr_to_peers: self.config.addr_to_peers,
             peers: self.config.peers.clone(),
             visible: new_config.clone(),
+            compression: self.config.compression,
         };
 
         let toml_str = toml::to_string(&temp_config)?;
@@ -246,7 +243,9 @@ mod tests {
     use super::*;
 
     /// Helper function to create a temporary test config file
-    fn create_test_config() -> (
+    fn create_test_config(
+        compression: bool,
+    ) -> (
         tempfile::NamedTempFile,
         tempfile::TempDir,
         tempfile::TempDir,
@@ -273,9 +272,11 @@ max_mb_of_level_base = 512
 num_of_thread = 8
 max_subcompactions = 2
 ack_transmission = 1024
+compression = {}
 "#,
             data_dir.path().display(),
-            export_dir.path().display()
+            export_dir.path().display(),
+            compression
         );
 
         temp_file
@@ -295,7 +296,6 @@ ack_transmission = 1024
             num_of_thread: 8,
             max_subcompactions: 2,
             ack_transmission: 1024,
-            compression: true,
         };
 
         (temp_file, data_dir, export_dir, config_visible)
@@ -303,7 +303,7 @@ ack_transmission = 1024
 
     #[test]
     fn test_update_config_file_readonly_failure_preserves_state() {
-        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config();
+        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config(false);
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
@@ -325,7 +325,6 @@ ack_transmission = 1024
             num_of_thread: original_config.num_of_thread,
             max_subcompactions: original_config.max_subcompactions,
             ack_transmission: original_config.ack_transmission,
-            compression: original_config.compression,
         };
 
         // Make the file read-only to force a write failure
@@ -357,7 +356,7 @@ ack_transmission = 1024
 
     #[test]
     fn test_update_config_file_success_updates_both_memory_and_disk() {
-        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config();
+        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config(false);
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
@@ -376,7 +375,6 @@ ack_transmission = 1024
             num_of_thread: original_config.num_of_thread,
             max_subcompactions: original_config.max_subcompactions,
             ack_transmission: original_config.ack_transmission,
-            compression: original_config.compression,
         };
 
         // Update the config file, which should succeed
@@ -424,6 +422,53 @@ ack_transmission = 1024
         );
 
         // Clean up the backup file created during the test
+        fs::remove_file(backup_path).expect("Failed to remove backup file");
+    }
+
+    #[test]
+    fn test_update_config_file_preserves_compression_setting() {
+        let (temp_file, _data_dir, _export_dir, original_config) = create_test_config(true);
+        let config_path = temp_file.path().to_str().unwrap();
+
+        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+        assert!(
+            settings.config.compression,
+            "Compression should be loaded from the config file"
+        );
+
+        // Update a visible field and ensure compression stays intact
+        let new_config = ConfigVisible {
+            graphql_srv_addr: original_config.graphql_srv_addr,
+            ingest_srv_addr: "[::]:12345".parse().unwrap(),
+            publish_srv_addr: original_config.publish_srv_addr,
+            retention: original_config.retention,
+            data_dir: original_config.data_dir.clone(),
+            export_dir: original_config.export_dir.clone(),
+            max_open_files: original_config.max_open_files + 1,
+            max_mb_of_level_base: original_config.max_mb_of_level_base,
+            num_of_thread: original_config.num_of_thread,
+            max_subcompactions: original_config.max_subcompactions,
+            ack_transmission: original_config.ack_transmission,
+        };
+
+        settings
+            .update_config_file(&new_config)
+            .expect("Expected update_config_file to succeed");
+
+        assert!(
+            settings.config.compression,
+            "In-memory compression should be preserved after update"
+        );
+
+        let reloaded_settings =
+            Settings::from_file(config_path).expect("Failed to reload settings from disk");
+        assert!(
+            reloaded_settings.config.compression,
+            "Persisted compression should be preserved after update"
+        );
+
+        // Clean up the backup file created during the test
+        let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
         fs::remove_file(backup_path).expect("Failed to remove backup file");
     }
 }
