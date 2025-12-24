@@ -51,7 +51,10 @@ use crate::graphql::client::{
 use crate::{
     comm::ingest::implement::EventFilter,
     graphql::events_in_cluster,
-    storage::{BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey},
+    storage::{
+        BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey,
+        TimestampKeyExtractor,
+    },
 };
 
 const ADDRESS_PROTOCOL: [&str; 20] = [
@@ -1843,6 +1846,16 @@ impl KeyExtractor for ExportFilter {
     }
 }
 
+impl TimestampKeyExtractor for ExportFilter {
+    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+}
+
 impl RawEventFilter for ExportFilter {
     fn check(
         &self,
@@ -2005,7 +2018,7 @@ fn export_by_protocol(
         "kerberos" => spawn_export!(kerberos_store, process_export),
         "ssh" => spawn_export!(ssh_store, process_export),
         "dce rpc" => spawn_export!(dce_rpc_store, process_export),
-        "op_log" => spawn_export!(op_log_store, process_export),
+        "op_log" => spawn_export!(op_log_store, process_oplog_export),
         "ftp" => spawn_export!(ftp_store, process_export),
         "mqtt" => spawn_export!(mqtt_store, process_export),
         "ldap" => spawn_export!(ldap_store, process_export),
@@ -2064,6 +2077,33 @@ where
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
     export_file(
+        iter,
+        filter,
+        export_type,
+        export_done_path,
+        export_progress_path,
+    )
+}
+
+fn process_oplog_export(
+    store: &RawEventStore<'_, OpLog>,
+    filter: &(impl RawEventFilter + TimestampKeyExtractor),
+    export_type: &str,
+    export_done_path: &Path,
+    export_progress_path: &Path,
+) -> Result<String> {
+    // OpLog uses timestamp-prefix key format: [timestamp:8][sequence_number:8]
+    let key_builder = StorageKey::timestamp_builder();
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_start_key(filter.get_range_start_key().0)
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_start_key(filter.get_range_start_key().1)
+        .build();
+
+    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+    export_oplog_file(
         iter,
         filter,
         export_type,
@@ -2131,6 +2171,34 @@ where
         }
         let (key, value) = item.expect("not error value");
         write_filtered_data_to_file(filter, export_type, &key, &value, &mut writer)?;
+    }
+    if invalid_data_cnt > 1 {
+        warn!("Failed to read database or invalid data #{invalid_data_cnt}");
+    }
+    fs::rename(progress_path, done_path)?;
+    Ok(format!("export file success: {}", done_path.display()))
+}
+
+fn export_oplog_file<I>(
+    iter: I,
+    filter: &impl RawEventFilter,
+    export_type: &str,
+    done_path: &Path,
+    progress_path: &Path,
+) -> Result<String>
+where
+    I: Iterator<Item = anyhow::Result<(Box<[u8]>, OpLog)>> + Send,
+{
+    let mut writer = File::create(progress_path)?;
+    let mut invalid_data_cnt: u32 = 0;
+
+    for item in iter {
+        if item.is_err() {
+            invalid_data_cnt += 1;
+            continue;
+        }
+        let (key, value) = item.expect("not error value");
+        write_oplog_data_to_file(filter, export_type, &key, &value, &mut writer)?;
     }
     if invalid_data_cnt > 1 {
         warn!("Failed to read database or invalid data #{invalid_data_cnt}");
@@ -2265,6 +2333,46 @@ where
     Ok(())
 }
 
+fn write_oplog_data_to_file(
+    filter: &impl RawEventFilter,
+    export_type: &str,
+    key: &[u8],
+    value: &OpLog,
+    writer: &mut File,
+) -> Result<()> {
+    if let Ok(true) = filter.check(
+        value.orig_addr(),
+        value.resp_addr(),
+        value.orig_port(),
+        value.resp_port(),
+        value.log_level(),
+        value.log_contents(),
+        value.text(),
+        value.sensor(),
+        value.agent_id(),
+    ) {
+        let timestamp = parse_oplog_key(key)?;
+        let time = DateTime::from_timestamp_nanos(timestamp)
+            .format("%s%.9f")
+            .to_string();
+        // For OpLog, the sensor info is stored in the value itself
+        let sensor = &value.sensor;
+
+        match export_type {
+            "csv" => {
+                writeln!(writer, "{time}\t{sensor}\t{value}")?;
+            }
+            "json" => {
+                let json_data = value.convert_json_output(time, sensor.clone())?;
+                let json_data = serde_json::to_string(&json_data)?;
+                writeln!(writer, "{json_data}")?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
     if let Some(pos) = key.iter().position(|x| *x == 0)
         && let Some(s) = key.get(..pos)
@@ -2276,6 +2384,22 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
         }
     }
     Err(anyhow!("Invalid key"))
+}
+
+/// Parses an `OpLog` key which uses a timestamp-prefix format.
+///
+/// `OpLog` keys are structured as: `[timestamp:8 bytes][sequence_number:8 bytes]`
+/// where both values are big-endian encoded.
+fn parse_oplog_key(key: &[u8]) -> anyhow::Result<i64> {
+    const TIMESTAMP_SIZE: usize = 8;
+    if key.len() >= TIMESTAMP_SIZE {
+        let timestamp_bytes: [u8; TIMESTAMP_SIZE] = key[..TIMESTAMP_SIZE]
+            .try_into()
+            .map_err(|_| anyhow!("Invalid OpLog key: failed to extract timestamp"))?;
+        Ok(i64::from_be_bytes(timestamp_bytes))
+    } else {
+        Err(anyhow!("Invalid OpLog key: key too short"))
+    }
 }
 
 fn to_vec_string<T>(vec: &[T]) -> Vec<String>
