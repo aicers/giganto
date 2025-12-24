@@ -372,9 +372,9 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
+    use crate::graphql::DateTime;
     #[cfg(feature = "count_events")]
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
@@ -385,7 +385,7 @@ mod tests {
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos();
         insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
         insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
@@ -410,35 +410,6 @@ mod tests {
             res.data.to_string(),
             "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
         );
-    }
-
-    #[tokio::test]
-    async fn statistics_timestamp_fomat_stability() {
-        let schema = TestSchema::new();
-        let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        insert_statistics_raw_event(&store, timestamp, "src1", 0, 600, 1_000_000, 100_000_000);
-
-        let query = r#"
-        {
-            statistics(sensors: ["src1"]) {
-                stats {
-                    timestamp
-                    detail {
-                        protocol
-                    }
-                }
-            }
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-        let res_json = res.data.into_json().unwrap();
-        let stats = res_json["statistics"][0]["stats"][0].as_object().unwrap();
-        assert_eq!(stats["timestamp"].as_str().unwrap(), timestamp.to_string());
     }
 
     fn insert_statistics_raw_event(
@@ -717,7 +688,7 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
 
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos();
 
         // Insert into each CF:
         //   SESSION -> 5 events

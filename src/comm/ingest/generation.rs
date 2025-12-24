@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use chrono::{Datelike, Utc};
-
 pub struct SequenceGenerator {
     counter: AtomicUsize,
     last_reset_date: AtomicU32,
@@ -36,7 +34,7 @@ impl SequenceGenerator {
     }
 
     fn get_current_date_time() -> u32 {
-        let utc_now = Utc::now();
-        utc_now.day()
+        let utc_now = jiff::Zoned::now();
+        u32::try_from(utc_now.day()).expect("day is always 1-31")
     }
 }
