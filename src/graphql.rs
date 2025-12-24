@@ -186,6 +186,16 @@ pub fn schema(
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const A_BILLION: i64 = 1_000_000_000;
 
+/// Converts a nanosecond timestamp to seconds and sub-second nanoseconds.
+///
+/// Returns a tuple of `(seconds, subsec_nanos)` where:
+/// - `seconds` is the whole seconds portion
+/// - `subsec_nanos` is the remaining nanoseconds (0 to 999,999,999)
+#[inline]
+fn timestamp_to_sec_nsec(timestamp_ns: i64) -> (i64, i64) {
+    (timestamp_ns / A_BILLION, timestamp_ns % A_BILLION)
+}
+
 fn collect_exist_times<T>(
     target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
     filter: &SearchFilter,
@@ -737,13 +747,14 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
 
     for packet in packets {
         let len = u32::try_from(packet.packet.len()).unwrap_or_default();
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(packet.packet_timestamp);
         let header = PacketHeader {
             ts: timeval {
-                tv_sec: packet.packet_timestamp / A_BILLION,
+                tv_sec: seconds,
                 #[cfg(target_os = "macos")]
-                tv_usec: i32::try_from(packet.packet_timestamp & A_BILLION).unwrap_or_default(),
+                tv_usec: i32::try_from(subsec_nanos).unwrap_or_default(),
                 #[cfg(target_os = "linux")]
-                tv_usec: packet.packet_timestamp & A_BILLION,
+                tv_usec: subsec_nanos,
             },
             caplen: len,
             len,
@@ -1060,5 +1071,91 @@ mod tests {
         let json_str = r#""99999999999999999999""#;
         let result: Result<StringNumberU32, _> = serde_json::from_str(json_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn timestamp_to_sec_nsec_converts_correctly() {
+        use super::timestamp_to_sec_nsec;
+
+        // Test with a timestamp that has both seconds and nanoseconds
+        // 1_234_567_890_123_456_789 ns = 1_234_567_890 seconds + 123_456_789 nanoseconds
+        let timestamp = 1_234_567_890_123_456_789_i64;
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 1_234_567_890);
+        assert_eq!(subsec_nanos, 123_456_789);
+
+        // Verify roundtrip: seconds * 1_000_000_000 + subsec_nanos == original timestamp
+        assert_eq!(seconds * 1_000_000_000 + subsec_nanos, timestamp);
+    }
+
+    #[test]
+    fn timestamp_to_sec_nsec_handles_edge_cases() {
+        use super::timestamp_to_sec_nsec;
+
+        // Test with exactly one second (no sub-second portion)
+        let timestamp = 1_000_000_000_i64;
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 1);
+        assert_eq!(subsec_nanos, 0);
+
+        // Test with only nanoseconds (less than one second)
+        let timestamp = 500_000_000_i64; // 0.5 seconds
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 0);
+        assert_eq!(subsec_nanos, 500_000_000);
+
+        // Test with zero
+        let timestamp = 0_i64;
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 0);
+        assert_eq!(subsec_nanos, 0);
+
+        // Test with max nanoseconds before rolling over to next second
+        let timestamp = 999_999_999_i64;
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 0);
+        assert_eq!(subsec_nanos, 999_999_999);
+
+        // Test that subsec_nanos is always less than 1 billion
+        let timestamp = 5_999_999_999_i64; // 5.999999999 seconds
+        let (seconds, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(seconds, 5);
+        assert_eq!(subsec_nanos, 999_999_999);
+        assert!(subsec_nanos < 1_000_000_000);
+    }
+
+    #[test]
+    fn timestamp_to_sec_nsec_modulo_vs_bitwise_and() {
+        use super::timestamp_to_sec_nsec;
+
+        // This test demonstrates why modulo (%) is correct and bitwise AND (&) is wrong
+        // for extracting the sub-second nanosecond portion from a timestamp.
+        //
+        // Using 1_000_000_000 as both a divisor and a mask:
+        // - Modulo (%) gives the remainder: correct for extracting sub-second part
+        // - Bitwise AND (&) gives bits that match: INCORRECT for decimal values
+        //
+        // Example: 1_234_567_890_123_456_789 ns
+        // Correct (modulo): 123_456_789 ns
+        // Wrong (bitwise AND): would give a corrupted value
+
+        let timestamp = 1_234_567_890_123_456_789_i64;
+        let a_billion: i64 = 1_000_000_000;
+
+        // Correct calculation using modulo
+        let correct_nsec = timestamp % a_billion;
+        assert_eq!(correct_nsec, 123_456_789);
+
+        // Incorrect calculation using bitwise AND (the bug we fixed)
+        let wrong_nsec = timestamp & a_billion;
+        // This produces a different value because 1_000_000_000 in binary is
+        // 0b00111011_10011010_11001010_00000000, and bitwise AND with this
+        // does not correctly extract the decimal remainder.
+        assert_ne!(wrong_nsec, 123_456_789);
+        assert_ne!(correct_nsec, wrong_nsec);
+
+        // Verify our helper function uses the correct calculation
+        let (_, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
+        assert_eq!(subsec_nanos, correct_nsec);
     }
 }
