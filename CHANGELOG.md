@@ -12,6 +12,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   GraphQL API was using bitwise AND (`&`) instead of modulo (`%`) when
   reconstructing the nanosecond portion of packet timestamps, causing incorrect
   timestamp values in `tcpdump` output.
+- Fixed `OpLog` export API that was broken due to outdated DB key format usage.
+  The export implementation now uses the correct timestamp-prefix key format
+  (`[timestamp:8][sequence_number:8]`) instead of the old sensor-prefix format.
 
 ## [0.26.1] - 2025-12-18
 
