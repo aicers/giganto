@@ -2391,7 +2391,6 @@ fn parse_key(key: &[u8]) -> anyhow::Result<(Cow<'_, str>, i64)> {
 /// `OpLog` keys are structured as: `[timestamp:8 bytes][sequence_number:8 bytes]`
 /// where both values are big-endian encoded.
 fn parse_oplog_key(key: &[u8]) -> anyhow::Result<i64> {
-    const TIMESTAMP_SIZE: usize = 8;
     if key.len() >= TIMESTAMP_SIZE {
         let timestamp_bytes: [u8; TIMESTAMP_SIZE] = key[..TIMESTAMP_SIZE]
             .try_into()
