@@ -4,6 +4,15 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed sub-second timestamp corruption in pcap file generation. The `pcap`
+  GraphQL API was using bitwise AND (`&`) instead of modulo (`%`) when
+  reconstructing the nanosecond portion of packet timestamps, causing incorrect
+  timestamp values in `tcpdump` output.
+
 ## [0.26.1] - 2025-12-18
 
 ### Changed
@@ -893,6 +902,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.26.1...main
 [0.26.1]: https://github.com/aicers/giganto/compare/0.26.0...0.26.1
 [0.26.0]: https://github.com/aicers/giganto/compare/0.25.1...0.26.0
 [0.25.1]: https://github.com/aicers/giganto/compare/0.25.0...0.25.1

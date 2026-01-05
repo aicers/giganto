@@ -234,7 +234,7 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Utc};
+    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -362,9 +362,21 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = Utc
+            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
+            .unwrap()
+            .with_nanosecond(123_456_789)
+            .unwrap();
+        let dt2 = Utc
+            .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
+            .unwrap()
+            .with_nanosecond(234_567_890)
+            .unwrap();
+        let dt3 = Utc
+            .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
+            .unwrap()
+            .with_nanosecond(345_678_901)
+            .unwrap();
 
         let ts1 = dt1.timestamp_nanos_opt().unwrap();
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
@@ -384,7 +396,7 @@ mod tests {
             pcap(
                 filter: {
                     sensor: "src 1"
-                    requestTime: "2023-01-20T00:00:00Z"
+                    requestTime: "2023-01-20T00:00:00.123456789Z"
                 }
             ) {
                 parsedPcap
@@ -406,15 +418,15 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:01.404277 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.123456 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:01.234567 UTC");
 
         let query = r#"
         {
             pcap(
                 filter: {
                     sensor: "ingest src 1"
-                    requestTime: "2023-01-20T00:00:00Z"
+                    requestTime: "2023-01-20T00:00:00.123456789Z"
                 }
             ) {
                 parsedPcap
@@ -435,15 +447,15 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.123456 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:02.345678 UTC");
 
         let query = r#"
         {
             pcap(
                 filter: {
                     sensor: "src 1"
-                    requestTime: "2023-01-20T00:00:01Z"
+                    requestTime: "2023-01-20T00:00:01.234567890Z"
                 }
             ) {
                 parsedPcap
@@ -464,8 +476,8 @@ mod tests {
         let ts1 = convert_to_utc_timezone(timestamps[0]);
         let ts2 = convert_to_utc_timezone(timestamps[1]);
 
-        assert_eq!(ts1, "2023-01-20 00:00:00.412745 UTC");
-        assert_eq!(ts2, "2023-01-20 00:00:02.328237 UTC");
+        assert_eq!(ts1, "2023-01-20 00:00:00.123456 UTC");
+        assert_eq!(ts2, "2023-01-20 00:00:02.345678 UTC");
     }
 
     #[tokio::test]
