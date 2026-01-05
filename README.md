@@ -19,6 +19,13 @@ and real-time analytics.
 - High Performance: Giganto is designed to efficiently handle high volumes of
   data, ensuring optimal performance for AICE.
 
+## Build
+
+### Build Requirements
+
+- libpcap
+- Clang & LLVM: To build [rocksdb](https://crates.io/crates/rocksdb)
+
 ## Usage
 
 You can run Giganto by invoking the following command:
