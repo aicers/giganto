@@ -397,12 +397,33 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 =
-            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 0, 123_456_789));
-        let dt2 =
-            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 1, 234_567_890));
-        let dt3 =
-            DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(2023, 1, 20, 0, 0, 2, 345_678_901));
+        let dt1 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            0,
+            123_456_789,
+        ));
+        let dt2 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            1,
+            234_567_890,
+        ));
+        let dt3 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            2,
+            345_678_901,
+        ));
 
         let ts1 = dt1.timestamp_nanos();
         let ts2 = dt2.timestamp_nanos();
