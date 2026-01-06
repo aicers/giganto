@@ -30,7 +30,7 @@ const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
 #[command(version)]
 pub struct Args {
     /// Path to the local configuration TOML file.
-    #[arg(short, value_name = "CONFIG_PATH")]
+    #[arg(short, long, value_name = "CONFIG_PATH")]
     pub config: String,
 
     /// Path to the certificate file.
@@ -470,5 +470,138 @@ compression = {}
         // Clean up the backup file created during the test
         let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
         fs::remove_file(backup_path).expect("Failed to remove backup file");
+    }
+
+    #[test]
+    fn test_validate_config_visible_valid_data_dir() {
+        let data_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config = ConfigVisible {
+            graphql_srv_addr: "[::]:8443".parse().unwrap(),
+            ingest_srv_addr: "[::]:38370".parse().unwrap(),
+            publish_srv_addr: "[::]:38371".parse().unwrap(),
+            retention: Duration::from_secs(100),
+            data_dir: data_dir.path().to_path_buf(),
+            export_dir: export_dir.path().to_path_buf(),
+            max_open_files: 8000,
+            max_mb_of_level_base: 512,
+            num_of_thread: 8,
+            max_subcompactions: 2,
+            ack_transmission: 1024,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_visible_invalid_data_dir() {
+        let export_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config = ConfigVisible {
+            graphql_srv_addr: "[::]:8443".parse().unwrap(),
+            ingest_srv_addr: "[::]:38370".parse().unwrap(),
+            publish_srv_addr: "[::]:38371".parse().unwrap(),
+            retention: Duration::from_secs(100),
+            data_dir: PathBuf::from("/non/existent/path"),
+            export_dir: export_dir.path().to_path_buf(),
+            max_open_files: 8000,
+            max_mb_of_level_base: 512,
+            num_of_thread: 8,
+            max_subcompactions: 2,
+            ack_transmission: 1024,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_deserialize_socket_addr_valid() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_socket_addr")]
+            addr: SocketAddr,
+        }
+
+        let toml_str = r#"addr = "127.0.0.1:8080""#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(
+            wrapper.addr,
+            "127.0.0.1:8080".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_deserialize_socket_addr_invalid() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_socket_addr", rename = "addr")]
+            _addr: SocketAddr,
+        }
+
+        let toml_str = r#"addr = "invalid_addr""#;
+        let result: Result<Wrapper, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_valid() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr")]
+            addr: Option<SocketAddr>,
+        }
+
+        let toml_str = r#"addr = "127.0.0.1:38383""#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(
+            wrapper.addr,
+            Some("127.0.0.1:38383".parse::<SocketAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_none() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr")]
+            addr: Option<SocketAddr>,
+        }
+
+        // Test with default invalid address
+        let toml_str = format!(r#"addr = "{DEFAULT_INVALID_ADDR_TO_PEERS}""#);
+        let wrapper: Wrapper = toml::from_str(&toml_str).expect("Failed to deserialize");
+        assert_eq!(wrapper.addr, None);
+
+        // Test with empty string
+        let toml_str = r#"addr = """#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(wrapper.addr, None);
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_invalid() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr", rename = "addr")]
+            _addr: Option<SocketAddr>,
+        }
+
+        let toml_str = r#"addr = "invalid_addr""#;
+        let result: Result<Wrapper, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_settings_from_nonexistent_file() {
+        let result = Settings::from_file("/non/existent/config.toml");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_settings_from_malformed_file() {
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("Failed to create temp file");
+        writeln!(temp_file, "invalid_toml_content").expect("Failed to write to temp file");
+        let result = Settings::from_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
     }
 }

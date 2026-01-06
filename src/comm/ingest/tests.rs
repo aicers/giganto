@@ -12,7 +12,7 @@ use chrono::{Duration, TimeZone, Utc};
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
-    frame::{recv_bytes, send_raw},
+    frame::{recv_bytes, send_bytes, send_raw},
     ingest::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
@@ -88,7 +88,7 @@ impl TestClient {
     }
 }
 
-fn server() -> Server {
+fn load_test_certs() -> Arc<Certs> {
     let cert_pem = fs::read(CERT_PATH).unwrap();
     let cert = to_cert_chain(&cert_pem).unwrap();
     let key_pem = fs::read(KEY_PATH).unwrap();
@@ -96,16 +96,48 @@ fn server() -> Server {
     let ca_cert_path = vec![CA_CERT_PATH.to_string()];
     let root = to_root_cert(&ca_cert_path).unwrap();
 
-    let certs = Arc::new(Certs {
+    Arc::new(Certs {
         certs: cert,
         key,
         root,
-    });
+    })
+}
 
+fn server() -> Server {
+    let certs = load_test_certs();
     Server::new(
         SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
         &certs,
     )
+}
+
+fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sensors = new_pcap_sensors();
+    let ingest_sensors = new_ingest_sensors(&db);
+    let runtime_ingest_sensors = new_runtime_ingest_sensors();
+    let stream_direct_channels = new_stream_direct_channels();
+    tokio::spawn(server().run(
+        db,
+        pcap_sensors,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        stream_direct_channels,
+        Arc::new(Notify::new()),
+        Some(Arc::new(Notify::new())),
+        1024_u16,
+    ))
+}
+
+async fn send_events<T: Serialize>(
+    send: &mut quinn::SendStream,
+    timestamp: i64,
+    msg: T,
+) -> anyhow::Result<()> {
+    let msg_buf = bincode::serialize(&msg)?;
+    let buf = bincode::serialize(&vec![(timestamp, msg_buf)])?;
+    send_raw(send, &buf).await?;
+    Ok(())
 }
 
 fn init_client() -> Endpoint {
@@ -152,32 +184,153 @@ fn init_client() -> Endpoint {
     endpoint
 }
 
+fn ip(addr: &str) -> IpAddr {
+    addr.parse().unwrap()
+}
+
+fn default_start_time() -> i64 {
+    Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
+fn now_ts() -> i64 {
+    Utc::now().timestamp_nanos_opt().unwrap()
+}
+
+// Common test data constants
+mod test_constants {
+    pub const TEST_ORIG_ADDR: &str = "192.168.4.76";
+    pub const TEST_ORIG_PORT: u16 = 46378;
+    pub const TEST_RESP_ADDR: &str = "31.3.245.133";
+    pub const TEST_RESP_PORT: u16 = 80;
+    pub const TEST_PROTO: u8 = 17;
+    pub const TEST_DURATION: i64 = 1_000_000_000;
+    pub const TEST_ORIG_PKTS: u64 = 1;
+    pub const TEST_RESP_PKTS: u64 = 1;
+    pub const TEST_ORIG_L2_BYTES: u64 = 100;
+    pub const TEST_RESP_L2_BYTES: u64 = 200;
+}
+
+// Helper to create common network fields
+struct NetworkEventBase {
+    orig_addr: IpAddr,
+    orig_port: u16,
+    resp_addr: IpAddr,
+    resp_port: u16,
+    proto: u8,
+    start_time: i64,
+    duration: i64,
+    orig_pkts: u64,
+    resp_pkts: u64,
+    orig_l2_bytes: u64,
+    resp_l2_bytes: u64,
+}
+
+impl Default for NetworkEventBase {
+    fn default() -> Self {
+        Self {
+            orig_addr: ip(test_constants::TEST_ORIG_ADDR),
+            orig_port: test_constants::TEST_ORIG_PORT,
+            resp_addr: ip(test_constants::TEST_RESP_ADDR),
+            resp_port: test_constants::TEST_RESP_PORT,
+            proto: test_constants::TEST_PROTO,
+            start_time: default_start_time(),
+            duration: test_constants::TEST_DURATION,
+            orig_pkts: test_constants::TEST_ORIG_PKTS,
+            resp_pkts: test_constants::TEST_RESP_PKTS,
+            orig_l2_bytes: test_constants::TEST_ORIG_L2_BYTES,
+            resp_l2_bytes: test_constants::TEST_RESP_L2_BYTES,
+        }
+    }
+}
+
+struct TestHarness {
+    _lock: tokio::sync::MutexGuard<'static, u32>,
+    _db_dir: TempDir,
+    client: TestClient,
+}
+
+impl TestHarness {
+    async fn new() -> Self {
+        init_crypto();
+        let lock = get_token().lock().await;
+        let db_dir = tempfile::tempdir().unwrap();
+        run_server(&db_dir);
+        let client = TestClient::new().await;
+        Self {
+            _lock: lock,
+            _db_dir: db_dir,
+            client,
+        }
+    }
+
+    async fn open_bi(&self) -> (quinn::SendStream, quinn::RecvStream) {
+        self.client
+            .conn
+            .open_bi()
+            .await
+            .expect("failed to open stream")
+    }
+
+    async fn shutdown(self, reason: &[u8]) {
+        self.client.conn.close(0u32.into(), reason);
+        self.client.endpoint.wait_idle().await;
+    }
+}
+
+async fn run_single_event_test<T: Serialize>(kind: RawEventKind, body: T, close_reason: &[u8]) {
+    let harness = TestHarness::new().await;
+    let (mut send, _) = harness.open_bi().await;
+    send_record(&mut send, kind, now_ts(), body).await.unwrap();
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(close_reason).await;
+}
+
+async fn send_record<T: Serialize>(
+    send: &mut quinn::SendStream,
+    kind: RawEventKind,
+    timestamp: i64,
+    msg: T,
+) -> anyhow::Result<()> {
+    send_record_header(send, kind).await?;
+    send_events(send, timestamp, msg).await
+}
+
+// Macro to generate simple network event tests with common fields
+macro_rules! simple_network_event_test {
+    ($test_name:ident, $event_kind:ident, $event_type:ty, $body:expr) => {
+        #[tokio::test]
+        async fn $test_name() {
+            let base = NetworkEventBase::default();
+            let body: $event_type = {
+                let build = $body;
+                build(base)
+            };
+            run_single_event_test(
+                RawEventKind::$event_kind,
+                body,
+                concat!(stringify!($test_name), "_done").as_bytes(),
+            )
+            .await;
+        }
+    };
+}
+
 #[tokio::test]
 async fn conn() {
-    init_crypto();
     const RAW_EVENT_KIND_CONN: RawEventKind = RawEventKind::Conn;
-
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_conn, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let tmp_dur = Duration::nanoseconds(12345);
     let conn_body = Conn {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: tmp_dur.num_nanoseconds().unwrap(),
         service: "-".to_string(),
         orig_bytes: 77,
@@ -188,46 +341,20 @@ async fn conn() {
         resp_l2_bytes: 27889,
     };
 
-    send_record_header(&mut send_conn, RAW_EVENT_KIND_CONN)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_conn,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        conn_body,
-    )
-    .await
-    .unwrap();
-
-    send_conn.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"conn_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_CONN, conn_body, b"conn_done").await;
 }
 
 #[tokio::test]
 async fn dns() {
-    init_crypto();
     const RAW_EVENT_KIND_DNS: RawEventKind = RawEventKind::Dns;
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_dns, _) = client.conn.open_bi().await.expect("failed to open stream");
-
     let dns_body = Dns {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000, // 1 second in nanoseconds
         orig_pkts: 1,
         resp_pkts: 1,
@@ -247,79 +374,66 @@ async fn dns() {
         ttl: vec![1; 5],
     };
 
-    send_record_header(&mut send_dns, RAW_EVENT_KIND_DNS)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_dns,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dns_body,
-    )
-    .await
-    .unwrap();
+    run_single_event_test(RAW_EVENT_KIND_DNS, dns_body, b"dns_done").await;
+}
 
-    send_dns.finish().expect("failed to shutdown stream");
+#[tokio::test]
+async fn malformed_dns() {
+    use giganto_client::ingest::network::MalformedDns;
+    const RAW_EVENT_KIND_MALFORMED_DNS: RawEventKind = RawEventKind::MalformedDns;
 
-    client.conn.close(0u32.into(), b"dns_done");
-    client.endpoint.wait_idle().await;
+    let body = MalformedDns {
+        orig_addr: ip("192.168.1.1"),
+        orig_port: 1234,
+        resp_addr: ip("192.168.1.2"),
+        resp_port: 53,
+        proto: 17,
+        start_time: 1000,
+        trans_id: 0,
+        flags: 0,
+        additional_count: 0,
+        answer_count: 0,
+        authority_count: 0,
+        query_count: 0,
+        resp_count: 0,
+        query_bytes: 0,
+        resp_bytes: 0,
+        duration: 0,
+        query_body: vec![],
+        resp_body: vec![],
+        question_count: 0,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 100,
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_MALFORMED_DNS, body, b"done").await;
 }
 
 #[tokio::test]
 async fn log() {
-    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
-
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let log_body = Log {
         kind: String::from("Hello"),
         log: base64_engine.decode("aGVsbG8gd29ybGQ=").unwrap(),
     };
 
-    send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        log_body,
-    )
-    .await
-    .unwrap();
-
-    send_log.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"log_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_LOG, log_body, b"log_done").await;
 }
 
 #[tokio::test]
 async fn http() {
-    init_crypto();
     const RAW_EVENT_KIND_HTTP: RawEventKind = RawEventKind::Http;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_http, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let http_body = Http {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -347,131 +461,52 @@ async fn http() {
         state: String::new(),
     };
 
-    send_record_header(&mut send_http, RAW_EVENT_KIND_HTTP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_http,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        http_body,
-    )
-    .await
-    .unwrap();
-
-    send_http.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"http_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_HTTP, http_body, b"http_done").await;
 }
 
-#[tokio::test]
-async fn rdp() {
-    init_crypto();
-    const RAW_EVENT_KIND_RDP: RawEventKind = RawEventKind::Rdp;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_rdp, _) = client.conn.open_bi().await.expect("failed to open stream");
-
-    let rdp_body = Rdp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_port: 80,
-        proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-        duration: 1_000_000_000,
-        orig_pkts: 1,
-        resp_pkts: 1,
-        orig_l2_bytes: 100,
-        resp_l2_bytes: 200,
-        cookie: "rdp_test".to_string(),
-    };
-
-    send_record_header(&mut send_rdp, RAW_EVENT_KIND_RDP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_rdp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        rdp_body,
-    )
-    .await
-    .unwrap();
-
-    send_rdp.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"log_done");
-    client.endpoint.wait_idle().await;
-}
+simple_network_event_test!(rdp, Rdp, Rdp, |base: NetworkEventBase| Rdp {
+    orig_addr: base.orig_addr,
+    orig_port: base.orig_port,
+    resp_addr: base.resp_addr,
+    resp_port: base.resp_port,
+    proto: base.proto,
+    start_time: base.start_time,
+    duration: base.duration,
+    orig_pkts: base.orig_pkts,
+    resp_pkts: base.resp_pkts,
+    orig_l2_bytes: base.orig_l2_bytes,
+    resp_l2_bytes: base.resp_l2_bytes,
+    cookie: "rdp_test".to_string(),
+});
 
 #[tokio::test]
 async fn periodic_time_series() {
-    init_crypto();
     const RAW_EVENT_KIND_PERIOD_TIME_SERIES: RawEventKind = RawEventKind::PeriodicTimeSeries;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_periodic_time_series, _) =
-        client.conn.open_bi().await.expect("failed to open stream");
 
     let periodic_time_series_body = PeriodicTimeSeries {
         id: String::from("model_one"),
         data: vec![1.1, 2.2, 3.3, 4.4, 5.5, 6.6],
     };
 
-    send_record_header(
-        &mut send_periodic_time_series,
+    run_single_event_test(
         RAW_EVENT_KIND_PERIOD_TIME_SERIES,
-    )
-    .await
-    .unwrap();
-    send_events(
-        &mut send_periodic_time_series,
-        Utc::now().timestamp_nanos_opt().unwrap(),
         periodic_time_series_body,
+        b"periodic_time_series_done",
     )
-    .await
-    .unwrap();
-
-    send_periodic_time_series
-        .finish()
-        .expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"periodic_time_series_done");
-    client.endpoint.wait_idle().await;
+    .await;
 }
 
 #[tokio::test]
 async fn smtp() {
-    init_crypto();
     const RAW_EVENT_KIND_SMTP: RawEventKind = RawEventKind::Smtp;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_smtp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let smtp_body = Smtp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -486,45 +521,20 @@ async fn smtp() {
         state: String::new(),
     };
 
-    send_record_header(&mut send_smtp, RAW_EVENT_KIND_SMTP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_smtp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smtp_body,
-    )
-    .await
-    .unwrap();
-
-    send_smtp.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"smtp_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_SMTP, smtp_body, b"smtp_done").await;
 }
 
 #[tokio::test]
 async fn ntlm() {
-    init_crypto();
     const RAW_EVENT_KIND_NTLM: RawEventKind = RawEventKind::Ntlm;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_ntlm, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let ntlm_body = Ntlm {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -537,45 +547,20 @@ async fn ntlm() {
         protocol: "protocol".to_string(),
     };
 
-    send_record_header(&mut send_ntlm, RAW_EVENT_KIND_NTLM)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_ntlm,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ntlm_body,
-    )
-    .await
-    .unwrap();
-
-    send_ntlm.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"ntlm_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_NTLM, ntlm_body, b"ntlm_done").await;
 }
 
 #[tokio::test]
 async fn kerberos() {
-    init_crypto();
     const RAW_EVENT_KIND_KERBEROS: RawEventKind = RawEventKind::Kerberos;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_kerberos, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let kerberos_body = Kerberos {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -592,45 +577,20 @@ async fn kerberos() {
         service_name: vec!["service_name".to_string()],
     };
 
-    send_record_header(&mut send_kerberos, RAW_EVENT_KIND_KERBEROS)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_kerberos,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        kerberos_body,
-    )
-    .await
-    .unwrap();
-
-    send_kerberos.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"kerberos_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_KERBEROS, kerberos_body, b"kerberos_done").await;
 }
 
 #[tokio::test]
 async fn ssh() {
-    init_crypto();
     const RAW_EVENT_KIND_SSH: RawEventKind = RawEventKind::Ssh;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_ssh, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let ssh_body = Ssh {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -651,45 +611,20 @@ async fn ssh() {
         server_shka: "server_shka".to_string(),
     };
 
-    send_record_header(&mut send_ssh, RAW_EVENT_KIND_SSH)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_ssh,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ssh_body,
-    )
-    .await
-    .unwrap();
-
-    send_ssh.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"ssh_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_SSH, ssh_body, b"ssh_done").await;
 }
 
 #[tokio::test]
 async fn dce_rpc() {
-    init_crypto();
     const RAW_EVENT_KIND_DCE_RPC: RawEventKind = RawEventKind::DceRpc;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_dce_rpc, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let dce_rpc_body = DceRpc {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("192.168.4.76"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -701,34 +636,30 @@ async fn dce_rpc() {
         operation: "operation".to_string(),
     };
 
-    send_record_header(&mut send_dce_rpc, RAW_EVENT_KIND_DCE_RPC)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_dce_rpc,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dce_rpc_body,
+    run_single_event_test(RAW_EVENT_KIND_DCE_RPC, dce_rpc_body, b"dce_rpc_done").await;
+}
+
+#[tokio::test]
+async fn statistics() {
+    const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;
+
+    let statistics_body = Statistics {
+        core: 1,
+        period: 600,
+        stats: vec![(RAW_EVENT_KIND_STATISTICS, 1000, 10_001_000)],
+    };
+
+    run_single_event_test(
+        RAW_EVENT_KIND_STATISTICS,
+        statistics_body,
+        b"statistics_done",
     )
-    .await
-    .unwrap();
-
-    send_dce_rpc.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"dce_rpc_done");
-    client.endpoint.wait_idle().await;
+    .await;
 }
 
 #[tokio::test]
 async fn op_log() {
-    init_crypto();
     const RAW_EVENT_KIND_OPLOG: RawEventKind = RawEventKind::OpLog;
-
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_op_log, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let op_log_body = OpLog {
         sensor: String::new(),
@@ -737,80 +668,33 @@ async fn op_log() {
         contents: "op_log".to_string(),
     };
 
-    send_record_header(&mut send_op_log, RAW_EVENT_KIND_OPLOG)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_op_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        op_log_body,
-    )
-    .await
-    .unwrap();
-
-    send_op_log.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"oplog_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_OPLOG, op_log_body, b"oplog_done").await;
 }
 
 #[tokio::test]
 async fn packet() {
-    init_crypto();
     const RAW_EVENT_KIND_PACKET: RawEventKind = RawEventKind::Packet;
-
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_packet, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let packet: Vec<u8> = vec![0, 1, 0, 1, 0, 1];
     let packet_body = Packet {
-        packet_timestamp: Utc::now().timestamp_nanos_opt().unwrap(),
+        packet_timestamp: now_ts(),
         packet,
     };
 
-    send_record_header(&mut send_packet, RAW_EVENT_KIND_PACKET)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_packet,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        packet_body,
-    )
-    .await
-    .unwrap();
-
-    send_packet.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"packet_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_PACKET, packet_body, b"packet_done").await;
 }
 
 #[tokio::test]
 async fn ftp() {
-    init_crypto();
     const RAW_EVENT_KIND_FTP: RawEventKind = RawEventKind::Ftp;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_ftp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let ftp_body = Ftp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -823,8 +707,8 @@ async fn ftp() {
             reply_code: "500".to_string(),
             reply_msg: "reply_message".to_string(),
             data_passive: false,
-            data_orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-            data_resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+            data_orig_addr: ip("192.168.4.76"),
+            data_resp_addr: ip("31.3.245.133"),
             data_resp_port: 80,
             file: "ftp_file".to_string(),
             file_size: 100,
@@ -832,45 +716,20 @@ async fn ftp() {
         }],
     };
 
-    send_record_header(&mut send_ftp, RAW_EVENT_KIND_FTP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_ftp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ftp_body,
-    )
-    .await
-    .unwrap();
-
-    send_ftp.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"ftp_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_FTP, ftp_body, b"ftp_done").await;
 }
 
 #[tokio::test]
 async fn mqtt() {
-    init_crypto();
     const RAW_EVENT_KIND_MQTT: RawEventKind = RawEventKind::Mqtt;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_mqtt, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let mqtt_body = Mqtt {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -884,45 +743,20 @@ async fn mqtt() {
         suback_reason: vec![1],
     };
 
-    send_record_header(&mut send_mqtt, RAW_EVENT_KIND_MQTT)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_mqtt,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        mqtt_body,
-    )
-    .await
-    .unwrap();
-
-    send_mqtt.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"mqtt_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_MQTT, mqtt_body, b"mqtt_done").await;
 }
 
 #[tokio::test]
 async fn ldap() {
-    init_crypto();
     const RAW_EVENT_KIND_LDAP: RawEventKind = RawEventKind::Ldap;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_ldap, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let ldap_body = Ldap {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -937,45 +771,20 @@ async fn ldap() {
         argument: Vec::new(),
     };
 
-    send_record_header(&mut send_ldap, RAW_EVENT_KIND_LDAP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_ldap,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        ldap_body,
-    )
-    .await
-    .unwrap();
-
-    send_ldap.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"ldap_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_LDAP, ldap_body, b"ldap_done").await;
 }
 
 #[tokio::test]
 async fn tls() {
-    init_crypto();
     const RAW_EVENT_KIND_TLS: RawEventKind = RawEventKind::Tls;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_tls, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let tls_body = Tls {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1004,45 +813,20 @@ async fn tls() {
         last_alert: 13,
     };
 
-    send_record_header(&mut send_tls, RAW_EVENT_KIND_TLS)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_tls,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        tls_body,
-    )
-    .await
-    .unwrap();
-
-    send_tls.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"tls_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_TLS, tls_body, b"tls_done").await;
 }
 
 #[tokio::test]
 async fn smb() {
-    init_crypto();
     const RAW_EVENT_KIND_SMB: RawEventKind = RawEventKind::Smb;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_smb, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let smb_body = Smb {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1061,45 +845,20 @@ async fn smb() {
         change_time: 20_000_000,
     };
 
-    send_record_header(&mut send_smb, RAW_EVENT_KIND_SMB)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_smb,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        smb_body,
-    )
-    .await
-    .unwrap();
-
-    send_smb.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"smb_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_SMB, smb_body, b"smb_done").await;
 }
 
 #[tokio::test]
 async fn nfs() {
-    init_crypto();
     const RAW_EVENT_KIND_NFS: RawEventKind = RawEventKind::Nfs;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_nfs, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let nfs_body = Nfs {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1109,45 +868,20 @@ async fn nfs() {
         write_files: vec![],
     };
 
-    send_record_header(&mut send_nfs, RAW_EVENT_KIND_NFS)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_nfs,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        nfs_body,
-    )
-    .await
-    .unwrap();
-
-    send_nfs.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"nfs_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_NFS, nfs_body, b"nfs_done").await;
 }
 
 #[tokio::test]
 async fn bootp() {
-    init_crypto();
     const RAW_EVENT_KIND_BOOTP: RawEventKind = RawEventKind::Bootp;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_bootp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let bootp_body = Bootp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1157,76 +891,45 @@ async fn bootp() {
         htype: 0,
         hops: 0,
         xid: 0,
-        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
-        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
-        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
-        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
+        ciaddr: ip("192.168.4.1"),
+        yiaddr: ip("192.168.4.2"),
+        siaddr: ip("192.168.4.3"),
+        giaddr: ip("192.168.4.4"),
         chaddr: vec![0, 1, 2],
         sname: "sname".to_string(),
         file: "file".to_string(),
     };
 
-    send_record_header(&mut send_bootp, RAW_EVENT_KIND_BOOTP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_bootp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        bootp_body,
-    )
-    .await
-    .unwrap();
-
-    send_bootp.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"bootp_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_BOOTP, bootp_body, b"bootp_done").await;
 }
 
 #[tokio::test]
 async fn dhcp() {
-    init_crypto();
     const RAW_EVENT_KIND_DHCP: RawEventKind = RawEventKind::Dhcp;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_dhcp, _) = client.conn.open_bi().await.expect("failed to open stream");
 
     let dhcp_body = Dhcp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        orig_addr: ip("192.168.4.76"),
         orig_port: 46378,
-        resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
+        resp_addr: ip("31.3.245.133"),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: default_start_time(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
         orig_l2_bytes: 100,
         resp_l2_bytes: 200,
         msg_type: 0,
-        ciaddr: "192.168.4.1".parse::<IpAddr>().unwrap(),
-        yiaddr: "192.168.4.2".parse::<IpAddr>().unwrap(),
-        siaddr: "192.168.4.3".parse::<IpAddr>().unwrap(),
-        giaddr: "192.168.4.4".parse::<IpAddr>().unwrap(),
-        subnet_mask: "192.168.4.5".parse::<IpAddr>().unwrap(),
-        router: vec![
-            "192.168.1.11".parse::<IpAddr>().unwrap(),
-            "192.168.1.22".parse::<IpAddr>().unwrap(),
-        ],
-        domain_name_server: vec![
-            "192.168.1.33".parse::<IpAddr>().unwrap(),
-            "192.168.1.44".parse::<IpAddr>().unwrap(),
-        ],
-        req_ip_addr: "192.168.4.6".parse::<IpAddr>().unwrap(),
+        ciaddr: ip("192.168.4.1"),
+        yiaddr: ip("192.168.4.2"),
+        siaddr: ip("192.168.4.3"),
+        giaddr: ip("192.168.4.4"),
+        subnet_mask: ip("192.168.4.5"),
+        router: vec![ip("192.168.1.11"), ip("192.168.1.22")],
+        domain_name_server: vec![ip("192.168.1.33"), ip("192.168.1.44")],
+        req_ip_addr: ip("192.168.4.6"),
         lease_time: 1,
-        server_id: "192.168.4.7".parse::<IpAddr>().unwrap(),
+        server_id: ip("192.168.4.7"),
         param_req_list: vec![0, 1, 2],
         message: "message".to_string(),
         renewal_time: 1,
@@ -1236,67 +939,430 @@ async fn dhcp() {
         client_id: vec![0, 1, 2],
     };
 
-    send_record_header(&mut send_dhcp, RAW_EVENT_KIND_DHCP)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_dhcp,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        dhcp_body,
-    )
-    .await
-    .unwrap();
-
-    send_dhcp.finish().expect("failed to shutdown stream");
-
-    client.conn.close(0u32.into(), b"dhcp_done");
-    client.endpoint.wait_idle().await;
+    run_single_event_test(RAW_EVENT_KIND_DHCP, dhcp_body, b"dhcp_done").await;
 }
+
 #[tokio::test]
-async fn statistics() {
-    init_crypto();
-    const RAW_EVENT_KIND_STATISTICS: RawEventKind = RawEventKind::Statistics;
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
+async fn radius() {
+    use giganto_client::ingest::network::Radius;
+    const RAW_EVENT_KIND_RADIUS: RawEventKind = RawEventKind::Radius;
 
-    let client = TestClient::new().await;
-    let (mut send_statistics, _) = client.conn.open_bi().await.expect("failed to open stream");
-
-    let statistics_body = Statistics {
-        core: 1,
-        period: 600,
-        stats: vec![(RAW_EVENT_KIND_STATISTICS, 1000, 10_001_000)],
+    let body = Radius {
+        orig_addr: ip("192.168.1.1"),
+        orig_port: 1234,
+        resp_addr: ip("192.168.1.2"),
+        resp_port: 1812,
+        proto: 17,
+        start_time: 1000,
+        code: 1,
+        id: 1,
+        auth: "auth".to_string(),
+        chap_passwd: "pass".as_bytes().to_vec(),
+        user_name: "user".as_bytes().to_vec(),
+        nas_ip: ip("192.168.1.3"),
+        nas_port: 123,
+        nas_id: "nas".as_bytes().to_vec(),
+        nas_port_type: 1,
+        message: "msg".to_string(),
+        state: vec![],
+        resp_code: 2,
+        resp_auth: "resp_auth".to_string(),
+        user_passwd: "user_pass".as_bytes().to_vec(),
+        duration: 0,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 100,
     };
 
-    send_record_header(&mut send_statistics, RAW_EVENT_KIND_STATISTICS)
-        .await
-        .unwrap();
-    send_events(
-        &mut send_statistics,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        statistics_body,
-    )
-    .await
-    .unwrap();
+    run_single_event_test(RAW_EVENT_KIND_RADIUS, body, b"done").await;
+}
 
-    send_statistics.finish().expect("failed to shutdown stream");
+#[tokio::test]
+async fn process_create() {
+    use giganto_client::ingest::sysmon::ProcessCreate;
+    const RAW_EVENT_KIND_PROCESS_CREATE: RawEventKind = RawEventKind::ProcessCreate;
 
-    client.conn.close(0u32.into(), b"statistics_done");
-    client.endpoint.wait_idle().await;
+    let body = ProcessCreate {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        file_version: "1.0".to_string(),
+        description: "desc".to_string(),
+        product: "product".to_string(),
+        company: "company".to_string(),
+        original_file_name: "orig".to_string(),
+        command_line: "cmd".to_string(),
+        current_directory: "dir".to_string(),
+        user: "user".to_string(),
+        logon_guid: "logon".to_string(),
+        logon_id: 1,
+        terminal_session_id: 1,
+        integrity_level: "high".to_string(),
+        hashes: vec!["hash".to_string()],
+        parent_process_guid: "pguid".to_string(),
+        parent_process_id: 1,
+        parent_image: "pimage".to_string(),
+        parent_command_line: "pcmd".to_string(),
+        agent_id: "agent_id".to_string(),
+        parent_user: "puser".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_PROCESS_CREATE, body, b"done").await;
+}
+
+#[tokio::test]
+async fn file_create_time() {
+    use giganto_client::ingest::sysmon::FileCreationTimeChanged;
+    const RAW_EVENT_KIND_FILE_CREATE_TIME: RawEventKind = RawEventKind::FileCreateTime;
+
+    let body = FileCreationTimeChanged {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        previous_creation_utc_time: 900,
+        agent_id: "agent_id".to_string(),
+        user: "user".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_FILE_CREATE_TIME, body, b"done").await;
+}
+
+#[tokio::test]
+async fn network_connect() {
+    use giganto_client::ingest::sysmon::NetworkConnection;
+    const RAW_EVENT_KIND_NETWORK_CONNECT: RawEventKind = RawEventKind::NetworkConnect;
+
+    let body = NetworkConnection {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        user: "user".to_string(),
+        protocol: "tcp".to_string(),
+        initiated: true,
+        source_is_ipv6: false,
+        source_ip: ip("192.168.1.1"),
+        source_hostname: "src".to_string(),
+        source_port: 1234,
+        source_port_name: "port".to_string(),
+        destination_is_ipv6: false,
+        destination_ip: ip("1.1.1.1"),
+        destination_hostname: "dst".to_string(),
+        destination_port: 80,
+        destination_port_name: "http".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_NETWORK_CONNECT, body, b"done").await;
+}
+
+#[tokio::test]
+async fn process_terminate() {
+    use giganto_client::ingest::sysmon::ProcessTerminated;
+    const RAW_EVENT_KIND_PROCESS_TERMINATE: RawEventKind = RawEventKind::ProcessTerminate;
+
+    let body = ProcessTerminated {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_PROCESS_TERMINATE, body, b"done").await;
+}
+
+#[tokio::test]
+async fn image_load() {
+    use giganto_client::ingest::sysmon::ImageLoaded;
+    const RAW_EVENT_KIND_IMAGE_LOAD: RawEventKind = RawEventKind::ImageLoad;
+
+    let body = ImageLoaded {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        image_loaded: "loaded".to_string(),
+        file_version: "1.0".to_string(),
+        description: "desc".to_string(),
+        product: "product".to_string(),
+        company: "company".to_string(),
+        original_file_name: "orig".to_string(),
+        hashes: vec!["hash".to_string()],
+        signed: true,
+        signature: "sig".to_string(),
+        signature_status: "status".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_IMAGE_LOAD, body, b"done").await;
+}
+
+#[tokio::test]
+async fn file_create() {
+    use giganto_client::ingest::sysmon::FileCreate;
+    const RAW_EVENT_KIND_FILE_CREATE: RawEventKind = RawEventKind::FileCreate;
+
+    let body = FileCreate {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        agent_id: "agent_id".to_string(),
+        user: "user".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_FILE_CREATE, body, b"done").await;
+}
+
+#[tokio::test]
+async fn registry_value_set() {
+    use giganto_client::ingest::sysmon::RegistryValueSet;
+    const RAW_EVENT_KIND_REGISTRY_VALUE_SET: RawEventKind = RawEventKind::RegistryValueSet;
+
+    let body = RegistryValueSet {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_object: "target".to_string(),
+        details: "details".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_REGISTRY_VALUE_SET, body, b"done").await;
+}
+
+#[tokio::test]
+async fn registry_key_rename() {
+    use giganto_client::ingest::sysmon::RegistryKeyValueRename;
+    const RAW_EVENT_KIND_REGISTRY_KEY_RENAME: RawEventKind = RawEventKind::RegistryKeyRename;
+
+    let body = RegistryKeyValueRename {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_object: "target".to_string(),
+        new_name: "new".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_REGISTRY_KEY_RENAME, body, b"done").await;
+}
+
+#[tokio::test]
+async fn file_create_stream_hash() {
+    use giganto_client::ingest::sysmon::FileCreateStreamHash;
+    const RAW_EVENT_KIND_FILE_CREATE_STREAM_HASH: RawEventKind = RawEventKind::FileCreateStreamHash;
+
+    let body = FileCreateStreamHash {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        hash: vec!["hash".to_string()],
+        contents: "contents".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_FILE_CREATE_STREAM_HASH, body, b"done").await;
+}
+
+#[tokio::test]
+async fn pipe_event() {
+    use giganto_client::ingest::sysmon::PipeEvent;
+    const RAW_EVENT_KIND_PIPE_EVENT: RawEventKind = RawEventKind::PipeEvent;
+
+    let body = PipeEvent {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        pipe_name: "pipe".to_string(),
+        image: "image".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_PIPE_EVENT, body, b"done").await;
+}
+
+#[tokio::test]
+async fn dns_query() {
+    use giganto_client::ingest::sysmon::DnsEvent;
+    const RAW_EVENT_KIND_DNS_QUERY: RawEventKind = RawEventKind::DnsQuery;
+
+    let body = DnsEvent {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        query_name: "query".to_string(),
+        query_status: 0,
+        query_results: vec!["result".to_string()],
+        image: "image".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_DNS_QUERY, body, b"done").await;
+}
+
+#[tokio::test]
+async fn file_delete() {
+    use giganto_client::ingest::sysmon::FileDelete;
+    const RAW_EVENT_KIND_FILE_DELETE: RawEventKind = RawEventKind::FileDelete;
+
+    let body = FileDelete {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        agent_id: "agent_id".to_string(),
+        hashes: vec!["hash".to_string()],
+        is_executable: true,
+        archived: true,
+        user: "user".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_FILE_DELETE, body, b"done").await;
+}
+
+#[tokio::test]
+async fn process_tamper() {
+    use giganto_client::ingest::sysmon::ProcessTampering;
+    const RAW_EVENT_KIND_PROCESS_TAMPER: RawEventKind = RawEventKind::ProcessTamper;
+
+    let body = ProcessTampering {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        tamper_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_PROCESS_TAMPER, body, b"done").await;
+}
+
+#[tokio::test]
+async fn file_delete_detected() {
+    use giganto_client::ingest::sysmon::FileDeleteDetected;
+    const RAW_EVENT_KIND_FILE_DELETE_DETECTED: RawEventKind = RawEventKind::FileDeleteDetected;
+
+    let body = FileDeleteDetected {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        hashes: vec!["hash".to_string()],
+        is_executable: true,
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_FILE_DELETE_DETECTED, body, b"done").await;
+}
+
+#[tokio::test]
+async fn netflow5() {
+    use giganto_client::ingest::netflow::Netflow5;
+    const RAW_EVENT_KIND_NETFLOW5: RawEventKind = RawEventKind::Netflow5;
+
+    let body = Netflow5 {
+        src_addr: ip("192.168.1.1"),
+        dst_addr: ip("192.168.1.2"),
+        next_hop: ip("10.0.0.1"),
+        input: 1,
+        output: 2,
+        d_pkts: 10,
+        d_octets: 1000,
+        first: 100,
+        last: 200,
+        src_port: 1234,
+        dst_port: 80,
+        tcp_flags: 0,
+        prot: 6,
+        tos: 0,
+        src_as: 0,
+        dst_as: 0,
+        src_mask: 24,
+        dst_mask: 24,
+        sampling_mode: 0,
+        sampling_rate: 0,
+        engine_type: 0,
+        engine_id: 0,
+        sequence: 0,
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_NETFLOW5, body, b"done").await;
+}
+
+#[tokio::test]
+async fn netflow9() {
+    use giganto_client::ingest::netflow::Netflow9;
+    const RAW_EVENT_KIND_NETFLOW9: RawEventKind = RawEventKind::Netflow9;
+
+    let body = Netflow9 {
+        orig_addr: ip("192.168.1.1"),
+        orig_port: 1234,
+        resp_addr: ip("192.168.1.2"),
+        resp_port: 80,
+        proto: 6,
+        contents: "payload".to_string(),
+        sequence: 1,
+        source_id: 1,
+        template_id: 256,
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_NETFLOW9, body, b"done").await;
+}
+
+#[tokio::test]
+async fn secu_log() {
+    use giganto_client::ingest::log::SecuLog;
+    const RAW_EVENT_KIND_SECU_LOG: RawEventKind = RawEventKind::SecuLog;
+
+    let body = SecuLog {
+        log_type: "type".to_string(),
+        version: "1.0".to_string(),
+        orig_addr: Some(ip("192.168.1.1")),
+        orig_port: Some(1234),
+        resp_addr: Some(ip("192.168.1.2")),
+        resp_port: Some(80),
+        proto: Some(6),
+        contents: "content".to_string(),
+        kind: "kind".to_string(),
+    };
+
+    run_single_event_test(RAW_EVENT_KIND_SECU_LOG, body, b"done").await;
 }
 
 #[tokio::test]
 async fn ack_info() {
-    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
+    let harness = TestHarness::new().await;
+    let (mut send_log, mut recv_log) = harness.open_bi().await;
 
     let log_body = Log {
         kind: String::from("Hello Server I am Log"),
@@ -1306,21 +1372,17 @@ async fn ack_info() {
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
         .unwrap();
-    let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
-    send_events(
-        &mut send_log,
-        Utc::now().timestamp_nanos_opt().unwrap(),
-        log_body,
-    )
-    .await
-    .unwrap();
+    let base_timestamp = now_ts();
+    send_events(&mut send_log, now_ts(), log_body)
+        .await
+        .unwrap();
 
     for i in 0..1023 {
         let log_body: Log = Log {
             kind: String::from("Hello Server I am Log"),
             log: vec![0; 10],
         };
-        send_events(&mut send_log, timestamp + i64::from(i + 1), log_body)
+        send_events(&mut send_log, base_timestamp + i64::from(i + 1), log_body)
             .await
             .unwrap();
     }
@@ -1328,24 +1390,18 @@ async fn ack_info() {
     let recv_timestamp = receive_ack_timestamp(&mut recv_log).await.unwrap();
 
     send_log.finish().expect("failed to shutdown stream");
-    client.conn.close(0u32.into(), b"log_done");
-    client.endpoint.wait_idle().await;
-    assert_eq!(timestamp + 1023, recv_timestamp);
+    harness.shutdown(b"log_done").await;
+    assert_eq!(base_timestamp + 1023, recv_timestamp);
 }
 
 #[tokio::test]
 async fn one_short_reproduce_channel_close() {
-    init_crypto();
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
     const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
     const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    run_server(&db_dir);
-
-    let client = TestClient::new().await;
-    let (mut send_log, mut recv_log) = client.conn.open_bi().await.expect("failed to open stream");
+    let harness = TestHarness::new().await;
+    let (mut send_log, mut recv_log) = harness.open_bi().await;
 
     send_record_header(&mut send_log, RAW_EVENT_KIND_LOG)
         .await
@@ -1363,36 +1419,271 @@ async fn one_short_reproduce_channel_close() {
     let recv_timestamp = i64::from_be_bytes(ts_buf);
 
     send_log.finish().expect("failed to shutdown stream");
-    client.conn.close(0u32.into(), b"log_done");
-    client.endpoint.wait_idle().await;
+    harness.shutdown(b"log_done").await;
     assert_eq!(CHANNEL_CLOSE_TIMESTAMP, recv_timestamp);
 }
 
-fn run_server(db_dir: &TempDir) -> JoinHandle<()> {
+#[tokio::test]
+async fn invalid_record_header() {
+    let harness = TestHarness::new().await;
+    let (mut send, _) = harness.open_bi().await;
+
+    // Send random bytes as header
+    let invalid_header = b"invalid_header_data";
+    send_raw(&mut send, invalid_header)
+        .await
+        .expect("failed to send data");
+
+    // The server should close the stream or log an error, but the connection might stay open or close depending on error handling.
+    // We verify that the client can finish without panic, implying the server handled the bad data gracefully (e.g. by closing the stream).
+    // In this test setup, we just expect the send operation to succeed. The verification is that the server doesn't crash.
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn invalid_body() {
+    const RAW_EVENT_KIND_DNS: RawEventKind = RawEventKind::Dns;
+    let harness = TestHarness::new().await;
+    let (mut send, _) = harness.open_bi().await;
+
+    send_record_header(&mut send, RAW_EVENT_KIND_DNS)
+        .await
+        .unwrap();
+
+    // Send invalid body (random bytes instead of Dns struct)
+    let invalid_body = b"invalid_body_data";
+    send_raw(&mut send, invalid_body)
+        .await
+        .expect("failed to send data");
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn test_send_ack_timestamp() {
+    init_crypto();
+    let _lock = get_token().lock().await;
+
+    // Use a unique port for isolation
+    const TEST_PORT_ACK_ISOLATED: u16 = 60197;
+    let certs = load_test_certs();
+
+    let server_config = crate::server::config_server(&certs).unwrap();
+    let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT_ACK_ISOLATED);
+    let endpoint = quinn::Endpoint::server(server_config, server_addr).unwrap();
+
+    let server_task = tokio::spawn(async move {
+        let incoming = endpoint.accept().await.unwrap();
+        let conn = incoming.await.unwrap();
+        let (_mut_send, mut recv) = conn.accept_bi().await.unwrap();
+
+        let mut buf = [0u8; 8];
+        recv_bytes(&mut recv, &mut buf).await.unwrap();
+
+        // return the data to be verified
+        buf.to_vec()
+    });
+
+    let client_endpoint = init_client();
+    let conn = client_endpoint
+        .connect(server_addr, HOST)
+        .unwrap()
+        .await
+        .unwrap();
+    let (mut send, _recv) = conn.open_bi().await.unwrap();
+
+    let timestamp: i64 = 123_456_789;
+    super::send_ack_timestamp(&mut send, timestamp)
+        .await
+        .unwrap();
+    send.finish().unwrap();
+
+    let received_data = server_task.await.unwrap();
+    assert_eq!(received_data, timestamp.to_be_bytes());
+
+    conn.close(0u32.into(), b"done");
+}
+
+#[tokio::test]
+async fn test_check_sensors_conn() {
+    use tokio::sync::mpsc;
+
+    use crate::comm::ingest::ConnState;
+
+    let db_dir = tempfile::tempdir().unwrap();
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    tokio::spawn(server().run(
-        db,
-        pcap_sensors,
-        ingest_sensors,
-        runtime_ingest_sensors,
-        stream_direct_channels,
-        Arc::new(Notify::new()),
-        Some(Arc::new(Notify::new())),
-        1024_u16,
-    ))
+    let (tx, rx) = mpsc::channel(10);
+    let notify_shutdown = Arc::new(Notify::new());
+
+    let db_clone = db.clone();
+    let pcap_sensors_clone = pcap_sensors.clone();
+    let ingest_sensors_clone = ingest_sensors.clone();
+    let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
+    let notify_shutdown_clone = notify_shutdown.clone();
+
+    tokio::spawn(async move {
+        super::check_sensors_conn(
+            db_clone,
+            pcap_sensors_clone,
+            ingest_sensors_clone,
+            runtime_ingest_sensors_clone,
+            rx,
+            None,
+            notify_shutdown_clone,
+        )
+        .await
+        .unwrap();
+    });
+
+    let sensor_name = "test_sensor".to_string();
+    let now = Utc::now();
+
+    // Test Connection
+    tx.send((sensor_name.clone(), now, ConnState::Connected, false))
+        .await
+        .unwrap();
+
+    // Yield to let check_sensors_conn process
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    assert!(ingest_sensors.read().await.contains(&sensor_name));
+    assert!(
+        runtime_ingest_sensors
+            .read()
+            .await
+            .get(&sensor_name)
+            .is_some()
+    );
+
+    // Test Disconnection
+    tx.send((sensor_name.clone(), now, ConnState::Disconnected, false))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    assert!(
+        !runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(&sensor_name)
+    );
+
+    notify_shutdown.notify_one();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 }
 
-async fn send_events<T: Serialize>(
-    send: &mut quinn::SendStream,
-    timestamp: i64,
-    msg: T,
-) -> anyhow::Result<()> {
-    let msg_buf = bincode::serialize(&msg)?;
-    let buf = bincode::serialize(&vec![(timestamp, msg_buf)])?;
-    send_raw(send, &buf).await?;
-    Ok(())
+#[tokio::test]
+async fn test_check_sensors_conn_pcap() {
+    // Verifies that the internal state management logic (check_sensors_conn) behaves correctly
+    // when sensors (such as "piglet") responsible for packet capture (PCAP) are connected or disconnected.
+    use tokio::sync::mpsc;
+
+    use crate::comm::ingest::ConnState;
+
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sensors = new_pcap_sensors();
+    let ingest_sensors = new_ingest_sensors(&db);
+    let runtime_ingest_sensors = new_runtime_ingest_sensors();
+    let (tx, rx) = mpsc::channel::<super::SensorInfo>(10);
+    let notify_shutdown = Arc::new(Notify::new());
+
+    let db_clone = db.clone();
+    let pcap_sensors_clone = pcap_sensors.clone();
+    let ingest_sensors_clone = ingest_sensors.clone();
+    let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
+    let notify_shutdown_clone = notify_shutdown.clone();
+
+    tokio::spawn(async move {
+        super::check_sensors_conn(
+            db_clone,
+            pcap_sensors_clone,
+            ingest_sensors_clone,
+            runtime_ingest_sensors_clone,
+            rx,
+            None,
+            notify_shutdown_clone,
+        )
+        .await
+        .unwrap();
+    });
+
+    let sensor_name = "piglet_sensor".to_string(); // "piglet" implies pcap sensor logic in handle_connection, but here we explicitly set is_pcap_sensor
+    let now = Utc::now();
+
+    tx.send((sensor_name.clone(), now, ConnState::Connected, true))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    tx.send((sensor_name.clone(), now, ConnState::Disconnected, true))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    assert!(
+        !runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(&sensor_name)
+    );
+
+    notify_shutdown.notify_one();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+}
+
+#[tokio::test]
+async fn test_handle_connection_handshake_failure() {
+    init_crypto();
+    let _lock = get_token().lock().await;
+    let db_dir = tempfile::tempdir().unwrap();
+    run_server(&db_dir);
+
+    let endpoint = init_client();
+    let conn = endpoint
+        .connect(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), TEST_PORT),
+            HOST,
+        )
+        .expect("Failed to connect")
+        .await
+        .expect("Failed to finish connection");
+
+    let (mut send, _) = conn.open_bi().await.expect("failed to open stream");
+
+    // send_bytes sends [len][data]. Data is empty, so it sends [0,0,0,0].
+    send_bytes(&mut send, &[]).await.unwrap();
+    send.finish().unwrap();
+
+    let err = conn.closed().await; // Waits for connection close
+    assert!(matches!(err, quinn::ConnectionError::ApplicationClosed(_)));
+
+    let _err_msg = conn.close_reason();
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn test_send_ack_timestamp_failure() {
+    let harness = TestHarness::new().await;
+    let (mut send, _recv) = harness.open_bi().await;
+
+    super::send_ack_timestamp(&mut send, 100).await.unwrap();
+
+    // Now FINISH/CLOSE the stream to force a failure on next send?
+    send.finish().unwrap(); // Half-closed
+
+    // Sending on a finished stream should fail?
+    // Quic SendStream: "Writing to a stream that has been finished or reset will return an error."
+    let res = super::send_ack_timestamp(&mut send, 200).await;
+    assert!(res.is_err());
+
+    harness.shutdown(b"done").await;
 }
