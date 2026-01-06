@@ -617,7 +617,8 @@ fn insert_dce_rpc_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase
 
 fn insert_op_log_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
     let store = schema.db.op_log_store().unwrap();
-    insert_op_log_export_event(&store, SENSOR_ID, timestamp);
+    let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
+    insert_op_log_export_event(&store, SENSOR_ID, timestamp, &generator);
 }
 
 fn insert_ftp_parity(schema: &TestSchema, _case: &ExportTimeFormatParityCase, timestamp: i64) {
@@ -2575,11 +2576,20 @@ fn insert_statistics_raw_event(
     store.append(&key, &value).unwrap();
 }
 
-fn insert_op_log_export_event(store: &RawEventStore<'_, OpLog>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
+fn insert_op_log_export_event(
+    store: &RawEventStore<'_, OpLog>,
+    sensor: &str,
+    timestamp: i64,
+    generator: &OnceLock<Arc<SequenceGenerator>>,
+) {
+    let generator = generator.get_or_init(SequenceGenerator::init_generator);
+    let sequence_number = generator.generate_sequence_number();
+
+    // OpLog uses timestamp-prefix key format: [timestamp:8][sequence_number:8]
+    let mut key = Vec::with_capacity(2 * mem::size_of::<i64>());
     key.extend_from_slice(&timestamp.to_be_bytes());
+    key.extend_from_slice(&sequence_number.to_be_bytes());
+
     let event = OpLog {
         sensor: sensor.to_string(),
         agent_name: "oplog-agent".to_string(),
