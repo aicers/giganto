@@ -1847,7 +1847,7 @@ impl KeyExtractor for ExportFilter {
 }
 
 impl TimestampKeyExtractor for ExportFilter {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_start_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -2354,7 +2354,8 @@ fn write_oplog_data_to_file(
     ) {
         let timestamp = parse_oplog_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
+            .0
+            .strftime("%s%.9f")
             .to_string();
         // For OpLog, the sensor info is stored in the value itself
         let sensor = &value.sensor;

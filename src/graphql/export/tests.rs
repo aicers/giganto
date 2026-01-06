@@ -1,14 +1,25 @@
 use std::mem;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use giganto_client::ingest::{
-    log::{Log, OpLog, OpLogLevel},
-    network::{
-        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-        Rdp, Smb, Smtp, Ssh, Tls,
+use giganto_client::{
+    RawEventKind,
+    ingest::{
+        log::{Log, OpLog, OpLogLevel, SecuLog},
+        netflow::{Netflow5, Netflow9},
+        network::{
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
+            Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        },
+        statistics::Statistics,
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
+        timeseries::PeriodicTimeSeries,
     },
-    timeseries::PeriodicTimeSeries,
 };
 
 use crate::comm::ingest::generation::SequenceGenerator;
