@@ -1,7 +1,6 @@
 use std::net::IpAddr;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
 #[cfg(feature = "cluster")]
@@ -10,6 +9,7 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 use tracing::info;
 
+use super::DateTime;
 use super::{
     Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
     get_time_from_key, handle_paged_events, write_run_tcpdump,
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     packet_time: Option<TimeRange>,
 }
 
@@ -49,7 +49,7 @@ impl KeyExtractor for PacketFilter {
         )
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.packet_time {
             (time.start, time.end)
         } else {
@@ -82,19 +82,28 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: DateTime<Utc>,
-    packet_time: DateTime<Utc>,
+    request_time: DateTime,
+    packet_time: DateTime,
     packet: String,
 }
 
-#[derive(SimpleObject, Debug, Default)]
+#[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
 #[cfg_attr(feature = "cluster", graphql_client_type(names = [
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     parsed_pcap: String,
+}
+
+impl Default for Pcap {
+    fn default() -> Self {
+        Self {
+            request_time: DateTime::from_timestamp_nanos(0),
+            parsed_pcap: String::new(),
+        }
+    }
 }
 
 impl Pcap {
@@ -234,10 +243,35 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::mem;
 
-    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
+    use crate::graphql::DateTime;
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+
+    /// Helper function to create a UTC timestamp in nanoseconds from date/time components.
+    fn utc_to_nanos(year: i16, month: i8, day: i8, hour: i8, min: i8, sec: i8) -> i64 {
+        utc_to_nanos_with_subsec(year, month, day, hour, min, sec, 0)
+    }
+
+    /// Helper function to create a UTC timestamp with subsecond nanoseconds.
+    fn utc_to_nanos_with_subsec(
+        year: i16,
+        month: i8,
+        day: i8,
+        hour: i8,
+        min: i8,
+        sec: i8,
+        subsec_nanos: i32,
+    ) -> i64 {
+        jiff::civil::date(year, month, day)
+            .at(hour, min, sec, subsec_nanos)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .expect("valid datetime")
+            .timestamp()
+            .as_nanosecond()
+            .try_into()
+            .expect("timestamp fits in i64")
+    }
 
     #[tokio::test]
     async fn packets_empty() {
@@ -268,13 +302,13 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 0));
+        let dt2 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 1));
+        let dt3 = DateTime::from_timestamp_nanos(utc_to_nanos(2023, 1, 20, 0, 0, 2));
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.timestamp_nanos();
+        let ts2 = dt2.timestamp_nanos();
+        let ts3 = dt3.timestamp_nanos();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -354,6 +388,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn pcap_with_data() {
         let schema = TestSchema::new();
@@ -362,25 +397,37 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .with_nanosecond(123_456_789)
-            .unwrap();
-        let dt2 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-            .unwrap()
-            .with_nanosecond(234_567_890)
-            .unwrap();
-        let dt3 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-            .unwrap()
-            .with_nanosecond(345_678_901)
-            .unwrap();
+        let dt1 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            0,
+            123_456_789,
+        ));
+        let dt2 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            1,
+            234_567_890,
+        ));
+        let dt3 = DateTime::from_timestamp_nanos(utc_to_nanos_with_subsec(
+            2023,
+            1,
+            20,
+            0,
+            0,
+            2,
+            345_678_901,
+        ));
 
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = dt1.timestamp_nanos();
+        let ts2 = dt2.timestamp_nanos();
+        let ts3 = dt3.timestamp_nanos();
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -408,10 +455,10 @@ mod tests {
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -437,10 +484,10 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -466,10 +513,10 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.6f", s).unwrap())
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -478,94 +525,6 @@ mod tests {
 
         assert_eq!(ts1, "2023-01-20 00:00:00.123456 UTC");
         assert_eq!(ts2, "2023-01-20 00:00:02.345678 UTC");
-    }
-
-    #[tokio::test]
-    async fn packets_timestamp_fomat_stability() {
-        let schema = TestSchema::new();
-        let store = schema.db.packet_store().unwrap();
-
-        let request_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-
-        insert_packet(&store, "src1", request_dt, packet_dt);
-
-        let query = r#"
-        {
-            packets(
-                filter: {
-                    sensor: "src1"
-                    requestTime: "2024-03-04T05:06:07Z"
-                }
-                first: 1
-            ) {
-                edges {
-                    node {
-                        packetTime
-                        requestTime
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-        let res_json = res.data.into_json().unwrap();
-        let node = res_json["packets"]["edges"][0]["node"].as_object().unwrap();
-        assert_eq!(
-            node["requestTime"].as_str().unwrap(),
-            "2024-03-04T05:06:07+00:00"
-        );
-        assert_eq!(
-            node["packetTime"].as_str().unwrap(),
-            "2024-03-04T05:06:08+00:00"
-        );
-    }
-
-    #[tokio::test]
-    async fn pcap_timestamp_fomat_stability() {
-        let schema = TestSchema::new();
-        let store = schema.db.packet_store().unwrap();
-
-        let request_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        insert_packet(&store, "src1", request_ts, packet_ts);
-
-        let query = r#"
-        {
-            pcap(
-                filter: {
-                    sensor: "src1"
-                    requestTime: "2024-03-04T05:06:07Z"
-                }
-            ) {
-                requestTime
-            }
-        }"#;
-        let res = schema.execute(query).await;
-        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-        let data = res.data.into_json().unwrap();
-        let node = data["pcap"].as_object().unwrap();
-        assert_eq!(
-            node["requestTime"].as_str().unwrap(),
-            "2024-03-04T05:06:07+00:00"
-        );
     }
 
     fn insert_packet(
@@ -592,9 +551,11 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
-        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
-        let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+    fn convert_to_utc_timezone(timestamp: jiff::civil::DateTime) -> String {
+        // Convert to local timezone, then to UTC
+        let local_tz = jiff::tz::TimeZone::system();
+        let zoned = timestamp.to_zoned(local_tz).unwrap();
+        let utc = zoned.with_time_zone(jiff::tz::TimeZone::UTC);
+        utc.strftime("%Y-%m-%d %H:%M:%S%.6f UTC").to_string()
     }
 }

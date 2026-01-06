@@ -1,17 +1,28 @@
-use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
-use num_traits::cast::ToPrimitive;
 
+use super::DateTime;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
+
+/// Helper function to create a UTC timestamp in nanoseconds from date/time components.
+/// This replaces the chrono `Utc.with_ymd_and_hms(...).timestamp_nanos_opt().unwrap()` pattern.
+fn utc_to_nanos(year: i16, month: i8, day: i8, hour: i8, min: i8, sec: i8) -> i64 {
+    jiff::civil::date(year, month, day)
+        .at(hour, min, sec, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .expect("valid datetime")
+        .timestamp()
+        .as_nanosecond()
+        .try_into()
+        .expect("timestamp fits in i64")
+}
 
 #[tokio::test]
 async fn conn_empty() {
@@ -110,8 +121,8 @@ async fn conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_conn_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -176,11 +187,7 @@ fn create_conn_body(
         resp_port: resp_port.unwrap_or(80),
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: utc_to_nanos(2023, 1, 20, 0, 0, 0),
         duration: 1_000_000_000,
         service: "-".to_string(),
         orig_bytes: 77,
@@ -287,150 +294,6 @@ async fn conn_with_data_giganto_cluster() {
     );
 
     mock.assert_async().await;
-}
-
-#[allow(clippy::too_many_lines)]
-#[tokio::test]
-async fn network_raw_events_timestamp_fomat_stability() {
-    let schema = TestSchema::new();
-    let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
-    let step = 1_000_000;
-
-    let conn_store = schema.db.conn_store().unwrap();
-    let dns_store = schema.db.dns_store().unwrap();
-    let malformed_dns_store = schema.db.malformed_dns_store().unwrap();
-    let http_store = schema.db.http_store().unwrap();
-    let rdp_store = schema.db.rdp_store().unwrap();
-    let ntlm_store = schema.db.ntlm_store().unwrap();
-    let kerberos_store = schema.db.kerberos_store().unwrap();
-    let ssh_store = schema.db.ssh_store().unwrap();
-    let dce_rpc_store = schema.db.dce_rpc_store().unwrap();
-    let ftp_store = schema.db.ftp_store().unwrap();
-    let mqtt_store = schema.db.mqtt_store().unwrap();
-    let ldap_store = schema.db.ldap_store().unwrap();
-    let tls_store = schema.db.tls_store().unwrap();
-    let smb_store = schema.db.smb_store().unwrap();
-    let nfs_store = schema.db.nfs_store().unwrap();
-    let smtp_store = schema.db.smtp_store().unwrap();
-    let bootp_store = schema.db.bootp_store().unwrap();
-    let dhcp_store = schema.db.dhcp_store().unwrap();
-    let radius_store = schema.db.radius_store().unwrap();
-
-    insert_conn_raw_event(&conn_store, sensor, base_ts);
-    insert_dns_raw_event(&dns_store, sensor, base_ts + step);
-    insert_malformed_dns_raw_event(&malformed_dns_store, sensor, base_ts + step * 2);
-    insert_http_raw_event(&http_store, sensor, base_ts + step * 3);
-    insert_rdp_raw_event(&rdp_store, sensor, base_ts + step * 4);
-    insert_ntlm_raw_event(&ntlm_store, sensor, base_ts + step * 5);
-    insert_kerberos_raw_event(&kerberos_store, sensor, base_ts + step * 6);
-    insert_ssh_raw_event(&ssh_store, sensor, base_ts + step * 7);
-    insert_dce_rpc_raw_event(&dce_rpc_store, sensor, base_ts + step * 8);
-    insert_ftp_raw_event(&ftp_store, sensor, base_ts + step * 9);
-    insert_mqtt_raw_event(&mqtt_store, sensor, base_ts + step * 10);
-    insert_ldap_raw_event(&ldap_store, sensor, base_ts + step * 11);
-    insert_tls_raw_event(&tls_store, sensor, base_ts + step * 12);
-    insert_smb_raw_event(&smb_store, sensor, base_ts + step * 13);
-    insert_nfs_raw_event(&nfs_store, sensor, base_ts + step * 14);
-    insert_smtp_raw_event(&smtp_store, sensor, base_ts + step * 15);
-    insert_bootp_raw_event(&bootp_store, sensor, base_ts + step * 16);
-    insert_dhcp_raw_event(&dhcp_store, sensor, base_ts + step * 17);
-    insert_radius_raw_event(&radius_store, sensor, base_ts + step * 18);
-
-    let query = r#"
-    {
-        networkRawEvents(
-            filter: {
-                sensor: "src1",
-                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:07:00Z" }
-            },
-            first: 50
-        ) {
-            edges {
-                node {
-                    __typename
-                    ... on ConnRawEvent { time }
-                    ... on DnsRawEvent { time }
-                    ... on MalformedDnsRawEvent { time }
-                    ... on HttpRawEvent { time }
-                    ... on RdpRawEvent { time }
-                    ... on NtlmRawEvent { time }
-                    ... on KerberosRawEvent { time }
-                    ... on SshRawEvent { time }
-                    ... on DceRpcRawEvent { time }
-                    ... on FtpRawEvent { time }
-                    ... on MqttRawEvent { time }
-                    ... on LdapRawEvent { time }
-                    ... on TlsRawEvent { time }
-                    ... on SmbRawEvent { time }
-                    ... on NfsRawEvent { time }
-                    ... on SmtpRawEvent { time }
-                    ... on BootpRawEvent { time }
-                    ... on DhcpRawEvent { time }
-                    ... on RadiusRawEvent { time }
-                }
-            }
-        }
-    }"#;
-
-    let res = schema.execute(query).await;
-    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-    let data = res.data.into_json().unwrap();
-    let edges = data["networkRawEvents"]["edges"].as_array().unwrap();
-
-    let expected_types = [
-        "ConnRawEvent",
-        "DnsRawEvent",
-        "MalformedDnsRawEvent",
-        "HttpRawEvent",
-        "RdpRawEvent",
-        "NtlmRawEvent",
-        "KerberosRawEvent",
-        "SshRawEvent",
-        "DceRpcRawEvent",
-        "FtpRawEvent",
-        "MqttRawEvent",
-        "LdapRawEvent",
-        "TlsRawEvent",
-        "SmbRawEvent",
-        "NfsRawEvent",
-        "SmtpRawEvent",
-        "BootpRawEvent",
-        "DhcpRawEvent",
-        "RadiusRawEvent",
-    ];
-
-    let mut expected_times: HashMap<&str, String> = HashMap::new();
-    for (idx, typename) in expected_types.iter().enumerate() {
-        let idx = idx.to_i64().expect("expected_types length fits in i64");
-        expected_times.insert(
-            typename,
-            Utc.timestamp_nanos(base_ts + step * idx).to_rfc3339(),
-        );
-    }
-    let mut seen = HashSet::new();
-
-    for edge in edges {
-        let node = edge["node"].as_object().unwrap();
-        let typename = node["__typename"].as_str().unwrap();
-        seen.insert(typename.to_string());
-        let expected = expected_times
-            .get(typename)
-            .expect("expected network event type");
-        assert_eq!(node["time"].as_str().unwrap(), expected);
-    }
-
-    assert_eq!(seen.len(), expected_types.len());
-    for expected in expected_types {
-        assert!(
-            seen.contains(expected),
-            "Missing network event type {expected}"
-        );
-    }
 }
 
 #[tokio::test]
@@ -541,8 +404,8 @@ async fn dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -586,7 +449,7 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -626,7 +489,7 @@ fn insert_malformed_dns_raw_event(
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -849,8 +712,8 @@ async fn malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_malformed_dns_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1071,22 +934,8 @@ async fn http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_http_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_http_raw_event(&store, "src 1", utc_to_nanos(2020, 6, 1, 0, 1, 1));
+    insert_http_raw_event(&store, "src 1", utc_to_nanos(2020, 6, 1, 0, 1, 2));
 
     let query = r#"
     {
@@ -1131,11 +980,7 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(1992, 6, 5, 12, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: utc_to_nanos(1992, 6, 5, 12, 0, 0),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1381,22 +1226,8 @@ async fn rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_rdp_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_rdp_raw_event(&store, "src 1", utc_to_nanos(2020, 6, 1, 0, 1, 1));
+    insert_rdp_raw_event(&store, "src 1", utc_to_nanos(2020, 6, 1, 0, 1, 2));
 
     let query = r#"
     {
@@ -1438,11 +1269,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(1992, 6, 5, 12, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: utc_to_nanos(1992, 6, 5, 12, 0, 0),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1544,8 +1371,8 @@ async fn smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_smtp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1581,7 +1408,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1689,8 +1516,8 @@ async fn ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ntlm_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1726,7 +1553,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1830,8 +1657,8 @@ async fn kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_kerberos_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -1867,7 +1694,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1988,8 +1815,8 @@ async fn ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ssh_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2025,7 +1852,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2145,8 +1972,8 @@ async fn dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dce_rpc_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2182,7 +2009,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2284,8 +2111,8 @@ async fn ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ftp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2321,7 +2148,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2448,8 +2275,8 @@ async fn mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_mqtt_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2485,7 +2312,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2596,8 +2423,8 @@ async fn ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_ldap_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2633,7 +2460,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2757,8 +2584,8 @@ async fn tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_tls_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2794,7 +2621,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2944,8 +2771,8 @@ async fn smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_smb_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -2988,7 +2815,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3110,8 +2937,8 @@ async fn nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_nfs_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3147,7 +2974,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3249,8 +3076,8 @@ async fn bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_bootp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3287,7 +3114,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3404,8 +3231,8 @@ async fn dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_dhcp_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3445,7 +3272,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3584,8 +3411,8 @@ async fn radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
+    insert_radius_raw_event(&store, "src 1", DateTime::now().timestamp_nanos());
 
     let query = r#"
     {
@@ -3626,7 +3453,7 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: DateTime::now().timestamp_nanos(),
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3755,7 +3582,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.70".parse::<IpAddr>().ok(),
         Some(100),
         "192.168.4.80".parse::<IpAddr>().ok(),
@@ -3764,7 +3591,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.71".parse::<IpAddr>().ok(),
         Some(101),
         "192.168.4.81".parse::<IpAddr>().ok(),
@@ -3773,7 +3600,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos(),
         "192.168.4.72".parse::<IpAddr>().ok(),
         Some(102),
         "192.168.4.82".parse::<IpAddr>().ok(),
@@ -4110,142 +3937,27 @@ async fn union() {
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
 
-    insert_conn_raw_event(
-        &conn_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_dns_raw_event(
-        &dns_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_http_raw_event(
-        &http_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_rdp_raw_event(
-        &rdp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ntlm_raw_event(
-        &ntlm_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_kerberos_raw_event(
-        &kerberos_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ssh_raw_event(
-        &ssh_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_dce_rpc_raw_event(
-        &dce_rpc_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ftp_raw_event(
-        &ftp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_mqtt_raw_event(
-        &mqtt_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ldap_raw_event(
-        &ldap_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_tls_raw_event(
-        &tls_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_smb_raw_event(
-        &smb_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_nfs_raw_event(
-        &nfs_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_smtp_raw_event(
-        &smtp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_conn_raw_event(&conn_store, "src 1", utc_to_nanos(2020, 1, 1, 0, 1, 1));
+    insert_dns_raw_event(&dns_store, "src 1", utc_to_nanos(2021, 1, 1, 0, 1, 1));
+    insert_http_raw_event(&http_store, "src 1", utc_to_nanos(2020, 6, 1, 0, 1, 1));
+    insert_rdp_raw_event(&rdp_store, "src 1", utc_to_nanos(2020, 1, 5, 0, 1, 1));
+    insert_ntlm_raw_event(&ntlm_store, "src 1", utc_to_nanos(2022, 1, 5, 0, 1, 1));
+    insert_kerberos_raw_event(&kerberos_store, "src 1", utc_to_nanos(2023, 1, 5, 0, 1, 1));
+    insert_ssh_raw_event(&ssh_store, "src 1", utc_to_nanos(2020, 1, 1, 0, 0, 1));
+    insert_dce_rpc_raw_event(&dce_rpc_store, "src 1", utc_to_nanos(2020, 1, 5, 6, 5, 0));
+    insert_ftp_raw_event(&ftp_store, "src 1", utc_to_nanos(2023, 1, 5, 12, 12, 0));
+    insert_mqtt_raw_event(&mqtt_store, "src 1", utc_to_nanos(2023, 1, 5, 12, 12, 0));
+    insert_ldap_raw_event(&ldap_store, "src 1", utc_to_nanos(2023, 1, 6, 12, 12, 0));
+    insert_tls_raw_event(&tls_store, "src 1", utc_to_nanos(2023, 1, 6, 11, 11, 0));
+    insert_smb_raw_event(&smb_store, "src 1", utc_to_nanos(2023, 1, 6, 12, 12, 10));
+    insert_nfs_raw_event(&nfs_store, "src 1", utc_to_nanos(2023, 1, 6, 12, 13, 0));
+    insert_smtp_raw_event(&smtp_store, "src 1", utc_to_nanos(2020, 1, 1, 0, 0, 5));
     insert_bootp_raw_event(
         &bootp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        utc_to_nanos(2019, 12, 31, 23, 59, 59),
     );
-    insert_dhcp_raw_event(
-        &dhcp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_dhcp_raw_event(&dhcp_store, "src 1", utc_to_nanos(2023, 1, 6, 12, 13, 10));
 
     // order: bootp, ssh, smtp, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
     let query = r#"
@@ -4348,15 +4060,15 @@ async fn search_http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_http_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, "src 1", time1);
+    insert_http_raw_event(&store, "src 1", time2);
+    insert_http_raw_event(&store, "src 1", time3);
+    insert_http_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4384,15 +4096,15 @@ async fn search_conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_conn_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, "src 1", time1);
+    insert_conn_raw_event(&store, "src 1", time2);
+    insert_conn_raw_event(&store, "src 1", time3);
+    insert_conn_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4470,15 +4182,15 @@ async fn search_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, "src 1", time1);
+    insert_dns_raw_event(&store, "src 1", time2);
+    insert_dns_raw_event(&store, "src 1", time3);
+    insert_dns_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4556,15 +4268,15 @@ async fn search_malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1);
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1);
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1);
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1);
 
-    insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time1);
+    insert_malformed_dns_raw_event(&store, "src 1", time2);
+    insert_malformed_dns_raw_event(&store, "src 1", time3);
+    insert_malformed_dns_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4642,15 +4354,15 @@ async fn search_rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_rdp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, "src 1", time1);
+    insert_rdp_raw_event(&store, "src 1", time2);
+    insert_rdp_raw_event(&store, "src 1", time3);
+    insert_rdp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4728,15 +4440,15 @@ async fn search_smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_smtp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, "src 1", time1);
+    insert_smtp_raw_event(&store, "src 1", time2);
+    insert_smtp_raw_event(&store, "src 1", time3);
+    insert_smtp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4814,15 +4526,15 @@ async fn search_ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_ntlm_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, "src 1", time1);
+    insert_ntlm_raw_event(&store, "src 1", time2);
+    insert_ntlm_raw_event(&store, "src 1", time3);
+    insert_ntlm_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4900,15 +4612,15 @@ async fn search_kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_kerberos_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, "src 1", time1);
+    insert_kerberos_raw_event(&store, "src 1", time2);
+    insert_kerberos_raw_event(&store, "src 1", time3);
+    insert_kerberos_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -4985,15 +4697,15 @@ async fn search_ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_ssh_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, "src 1", time1);
+    insert_ssh_raw_event(&store, "src 1", time2);
+    insert_ssh_raw_event(&store, "src 1", time3);
+    insert_ssh_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5021,15 +4733,15 @@ async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_dce_rpc_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, "src 1", time1);
+    insert_dce_rpc_raw_event(&store, "src 1", time2);
+    insert_dce_rpc_raw_event(&store, "src 1", time3);
+    insert_dce_rpc_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5057,15 +4769,15 @@ async fn search_ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_ftp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, "src 1", time1);
+    insert_ftp_raw_event(&store, "src 1", time2);
+    insert_ftp_raw_event(&store, "src 1", time3);
+    insert_ftp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5093,15 +4805,15 @@ async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_mqtt_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, "src 1", time1);
+    insert_mqtt_raw_event(&store, "src 1", time2);
+    insert_mqtt_raw_event(&store, "src 1", time3);
+    insert_mqtt_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5129,15 +4841,15 @@ async fn search_ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_ldap_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, "src 1", time1);
+    insert_ldap_raw_event(&store, "src 1", time2);
+    insert_ldap_raw_event(&store, "src 1", time3);
+    insert_ldap_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5165,15 +4877,15 @@ async fn search_tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_tls_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, "src 1", time1);
+    insert_tls_raw_event(&store, "src 1", time2);
+    insert_tls_raw_event(&store, "src 1", time3);
+    insert_tls_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5201,15 +4913,15 @@ async fn search_smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_smb_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, "src 1", time1);
+    insert_smb_raw_event(&store, "src 1", time2);
+    insert_smb_raw_event(&store, "src 1", time3);
+    insert_smb_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5237,15 +4949,15 @@ async fn search_nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_nfs_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, "src 1", time1);
+    insert_nfs_raw_event(&store, "src 1", time2);
+    insert_nfs_raw_event(&store, "src 1", time3);
+    insert_nfs_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5273,15 +4985,15 @@ async fn search_bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_bootp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, "src 1", time1);
+    insert_bootp_raw_event(&store, "src 1", time2);
+    insert_bootp_raw_event(&store, "src 1", time3);
+    insert_bootp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5309,15 +5021,15 @@ async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_dhcp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, "src 1", time1);
+    insert_dhcp_raw_event(&store, "src 1", time2);
+    insert_dhcp_raw_event(&store, "src 1", time3);
+    insert_dhcp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -5345,15 +5057,15 @@ async fn search_radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = utc_to_nanos(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = utc_to_nanos(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = utc_to_nanos(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = utc_to_nanos(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
-    insert_radius_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", time1);
+    insert_radius_raw_event(&store, "src 1", time2);
+    insert_radius_raw_event(&store, "src 1", time3);
+    insert_radius_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {

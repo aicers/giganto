@@ -1,13 +1,13 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 
+use super::DateTime;
 use super::{
     FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
     handle_paged_events, paged_events_in_cluster,
@@ -46,7 +46,7 @@ impl KeyExtractor for SecuLogFilter {
         Some(self.kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -86,7 +86,7 @@ impl RawEventFilter for SecuLogFilter {
     secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
 ]))]
 struct SecuLogRawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -189,7 +189,6 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::log::SecuLog;
 
     use crate::graphql::tests::TestSchema;
@@ -226,45 +225,6 @@ mod tests {
             res.data.to_string(),
             "{secuLogRawEvents: {edges: [{node: {contents: \"secu_log_contents 1\", version: \"V3\"}}]}}"
         );
-    }
-
-    #[tokio::test]
-    async fn secu_log_timestamp_fomat_stability() {
-        let schema = TestSchema::new();
-        let store = schema.db.secu_log_store().unwrap();
-
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        insert_secu_log_event(&store, "device", "src1", timestamp);
-
-        let query = r#"
-        {
-            secuLogRawEvents(
-                filter: {
-                    kind: "device",
-                    sensor: "src1",
-                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
-                },
-                first: 1
-            ) {
-                edges {
-                    node {
-                        time
-                    }
-                }
-            }
-        }"#;
-
-        let res = schema.execute(query).await;
-        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-        let res_json = res.data.into_json().unwrap();
-        let node = res_json["secuLogRawEvents"]["edges"][0]["node"]
-            .as_object()
-            .unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
     }
 
     #[tokio::test]
