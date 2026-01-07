@@ -956,7 +956,7 @@ mod tests {
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
-            let settings = Settings::from_file("tests/config.toml").unwrap();
+            let settings = Settings::load("tests/config.toml").unwrap();
             let schema = schema(
                 NodeName("giganto1".to_string()),
                 db.clone(),

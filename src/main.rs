@@ -89,39 +89,7 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let args = Args::parse();
-    let mut settings = Settings::from_file(&args.config).or_else(|e| {
-        eprintln!(
-            "failed to read configuration file: {}. Error: {e}",
-            args.config
-        );
-
-        let backup_path = Path::new(&args.config).with_extension("toml.bak");
-        if backup_path.exists() {
-            println!(
-                "attempting to restore backup configuration from: {}",
-                backup_path.display()
-            );
-
-            fs::copy(&backup_path, &args.config).with_context(|| {
-                format!(
-                    "failed to restore configuration from backup: {} to {}",
-                    backup_path.display(),
-                    &args.config
-                )
-            })?;
-
-            println!("configuration restored from backup.");
-
-            Settings::from_file(&args.config).with_context(|| {
-                format!(
-                    "failed to read restored configuration file: {}",
-                    backup_path.display()
-                )
-            })
-        } else {
-            Err(e).context("no valid configuration file available, and no backup found.")
-        }
-    })?;
+    let mut settings = Settings::load_or_restore(&args.config)?;
 
     settings.config.validate()?;
 
@@ -438,6 +406,16 @@ async fn wait_for_task_shutdown(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use tokio::time::sleep;
+
     use super::*;
 
     #[test]
@@ -458,5 +436,59 @@ mod tests {
 
         let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_task_shutdown_joins_all_handles() {
+        let ingest_done = Arc::new(AtomicBool::new(false));
+        let publish_done = Arc::new(AtomicBool::new(false));
+        let peer_done = Arc::new(AtomicBool::new(false));
+        let retain_done = Arc::new(AtomicBool::new(false));
+
+        let ingest_task_handle = tokio::spawn({
+            let ingest_done = ingest_done.clone();
+            async move {
+                sleep(Duration::from_millis(25)).await;
+                ingest_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let publish_task_handle = tokio::spawn({
+            let publish_done = publish_done.clone();
+            async move {
+                sleep(Duration::from_millis(30)).await;
+                publish_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let peer_task_handle = Some(tokio::spawn({
+            let peer_done = peer_done.clone();
+            async move {
+                sleep(Duration::from_millis(35)).await;
+                peer_done.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }));
+
+        let retain_task_handle = std::thread::spawn({
+            let retain_done = retain_done.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(20));
+                retain_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        wait_for_task_shutdown(
+            ingest_task_handle,
+            publish_task_handle,
+            peer_task_handle,
+            retain_task_handle,
+        )
+        .await;
+
+        assert!(ingest_done.load(Ordering::SeqCst));
+        assert!(publish_done.load(Ordering::SeqCst));
+        assert!(peer_done.load(Ordering::SeqCst));
+        assert!(retain_done.load(Ordering::SeqCst));
     }
 }
