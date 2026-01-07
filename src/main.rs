@@ -448,4 +448,15 @@ mod tests {
         let result = create_graphql_client(invalid_cert, invalid_key);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_create_graphql_client_with_valid_cert() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+            .expect("failed to generate self-signed certificate");
+        let cert_pem = cert.cert.pem();
+        let key_pem = cert.signing_key.serialize_pem();
+
+        let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
+        assert!(result.is_ok());
+    }
 }
