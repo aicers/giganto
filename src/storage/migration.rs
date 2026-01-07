@@ -1803,4 +1803,513 @@ mod tests {
                 .contains("Only versions 0.21.0 and above are supported")
         );
     }
+
+    #[test]
+    fn test_retrieve_or_create_version_creates_new_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version = super::retrieve_or_create_version(temp_dir.path()).unwrap();
+        
+        // Should create VERSION file with current package version
+        let expected = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid version");
+        assert_eq!(version, expected);
+        
+        // Verify VERSION file exists
+        assert!(temp_dir.path().join("VERSION").exists());
+    }
+
+    #[test]
+    fn test_retrieve_or_create_version_reads_existing_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version_path = temp_dir.path().join("VERSION");
+        
+        // Create VERSION file with specific version
+        let mut file = File::create(&version_path).unwrap();
+        file.write_all(b"0.25.0").unwrap();
+        drop(file);
+        
+        let version = super::retrieve_or_create_version(temp_dir.path()).unwrap();
+        assert_eq!(version, Version::parse("0.25.0").unwrap());
+    }
+
+    #[test]
+    fn test_create_version_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version_path = temp_dir.path().join("VERSION");
+        
+        super::create_version_file(&version_path).unwrap();
+        
+        let content = fs::read_to_string(&version_path).unwrap();
+        assert_eq!(content, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn test_read_version_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version_path = temp_dir.path().join("VERSION");
+        
+        let mut file = File::create(&version_path).unwrap();
+        file.write_all(b"1.2.3").unwrap();
+        drop(file);
+        
+        let version = super::read_version_file(&version_path).unwrap();
+        assert_eq!(version, Version::parse("1.2.3").unwrap());
+    }
+
+    #[test]
+    fn test_read_version_file_invalid_format() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version_path = temp_dir.path().join("VERSION");
+        
+        let mut file = File::create(&version_path).unwrap();
+        file.write_all(b"invalid_version").unwrap();
+        drop(file);
+        
+        let result = super::read_version_file(&version_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot parse VERSION"));
+    }
+
+    #[test]
+    fn test_read_version_file_not_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let version_path = temp_dir.path().join("NONEXISTENT");
+        
+        let result = super::read_version_file(&version_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot open VERSION"));
+    }
+
+    #[test]
+    fn test_get_timestamp_from_key_valid() {
+        let timestamp: i64 = 1234567890;
+        let timestamp_bytes = timestamp.to_be_bytes();
+        
+        // Create key with timestamp at the end
+        let mut key = vec![1, 2, 3, 4, 5];
+        key.extend_from_slice(&timestamp_bytes);
+        
+        let result = super::get_timestamp_from_key(&key).unwrap();
+        assert_eq!(result, timestamp);
+    }
+
+    #[test]
+    fn test_get_timestamp_from_key_exact_size() {
+        let timestamp: i64 = 9876543210;
+        let key = timestamp.to_be_bytes();
+        
+        // Key with exactly TIMESTAMP_SIZE should fail based on current logic
+        let result = super::get_timestamp_from_key(&key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid database key length"));
+    }
+
+    #[test]
+    fn test_get_timestamp_from_key_too_short() {
+        let key = vec![1, 2, 3]; // Less than TIMESTAMP_SIZE (8 bytes)
+        
+        let result = super::get_timestamp_from_key(&key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid database key length"));
+    }
+
+    #[test]
+    fn test_migrate_data_dir_already_compatible() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        
+        // Create VERSION file with compatible version
+        let version_path = temp_dir.path().join("VERSION");
+        let mut file = File::create(&version_path).unwrap();
+        file.write_all(b"0.26.0").unwrap();
+        drop(file);
+        
+        let db_options = DbOptions::default();
+        let result = migrate_data_dir(temp_dir.path(), &db_options);
+        
+        // Should succeed without migration
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_data_dir_creates_directory_if_not_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let new_dir = temp_dir.path().join("new_data_dir");
+        
+        // Directory doesn't exist yet
+        assert!(!new_dir.exists());
+        
+        let db_options = DbOptions::default();
+        let result = migrate_data_dir(&new_dir, &db_options);
+        
+        // Should create directory and VERSION file
+        assert!(result.is_ok());
+        assert!(new_dir.exists());
+        assert!(new_dir.join("VERSION").exists());
+    }
+
+    #[test]
+    fn test_rename_sources_to_sensors_no_old_cf() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+        
+        // Create database without "sources" CF
+        let db_options = DbOptions::default();
+        let _db = Database::open(&db_path, &db_options).unwrap();
+        
+        // Should succeed without doing anything
+        let result = super::rename_sources_to_sensors(&db_path, &db_options);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_21_to_0_23_netflow5_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_21_to_0_23_netflow5(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_21_to_0_23_netflow9_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_21_to_0_23_netflow9(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_21_to_0_23_secu_log_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_21_to_0_23_secu_log(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_23_0_to_0_24_0_op_log_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_23_0_to_0_24_0_op_log(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_23_0_to_0_24_0_op_log_invalid_key() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let store = db.op_log_store().unwrap();
+        
+        // Insert entry with key that's too short (no timestamp)
+        let old_op_log = OpLogBeforeV24 {
+            agent_name: "local".to_string(),
+            log_level: OpLogLevel::Info,
+            contents: "test".to_string(),
+        };
+        let serialized = bincode::serialize(&old_op_log).unwrap();
+        let short_key = b"short"; // Key without proper timestamp
+        
+        store.append(short_key, &serialized).unwrap();
+        
+        // Should handle invalid key gracefully
+        let result = super::migrate_0_23_0_to_0_24_0_op_log(&db);
+        assert!(result.is_ok());
+        
+        // The invalid entry should be skipped
+        let count = store.iter_forward().count();
+        assert_eq!(count, 1); // Original entry still exists (not migrated)
+    }
+
+    #[test]
+    fn test_migrate_0_23_0_to_0_24_0_op_log_missing_sensor() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let store = db.op_log_store().unwrap();
+        
+        // Insert entry with key that has no '@' separator
+        let old_op_log = OpLogBeforeV24 {
+            agent_name: "local".to_string(),
+            log_level: OpLogLevel::Info,
+            contents: "test".to_string(),
+        };
+        let serialized = bincode::serialize(&old_op_log).unwrap();
+        let key = StorageKey::builder()
+            .start_key("noseparator") // No '@' in the key
+            .end_key(1000_i64)
+            .build()
+            .key();
+        
+        store.append(&key, &serialized).unwrap();
+        
+        // Should handle missing sensor gracefully
+        let result = super::migrate_0_23_0_to_0_24_0_op_log(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_24_to_0_26_conn_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_24_to_0_26_conn(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_24_to_0_26_http_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_0_24_to_0_26_http(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_raw_event_0_24_to_0_26_empty_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let dns_store = db.dns_store().unwrap();
+        
+        // Empty store should migrate successfully
+        let result = super::migrate_raw_event_0_24_to_0_26::<DnsBeforeV26, DnsFromV26>(&dns_store);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_24_to_0_26_http_with_empty_filenames() {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let sensor = "test_sensor";
+        
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Create old HTTP entry with empty filename/mime_type vectors
+        let old_http = HttpFromV21BeforeV26 {
+            orig_addr: "192.168.1.1".parse().unwrap(),
+            orig_port: 80,
+            resp_addr: "192.168.1.2".parse().unwrap(),
+            resp_port: 8080,
+            proto: 6,
+            end_time: timestamp + 1000,
+            method: "GET".to_string(),
+            host: "example.com".to_string(),
+            uri: "/test".to_string(),
+            referer: String::new(),
+            version: "1.1".to_string(),
+            user_agent: "test".to_string(),
+            request_len: 100,
+            response_len: 200,
+            status_code: 200,
+            status_msg: "OK".to_string(),
+            username: String::new(),
+            password: String::new(),
+            cookie: String::new(),
+            content_encoding: String::new(),
+            content_type: "text/html".to_string(),
+            cache_control: String::new(),
+            orig_filenames: vec![], // Empty
+            orig_mime_types: vec![], // Empty
+            resp_filenames: vec![], // Empty
+            resp_mime_types: vec![], // Empty
+            post_body: vec![],
+            state: String::new(),
+        };
+        
+        let serialized = bincode::serialize(&old_http).unwrap();
+        let key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        
+        let http_store = db.http_store().unwrap();
+        http_store.append(&key, &serialized).unwrap();
+        
+        // Migrate
+        super::migrate_0_24_to_0_26_http(&db).unwrap();
+        
+        // Verify migration
+        let (_, val) = http_store.iter_forward().next().unwrap().unwrap();
+        let migrated: HttpFromV26 = bincode::deserialize(&val).unwrap();
+        
+        assert_eq!(migrated.filenames.len(), 0);
+        assert_eq!(migrated.mime_types.len(), 0);
+    }
+
+    #[test]
+    fn test_migrate_0_24_to_0_26_http_combines_filenames_and_mime_types() {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let sensor = "test_sensor";
+        
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Create old HTTP entry with both orig and resp filenames/mime_types
+        let old_http = HttpFromV21BeforeV26 {
+            orig_addr: "192.168.1.1".parse().unwrap(),
+            orig_port: 80,
+            resp_addr: "192.168.1.2".parse().unwrap(),
+            resp_port: 8080,
+            proto: 6,
+            end_time: timestamp + 1000,
+            method: "POST".to_string(),
+            host: "example.com".to_string(),
+            uri: "/upload".to_string(),
+            referer: String::new(),
+            version: "1.1".to_string(),
+            user_agent: "test".to_string(),
+            request_len: 100,
+            response_len: 200,
+            status_code: 200,
+            status_msg: "OK".to_string(),
+            username: String::new(),
+            password: String::new(),
+            cookie: String::new(),
+            content_encoding: String::new(),
+            content_type: "multipart/form-data".to_string(),
+            cache_control: String::new(),
+            orig_filenames: vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            orig_mime_types: vec!["text/plain".to_string(), "text/plain".to_string()],
+            resp_filenames: vec!["response.json".to_string()],
+            resp_mime_types: vec!["application/json".to_string()],
+            post_body: vec![1, 2, 3],
+            state: String::new(),
+        };
+        
+        let serialized = bincode::serialize(&old_http).unwrap();
+        let key = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(timestamp)
+            .build()
+            .key();
+        
+        let http_store = db.http_store().unwrap();
+        http_store.append(&key, &serialized).unwrap();
+        
+        // Migrate
+        super::migrate_0_24_to_0_26_http(&db).unwrap();
+        
+        // Verify migration - filenames and mime_types should be combined
+        let (_, val) = http_store.iter_forward().next().unwrap().unwrap();
+        let migrated: HttpFromV26 = bincode::deserialize(&val).unwrap();
+        
+        assert_eq!(migrated.filenames.len(), 3);
+        assert_eq!(migrated.filenames[0], "file1.txt");
+        assert_eq!(migrated.filenames[1], "file2.txt");
+        assert_eq!(migrated.filenames[2], "response.json");
+        
+        assert_eq!(migrated.mime_types.len(), 3);
+        assert_eq!(migrated.mime_types[0], "text/plain");
+        assert_eq!(migrated.mime_types[1], "text/plain");
+        assert_eq!(migrated.mime_types[2], "application/json");
+    }
+
+    #[test]
+    fn test_migrate_0_21_to_0_23_netflow5_multiple_entries() {
+        const TEST_SENSOR: &str = "sensor1";
+        
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+        let db = open_with_old_cfs(&db_path, &DbOptions::default());
+        
+        let netflow5_store = db.netflow5_store().unwrap();
+        
+        // Insert multiple entries
+        for i in 0..5 {
+            let key = StorageKey::builder()
+                .start_key(TEST_SENSOR)
+                .end_key(1000_i64 + i)
+                .build()
+                .key();
+            
+            let old = Netflow5BeforeV23 {
+                source: String::new(),
+                src_addr: "192.168.1.1".parse().unwrap(),
+                dst_addr: "192.168.1.2".parse().unwrap(),
+                next_hop: "192.168.1.254".parse().unwrap(),
+                input: i as u16,
+                output: 1,
+                d_pkts: 10,
+                d_octets: 1000,
+                first: 100,
+                last: 200,
+                src_port: 1000 + i as u16,
+                dst_port: 80,
+                tcp_flags: 0,
+                prot: 6,
+                tos: 0,
+                src_as: 0,
+                dst_as: 0,
+                src_mask: 0,
+                dst_mask: 0,
+                sequence: i as u32,
+                engine_type: 0,
+                engine_id: 0,
+                sampling_mode: 0,
+                sampling_rate: 0,
+            };
+            
+            let serialized = bincode::serialize(&old).unwrap();
+            netflow5_store.append(&key, &serialized).unwrap();
+        }
+        
+        // Migrate
+        super::migrate_0_21_to_0_23_netflow5(&db).unwrap();
+        
+        // Verify all entries migrated
+        let count = netflow5_store.iter_forward().count();
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_migration_0_24_to_0_26_other_protocols() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        
+        // Should succeed even with empty stores
+        let result = super::migration_0_24_to_0_26_other_protocols(&db);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_24_to_0_26() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+        
+        // Should succeed even with empty database
+        let result = super::migrate_0_24_to_0_26(&db_path, &DbOptions::default());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_23_to_0_24() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+        
+        // Should succeed even with empty database
+        let result = super::migrate_0_23_to_0_24(&db_path, &DbOptions::default());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_migrate_0_21_to_0_23() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = data_dir_to_db_path(db_dir.path());
+        
+        // Create database with old CFs
+        let _db = open_with_old_cfs(&db_path, &DbOptions::default());
+        drop(_db);
+        
+        // Should succeed
+        let result = super::migrate_0_21_to_0_23(&db_path, &DbOptions::default());
+        assert!(result.is_ok());
+    }
 }
