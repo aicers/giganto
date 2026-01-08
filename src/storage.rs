@@ -1292,14 +1292,27 @@ pub fn repair_db(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
-    use super::{Database, DbOptions, StorageKey};
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use giganto_client::ingest::network::Conn;
+    use giganto_client::ingest::statistics::Statistics;
+    use tempfile::TempDir;
+    use tokio::sync::Notify;
+
+    use super::{Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, StatisticsIter, StorageKey};
+
+    fn setup_db() -> (TempDir, Database) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        (dir, db)
+    }
+
     /// Test `SensorStore` insert with `DateTime` conversion
     #[test]
     fn test_sensor_store_datetime_to_timestamp() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let (_dir, db) = setup_db();
         let sensor_store = db.sensors_store().unwrap();
 
         // Test with current time
@@ -1323,9 +1336,28 @@ mod tests {
     }
 
     #[test]
+    fn test_sensor_store_names_and_list() {
+        let (_dir, db) = setup_db();
+        let sensor_store = db.sensors_store().unwrap();
+
+        let now = Utc::now();
+        sensor_store.insert("sensor1", now).unwrap();
+        sensor_store.insert("sensor2", now).unwrap();
+
+        let names = sensor_store.names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&b"sensor1".to_vec()));
+        assert!(names.contains(&b"sensor2".to_vec()));
+
+        let list = sensor_store.sensor_list();
+        assert_eq!(list.len(), 2);
+        assert!(list.contains("sensor1"));
+        assert!(list.contains("sensor2"));
+    }
+
+    #[test]
     fn test_batched_multi_get_from_ts_returns_sorted_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let (_dir, db) = setup_db();
         let store = db.conn_store().unwrap();
         let sensor = "batch-sensor";
         let other_sensor = "ignored-sensor";
@@ -1361,8 +1393,137 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, ts_early);
         assert_eq!(results[0].1, b"alpha");
-        assert_eq!(results[1].0, ts_late);
+        assert_eq!(results[1].0, ts_early + Duration::seconds(2));
         assert_eq!(results[1].1, b"omega");
+    }
+
+    #[test]
+    fn test_raw_event_store_delete() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        let key = b"test_key";
+        let value = b"test_value";
+
+        store.append(key, value).unwrap();
+        store.delete(key).unwrap();
+
+        let mut iter = store.iter_forward();
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_raw_event_store_batched_multi_get_with_sensor() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        let sensor = "sensor1";
+
+        let ts1 = 1_000_000_000;
+        let ts2 = 2_000_000_000;
+
+        let key1 = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(ts1)
+            .build()
+            .key();
+        let key2 = StorageKey::builder()
+            .start_key(sensor)
+            .end_key(ts2)
+            .build()
+            .key();
+
+        store.append(&key1, b"val1").unwrap();
+        store.append(&key2, b"val2").unwrap();
+
+        let timestamps = [ts1, ts2, 3_000_000_000];
+        let results = store.batched_multi_get_with_sensor(sensor, &timestamps);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, ts1);
+        assert_eq!(results[0].1, sensor);
+        assert_eq!(results[0].2, b"val1");
+        assert_eq!(results[1].0, ts2);
+        assert_eq!(results[1].1, sensor);
+        assert_eq!(results[1].2, b"val2");
+    }
+
+    #[test]
+    fn test_raw_event_store_iter_forward() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+
+        store.append(b"key1", b"val1").unwrap();
+        store.append(b"key2", b"val2").unwrap();
+
+        let mut iter = store.iter_forward();
+        let item1 = iter.next().unwrap().unwrap();
+        assert_eq!(item1.0.as_ref(), b"key1");
+        assert_eq!(item1.1.as_ref(), b"val1");
+
+        let item2 = iter.next().unwrap().unwrap();
+        assert_eq!(item2.0.as_ref(), b"key2");
+        assert_eq!(item2.1.as_ref(), b"val2");
+
+        assert!(iter.next().is_none());
+    }
+
+    fn create_test_conn(orig_addr: &str) -> Conn {
+        Conn {
+            orig_addr: orig_addr.parse().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse().unwrap(),
+            resp_port: 80,
+            proto: 6,
+            conn_state: "sf".to_string(),
+            start_time: Utc::now().timestamp_nanos_opt().unwrap(),
+            duration: 1000,
+            service: "-".to_string(),
+            orig_bytes: 77,
+            resp_bytes: 295,
+            orig_pkts: 397,
+            resp_pkts: 511,
+            orig_l2_bytes: 21515,
+            resp_l2_bytes: 27889,
+        }
+    }
+
+    fn create_test_statistics() -> Statistics {
+        Statistics {
+            core: 0,
+            period: 600,
+            stats: vec![],
+        }
+    }
+
+    #[test]
+    fn test_boundary_iter() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+
+        let conn = create_test_conn("192.168.4.76");
+        let value = bincode::serialize(&conn).unwrap();
+        store.append(b"key1", &value).unwrap();
+
+        let mut boundary_iter = store.boundary_iter(b"key1", b"key2", super::Direction::Forward);
+
+        let item = boundary_iter.next().unwrap().unwrap();
+        assert_eq!(item.0.as_ref(), b"key1");
+        assert_eq!(item.1.orig_addr, conn.orig_addr);
+    }
+
+    #[test]
+    fn test_statistics_iter() {
+        let (_dir, db) = setup_db();
+        let store = db.statistics_store().unwrap();
+
+        let stats = create_test_statistics();
+        let value = bincode::serialize(&stats).unwrap();
+        store.append(b"key1", &value).unwrap();
+
+        let boundary_iter = store.boundary_iter(b"key1", b"key2", super::Direction::Forward);
+        let mut stats_iter = StatisticsIter::new(boundary_iter);
+
+        let item = stats_iter.next().unwrap();
+        assert_eq!(item.0.as_ref(), b"key1");
     }
 
     /// Test `StorageKeyBuilder` with timestamp boundaries
@@ -1556,5 +1717,140 @@ mod tests {
         let mut expected_zero = 7_i64.to_be_bytes().to_vec();
         expected_zero.extend_from_slice(&i64::MAX.to_be_bytes());
         assert_eq!(key_zero, expected_zero);
+    }
+
+    #[test]
+    fn test_storage_key_builder_mid_key() {
+        let key = StorageKey::builder()
+            .start_key("source")
+            .mid_key(Some(b"mid".to_vec()))
+            .end_key(12345)
+            .build()
+            .key();
+
+        let mut expected = b"source\0".to_vec();
+        expected.extend_from_slice(b"mid\0");
+        expected.extend_from_slice(&12345_i64.to_be_bytes());
+        assert_eq!(key, expected);
+
+        let key_none = StorageKey::builder()
+            .start_key("source")
+            .mid_key(None)
+            .end_key(12345)
+            .build()
+            .key();
+
+        let mut expected_none = b"source\0".to_vec();
+        expected_none.extend_from_slice(&12345_i64.to_be_bytes());
+        assert_eq!(key_none, expected_none);
+    }
+
+    #[test]
+    fn test_to_hms() {
+        assert_eq!(
+            super::to_hms(Duration::seconds(0).to_std().unwrap()),
+            "00:00:00"
+        );
+        assert_eq!(
+            super::to_hms(Duration::seconds(61).to_std().unwrap()),
+            "00:01:01"
+        );
+        assert_eq!(
+            super::to_hms(Duration::seconds(3661).to_std().unwrap()),
+            "01:01:01"
+        );
+    }
+
+    #[test]
+    fn test_data_dir_to_db_path() {
+        let path = std::path::Path::new("/tmp/data");
+        let db_path = super::data_dir_to_db_path(path);
+        assert_eq!(db_path, path.join("db"));
+    }
+
+    #[test]
+    fn test_validate_compression_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path();
+
+        // First run: should create metadata
+        super::validate_compression_metadata(data_dir, true).unwrap();
+        let metadata_path = data_dir.join("COMPRESSION");
+        assert!(metadata_path.exists());
+        assert_eq!(std::fs::read_to_string(metadata_path).unwrap(), "enabled");
+
+        // Second run: should match
+        super::validate_compression_metadata(data_dir, true).unwrap();
+
+        // Third run: should mismatch
+        let result = super::validate_compression_metadata(data_dir, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_shutdown() {
+        let (_dir, db) = setup_db();
+        let result = db.shutdown();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_properties_cf() {
+        let (_dir, db) = setup_db();
+        let conn = db.conn_store().unwrap();
+        conn.append(b"key", b"value").unwrap();
+        let props = db
+            .properties_cf("conn")
+            .expect("properties_cf should succeed");
+        assert!(props.estimate_num_keys > 0);
+        assert!(!props.stats.is_empty());
+    }
+
+    #[test]
+    fn test_retain_period_store() {
+        let (_dir, db) = setup_db();
+        let stores = db
+            .retain_period_store()
+            .expect("Failed to get retain stores");
+
+        let total_count = stores.standard_cfs.len() + stores.non_standard_cfs.len();
+        assert_eq!(total_count, RAW_DATA_COLUMN_FAMILY_NAMES.len());
+    }
+
+    #[tokio::test]
+    async fn test_retain_periodically_shutdown() {
+        let (_dir, db) = setup_db();
+        let notify_shutdown = Arc::new(Notify::new());
+        let running_flag = Arc::new(AtomicBool::new(false));
+
+        let shutdown_clone = notify_shutdown.clone();
+        let task = tokio::spawn(async move {
+            super::retain_periodically(
+                std::time::Duration::from_millis(10),
+                std::time::Duration::from_secs(3600),
+                db,
+                shutdown_clone,
+                running_flag,
+            )
+            .await
+        });
+
+        notify_shutdown.notify_one();
+        let result = task.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_db_usage() {
+        let (over_threshold, over_low) = super::check_db_usage().await;
+        if over_threshold {
+            assert!(over_low);
+        }
+    }
+
+    #[test]
+    fn test_repair_db() {
+        let dir = tempfile::tempdir().unwrap();
+        super::repair_db(dir.path(), 8000, 512, 8, 2, true);
     }
 }
