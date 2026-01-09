@@ -14,9 +14,15 @@ use giganto_client::{
     connection::client_handshake,
     ingest::{
         log::Log,
+        netflow::{Netflow5, Netflow9},
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
             Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        },
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -35,7 +41,8 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tempfile::TempDir;
+use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
 
 static INIT: OnceLock<()> = OnceLock::new();
 
@@ -48,8 +55,11 @@ fn init_crypto() {
 use super::Server;
 use crate::{
     comm::{
+        IngestSensors, StreamDirectChannels,
+        ingest::NetworkKey,
         new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         peer::{PeerIdentity, PeerInfo},
+        publish::send_direct_stream,
         to_cert_chain, to_private_key, to_root_cert,
     },
     server::Certs,
@@ -62,21 +72,678 @@ fn get_token() -> &'static Mutex<u32> {
     TOKEN.get_or_init(|| Mutex::new(0))
 }
 
+struct TestHarness {
+    _lock: MutexGuard<'static, u32>,
+    _temp_dir: TempDir,
+    db: Database,
+    publish: TestClient,
+    stream_direct_channels: StreamDirectChannels,
+}
+
+fn build_ingest_sensors_from_list(list: &[&str]) -> IngestSensors {
+    Arc::new(RwLock::new(
+        list.iter()
+            .copied()
+            .map(str::to_string)
+            .collect::<HashSet<String>>(),
+    ))
+}
+
+fn build_ingest_sensors() -> IngestSensors {
+    NODE1.build_ingest_sensors()
+}
+
+fn build_certs_from_paths(cert_path: &str, key_path: &str) -> Arc<Certs> {
+    let cert_pem = fs::read(cert_path).unwrap();
+    let cert = to_cert_chain(&cert_pem).unwrap();
+    let key_pem = fs::read(key_path).unwrap();
+    let key = to_private_key(&key_pem).unwrap();
+    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+    let root = to_root_cert(&ca_cert_path).unwrap();
+
+    Arc::new(Certs {
+        certs: cert,
+        key,
+        root,
+    })
+}
+
+fn build_test_certs() -> Arc<Certs> {
+    NODE1.build_certs()
+}
+
+async fn setup_test_harness() -> TestHarness {
+    init_crypto();
+
+    let lock = get_token().lock().await;
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(temp_dir.path(), &DbOptions::default()).unwrap();
+    let pcap_sensors = new_pcap_sensors();
+    let stream_direct_channels = new_stream_direct_channels();
+    let ingest_sensors = build_ingest_sensors();
+    let (peers, peer_idents) = new_peers_data(None);
+    let certs = build_test_certs();
+
+    tokio::spawn(server().run(
+        db.clone(),
+        pcap_sensors,
+        stream_direct_channels.clone(),
+        ingest_sensors,
+        peers,
+        peer_idents,
+        certs,
+        Arc::new(Notify::new()),
+    ));
+
+    let publish = TestClient::new().await;
+
+    TestHarness {
+        _lock: lock,
+        _temp_dir: temp_dir,
+        db,
+        publish,
+        stream_direct_channels,
+    }
+}
+
+fn assert_range_result<T: serde::Serialize>(
+    mut result_data: Vec<Option<T>>,
+    expected: &[u8],
+    done: &[u8],
+    context: &str,
+) {
+    let done_payload = bincode::serialize(&result_data.pop().unwrap()).unwrap();
+    assert_eq!(done, done_payload, "done payload mismatch: {context}");
+    let payload = bincode::serialize(&result_data.pop().unwrap()).unwrap();
+    assert_eq!(expected, payload, "response payload mismatch: {context}");
+}
+
+async fn fetch_raw_data(
+    publish: &TestClient,
+    kind: &str,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<(i64, String, Vec<u8>)> {
+    let (mut send_pub_req, mut recv_pub_resp) =
+        publish.conn.open_bi().await.expect("failed to open stream");
+
+    let message = RequestRawData {
+        kind: String::from(kind),
+        input: vec![(String::from(sensor), vec![timestamp])],
+    };
+
+    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
+        .await
+        .unwrap();
+
+    let mut result_data = Vec::new();
+    loop {
+        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
+            .await
+            .unwrap();
+
+        if let Some(data) = resp_data {
+            result_data.push(data);
+        } else {
+            break;
+        }
+    }
+
+    result_data
+}
+
+macro_rules! build_network_expected_case {
+    ($kind:expr, $type:ty, $insert_fn:ident, $store_fn:ident, $db:expr, $sensor:expr, $timestamp:expr, $done_type:ty) => {{
+        let ser_body = $insert_fn(&$db.$store_fn().unwrap(), $sensor, $timestamp);
+        let expected = bincode::deserialize::<$type>(&ser_body)
+            .unwrap()
+            .response_data($timestamp, $sensor)
+            .unwrap();
+        (expected, <$done_type>::response_done().unwrap())
+    }};
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_network_expected(
+    db: &Database,
+    kind: &str,
+    sensor: &str,
+    timestamp: i64,
+) -> (Vec<u8>, Vec<u8>) {
+    match kind {
+        "conn" => build_network_expected_case!(
+            kind,
+            Conn,
+            insert_conn_raw_event,
+            conn_store,
+            db,
+            sensor,
+            timestamp,
+            Conn
+        ),
+        "dns" => build_network_expected_case!(
+            kind,
+            Dns,
+            insert_dns_raw_event,
+            dns_store,
+            db,
+            sensor,
+            timestamp,
+            Dns
+        ),
+        "malformed_dns" => build_network_expected_case!(
+            kind,
+            MalformedDns,
+            insert_malformed_dns_raw_event,
+            malformed_dns_store,
+            db,
+            sensor,
+            timestamp,
+            MalformedDns
+        ),
+        "http" => build_network_expected_case!(
+            kind,
+            Http,
+            insert_http_raw_event,
+            http_store,
+            db,
+            sensor,
+            timestamp,
+            Http
+        ),
+        "rdp" => build_network_expected_case!(
+            kind,
+            Rdp,
+            insert_rdp_raw_event,
+            rdp_store,
+            db,
+            sensor,
+            timestamp,
+            Rdp
+        ),
+        "smtp" => build_network_expected_case!(
+            kind,
+            Smtp,
+            insert_smtp_raw_event,
+            smtp_store,
+            db,
+            sensor,
+            timestamp,
+            Conn
+        ),
+        "ntlm" => build_network_expected_case!(
+            kind,
+            Ntlm,
+            insert_ntlm_raw_event,
+            ntlm_store,
+            db,
+            sensor,
+            timestamp,
+            Ntlm
+        ),
+        "kerberos" => build_network_expected_case!(
+            kind,
+            Kerberos,
+            insert_kerberos_raw_event,
+            kerberos_store,
+            db,
+            sensor,
+            timestamp,
+            Kerberos
+        ),
+        "ssh" => build_network_expected_case!(
+            kind,
+            Ssh,
+            insert_ssh_raw_event,
+            ssh_store,
+            db,
+            sensor,
+            timestamp,
+            Ssh
+        ),
+        "dce rpc" => build_network_expected_case!(
+            kind,
+            DceRpc,
+            insert_dce_rpc_raw_event,
+            dce_rpc_store,
+            db,
+            sensor,
+            timestamp,
+            DceRpc
+        ),
+        "ftp" => build_network_expected_case!(
+            kind,
+            Ftp,
+            insert_ftp_raw_event,
+            ftp_store,
+            db,
+            sensor,
+            timestamp,
+            Ftp
+        ),
+        "mqtt" => build_network_expected_case!(
+            kind,
+            Mqtt,
+            insert_mqtt_raw_event,
+            mqtt_store,
+            db,
+            sensor,
+            timestamp,
+            Mqtt
+        ),
+        "ldap" => build_network_expected_case!(
+            kind,
+            Ldap,
+            insert_ldap_raw_event,
+            ldap_store,
+            db,
+            sensor,
+            timestamp,
+            Ldap
+        ),
+        "tls" => build_network_expected_case!(
+            kind,
+            Tls,
+            insert_tls_raw_event,
+            tls_store,
+            db,
+            sensor,
+            timestamp,
+            Tls
+        ),
+        "smb" => build_network_expected_case!(
+            kind,
+            Smb,
+            insert_smb_raw_event,
+            smb_store,
+            db,
+            sensor,
+            timestamp,
+            Smb
+        ),
+        "nfs" => build_network_expected_case!(
+            kind,
+            Nfs,
+            insert_nfs_raw_event,
+            nfs_store,
+            db,
+            sensor,
+            timestamp,
+            Nfs
+        ),
+        "bootp" => build_network_expected_case!(
+            kind,
+            Bootp,
+            insert_bootp_raw_event,
+            bootp_store,
+            db,
+            sensor,
+            timestamp,
+            Bootp
+        ),
+        "dhcp" => build_network_expected_case!(
+            kind,
+            Dhcp,
+            insert_dhcp_raw_event,
+            dhcp_store,
+            db,
+            sensor,
+            timestamp,
+            Dhcp
+        ),
+        "radius" => build_network_expected_case!(
+            kind,
+            Radius,
+            insert_radius_raw_event,
+            radius_store,
+            db,
+            sensor,
+            timestamp,
+            Radius
+        ),
+        _ => unreachable!("unknown network kind: {kind}"),
+    }
+}
+
+macro_rules! build_sysmon_expected_case {
+    ($type:ty, $insert_fn:ident, $store_fn:ident, $db:expr, $sensor:expr, $timestamp:expr) => {{
+        let ser_body = $insert_fn(&$db.$store_fn().unwrap(), $sensor, $timestamp);
+        bincode::deserialize::<$type>(&ser_body)
+            .unwrap()
+            .response_data($timestamp, $sensor)
+            .unwrap()
+    }};
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_sysmon_expected(db: &Database, kind: &str, sensor: &str, timestamp: i64) -> Vec<u8> {
+    match kind {
+        "process_create" => build_sysmon_expected_case!(
+            ProcessCreate,
+            insert_process_create_raw_event,
+            process_create_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "file_create_time" => build_sysmon_expected_case!(
+            FileCreationTimeChanged,
+            insert_file_create_time_raw_event,
+            file_create_time_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "network_connect" => build_sysmon_expected_case!(
+            NetworkConnection,
+            insert_network_connect_raw_event,
+            network_connect_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "process_terminate" => build_sysmon_expected_case!(
+            ProcessTerminated,
+            insert_process_terminate_raw_event,
+            process_terminate_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "image_load" => build_sysmon_expected_case!(
+            ImageLoaded,
+            insert_image_load_raw_event,
+            image_load_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "file_create" => build_sysmon_expected_case!(
+            FileCreate,
+            insert_file_create_raw_event,
+            file_create_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "registry_value_set" => build_sysmon_expected_case!(
+            RegistryValueSet,
+            insert_registry_value_set_raw_event,
+            registry_value_set_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "registry_key_rename" => build_sysmon_expected_case!(
+            RegistryKeyValueRename,
+            insert_registry_key_rename_raw_event,
+            registry_key_rename_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "file_create_stream_hash" => build_sysmon_expected_case!(
+            FileCreateStreamHash,
+            insert_file_create_stream_hash_raw_event,
+            file_create_stream_hash_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "pipe_event" => build_sysmon_expected_case!(
+            PipeEvent,
+            insert_pipe_event_raw_event,
+            pipe_event_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "dns_query" => build_sysmon_expected_case!(
+            DnsEvent,
+            insert_dns_query_raw_event,
+            dns_query_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "file_delete" => build_sysmon_expected_case!(
+            FileDelete,
+            insert_file_delete_raw_event,
+            file_delete_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "process_tamper" => build_sysmon_expected_case!(
+            ProcessTampering,
+            insert_process_tamper_raw_event,
+            process_tamper_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        "file_delete_detected" => build_sysmon_expected_case!(
+            FileDeleteDetected,
+            insert_file_delete_detected_raw_event,
+            file_delete_detected_store,
+            db,
+            sensor,
+            timestamp
+        ),
+        _ => unreachable!("unknown sysmon kind: {kind}"),
+    }
+}
+
+type StreamInsertFn = fn(&Database, &str, i64) -> Vec<u8>;
+
+struct NetworkStreamCase {
+    record_type: RequestStreamRecord,
+    kind: &'static str,
+    semi_payload: fn() -> Vec<u8>,
+    direct_payload: fn() -> Vec<u8>,
+    insert_db: StreamInsertFn,
+}
+
+async fn assert_semi_supervised_stream(
+    publish: &mut TestClient,
+    record_type: RequestStreamRecord,
+    request: &RequestSemiSupervisedStream,
+    stream_direct_channels: &StreamDirectChannels,
+    kind: &str,
+    sensors: &[&str],
+    payload_fn: fn() -> Vec<u8>,
+) {
+    send_stream_request(
+        &mut publish.send,
+        StreamRequestPayload::SemiSupervised {
+            record_type,
+            request: request.clone(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut stream = publish.conn.accept_uni().await.unwrap();
+    let start_msg = receive_semi_supervised_stream_start_message(&mut stream)
+        .await
+        .unwrap();
+    assert_eq!(start_msg, record_type);
+
+    for sensor in sensors {
+        let send_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let key = NetworkKey::new(sensor, kind);
+        let payload = payload_fn();
+
+        send_direct_stream(
+            &key,
+            &payload,
+            send_time,
+            sensor,
+            stream_direct_channels.clone(),
+        )
+        .await
+        .unwrap();
+
+        let recv_data = receive_semi_supervised_data(&mut stream).await.unwrap();
+        assert_eq!(payload, recv_data[20..]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn assert_time_series_generator_stream(
+    publish: &mut TestClient,
+    record_type: RequestStreamRecord,
+    request: &RequestTimeSeriesGeneratorStream,
+    stream_direct_channels: &StreamDirectChannels,
+    kind: &str,
+    sensor: &str,
+    policy_id: u32,
+    db_timestamp: i64,
+    db_payload: Vec<u8>,
+    direct_timestamp: i64,
+    direct_payload: Vec<u8>,
+) {
+    send_stream_request(
+        &mut publish.send,
+        StreamRequestPayload::TimeSeriesGenerator {
+            record_type,
+            request: request.clone(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut stream = publish.conn.accept_uni().await.unwrap();
+    let start_msg = receive_time_series_generator_stream_start_message(&mut stream)
+        .await
+        .unwrap();
+    assert_eq!(start_msg, policy_id);
+
+    let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+        .await
+        .unwrap();
+    assert_eq!(db_timestamp, recv_timestamp);
+    assert_eq!(db_payload, recv_data);
+
+    let key = NetworkKey::new(sensor, kind);
+    send_direct_stream(
+        &key,
+        &direct_payload,
+        direct_timestamp,
+        sensor,
+        stream_direct_channels.clone(),
+    )
+    .await
+    .unwrap();
+
+    let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+        .await
+        .unwrap();
+    assert_eq!(direct_timestamp, recv_timestamp);
+    assert_eq!(direct_payload, recv_data);
+}
+
+macro_rules! impl_insert_stream {
+    ($($name:ident, $raw_fn:ident, $store_fn:ident);+ $(;)?) => {
+        $(
+            fn $name(db: &Database, sensor: &str, timestamp: i64) -> Vec<u8> {
+                $raw_fn(&db.$store_fn().unwrap(), sensor, timestamp)
+            }
+        )+
+    };
+}
+
+impl_insert_stream! {
+    insert_conn_stream, insert_conn_raw_event, conn_store;
+    insert_dns_stream, insert_dns_raw_event, dns_store;
+    insert_rdp_stream, insert_rdp_raw_event, rdp_store;
+    insert_http_stream, insert_http_raw_event, http_store;
+    insert_smtp_stream, insert_smtp_raw_event, smtp_store;
+    insert_ntlm_stream, insert_ntlm_raw_event, ntlm_store;
+    insert_kerberos_stream, insert_kerberos_raw_event, kerberos_store;
+    insert_ssh_stream, insert_ssh_raw_event, ssh_store;
+    insert_dce_rpc_stream, insert_dce_rpc_raw_event, dce_rpc_store;
+    insert_ftp_stream, insert_ftp_raw_event, ftp_store;
+    insert_mqtt_stream, insert_mqtt_raw_event, mqtt_store;
+    insert_ldap_stream, insert_ldap_raw_event, ldap_store;
+    insert_tls_stream, insert_tls_raw_event, tls_store;
+    insert_smb_stream, insert_smb_raw_event, smb_store;
+    insert_nfs_stream, insert_nfs_raw_event, nfs_store;
+    insert_bootp_stream, insert_bootp_raw_event, bootp_store;
+    insert_dhcp_stream, insert_dhcp_raw_event, dhcp_store;
+    insert_radius_stream, insert_radius_raw_event, radius_store;
+}
+
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const NODE1_CERT_PATH: &str = "tests/certs/node1/cert.pem";
-const NODE1_KEY_PATH: &str = "tests/certs/node1/key.pem";
-const NODE1_HOST: &str = "node1";
-const NODE1_TEST_PORT: u16 = 60191;
+struct NodeConfig {
+    cert_path: &'static str,
+    key_path: &'static str,
+    host: &'static str,
+    port: u16,
+    ingest_sensors: &'static [&'static str],
+}
 
-const NODE2_CERT_PATH: &str = "tests/certs/node2/cert.pem";
-const NODE2_KEY_PATH: &str = "tests/certs/node2/key.pem";
-const NODE2_HOST: &str = "node2";
-const NODE2_PORT: u16 = 60192;
+impl NodeConfig {
+    fn socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), self.port)
+    }
 
-const NODE1_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src1", "src 1", "ingest src 1"];
-const NODE2_GIGANTO_INGEST_SENSORS: [&str; 3] = ["src2", "src 2", "ingest src 2"];
+    fn socket_addr_v4(&self) -> SocketAddr {
+        SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), self.port)
+    }
+
+    fn build_certs(&self) -> Arc<Certs> {
+        build_certs_from_paths(self.cert_path, self.key_path)
+    }
+
+    fn build_ingest_sensors(&self) -> IngestSensors {
+        build_ingest_sensors_from_list(self.ingest_sensors)
+    }
+
+    fn peer_info(&self) -> PeerInfo {
+        PeerInfo {
+            ingest_sensors: self
+                .ingest_sensors
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<HashSet<String>>(),
+            graphql_port: None,
+            publish_port: Some(self.port),
+        }
+    }
+
+    fn peer_identity(&self) -> PeerIdentity {
+        PeerIdentity {
+            addr: self.socket_addr(),
+            hostname: self.host.to_string(),
+        }
+    }
+
+    fn peer_identity_v4(&self) -> PeerIdentity {
+        PeerIdentity {
+            addr: self.socket_addr_v4(),
+            hostname: self.host.to_string(),
+        }
+    }
+}
+
+const NODE1: NodeConfig = NodeConfig {
+    cert_path: "tests/certs/node1/cert.pem",
+    key_path: "tests/certs/node1/key.pem",
+    host: "node1",
+    port: 60191,
+    ingest_sensors: &["src1", "src 1", "ingest src 1"],
+};
+
+const NODE2: NodeConfig = NodeConfig {
+    cert_path: "tests/certs/node2/cert.pem",
+    key_path: "tests/certs/node2/key.pem",
+    host: "node2",
+    port: 60192,
+    ingest_sensors: &["src2", "src 2", "ingest src 2"],
+};
 
 struct TestClient {
     send: SendStream,
@@ -88,10 +755,7 @@ impl TestClient {
     async fn new() -> Self {
         let endpoint = init_client();
         let conn = endpoint
-            .connect(
-                SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-                NODE1_HOST,
-            )
+            .connect(NODE1.socket_addr(), NODE1.host)
             .expect(
                 "Failed to connect server's endpoint, Please check if the setting value is correct",
             )
@@ -104,43 +768,57 @@ impl TestClient {
             endpoint,
         }
     }
+
+    async fn send_range_request<T: serde::de::DeserializeOwned>(
+        &self,
+        message_code: MessageCode,
+        message: RequestRange,
+    ) -> Vec<Option<T>> {
+        let (mut send_pub_req, mut recv_pub_resp) =
+            self.conn.open_bi().await.expect("failed to open stream");
+        send_range_data_request(&mut send_pub_req, message_code, message)
+            .await
+            .unwrap();
+
+        let mut result_data = Vec::new();
+        loop {
+            let resp_data = receive_range_data::<Option<T>>(&mut recv_pub_resp)
+                .await
+                .unwrap();
+            let is_done = resp_data.is_none();
+
+            result_data.push(resp_data);
+            if is_done {
+                break;
+            }
+        }
+
+        result_data
+    }
 }
 
 fn server() -> Server {
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
+    let certs = build_test_certs();
 
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    Server::new(
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-        &certs,
-    )
+    Server::new(NODE1.socket_addr(), &certs)
 }
 
 fn init_client() -> Endpoint {
-    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) = fs::read(NODE1_CERT_PATH).map(|x| {
+    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) = fs::read(NODE1.cert_path).map(|x| {
         (
             x,
-            fs::read(NODE1_KEY_PATH).expect("Failed to Read key file"),
+            fs::read(NODE1.key_path).expect("Failed to Read key file"),
         )
     }) {
         x
     } else {
         panic!(
-            "failed to read (cert, key) file, {NODE1_CERT_PATH}, {NODE1_KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
+            "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
+            NODE1.cert_path, NODE1.key_path
         );
     };
 
-    let pv_key = if Path::new(NODE1_KEY_PATH)
+    let pv_key = if Path::new(NODE1.key_path)
         .extension()
         .is_some_and(|x| x == "der")
     {
@@ -151,7 +829,7 @@ fn init_client() -> Endpoint {
             .expect("no private keys found")
     };
 
-    let cert_chain = if Path::new(NODE1_CERT_PATH)
+    let cert_chain = if Path::new(NODE1.cert_path)
         .extension()
         .is_some_and(|x| x == "der")
     {
@@ -169,14 +847,45 @@ fn init_client() -> Endpoint {
         .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
 
-    let mut endpoint =
-        quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
-            .expect("Failed to create endpoint");
+    let mut endpoint = Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
+        .expect("Failed to create endpoint");
     endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
             .expect("Failed to generate QuicClientConfig"),
     )));
     endpoint
+}
+
+fn default_time_range() -> (i64, i64) {
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .expect("valid date")
+            .and_hms_opt(0, 0, 0)
+            .expect("valid time"),
+        Utc,
+    );
+    let end = DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from_ymd_opt(2050, 12, 31)
+            .expect("valid date")
+            .and_hms_opt(23, 59, 59)
+            .expect("valid time"),
+        Utc,
+    );
+    (
+        start.timestamp_nanos_opt().unwrap(),
+        end.timestamp_nanos_opt().unwrap(),
+    )
+}
+
+fn build_range_request(sensor: &str, kind: &str) -> RequestRange {
+    let (start, end) = default_time_range();
+    RequestRange {
+        sensor: sensor.to_string(),
+        kind: kind.to_string(),
+        start,
+        end,
+        count: 5,
+    }
 }
 
 fn gen_network_event_key(sensor: &str, kind: Option<&str>, timestamp: i64) -> Vec<u8> {
@@ -825,86 +1534,39 @@ fn gen_radius_raw_event() -> Vec<u8> {
     bincode::serialize(&radius_body).unwrap()
 }
 
-fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_conn_body = gen_conn_raw_event();
-    store.append(&key, &ser_conn_body).unwrap();
-    ser_conn_body
+macro_rules! impl_insert_network_raw_event {
+    ($($name:ident, $type:ty, $gen_fn:ident);+ $(;)?) => {
+        $(
+            fn $name(store: &RawEventStore<$type>, sensor: &str, timestamp: i64) -> Vec<u8> {
+                let key = gen_network_event_key(sensor, None, timestamp);
+                let ser_body = $gen_fn();
+                store.append(&key, &ser_body).unwrap();
+                ser_body
+            }
+        )+
+    };
 }
 
-fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_dns_body = gen_dns_raw_event();
-    store.append(&key, &ser_dns_body).unwrap();
-    ser_dns_body
-}
-
-fn insert_malformed_dns_raw_event(
-    store: &RawEventStore<MalformedDns>,
-    sensor: &str,
-    timestamp: i64,
-) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_malformed_dns_body = gen_malformed_dns_raw_event();
-    store.append(&key, &ser_malformed_dns_body).unwrap();
-    ser_malformed_dns_body
-}
-
-fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_rdp_body = gen_rdp_raw_event();
-    store.append(&key, &ser_rdp_body).unwrap();
-    ser_rdp_body
-}
-
-fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_http_body = gen_http_raw_event();
-    store.append(&key, &ser_http_body).unwrap();
-    ser_http_body
-}
-
-fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_smtp_body = gen_smtp_raw_event();
-    store.append(&key, &ser_smtp_body).unwrap();
-    ser_smtp_body
-}
-
-fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_ntlm_body = gen_ntlm_raw_event();
-    store.append(&key, &ser_ntlm_body).unwrap();
-    ser_ntlm_body
-}
-
-fn insert_kerberos_raw_event(
-    store: &RawEventStore<Kerberos>,
-    sensor: &str,
-    timestamp: i64,
-) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_kerberos_body = gen_kerberos_raw_event();
-    store.append(&key, &ser_kerberos_body).unwrap();
-    ser_kerberos_body
-}
-
-fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_ssh_body = gen_ssh_raw_event();
-    store.append(&key, &ser_ssh_body).unwrap();
-    ser_ssh_body
-}
-
-fn insert_dce_rpc_raw_event(
-    store: &RawEventStore<DceRpc>,
-    sensor: &str,
-    timestamp: i64,
-) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_dce_rpc_body = gen_dce_rpc_raw_event();
-    store.append(&key, &ser_dce_rpc_body).unwrap();
-    ser_dce_rpc_body
+impl_insert_network_raw_event! {
+    insert_conn_raw_event, Conn, gen_conn_raw_event;
+    insert_dns_raw_event, Dns, gen_dns_raw_event;
+    insert_malformed_dns_raw_event, MalformedDns, gen_malformed_dns_raw_event;
+    insert_rdp_raw_event, Rdp, gen_rdp_raw_event;
+    insert_http_raw_event, Http, gen_http_raw_event;
+    insert_smtp_raw_event, Smtp, gen_smtp_raw_event;
+    insert_ntlm_raw_event, Ntlm, gen_ntlm_raw_event;
+    insert_kerberos_raw_event, Kerberos, gen_kerberos_raw_event;
+    insert_ssh_raw_event, Ssh, gen_ssh_raw_event;
+    insert_dce_rpc_raw_event, DceRpc, gen_dce_rpc_raw_event;
+    insert_ftp_raw_event, Ftp, gen_ftp_raw_event;
+    insert_mqtt_raw_event, Mqtt, gen_mqtt_raw_event;
+    insert_ldap_raw_event, Ldap, gen_ldap_raw_event;
+    insert_tls_raw_event, Tls, gen_tls_raw_event;
+    insert_smb_raw_event, Smb, gen_smb_raw_event;
+    insert_nfs_raw_event, Nfs, gen_nfs_raw_event;
+    insert_bootp_raw_event, Bootp, gen_bootp_raw_event;
+    insert_dhcp_raw_event, Dhcp, gen_dhcp_raw_event;
+    insert_radius_raw_event, Radius, gen_radius_raw_event;
 }
 
 fn insert_log_raw_event(
@@ -930,73 +1592,464 @@ fn insert_periodic_time_series_raw_event(
     ser_periodic_time_series_body
 }
 
-fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_ftp_body = gen_ftp_raw_event();
-    store.append(&key, &ser_ftp_body).unwrap();
-    ser_ftp_body
+fn gen_process_create_raw_event() -> Vec<u8> {
+    let body = ProcessCreate {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        file_version: "1.0".to_string(),
+        description: "desc".to_string(),
+        product: "product".to_string(),
+        company: "company".to_string(),
+        original_file_name: "orig".to_string(),
+        command_line: "cmd".to_string(),
+        current_directory: "dir".to_string(),
+        user: "user".to_string(),
+        logon_guid: "logon".to_string(),
+        logon_id: 1,
+        terminal_session_id: 1,
+        integrity_level: "high".to_string(),
+        hashes: vec!["hash".to_string()],
+        parent_process_guid: "pguid".to_string(),
+        parent_process_id: 1,
+        parent_image: "pimage".to_string(),
+        parent_command_line: "pcmd".to_string(),
+        agent_id: "agent_id".to_string(),
+        parent_user: "puser".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
 }
 
-fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_process_create_raw_event(
+    store: &RawEventStore<ProcessCreate>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_mqtt_body = gen_mqtt_raw_event();
-    store.append(&key, &ser_mqtt_body).unwrap();
-    ser_mqtt_body
+    let ser_body = gen_process_create_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
 }
 
-fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_ldap_body = gen_ldap_raw_event();
-    store.append(&key, &ser_ldap_body).unwrap();
-    ser_ldap_body
+fn gen_file_create_time_raw_event() -> Vec<u8> {
+    let body = FileCreationTimeChanged {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        previous_creation_utc_time: 900,
+        agent_id: "agent_id".to_string(),
+        user: "user".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
 }
 
-fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_file_create_time_raw_event(
+    store: &RawEventStore<FileCreationTimeChanged>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_tls_body = gen_tls_raw_event();
-    store.append(&key, &ser_tls_body).unwrap();
-    ser_tls_body
+    let ser_body = gen_file_create_time_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
 }
 
-fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_smb_body = gen_smb_raw_event();
-    store.append(&key, &ser_smb_body).unwrap();
-    ser_smb_body
+fn gen_network_connect_raw_event() -> Vec<u8> {
+    let body = NetworkConnection {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        user: "user".to_string(),
+        protocol: "tcp".to_string(),
+        initiated: true,
+        source_is_ipv6: false,
+        source_ip: "192.168.1.1".parse::<IpAddr>().unwrap(),
+        source_hostname: "src".to_string(),
+        source_port: 1234,
+        source_port_name: "port".to_string(),
+        destination_is_ipv6: false,
+        destination_ip: "1.1.1.1".parse::<IpAddr>().unwrap(),
+        destination_hostname: "dst".to_string(),
+        destination_port: 80,
+        destination_port_name: "http".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
 }
 
-fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_network_connect_raw_event(
+    store: &RawEventStore<NetworkConnection>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_nfs_body = gen_nfs_raw_event();
-    store.append(&key, &ser_nfs_body).unwrap();
-    ser_nfs_body
+    let ser_body = gen_network_connect_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
 }
 
-fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) -> Vec<u8> {
-    let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_bootp_body = gen_bootp_raw_event();
-    store.append(&key, &ser_bootp_body).unwrap();
-    ser_bootp_body
+fn gen_process_terminate_raw_event() -> Vec<u8> {
+    let body = ProcessTerminated {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn insert_process_terminate_raw_event(
+    store: &RawEventStore<ProcessTerminated>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_dhcp_body = gen_dhcp_raw_event();
-    store.append(&key, &ser_dhcp_body).unwrap();
-    ser_dhcp_body
+    let ser_body = gen_process_terminate_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
 }
 
-fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) -> Vec<u8> {
+fn gen_image_load_raw_event() -> Vec<u8> {
+    let body = ImageLoaded {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        image_loaded: "loaded".to_string(),
+        file_version: "1.0".to_string(),
+        description: "desc".to_string(),
+        product: "product".to_string(),
+        company: "company".to_string(),
+        original_file_name: "orig".to_string(),
+        hashes: vec!["hash".to_string()],
+        signed: true,
+        signature: "sig".to_string(),
+        signature_status: "status".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_image_load_raw_event(
+    store: &RawEventStore<ImageLoaded>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
     let key = gen_network_event_key(sensor, None, timestamp);
-    let ser_radius_body = gen_radius_raw_event();
-    store.append(&key, &ser_radius_body).unwrap();
-    ser_radius_body
+    let ser_body = gen_image_load_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_file_create_raw_event() -> Vec<u8> {
+    let body = FileCreate {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        agent_id: "agent_id".to_string(),
+        user: "user".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_file_create_raw_event(
+    store: &RawEventStore<FileCreate>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_file_create_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_registry_value_set_raw_event() -> Vec<u8> {
+    let body = RegistryValueSet {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_object: "target".to_string(),
+        details: "details".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_registry_value_set_raw_event(
+    store: &RawEventStore<RegistryValueSet>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_registry_value_set_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_registry_key_rename_raw_event() -> Vec<u8> {
+    let body = RegistryKeyValueRename {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_object: "target".to_string(),
+        new_name: "new".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_registry_key_rename_raw_event(
+    store: &RawEventStore<RegistryKeyValueRename>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_registry_key_rename_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_file_create_stream_hash_raw_event() -> Vec<u8> {
+    let body = FileCreateStreamHash {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        creation_utc_time: 1000,
+        hash: vec!["hash".to_string()],
+        contents: "contents".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_file_create_stream_hash_raw_event(
+    store: &RawEventStore<FileCreateStreamHash>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_file_create_stream_hash_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_pipe_event_raw_event() -> Vec<u8> {
+    let body = PipeEvent {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        pipe_name: "pipe".to_string(),
+        image: "image".to_string(),
+        event_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_pipe_event_raw_event(
+    store: &RawEventStore<PipeEvent>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_pipe_event_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_dns_query_raw_event() -> Vec<u8> {
+    let body = DnsEvent {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        query_name: "query".to_string(),
+        query_status: 0,
+        query_results: vec!["result".to_string()],
+        image: "image".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_dns_query_raw_event(
+    store: &RawEventStore<DnsEvent>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_dns_query_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_file_delete_raw_event() -> Vec<u8> {
+    let body = FileDelete {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        agent_id: "agent_id".to_string(),
+        hashes: vec!["hash".to_string()],
+        is_executable: true,
+        archived: true,
+        user: "user".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_file_delete_raw_event(
+    store: &RawEventStore<FileDelete>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_file_delete_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_process_tamper_raw_event() -> Vec<u8> {
+    let body = ProcessTampering {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        tamper_type: "type".to_string(),
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_process_tamper_raw_event(
+    store: &RawEventStore<ProcessTampering>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_process_tamper_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_file_delete_detected_raw_event() -> Vec<u8> {
+    let body = FileDeleteDetected {
+        agent_name: "agent".to_string(),
+        process_guid: "guid".to_string(),
+        process_id: 123,
+        image: "image".to_string(),
+        target_filename: "target".to_string(),
+        hashes: vec!["hash".to_string()],
+        is_executable: true,
+        user: "user".to_string(),
+        agent_id: "agent_id".to_string(),
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_file_delete_detected_raw_event(
+    store: &RawEventStore<FileDeleteDetected>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_file_delete_detected_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_netflow5_raw_event() -> Vec<u8> {
+    let body = Netflow5 {
+        src_addr: "192.168.1.1".parse::<IpAddr>().unwrap(),
+        dst_addr: "192.168.1.2".parse::<IpAddr>().unwrap(),
+        next_hop: "10.0.0.1".parse::<IpAddr>().unwrap(),
+        input: 1,
+        output: 2,
+        d_pkts: 10,
+        d_octets: 1000,
+        first: 100,
+        last: 200,
+        src_port: 1234,
+        dst_port: 80,
+        tcp_flags: 0,
+        prot: 6,
+        tos: 0,
+        src_as: 0,
+        dst_as: 0,
+        src_mask: 24,
+        dst_mask: 24,
+        sampling_mode: 0,
+        sampling_rate: 0,
+        engine_type: 0,
+        engine_id: 0,
+        sequence: 0,
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_netflow5_raw_event(
+    store: &RawEventStore<Netflow5>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_netflow5_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
+}
+
+fn gen_netflow9_raw_event() -> Vec<u8> {
+    let body = Netflow9 {
+        orig_addr: "192.168.1.1".parse::<IpAddr>().unwrap(),
+        orig_port: 1234,
+        resp_addr: "192.168.1.2".parse::<IpAddr>().unwrap(),
+        resp_port: 80,
+        proto: 6,
+        contents: "payload".to_string(),
+        sequence: 1,
+        source_id: 1,
+        template_id: 256,
+    };
+    bincode::serialize(&body).unwrap()
+}
+
+fn insert_netflow9_raw_event(
+    store: &RawEventStore<Netflow9>,
+    sensor: &str,
+    timestamp: i64,
+) -> Vec<u8> {
+    let key = gen_network_event_key(sensor, None, timestamp);
+    let ser_body = gen_netflow9_raw_event();
+    store.append(&key, &ser_body).unwrap();
+    ser_body
 }
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_range_data_with_protocol() {
-    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "ingest src 1";
     const CONN_KIND: &str = "conn";
@@ -1019,1238 +2072,43 @@ async fn request_range_data_with_protocol() {
     const DHCP_KIND: &str = "dhcp";
     const RADIUS_KIND: &str = "radius";
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
-
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels,
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let publish = TestClient::new().await;
-
-    // conn protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let conn_store = db.conn_store().unwrap();
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = bincode::deserialize::<Conn>(&insert_conn_raw_event(
-            &conn_store,
-            SENSOR,
-            send_conn_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(CONN_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            conn_data.response_data(send_conn_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // dns protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let dns_store = db.dns_store().unwrap();
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dns_data =
-            bincode::deserialize::<Dns>(&insert_dns_raw_event(&dns_store, SENSOR, send_dns_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(DNS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Dns::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            dns_data.response_data(send_dns_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // malformed_dns protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let malformed_dns_store = db.malformed_dns_store().unwrap();
-        let send_malformed_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let malformed_dns_data: MalformedDns = bincode::deserialize::<MalformedDns>(
-            &insert_malformed_dns_raw_event(&malformed_dns_store, SENSOR, send_malformed_dns_time),
-        )
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(MALFORMED_DNS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            MalformedDns::response_done().unwrap(),
-            bincode::serialize(&result_data.pop().unwrap()).unwrap()
-        );
-        assert_eq!(
-            malformed_dns_data
-                .response_data(send_malformed_dns_time, SENSOR)
-                .unwrap(),
-            bincode::serialize(&result_data.pop().unwrap()).unwrap()
-        );
-    }
-
-    // http protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let http_store = db.http_store().unwrap();
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let http_data = bincode::deserialize::<Http>(&insert_http_raw_event(
-            &http_store,
-            SENSOR,
-            send_http_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(HTTP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Http::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            http_data.response_data(send_http_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // rdp protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let rdp_store = db.rdp_store().unwrap();
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let rdp_data =
-            bincode::deserialize::<Rdp>(&insert_rdp_raw_event(&rdp_store, SENSOR, send_rdp_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(RDP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Rdp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            rdp_data.response_data(send_rdp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // smtp protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let smtp_store = db.smtp_store().unwrap();
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smtp_data = bincode::deserialize::<Smtp>(&insert_smtp_raw_event(
-            &smtp_store,
-            SENSOR,
-            send_smtp_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(SMTP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Conn::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            smtp_data.response_data(send_smtp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // ntlm protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let ntlm_store = db.ntlm_store().unwrap();
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ntlm_data = bincode::deserialize::<Ntlm>(&insert_ntlm_raw_event(
-            &ntlm_store,
-            SENSOR,
-            send_ntlm_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(NTLM_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Ntlm::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            ntlm_data.response_data(send_ntlm_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // kerberos protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let kerberos_store = db.kerberos_store().unwrap();
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let kerberos_data = bincode::deserialize::<Kerberos>(&insert_kerberos_raw_event(
-            &kerberos_store,
-            SENSOR,
-            send_kerberos_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(KERBEROS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Kerberos::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            kerberos_data
-                .response_data(send_kerberos_time, SENSOR)
-                .unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // ssh protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let ssh_store = db.ssh_store().unwrap();
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ssh_data =
-            bincode::deserialize::<Ssh>(&insert_ssh_raw_event(&ssh_store, SENSOR, send_ssh_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(SSH_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Ssh::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            ssh_data.response_data(send_ssh_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // dce_rpc protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let dce_rpc_store = db.dce_rpc_store().unwrap();
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dce_rpc_data = bincode::deserialize::<DceRpc>(&insert_dce_rpc_raw_event(
-            &dce_rpc_store,
-            SENSOR,
-            send_dce_rpc_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(DCE_RPC_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            DceRpc::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            dce_rpc_data
-                .response_data(send_dce_rpc_time, SENSOR)
-                .unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // ftp protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let ftp_store = db.ftp_store().unwrap();
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ftp_data =
-            bincode::deserialize::<Ftp>(&insert_ftp_raw_event(&ftp_store, SENSOR, send_ftp_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(FTP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Ftp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            ftp_data.response_data(send_ftp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // mqtt protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let mqtt_store = db.mqtt_store().unwrap();
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let mqtt_data = bincode::deserialize::<Mqtt>(&insert_mqtt_raw_event(
-            &mqtt_store,
-            SENSOR,
-            send_mqtt_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(MQTT_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Mqtt::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            mqtt_data.response_data(send_mqtt_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // ldap protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let ldap_store = db.ldap_store().unwrap();
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ldap_data = bincode::deserialize::<Ldap>(&insert_ldap_raw_event(
-            &ldap_store,
-            SENSOR,
-            send_ldap_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(LDAP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Ldap::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            ldap_data.response_data(send_ldap_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // tls protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let tls_store = db.tls_store().unwrap();
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let tls_data =
-            bincode::deserialize::<Tls>(&insert_tls_raw_event(&tls_store, SENSOR, send_tls_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(TLS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Tls::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            tls_data.response_data(send_tls_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // smb protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let smb_store = db.smb_store().unwrap();
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smb_data =
-            bincode::deserialize::<Smb>(&insert_smb_raw_event(&smb_store, SENSOR, send_smb_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(SMB_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Smb::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            smb_data.response_data(send_smb_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // nfs protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let nfs_store = db.nfs_store().unwrap();
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let nfs_data =
-            bincode::deserialize::<Nfs>(&insert_nfs_raw_event(&nfs_store, SENSOR, send_nfs_time))
-                .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(NFS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Nfs::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            nfs_data.response_data(send_nfs_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // bootp protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let bootp_store = db.bootp_store().unwrap();
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let bootp_data = bincode::deserialize::<Bootp>(&insert_bootp_raw_event(
-            &bootp_store,
-            SENSOR,
-            send_bootp_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(BOOTP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Bootp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            bootp_data.response_data(send_bootp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // dhcp protocol
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let dhcp_store = db.dhcp_store().unwrap();
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dhcp_data = bincode::deserialize::<Dhcp>(&insert_dhcp_raw_event(
-            &dhcp_store,
-            SENSOR,
-            send_dhcp_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(DHCP_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Dhcp::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            dhcp_data.response_data(send_dhcp_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-    }
-
-    // radius test
-    {
-        let (mut send_pub_req, mut recv_pub_resp) =
-            publish.conn.open_bi().await.expect("failed to open stream");
-        let radius_store = db.radius_store().unwrap();
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let radius_data = bincode::deserialize::<Radius>(&insert_radius_raw_event(
-            &radius_store,
-            SENSOR,
-            send_radius_time,
-        ))
-        .unwrap();
-
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(00, 00, 00)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
-        let message = RequestRange {
-            sensor: String::from(SENSOR),
-            kind: String::from(RADIUS_KIND),
-            start: start.timestamp_nanos_opt().unwrap(),
-            end: end.timestamp_nanos_opt().unwrap(),
-            count: 5,
-        };
-
-        send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-            .await
-            .unwrap();
-
-        let mut result_data = Vec::new();
-        loop {
-            let resp_data =
-                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-                    .await
-                    .unwrap();
-
-            result_data.push(resp_data.clone());
-            if resp_data.is_none() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            Radius::response_done().unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            radius_data.response_data(send_radius_time, SENSOR).unwrap(),
-            bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap())
-                .unwrap()
-        );
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
+
+    let kinds = [
+        CONN_KIND,
+        DNS_KIND,
+        MALFORMED_DNS_KIND,
+        HTTP_KIND,
+        RDP_KIND,
+        SMTP_KIND,
+        NTLM_KIND,
+        KERBEROS_KIND,
+        SSH_KIND,
+        DCE_RPC_KIND,
+        FTP_KIND,
+        MQTT_KIND,
+        LDAP_KIND,
+        TLS_KIND,
+        SMB_KIND,
+        NFS_KIND,
+        BOOTP_KIND,
+        DHCP_KIND,
+        RADIUS_KIND,
+    ];
+
+    for kind in kinds {
+        let send_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let (expected, done) = build_network_expected(db, kind, SENSOR, send_time);
+        let result_data = publish
+            .send_range_request::<(i64, String, Vec<u8>)>(
+                PUBLISH_RANGE_MESSAGE_CODE,
+                build_range_request(SENSOR, kind),
+            )
+            .await;
+
+        assert_range_result(result_data, expected.as_slice(), done.as_slice(), kind);
     }
 
     publish.conn.close(0u32.into(), b"publish_protocol_done");
@@ -2259,50 +2117,13 @@ async fn request_range_data_with_protocol() {
 
 #[tokio::test]
 async fn request_range_data_with_log() {
-    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SENSOR: &str = "src1";
     const KIND: &str = "Hello";
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
-
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels,
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let publish = TestClient::new().await;
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
 
     let log_store = db.log_store().unwrap();
     let send_log_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2314,51 +2135,19 @@ async fn request_range_data_with_log() {
     ))
     .unwrap();
 
-    let start = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("valid date")
-            .and_hms_opt(00, 00, 00)
-            .expect("valid time"),
-        Utc,
-    );
-    let end = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2050, 12, 31)
-            .expect("valid date")
-            .and_hms_opt(23, 59, 59)
-            .expect("valid time"),
-        Utc,
-    );
-    let message = RequestRange {
-        sensor: String::from(SENSOR),
-        kind: String::from(KIND),
-        start: start.timestamp_nanos_opt().unwrap(),
-        end: end.timestamp_nanos_opt().unwrap(),
-        count: 5,
-    };
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<u8>)>(
+            PUBLISH_RANGE_MESSAGE_CODE,
+            build_range_request(SENSOR, KIND),
+        )
+        .await;
 
-    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-        .await
-        .unwrap();
-
-    let mut result_data = Vec::new();
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        result_data.push(resp_data.clone());
-        if resp_data.is_none() {
-            break;
-        }
-    }
-
-    assert_eq!(
-        Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
-    );
-    assert_eq!(
-        log_data.response_data(send_log_time, SENSOR).unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    let expected = log_data.response_data(send_log_time, SENSOR).unwrap();
+    assert_range_result(
+        result_data,
+        expected.as_slice(),
+        Conn::response_done().unwrap().as_slice(),
+        KIND,
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -2366,51 +2155,118 @@ async fn request_range_data_with_log() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn request_range_data_with_sysmon() {
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
+    const SENSOR: &str = "ingest src 1";
+
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
+
+    let kinds = [
+        "process_create",
+        "file_create_time",
+        "network_connect",
+        "process_terminate",
+        "image_load",
+        "file_create",
+        "registry_value_set",
+        "registry_key_rename",
+        "file_create_stream_hash",
+        "pipe_event",
+        "dns_query",
+        "file_delete",
+        "process_tamper",
+        "file_delete_detected",
+    ];
+
+    for kind in kinds {
+        let send_time = Utc::now().timestamp_nanos_opt().unwrap();
+        let expected_resp = build_sysmon_expected(db, kind, SENSOR, send_time);
+        let result_data = publish
+            .send_range_request::<(i64, String, Vec<u8>)>(
+                PUBLISH_RANGE_MESSAGE_CODE,
+                build_range_request(SENSOR, kind),
+            )
+            .await;
+
+        assert_range_result(
+            result_data,
+            expected_resp.as_slice(),
+            Conn::response_done().unwrap().as_slice(),
+            kind,
+        );
+    }
+
+    publish.conn.close(0u32.into(), b"publish_sysmon_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn request_range_data_with_netflow() {
+    const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
+    const SENSOR: &str = "ingest src 1";
+
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
+
+    let kinds = ["netflow5", "netflow9"];
+
+    for kind in kinds {
+        let send_time = Utc::now().timestamp_nanos_opt().unwrap();
+
+        let ser_body = match kind {
+            "netflow5" => {
+                insert_netflow5_raw_event(&db.netflow5_store().unwrap(), SENSOR, send_time)
+            }
+            "netflow9" => {
+                insert_netflow9_raw_event(&db.netflow9_store().unwrap(), SENSOR, send_time)
+            }
+            _ => unreachable!(),
+        };
+
+        let result_data = publish
+            .send_range_request::<(i64, String, Vec<u8>)>(
+                PUBLISH_RANGE_MESSAGE_CODE,
+                build_range_request(SENSOR, kind),
+            )
+            .await;
+
+        let expected_resp = match kind {
+            "netflow5" => bincode::deserialize::<Netflow5>(&ser_body)
+                .unwrap()
+                .response_data(send_time, SENSOR)
+                .unwrap(),
+            "netflow9" => bincode::deserialize::<Netflow9>(&ser_body)
+                .unwrap()
+                .response_data(send_time, SENSOR)
+                .unwrap(),
+            _ => unreachable!(),
+        };
+
+        assert_range_result(
+            result_data,
+            expected_resp.as_slice(),
+            Conn::response_done().unwrap().as_slice(),
+            kind,
+        );
+    }
+
+    publish.conn.close(0u32.into(), b"publish_netflow_done");
+    publish.endpoint.wait_idle().await;
+}
+
+#[tokio::test]
 async fn request_range_data_with_period_time_series() {
-    init_crypto();
     const PUBLISH_RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
     const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 1";
     const KIND: &str = "timeseries";
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
-
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels,
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let publish = TestClient::new().await;
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
 
     let time_series_store = db.periodic_time_series_store().unwrap();
     let send_time_series_time = Utc::now().timestamp_nanos_opt().unwrap();
@@ -2422,53 +2278,21 @@ async fn request_range_data_with_period_time_series() {
         ))
         .unwrap();
 
-    let start = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("valid date")
-            .and_hms_opt(00, 00, 00)
-            .expect("valid time"),
-        Utc,
-    );
-    let end = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2050, 12, 31)
-            .expect("valid date")
-            .and_hms_opt(23, 59, 59)
-            .expect("valid time"),
-        Utc,
-    );
-    let message = RequestRange {
-        sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
-        kind: String::from(KIND),
-        start: start.timestamp_nanos_opt().unwrap(),
-        end: end.timestamp_nanos_opt().unwrap(),
-        count: 5,
-    };
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<f64>)>(
+            PUBLISH_RANGE_MESSAGE_CODE,
+            build_range_request(SAMPLING_POLICY_ID_AS_SENSOR, KIND),
+        )
+        .await;
 
-    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-        .await
+    let expected = time_series_data
+        .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
         .unwrap();
-
-    let mut result_data = Vec::new();
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<f64>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        result_data.push(resp_data.clone());
-        if resp_data.is_none() {
-            break;
-        }
-    }
-
-    assert_eq!(
-        PeriodicTimeSeries::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
-    );
-    assert_eq!(
-        time_series_data
-            .response_data(send_time_series_time, SAMPLING_POLICY_ID_AS_SENSOR)
-            .unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+    assert_range_result(
+        result_data,
+        expected.as_slice(),
+        PeriodicTimeSeries::response_done().unwrap().as_slice(),
+        KIND,
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -2478,9 +2302,6 @@ async fn request_range_data_with_period_time_series() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn request_network_event_stream() {
-    init_crypto();
-    use crate::comm::{ingest::NetworkKey, publish::send_direct_stream};
-
     const NETWORK_STREAM_CONN: RequestStreamRecord = RequestStreamRecord::Conn;
     const NETWORK_STREAM_DNS: RequestStreamRecord = RequestStreamRecord::Dns;
     const NETWORK_STREAM_RDP: RequestStreamRecord = RequestStreamRecord::Rdp;
@@ -2499,15 +2320,19 @@ async fn request_network_event_stream() {
     const NETWORK_STREAM_BOOTP: RequestStreamRecord = RequestStreamRecord::Bootp;
     const NETWORK_STREAM_DHCP: RequestStreamRecord = RequestStreamRecord::Dhcp;
     const NETWORK_STREAM_RADIUS: RequestStreamRecord = RequestStreamRecord::Radius;
+    const NETWORK_STREAM_FILE_CREATE: RequestStreamRecord = RequestStreamRecord::FileCreate;
+    const NETWORK_STREAM_FILE_DELETE: RequestStreamRecord = RequestStreamRecord::FileDelete;
+    const NETWORK_STREAM_MALFORMED_DNS: RequestStreamRecord = RequestStreamRecord::MalformedDns;
 
     const SENSOR_SEMI_SUPERVISED_ONE: &str = "src1";
     const SENSOR_SEMI_SUPERVISED_TWO: &str = "src2";
     const SENSOR_TIME_SERIES_GENERATOR_THREE: &str = "src3";
     const POLICY_ID: u32 = 1;
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let mut harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &mut harness.publish;
+    let stream_direct_channels = harness.stream_direct_channels.clone();
 
     let semi_supervised_msg = RequestSemiSupervisedStream {
         start: 0,
@@ -2523,2058 +2348,197 @@ async fn request_network_event_stream() {
         dst_ip: Some("31.3.245.133".parse::<IpAddr>().unwrap()),
         sensor: Some(String::from(SENSOR_TIME_SERIES_GENERATOR_THREE)),
     };
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
+    let cases = [
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_CONN,
+            kind: "conn",
+            semi_payload: gen_conn_raw_event,
+            direct_payload: gen_conn_raw_event,
+            insert_db: insert_conn_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_DNS,
+            kind: "dns",
+            semi_payload: gen_conn_raw_event,
+            direct_payload: gen_dns_raw_event,
+            insert_db: insert_dns_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_RDP,
+            kind: "rdp",
+            semi_payload: gen_conn_raw_event,
+            direct_payload: gen_rdp_raw_event,
+            insert_db: insert_rdp_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_HTTP,
+            kind: "http",
+            semi_payload: gen_conn_raw_event,
+            direct_payload: gen_http_raw_event,
+            insert_db: insert_http_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_SMTP,
+            kind: "smtp",
+            semi_payload: gen_smtp_raw_event,
+            direct_payload: gen_smtp_raw_event,
+            insert_db: insert_smtp_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_NTLM,
+            kind: "ntlm",
+            semi_payload: gen_ntlm_raw_event,
+            direct_payload: gen_ntlm_raw_event,
+            insert_db: insert_ntlm_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_KERBEROS,
+            kind: "kerberos",
+            semi_payload: gen_kerberos_raw_event,
+            direct_payload: gen_kerberos_raw_event,
+            insert_db: insert_kerberos_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_SSH,
+            kind: "ssh",
+            semi_payload: gen_ssh_raw_event,
+            direct_payload: gen_ssh_raw_event,
+            insert_db: insert_ssh_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_DCE_RPC,
+            kind: "dce rpc",
+            semi_payload: gen_dce_rpc_raw_event,
+            direct_payload: gen_dce_rpc_raw_event,
+            insert_db: insert_dce_rpc_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_FTP,
+            kind: "ftp",
+            semi_payload: gen_ftp_raw_event,
+            direct_payload: gen_ftp_raw_event,
+            insert_db: insert_ftp_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_MQTT,
+            kind: "mqtt",
+            semi_payload: gen_mqtt_raw_event,
+            direct_payload: gen_mqtt_raw_event,
+            insert_db: insert_mqtt_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_LDAP,
+            kind: "ldap",
+            semi_payload: gen_ldap_raw_event,
+            direct_payload: gen_ldap_raw_event,
+            insert_db: insert_ldap_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_TLS,
+            kind: "tls",
+            semi_payload: gen_tls_raw_event,
+            direct_payload: gen_tls_raw_event,
+            insert_db: insert_tls_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_SMB,
+            kind: "smb",
+            semi_payload: gen_smb_raw_event,
+            direct_payload: gen_smb_raw_event,
+            insert_db: insert_smb_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_NFS,
+            kind: "nfs",
+            semi_payload: gen_nfs_raw_event,
+            direct_payload: gen_nfs_raw_event,
+            insert_db: insert_nfs_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_BOOTP,
+            kind: "bootp",
+            semi_payload: gen_bootp_raw_event,
+            direct_payload: gen_bootp_raw_event,
+            insert_db: insert_bootp_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_DHCP,
+            kind: "dhcp",
+            semi_payload: gen_dhcp_raw_event,
+            direct_payload: gen_dhcp_raw_event,
+            insert_db: insert_dhcp_stream,
+        },
+        NetworkStreamCase {
+            record_type: NETWORK_STREAM_RADIUS,
+            kind: "radius",
+            semi_payload: gen_radius_raw_event,
+            direct_payload: gen_radius_raw_event,
+            insert_db: insert_radius_stream,
+        },
+    ];
 
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels.clone(),
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let mut publish = TestClient::new().await;
-
-    {
-        let conn_store = db.conn_store().unwrap();
-
-        // direct conn network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_CONN,
-                request: semi_supervised_msg.clone(),
-            },
+    for case in cases {
+        assert_semi_supervised_stream(
+            publish,
+            case.record_type,
+            &semi_supervised_msg,
+            &stream_direct_channels,
+            case.kind,
+            &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
+            case.semi_payload,
         )
-        .await
-        .unwrap();
+        .await;
 
-        let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
+        let db_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let db_payload = (case.insert_db)(db, SENSOR_TIME_SERIES_GENERATOR_THREE, db_timestamp);
+        let direct_timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let direct_payload = (case.direct_payload)();
 
-        let conn_start_msg = receive_semi_supervised_stream_start_message(&mut send_conn_stream)
-            .await
-            .unwrap();
-        assert_eq!(conn_start_msg, NETWORK_STREAM_CONN);
-
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "conn");
-        let conn_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &conn_data,
-            send_conn_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_conn_stream)
-            .await
-            .unwrap();
-        assert_eq!(conn_data, recv_data[20..]);
-
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "conn");
-        let conn_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &conn_data,
-            send_conn_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-        let recv_data = receive_semi_supervised_data(&mut send_conn_stream)
-            .await
-            .unwrap();
-        assert_eq!(conn_data, recv_data[20..]);
-
-        // database conn network event for the Time Series Generator
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let conn_data = insert_conn_raw_event(
-            &conn_store,
+        assert_time_series_generator_stream(
+            publish,
+            case.record_type,
+            &time_series_generator_msg,
+            &stream_direct_channels,
+            case.kind,
             SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_conn_time,
-        );
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_CONN,
-                request: time_series_generator_msg.clone(),
-            },
+            POLICY_ID,
+            db_timestamp,
+            db_payload,
+            direct_timestamp,
+            direct_payload,
         )
-        .await
-        .unwrap();
-
-        let mut send_conn_stream = publish.conn.accept_uni().await.unwrap();
-        let conn_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_conn_stream)
-                .await
-                .unwrap();
-        assert_eq!(conn_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_conn_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_conn_time, recv_timestamp);
-        assert_eq!(conn_data, recv_data);
-
-        // direct conn network event for the Time Series Generator
-        let send_conn_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "conn");
-        let conn_data = gen_conn_raw_event();
-
-        send_direct_stream(
-            &key,
-            &conn_data,
-            send_conn_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_conn_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_conn_time, recv_timestamp);
-        assert_eq!(conn_data, recv_data);
+        .await;
     }
 
-    {
-        let dns_store = db.dns_store().unwrap();
-
-        // direct dns network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_DNS,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dns_start_msg = receive_semi_supervised_stream_start_message(&mut send_dns_stream)
-            .await
-            .unwrap();
-        assert_eq!(dns_start_msg, NETWORK_STREAM_DNS);
-
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dns");
-        let dns_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &dns_data,
-            send_dns_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dns_stream)
-            .await
-            .unwrap();
-        assert_eq!(dns_data, recv_data[20..]);
-
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dns");
-        let dns_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &dns_data,
-            send_dns_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dns_stream)
-            .await
-            .unwrap();
-        assert_eq!(dns_data, recv_data[20..]);
-
-        // database dns network event for the Time Series Generator
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dns_data = insert_dns_raw_event(
-            &dns_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_dns_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_DNS,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dns_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dns_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_dns_stream)
-                .await
-                .unwrap();
-        assert_eq!(dns_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dns_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_dns_time, recv_timestamp);
-        assert_eq!(dns_data, recv_data);
-
-        // direct dns network event for the Time Series Generator
-        let send_dns_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dns");
-        let dns_data = gen_dns_raw_event();
-
-        send_direct_stream(
-            &key,
-            &dns_data,
-            send_dns_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dns_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_dns_time, recv_timestamp);
-        assert_eq!(dns_data, recv_data);
-    }
-
-    {
-        let rdp_store = db.rdp_store().unwrap();
-
-        // direct rdp network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_RDP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let rdp_start_msg = receive_semi_supervised_stream_start_message(&mut send_rdp_stream)
-            .await
-            .unwrap();
-        assert_eq!(rdp_start_msg, NETWORK_STREAM_RDP);
-
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "rdp");
-        let rdp_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &rdp_data,
-            send_rdp_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_rdp_stream)
-            .await
-            .unwrap();
-        assert_eq!(rdp_data, recv_data[20..]);
-
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "rdp");
-        let rdp_data = gen_conn_raw_event();
-        send_direct_stream(
-            &key,
-            &rdp_data,
-            send_rdp_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_rdp_stream)
-            .await
-            .unwrap();
-        assert_eq!(rdp_data, recv_data[20..]);
-
-        // database rdp network event for the Time Series Generator
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let rdp_data = insert_rdp_raw_event(
-            &rdp_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_rdp_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_RDP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_rdp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let rdp_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_rdp_stream)
-                .await
-                .unwrap();
-        assert_eq!(rdp_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_rdp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_rdp_time, recv_timestamp);
-        assert_eq!(rdp_data, recv_data);
-
-        // direct rdp network event for the Time Series Generator
-        let send_rdp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "rdp");
-        let rdp_data = gen_rdp_raw_event();
-        send_direct_stream(
-            &key,
-            &rdp_data,
-            send_rdp_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_rdp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_rdp_time, recv_timestamp);
-        assert_eq!(rdp_data, recv_data);
-    }
-
-    {
-        let http_store = db.http_store().unwrap();
-
-        // direct http network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_HTTP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
-
-        let http_start_msg = receive_semi_supervised_stream_start_message(&mut send_http_stream)
-            .await
-            .unwrap();
-        assert_eq!(http_start_msg, NETWORK_STREAM_HTTP);
-
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "http");
-        let http_data = gen_conn_raw_event();
-
-        send_direct_stream(
-            &key,
-            &http_data,
-            send_http_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_http_stream)
-            .await
-            .unwrap();
-        assert_eq!(http_data, recv_data[20..]);
-
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "http");
-        let http_data = gen_conn_raw_event();
-
-        send_direct_stream(
-            &key,
-            &http_data,
-            send_http_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_http_stream)
-            .await
-            .unwrap();
-        assert_eq!(http_data, recv_data[20..]);
-
-        // database http network event for the Time Series Generator
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let http_data = insert_http_raw_event(
-            &http_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_http_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_HTTP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_http_stream = publish.conn.accept_uni().await.unwrap();
-
-        let http_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_http_stream)
-                .await
-                .unwrap();
-        assert_eq!(http_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_http_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_http_time, recv_timestamp);
-        assert_eq!(http_data, recv_data);
-
-        // direct http network event for the Time Series Generator
-        let send_http_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "http");
-        let http_data = gen_http_raw_event();
-        send_direct_stream(
-            &key,
-            &http_data,
-            send_http_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_http_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_http_time, recv_timestamp);
-        assert_eq!(http_data, recv_data);
-    }
-
-    {
-        let smtp_store = db.smtp_store().unwrap();
-
-        // direct smtp network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_SMTP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let smtp_start_msg = receive_semi_supervised_stream_start_message(&mut send_smtp_stream)
-            .await
-            .unwrap();
-        assert_eq!(smtp_start_msg, NETWORK_STREAM_SMTP);
-
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smtp");
-        let smtp_data = gen_smtp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &smtp_data,
-            send_smtp_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_smtp_stream)
-            .await
-            .unwrap();
-        assert_eq!(smtp_data, recv_data[20..]);
-
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smtp");
-        let smtp_data = gen_smtp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &smtp_data,
-            send_smtp_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_smtp_stream)
-            .await
-            .unwrap();
-        assert_eq!(smtp_data, recv_data[20..]);
-
-        // database smtp network event for the Time Series Generator
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smtp_data = insert_smtp_raw_event(
-            &smtp_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_smtp_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_SMTP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_smtp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let smtp_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_smtp_stream)
-                .await
-                .unwrap();
-        assert_eq!(smtp_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smtp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_smtp_time, recv_timestamp);
-        assert_eq!(smtp_data, recv_data);
-
-        // direct smtp network event for the Time Series Generator
-        let send_smtp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smtp");
-        let smtp_data = gen_smtp_raw_event();
-        send_direct_stream(
-            &key,
-            &smtp_data,
-            send_smtp_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smtp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_smtp_time, recv_timestamp);
-        assert_eq!(smtp_data, recv_data);
-    }
-
-    {
-        let ntlm_store = db.ntlm_store().unwrap();
-
-        // direct ntlm network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_NTLM,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ntlm_start_msg = receive_semi_supervised_stream_start_message(&mut send_ntlm_stream)
-            .await
-            .unwrap();
-        assert_eq!(ntlm_start_msg, NETWORK_STREAM_NTLM);
-
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ntlm");
-        let ntlm_data = gen_ntlm_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ntlm_data,
-            send_ntlm_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ntlm_stream)
-            .await
-            .unwrap();
-        assert_eq!(ntlm_data, recv_data[20..]);
-
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ntlm");
-        let ntlm_data = gen_ntlm_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ntlm_data,
-            send_ntlm_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ntlm_stream)
-            .await
-            .unwrap();
-        assert_eq!(ntlm_data, recv_data[20..]);
-
-        // database ntlm network event for the Time Series Generator
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ntlm_data = insert_ntlm_raw_event(
-            &ntlm_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_ntlm_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_NTLM,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ntlm_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ntlm_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_ntlm_stream)
-                .await
-                .unwrap();
-        assert_eq!(ntlm_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ntlm_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ntlm_time, recv_timestamp);
-        assert_eq!(ntlm_data, recv_data);
-
-        // direct ntlm network event for the Time Series Generator
-        let send_ntlm_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ntlm");
-        let ntlm_data = gen_ntlm_raw_event();
-        send_direct_stream(
-            &key,
-            &ntlm_data,
-            send_ntlm_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ntlm_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ntlm_time, recv_timestamp);
-        assert_eq!(ntlm_data, recv_data);
-    }
-
-    {
-        let kerberos_store = db.kerberos_store().unwrap();
-
-        // direct kerberos network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_KERBEROS,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
-        let kerberos_start_msg =
-            receive_semi_supervised_stream_start_message(&mut send_kerberos_stream)
-                .await
-                .unwrap();
-        assert_eq!(kerberos_start_msg, NETWORK_STREAM_KERBEROS);
-
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "kerberos");
-        let kerberos_data = gen_kerberos_raw_event();
-
-        send_direct_stream(
-            &key,
-            &kerberos_data,
-            send_kerberos_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_kerberos_stream)
-            .await
-            .unwrap();
-        assert_eq!(kerberos_data, recv_data[20..]);
-
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "kerberos");
-        let kerberos_data = gen_kerberos_raw_event();
-
-        send_direct_stream(
-            &key,
-            &kerberos_data,
-            send_kerberos_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_kerberos_stream)
-            .await
-            .unwrap();
-        assert_eq!(kerberos_data, recv_data[20..]);
-
-        // database kerberos network event for the Time Series Generator
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let kerberos_data = insert_kerberos_raw_event(
-            &kerberos_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_kerberos_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_KERBEROS,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_kerberos_stream = publish.conn.accept_uni().await.unwrap();
-
-        let kerberos_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_kerberos_stream)
-                .await
-                .unwrap();
-        assert_eq!(kerberos_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_kerberos_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_kerberos_time, recv_timestamp);
-        assert_eq!(kerberos_data, recv_data);
-
-        // direct kerberos network event for the Time Series Generator
-        let send_kerberos_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "kerberos");
-        let kerberos_data = gen_kerberos_raw_event();
-        send_direct_stream(
-            &key,
-            &kerberos_data,
-            send_kerberos_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_kerberos_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_kerberos_time, recv_timestamp);
-        assert_eq!(kerberos_data, recv_data);
-    }
-
-    {
-        let ssh_store = db.ssh_store().unwrap();
-
-        // direct ssh network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_SSH,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ssh_start_msg = receive_semi_supervised_stream_start_message(&mut send_ssh_stream)
-            .await
-            .unwrap();
-        assert_eq!(ssh_start_msg, NETWORK_STREAM_SSH);
-
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ssh");
-        let ssh_data = gen_ssh_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ssh_data,
-            send_ssh_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ssh_stream)
-            .await
-            .unwrap();
-        assert_eq!(ssh_data, recv_data[20..]);
-
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ssh");
-        let ssh_data = gen_ssh_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ssh_data,
-            send_ssh_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ssh_stream)
-            .await
-            .unwrap();
-        assert_eq!(ssh_data, recv_data[20..]);
-
-        // database ssh network event for the Time Series Generator
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ssh_data = insert_ssh_raw_event(
-            &ssh_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_ssh_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_SSH,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ssh_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ssh_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_ssh_stream)
-                .await
-                .unwrap();
-        assert_eq!(ssh_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ssh_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ssh_time, recv_timestamp);
-        assert_eq!(ssh_data, recv_data);
-
-        // direct ssh network event for the Time Series Generator
-        let send_ssh_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ssh");
-        let ssh_data = gen_ssh_raw_event();
-        send_direct_stream(
-            &key,
-            &ssh_data,
-            send_ssh_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ssh_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ssh_time, recv_timestamp);
-        assert_eq!(ssh_data, recv_data);
-    }
-
-    {
-        let dce_rpc_store = db.dce_rpc_store().unwrap();
-
-        // direct dce_rpc network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_DCE_RPC,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dce_rpc_start_msg =
-            receive_semi_supervised_stream_start_message(&mut send_dce_rpc_stream)
-                .await
-                .unwrap();
-        assert_eq!(dce_rpc_start_msg, NETWORK_STREAM_DCE_RPC);
-
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dce rpc");
-        let dce_rpc_data = gen_dce_rpc_raw_event();
-
-        send_direct_stream(
-            &key,
-            &dce_rpc_data,
-            send_dce_rpc_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
-        assert_eq!(dce_rpc_data, recv_data[20..]);
-
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dce rpc");
-        let dce_rpc_data = gen_dce_rpc_raw_event();
-
-        send_direct_stream(
-            &key,
-            &dce_rpc_data,
-            send_dce_rpc_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dce_rpc_stream)
-            .await
-            .unwrap();
-        assert_eq!(dce_rpc_data, recv_data[20..]);
-
-        // database dce_rpc network event for the Time Series Generator
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dce_rpc_data = insert_dce_rpc_raw_event(
-            &dce_rpc_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_dce_rpc_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_DCE_RPC,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dce_rpc_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dce_rpc_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_dce_rpc_stream)
-                .await
-                .unwrap();
-        assert_eq!(dce_rpc_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_dce_rpc_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_dce_rpc_time, recv_timestamp);
-        assert_eq!(dce_rpc_data, recv_data);
-
-        // direct dce_rpc network event for the Time Series Generator
-        let send_dce_rpc_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dce rpc");
-        let dce_rpc_data = gen_dce_rpc_raw_event();
-        send_direct_stream(
-            &key,
-            &dce_rpc_data,
-            send_dce_rpc_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_dce_rpc_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_dce_rpc_time, recv_timestamp);
-        assert_eq!(dce_rpc_data, recv_data);
-    }
-
-    {
-        let ftp_store = db.ftp_store().unwrap();
-
-        // direct ftp network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_FTP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ftp_start_msg = receive_semi_supervised_stream_start_message(&mut send_ftp_stream)
-            .await
-            .unwrap();
-        assert_eq!(ftp_start_msg, NETWORK_STREAM_FTP);
-
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ftp");
-        let ftp_data = gen_ftp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ftp_data,
-            send_ftp_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ftp_stream)
-            .await
-            .unwrap();
-        assert_eq!(ftp_data, recv_data[20..]);
-
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ftp");
-        let ftp_data = gen_ftp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ftp_data,
-            send_ftp_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ftp_stream)
-            .await
-            .unwrap();
-        assert_eq!(ftp_data, recv_data[20..]);
-
-        // database ftp network event for the Time Series Generator
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ftp_data = insert_ftp_raw_event(
-            &ftp_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_ftp_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_FTP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ftp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ftp_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_ftp_stream)
-                .await
-                .unwrap();
-        assert_eq!(ftp_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ftp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ftp_time, recv_timestamp);
-        assert_eq!(ftp_data, recv_data);
-
-        // direct ftp network event for the Time Series Generator
-        let send_ftp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ftp");
-        let ftp_data = gen_ftp_raw_event();
-        send_direct_stream(
-            &key,
-            &ftp_data,
-            send_ftp_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ftp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ftp_time, recv_timestamp);
-        assert_eq!(ftp_data, recv_data);
-    }
-
-    {
-        let mqtt_store = db.mqtt_store().unwrap();
-
-        // direct mqtt network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_MQTT,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
-
-        let mqtt_start_msg = receive_semi_supervised_stream_start_message(&mut send_mqtt_stream)
-            .await
-            .unwrap();
-        assert_eq!(mqtt_start_msg, NETWORK_STREAM_MQTT);
-
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "mqtt");
-        let mqtt_data = gen_mqtt_raw_event();
-
-        send_direct_stream(
-            &key,
-            &mqtt_data,
-            send_mqtt_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_mqtt_stream)
-            .await
-            .unwrap();
-        assert_eq!(mqtt_data, recv_data[20..]);
-
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "mqtt");
-        let mqtt_data = gen_mqtt_raw_event();
-
-        send_direct_stream(
-            &key,
-            &mqtt_data,
-            send_mqtt_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_mqtt_stream)
-            .await
-            .unwrap();
-        assert_eq!(mqtt_data, recv_data[20..]);
-
-        // database mqtt network event for the Time Series Generator
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let mqtt_data = insert_mqtt_raw_event(
-            &mqtt_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_mqtt_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_MQTT,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_mqtt_stream = publish.conn.accept_uni().await.unwrap();
-
-        let mqtt_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_mqtt_stream)
-                .await
-                .unwrap();
-        assert_eq!(mqtt_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_mqtt_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_mqtt_time, recv_timestamp);
-        assert_eq!(mqtt_data, recv_data);
-
-        // direct mqtt network event for the Time Series Generator
-        let send_mqtt_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "mqtt");
-        let mqtt_data = gen_mqtt_raw_event();
-        send_direct_stream(
-            &key,
-            &mqtt_data,
-            send_mqtt_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_mqtt_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_mqtt_time, recv_timestamp);
-        assert_eq!(mqtt_data, recv_data);
-    }
-
-    {
-        let ldap_store = db.ldap_store().unwrap();
-
-        // direct ldap network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_LDAP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ldap_start_msg = receive_semi_supervised_stream_start_message(&mut send_ldap_stream)
-            .await
-            .unwrap();
-        assert_eq!(ldap_start_msg, NETWORK_STREAM_LDAP);
-
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "ldap");
-        let ldap_data = gen_ldap_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ldap_data,
-            send_ldap_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ldap_stream)
-            .await
-            .unwrap();
-        assert_eq!(ldap_data, recv_data[20..]);
-
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "ldap");
-        let ldap_data = gen_ldap_raw_event();
-
-        send_direct_stream(
-            &key,
-            &ldap_data,
-            send_ldap_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_ldap_stream)
-            .await
-            .unwrap();
-        assert_eq!(ldap_data, recv_data[20..]);
-
-        // database ldap network event for the Time Series Generator
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let ldap_data = insert_ldap_raw_event(
-            &ldap_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_ldap_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_LDAP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_ldap_stream = publish.conn.accept_uni().await.unwrap();
-
-        let ldap_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_ldap_stream)
-                .await
-                .unwrap();
-        assert_eq!(ldap_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ldap_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ldap_time, recv_timestamp);
-        assert_eq!(ldap_data, recv_data);
-
-        // direct ldap network event for the Time Series Generator
-        let send_ldap_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "ldap");
-        let ldap_data = gen_ldap_raw_event();
-        send_direct_stream(
-            &key,
-            &ldap_data,
-            send_ldap_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_ldap_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_ldap_time, recv_timestamp);
-        assert_eq!(ldap_data, recv_data);
-    }
-
-    {
-        let tls_store = db.tls_store().unwrap();
-
-        // direct tls network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_TLS,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
-
-        let tls_start_msg = receive_semi_supervised_stream_start_message(&mut send_tls_stream)
-            .await
-            .unwrap();
-        assert_eq!(tls_start_msg, NETWORK_STREAM_TLS);
-
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "tls");
-        let tls_data = gen_tls_raw_event();
-
-        send_direct_stream(
-            &key,
-            &tls_data,
-            send_tls_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_tls_stream)
-            .await
-            .unwrap();
-        assert_eq!(tls_data, recv_data[20..]);
-
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "tls");
-        let tls_data = gen_tls_raw_event();
-
-        send_direct_stream(
-            &key,
-            &tls_data,
-            send_tls_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_tls_stream)
-            .await
-            .unwrap();
-        assert_eq!(tls_data, recv_data[20..]);
-
-        // database tls network event for the Time Series Generator
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let tls_data = insert_tls_raw_event(
-            &tls_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_tls_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_TLS,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_tls_stream = publish.conn.accept_uni().await.unwrap();
-
-        let tls_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_tls_stream)
-                .await
-                .unwrap();
-        assert_eq!(tls_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_tls_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_tls_time, recv_timestamp);
-        assert_eq!(tls_data, recv_data);
-
-        // direct tls network event for the Time Series Generator
-        let send_tls_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "tls");
-        let tls_data = gen_tls_raw_event();
-        send_direct_stream(
-            &key,
-            &tls_data,
-            send_tls_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_tls_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_tls_time, recv_timestamp);
-        assert_eq!(tls_data, recv_data);
-    }
-
-    {
-        let smb_store = db.smb_store().unwrap();
-
-        // direct smb network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_SMB,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
-
-        let smb_start_msg = receive_semi_supervised_stream_start_message(&mut send_smb_stream)
-            .await
-            .unwrap();
-        assert_eq!(smb_start_msg, NETWORK_STREAM_SMB);
-
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "smb");
-        let smb_data = gen_smb_raw_event();
-
-        send_direct_stream(
-            &key,
-            &smb_data,
-            send_smb_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_smb_stream)
-            .await
-            .unwrap();
-        assert_eq!(smb_data, recv_data[20..]);
-
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "smb");
-        let smb_data = gen_smb_raw_event();
-
-        send_direct_stream(
-            &key,
-            &smb_data,
-            send_smb_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_smb_stream)
-            .await
-            .unwrap();
-        assert_eq!(smb_data, recv_data[20..]);
-
-        // database smb network event for the Time Series Generator
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let smb_data = insert_smb_raw_event(
-            &smb_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_smb_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_SMB,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_smb_stream = publish.conn.accept_uni().await.unwrap();
-
-        let smb_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_smb_stream)
-                .await
-                .unwrap();
-        assert_eq!(smb_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smb_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_smb_time, recv_timestamp);
-        assert_eq!(smb_data, recv_data);
-
-        // direct smb network event for the Time Series Generator
-        let send_smb_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "smb");
-        let smb_data = gen_smb_raw_event();
-        send_direct_stream(
-            &key,
-            &smb_data,
-            send_smb_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_smb_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_smb_time, recv_timestamp);
-        assert_eq!(smb_data, recv_data);
-    }
-
-    {
-        let nfs_store = db.nfs_store().unwrap();
-
-        // direct nfs network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_NFS,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
-
-        let nfs_start_msg = receive_semi_supervised_stream_start_message(&mut send_nfs_stream)
-            .await
-            .unwrap();
-        assert_eq!(nfs_start_msg, NETWORK_STREAM_NFS);
-
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "nfs");
-        let nfs_data = gen_nfs_raw_event();
-
-        send_direct_stream(
-            &key,
-            &nfs_data,
-            send_nfs_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_nfs_stream)
-            .await
-            .unwrap();
-        assert_eq!(nfs_data, recv_data[20..]);
-
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "nfs");
-        let nfs_data = gen_nfs_raw_event();
-
-        send_direct_stream(
-            &key,
-            &nfs_data,
-            send_nfs_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_nfs_stream)
-            .await
-            .unwrap();
-        assert_eq!(nfs_data, recv_data[20..]);
-
-        // database nfs network event for the Time Series Generator
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let nfs_data = insert_nfs_raw_event(
-            &nfs_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_nfs_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_NFS,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_nfs_stream = publish.conn.accept_uni().await.unwrap();
-
-        let nfs_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_nfs_stream)
-                .await
-                .unwrap();
-        assert_eq!(nfs_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_nfs_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_nfs_time, recv_timestamp);
-        assert_eq!(nfs_data, recv_data);
-
-        // direct nfs network event for the Time Series Generator
-        let send_nfs_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "nfs");
-        let nfs_data = gen_nfs_raw_event();
-        send_direct_stream(
-            &key,
-            &nfs_data,
-            send_nfs_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_nfs_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_nfs_time, recv_timestamp);
-        assert_eq!(nfs_data, recv_data);
-    }
-
-    {
-        let bootp_store = db.bootp_store().unwrap();
-
-        // direct bootp network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_BOOTP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let bootp_start_msg = receive_semi_supervised_stream_start_message(&mut send_bootp_stream)
-            .await
-            .unwrap();
-        assert_eq!(bootp_start_msg, NETWORK_STREAM_BOOTP);
-
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "bootp");
-        let bootp_data = gen_bootp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &bootp_data,
-            send_bootp_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_bootp_stream)
-            .await
-            .unwrap();
-        assert_eq!(bootp_data, recv_data[20..]);
-
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "bootp");
-        let bootp_data = gen_bootp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &bootp_data,
-            send_bootp_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_bootp_stream)
-            .await
-            .unwrap();
-        assert_eq!(bootp_data, recv_data[20..]);
-
-        // database bootp network event for the Time Series Generator
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let bootp_data = insert_bootp_raw_event(
-            &bootp_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_bootp_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_BOOTP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_bootp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let bootp_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_bootp_stream)
-                .await
-                .unwrap();
-        assert_eq!(bootp_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_bootp_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_bootp_time, recv_timestamp);
-        assert_eq!(bootp_data, recv_data);
-
-        // direct bootp network event for the Time Series Generator
-        let send_bootp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "bootp");
-        let bootp_data = gen_bootp_raw_event();
-        send_direct_stream(
-            &key,
-            &bootp_data,
-            send_bootp_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_bootp_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_bootp_time, recv_timestamp);
-        assert_eq!(bootp_data, recv_data);
-    }
-
-    {
-        let dhcp_store = db.dhcp_store().unwrap();
-
-        // direct dhcp network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_DHCP,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dhcp_start_msg = receive_semi_supervised_stream_start_message(&mut send_dhcp_stream)
-            .await
-            .unwrap();
-        assert_eq!(dhcp_start_msg, NETWORK_STREAM_DHCP);
-
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "dhcp");
-        let dhcp_data = gen_dhcp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &dhcp_data,
-            send_dhcp_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dhcp_stream)
-            .await
-            .unwrap();
-        assert_eq!(dhcp_data, recv_data[20..]);
-
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "dhcp");
-        let dhcp_data = gen_dhcp_raw_event();
-
-        send_direct_stream(
-            &key,
-            &dhcp_data,
-            send_dhcp_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_dhcp_stream)
-            .await
-            .unwrap();
-        assert_eq!(dhcp_data, recv_data[20..]);
-
-        // database dhcp network event for the Time Series Generator
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let dhcp_data = insert_dhcp_raw_event(
-            &dhcp_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_dhcp_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_DHCP,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_dhcp_stream = publish.conn.accept_uni().await.unwrap();
-
-        let dhcp_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_dhcp_stream)
-                .await
-                .unwrap();
-        assert_eq!(dhcp_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dhcp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_dhcp_time, recv_timestamp);
-        assert_eq!(dhcp_data, recv_data);
-
-        // direct dhcp network event for the Time Series Generator
-        let send_dhcp_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "dhcp");
-        let dhcp_data = gen_dhcp_raw_event();
-        send_direct_stream(
-            &key,
-            &dhcp_data,
-            send_dhcp_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut send_dhcp_stream)
-            .await
-            .unwrap();
-        assert_eq!(send_dhcp_time, recv_timestamp);
-        assert_eq!(dhcp_data, recv_data);
-    }
-
-    {
-        let radius_store = db.radius_store().unwrap();
-
-        // direct radius network event for the Semi-supervised Engine (src1,src2)
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::SemiSupervised {
-                record_type: NETWORK_STREAM_RADIUS,
-                request: semi_supervised_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_radius_stream = publish.conn.accept_uni().await.unwrap();
-
-        let radius_start_msg =
-            receive_semi_supervised_stream_start_message(&mut send_radius_stream)
-                .await
-                .unwrap();
-        assert_eq!(radius_start_msg, NETWORK_STREAM_RADIUS);
-
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "radius");
-        let radius_data = gen_radius_raw_event();
-
-        send_direct_stream(
-            &key,
-            &radius_data,
-            send_radius_time,
-            SENSOR_SEMI_SUPERVISED_ONE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_radius_stream)
-            .await
-            .unwrap();
-        assert_eq!(radius_data, recv_data[20..]);
-
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, "radius");
-        let radius_data = gen_radius_raw_event();
-
-        send_direct_stream(
-            &key,
-            &radius_data,
-            send_radius_time,
-            SENSOR_SEMI_SUPERVISED_TWO,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let recv_data = receive_semi_supervised_data(&mut send_radius_stream)
-            .await
-            .unwrap();
-        assert_eq!(radius_data, recv_data[20..]);
-
-        // database radius network event for the Time Series Generator
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let radius_data = insert_radius_raw_event(
-            &radius_store,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            send_radius_time,
-        );
-
-        send_stream_request(
-            &mut publish.send,
-            StreamRequestPayload::TimeSeriesGenerator {
-                record_type: NETWORK_STREAM_RADIUS,
-                request: time_series_generator_msg.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut send_radius_stream = publish.conn.accept_uni().await.unwrap();
-
-        let radius_start_msg =
-            receive_time_series_generator_stream_start_message(&mut send_radius_stream)
-                .await
-                .unwrap();
-        assert_eq!(radius_start_msg, POLICY_ID);
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_radius_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_radius_time, recv_timestamp);
-        assert_eq!(radius_data, recv_data);
-
-        // direct radius network event for the Time Series Generator
-        let send_radius_time = Utc::now().timestamp_nanos_opt().unwrap();
-        let key = NetworkKey::new(SENSOR_TIME_SERIES_GENERATOR_THREE, "radius");
-        let radius_data = gen_radius_raw_event();
-        send_direct_stream(
-            &key,
-            &radius_data,
-            send_radius_time,
-            SENSOR_TIME_SERIES_GENERATOR_THREE,
-            stream_direct_channels.clone(),
-        )
-        .await
-        .unwrap();
-
-        let (recv_data, recv_timestamp) =
-            receive_time_series_generator_data(&mut send_radius_stream)
-                .await
-                .unwrap();
-        assert_eq!(send_radius_time, recv_timestamp);
-        assert_eq!(radius_data, recv_data);
+    let semi_only_cases = [
+        (
+            NETWORK_STREAM_MALFORMED_DNS,
+            "malformed_dns",
+            gen_malformed_dns_raw_event as fn() -> Vec<u8>,
+        ),
+        (
+            NETWORK_STREAM_FILE_CREATE,
+            "file_create",
+            gen_file_create_raw_event as fn() -> Vec<u8>,
+        ),
+        (
+            NETWORK_STREAM_FILE_DELETE,
+            "file_delete",
+            gen_file_delete_raw_event as fn() -> Vec<u8>,
+        ),
+    ];
+
+    for (record_type, kind, payload_fn) in semi_only_cases {
+        assert_semi_supervised_stream(
+            publish,
+            record_type,
+            &semi_supervised_msg,
+            &stream_direct_channels,
+            kind,
+            &[SENSOR_SEMI_SUPERVISED_ONE],
+            payload_fn,
+        )
+        .await;
     }
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -4582,52 +2546,223 @@ async fn request_network_event_stream() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn request_raw_events_sysmon() {
+    const SENSOR: &str = "src 1";
+
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
+
+    let kinds = [
+        ("process_create", "ProcessCreate"),
+        ("file_create_time", "FileCreationTimeChanged"),
+        ("network_connect", "NetworkConnection"),
+        ("process_terminate", "ProcessTerminated"),
+        ("image_load", "ImageLoaded"),
+        ("file_create", "FileCreate"),
+        ("registry_value_set", "RegistryValueSet"),
+        ("registry_key_rename", "RegistryKeyValueRename"),
+        ("file_create_stream_hash", "FileCreateStreamHash"),
+        ("pipe_event", "PipeEvent"),
+        ("dns_query", "DnsEvent"),
+        ("file_delete", "FileDelete"),
+        ("process_tamper", "ProcessTampering"),
+        ("file_delete_detected", "FileDeleteDetected"),
+    ];
+
+    for (kind, _) in kinds {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+
+        let ser_body = match kind {
+            "process_create" => insert_process_create_raw_event(
+                &db.process_create_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "file_create_time" => insert_file_create_time_raw_event(
+                &db.file_create_time_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "network_connect" => insert_network_connect_raw_event(
+                &db.network_connect_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "process_terminate" => insert_process_terminate_raw_event(
+                &db.process_terminate_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "image_load" => {
+                insert_image_load_raw_event(&db.image_load_store().unwrap(), SENSOR, timestamp)
+            }
+            "file_create" => {
+                insert_file_create_raw_event(&db.file_create_store().unwrap(), SENSOR, timestamp)
+            }
+            "registry_value_set" => insert_registry_value_set_raw_event(
+                &db.registry_value_set_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "registry_key_rename" => insert_registry_key_rename_raw_event(
+                &db.registry_key_rename_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "file_create_stream_hash" => insert_file_create_stream_hash_raw_event(
+                &db.file_create_stream_hash_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "pipe_event" => {
+                insert_pipe_event_raw_event(&db.pipe_event_store().unwrap(), SENSOR, timestamp)
+            }
+            "dns_query" => {
+                insert_dns_query_raw_event(&db.dns_query_store().unwrap(), SENSOR, timestamp)
+            }
+            "file_delete" => {
+                insert_file_delete_raw_event(&db.file_delete_store().unwrap(), SENSOR, timestamp)
+            }
+            "process_tamper" => insert_process_tamper_raw_event(
+                &db.process_tamper_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            "file_delete_detected" => insert_file_delete_detected_raw_event(
+                &db.file_delete_detected_store().unwrap(),
+                SENSOR,
+                timestamp,
+            ),
+            _ => unreachable!(),
+        };
+
+        let result_data = fetch_raw_data(publish, kind, SENSOR, timestamp).await;
+        assert_eq!(result_data.len(), 1, "Failed for kind: {kind}");
+        assert_eq!(result_data[0].0, timestamp);
+        assert_eq!(&result_data[0].1, SENSOR);
+        let expected_resp = match kind {
+            "process_create" => bincode::deserialize::<ProcessCreate>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "file_create_time" => bincode::deserialize::<FileCreationTimeChanged>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "network_connect" => bincode::deserialize::<NetworkConnection>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "process_terminate" => bincode::deserialize::<ProcessTerminated>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "image_load" => bincode::deserialize::<ImageLoaded>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "file_create" => bincode::deserialize::<FileCreate>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "registry_value_set" => bincode::deserialize::<RegistryValueSet>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "registry_key_rename" => bincode::deserialize::<RegistryKeyValueRename>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "file_create_stream_hash" => bincode::deserialize::<FileCreateStreamHash>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "pipe_event" => bincode::deserialize::<PipeEvent>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "dns_query" => bincode::deserialize::<DnsEvent>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "file_delete" => bincode::deserialize::<FileDelete>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "process_tamper" => bincode::deserialize::<ProcessTampering>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "file_delete_detected" => bincode::deserialize::<FileDeleteDetected>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            _ => unreachable!(),
+        };
+
+        assert_eq!(
+            expected_resp,
+            bincode::serialize(&Some(result_data[0].clone())).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn request_raw_events_netflow() {
+    const SENSOR: &str = "src 1";
+
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
+
+    let kinds = ["netflow5", "netflow9"];
+
+    for kind in kinds {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+
+        let ser_body = match kind {
+            "netflow5" => {
+                insert_netflow5_raw_event(&db.netflow5_store().unwrap(), SENSOR, timestamp)
+            }
+            "netflow9" => {
+                insert_netflow9_raw_event(&db.netflow9_store().unwrap(), SENSOR, timestamp)
+            }
+            _ => unreachable!(),
+        };
+
+        let result_data = fetch_raw_data(publish, kind, SENSOR, timestamp).await;
+        assert_eq!(result_data.len(), 1, "Failed for kind: {kind}");
+        assert_eq!(result_data[0].0, timestamp);
+        assert_eq!(&result_data[0].1, SENSOR);
+        let expected_resp = match kind {
+            "netflow5" => bincode::deserialize::<Netflow5>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            "netflow9" => bincode::deserialize::<Netflow9>(&ser_body)
+                .unwrap()
+                .response_data(timestamp, SENSOR)
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            expected_resp,
+            bincode::serialize(&Some(result_data[0].clone())).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
 async fn request_raw_events() {
-    init_crypto();
     const SENSOR: &str = "src 1";
     const KIND: &str = "conn";
     const TIMESTAMP: i64 = 100;
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
-
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels,
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let publish = TestClient::new().await;
-
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
 
     let conn_store = db.conn_store().unwrap();
     let send_conn_time = TIMESTAMP;
@@ -4635,27 +2770,7 @@ async fn request_raw_events() {
     let conn_data = bincode::deserialize::<Conn>(&conn_raw_data).unwrap();
     let raw_data = conn_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
-    let message = RequestRawData {
-        kind: String::from(KIND),
-        input: vec![(String::from(SENSOR), vec![TIMESTAMP])],
-    };
-
-    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
-        .await
-        .unwrap();
-
-    let mut result_data = vec![];
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        if let Some(data) = resp_data {
-            result_data.push(data);
-        } else {
-            break;
-        }
-    }
+    let mut result_data = fetch_raw_data(publish, KIND, SENSOR, TIMESTAMP).await;
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
     assert_eq!(&result_data[0].1, SENSOR);
@@ -4667,51 +2782,13 @@ async fn request_raw_events() {
 
 #[tokio::test]
 async fn request_malformed_dns_raw_events() {
-    init_crypto();
     const SENSOR: &str = "src 1";
     const KIND: &str = "malformed_dns";
     const TIMESTAMP: i64 = 200;
 
-    let _lock = get_token().lock().await;
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
-    let pcap_sensors = new_pcap_sensors();
-    let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
-    let (peers, peer_idents) = new_peers_data(None);
-
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
-
-    tokio::spawn(server().run(
-        db.clone(),
-        pcap_sensors,
-        stream_direct_channels,
-        ingest_sensors,
-        peers,
-        peer_idents,
-        certs,
-        Arc::new(Notify::new()),
-    ));
-    let publish = TestClient::new().await;
-
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
+    let harness = setup_test_harness().await;
+    let db = &harness.db;
+    let publish = &harness.publish;
 
     let malformed_dns_store = db.malformed_dns_store().unwrap();
     let send_malformed_dns_time = TIMESTAMP;
@@ -4721,27 +2798,7 @@ async fn request_malformed_dns_raw_events() {
         bincode::deserialize::<MalformedDns>(&malformed_dns_raw).unwrap();
     let raw_data = malformed_dns_data.response_data(TIMESTAMP, SENSOR).unwrap();
 
-    let message = RequestRawData {
-        kind: String::from(KIND),
-        input: vec![(String::from(SENSOR), vec![TIMESTAMP])],
-    };
-
-    send_range_data_request(&mut send_pub_req, MessageCode::RawData, message)
-        .await
-        .unwrap();
-
-    let mut result_data = vec![];
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        if let Some(data) = resp_data {
-            result_data.push(data);
-        } else {
-            break;
-        }
-    }
+    let mut result_data = fetch_raw_data(publish, KIND, SENSOR, TIMESTAMP).await;
     assert_eq!(result_data.len(), 1);
     assert_eq!(result_data[0].0, TIMESTAMP);
     assert_eq!(&result_data[0].1, SENSOR);
@@ -4764,42 +2821,17 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-        ));
+        let ingest_sensors = NODE2.build_ingest_sensors();
 
-        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
-        let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let root = to_root_cert(&ca_cert_path).unwrap();
-        let certs = Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        });
+        let certs = NODE2.build_certs();
 
-        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        let peers = Arc::new(RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
-            PeerInfo {
-                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<String>>(),
-                graphql_port: None,
-                publish_port: Some(NODE1_TEST_PORT),
-            },
+            NODE1.peer_info(),
         )])));
 
         let mut peer_identities = HashSet::new();
-        peer_identities.insert(PeerIdentity {
-            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            hostname: NODE1_HOST.to_string(),
-        });
+        peer_identities.insert(NODE1.peer_identity());
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -4821,10 +2853,7 @@ async fn request_range_data_with_protocol_giganto_cluster() {
             eprintln!("the receiver is dropped");
         }
 
-        let node2_server = Server::new(
-            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
-            &certs,
-        );
+        let node2_server = Server::new(NODE2.socket_addr_v4(), &certs);
         node2_server
             .run(
                 db,
@@ -4844,44 +2873,18 @@ async fn request_range_data_with_protocol_giganto_cluster() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
+    let ingest_sensors = build_ingest_sensors();
 
-    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+    let peers = Arc::new(RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
-        PeerInfo {
-            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-            graphql_port: None,
-            publish_port: Some(NODE2_PORT),
-        },
+        NODE2.peer_info(),
     )])));
     let mut peer_identities = HashSet::new();
-    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
-    peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers,
-        hostname: NODE2_HOST.to_string(),
-    });
+    let _addr_to_peers = NODE2.socket_addr_v4();
+    peer_identities.insert(NODE2.peer_identity_v4());
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
+    let certs = build_test_certs();
 
     tokio::spawn(server().run(
         db.clone(),
@@ -4896,46 +2899,12 @@ async fn request_range_data_with_protocol_giganto_cluster() {
 
     let publish = TestClient::new().await;
 
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
-
-    let start = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("valid date")
-            .and_hms_opt(00, 00, 00)
-            .expect("valid time"),
-        Utc,
-    );
-    let end = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2050, 12, 31)
-            .expect("valid date")
-            .and_hms_opt(23, 59, 59)
-            .expect("valid time"),
-        Utc,
-    );
-    let message = RequestRange {
-        sensor: String::from(SENSOR),
-        kind: String::from(CONN_KIND),
-        start: start.timestamp_nanos_opt().unwrap(),
-        end: end.timestamp_nanos_opt().unwrap(),
-        count: 5,
-    };
-
-    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-        .await
-        .unwrap();
-
-    let mut result_data = Vec::new();
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        result_data.push(resp_data.clone());
-        if resp_data.is_none() {
-            break;
-        }
-    }
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<u8>)>(
+            PUBLISH_RANGE_MESSAGE_CODE,
+            build_range_request(SENSOR, CONN_KIND),
+        )
+        .await;
 
     let raw_data = if let Ok(v) = oneshot_recv.await {
         v
@@ -4944,13 +2913,11 @@ async fn request_range_data_with_protocol_giganto_cluster() {
         Vec::new()
     };
 
-    assert_eq!(
-        Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
-    );
-    assert_eq!(
-        raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    assert_range_result(
+        result_data,
+        raw_data.as_slice(),
+        Conn::response_done().unwrap().as_slice(),
+        CONN_KIND,
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -4973,42 +2940,17 @@ async fn request_range_data_with_log_giganto_cluster() {
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-        ));
+        let ingest_sensors = NODE2.build_ingest_sensors();
 
-        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
-        let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let root = to_root_cert(&ca_cert_path).unwrap();
-        let certs = Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        });
+        let certs = NODE2.build_certs();
 
-        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        let peers = Arc::new(RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
-            PeerInfo {
-                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<String>>(),
-                graphql_port: None,
-                publish_port: Some(NODE1_TEST_PORT),
-            },
+            NODE1.peer_info(),
         )])));
 
         let mut peer_identities = HashSet::new();
-        peer_identities.insert(PeerIdentity {
-            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            hostname: NODE1_HOST.to_string(),
-        });
+        peer_identities.insert(NODE1.peer_identity());
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -5031,10 +2973,7 @@ async fn request_range_data_with_log_giganto_cluster() {
             eprintln!("the receiver is dropped");
         }
 
-        let node2_server = Server::new(
-            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
-            &certs,
-        );
+        let node2_server = Server::new(NODE2.socket_addr_v4(), &certs);
         node2_server
             .run(
                 db,
@@ -5054,44 +2993,18 @@ async fn request_range_data_with_log_giganto_cluster() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
+    let ingest_sensors = build_ingest_sensors();
 
-    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+    let peers = Arc::new(RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
-        PeerInfo {
-            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-            graphql_port: None,
-            publish_port: Some(NODE2_PORT),
-        },
+        NODE2.peer_info(),
     )])));
     let mut peer_identities = HashSet::new();
-    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
-    peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers,
-        hostname: NODE2_HOST.to_string(),
-    });
+    let _addr_to_peers = NODE2.socket_addr_v4();
+    peer_identities.insert(NODE2.peer_identity_v4());
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
+    let certs = build_test_certs();
 
     tokio::spawn(server().run(
         db.clone(),
@@ -5104,46 +3017,12 @@ async fn request_range_data_with_log_giganto_cluster() {
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
-
-    let start = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("valid date")
-            .and_hms_opt(00, 00, 00)
-            .expect("valid time"),
-        Utc,
-    );
-    let end = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2050, 12, 31)
-            .expect("valid date")
-            .and_hms_opt(23, 59, 59)
-            .expect("valid time"),
-        Utc,
-    );
-    let message = RequestRange {
-        sensor: String::from(SENSOR),
-        kind: String::from(KIND),
-        start: start.timestamp_nanos_opt().unwrap(),
-        end: end.timestamp_nanos_opt().unwrap(),
-        count: 5,
-    };
-
-    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-        .await
-        .unwrap();
-
-    let mut result_data = Vec::new();
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        result_data.push(resp_data.clone());
-        if resp_data.is_none() {
-            break;
-        }
-    }
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<u8>)>(
+            PUBLISH_RANGE_MESSAGE_CODE,
+            build_range_request(SENSOR, KIND),
+        )
+        .await;
 
     let raw_data = if let Ok(v) = oneshot_recv.await {
         v
@@ -5152,13 +3031,11 @@ async fn request_range_data_with_log_giganto_cluster() {
         Vec::new()
     };
 
-    assert_eq!(
-        Conn::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
-    );
-    assert_eq!(
-        raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<u8>)>>(&result_data.pop().unwrap()).unwrap()
+    assert_range_result(
+        result_data,
+        raw_data.as_slice(),
+        Conn::response_done().unwrap().as_slice(),
+        KIND,
     );
 
     publish.conn.close(0u32.into(), b"publish_log_done");
@@ -5181,42 +3058,17 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-        ));
+        let ingest_sensors = NODE2.build_ingest_sensors();
 
-        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
-        let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let root = to_root_cert(&ca_cert_path).unwrap();
-        let certs = Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        });
+        let certs = NODE2.build_certs();
 
-        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        let peers = Arc::new(RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
-            PeerInfo {
-                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<String>>(),
-                graphql_port: None,
-                publish_port: Some(NODE1_TEST_PORT),
-            },
+            NODE1.peer_info(),
         )])));
 
         let mut peer_identities = HashSet::new();
-        peer_identities.insert(PeerIdentity {
-            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            hostname: NODE1_HOST.to_string(),
-        });
+        peer_identities.insert(NODE1.peer_identity());
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -5243,10 +3095,7 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
             eprintln!("the receiver is dropped");
         }
 
-        let node2_server = Server::new(
-            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
-            &certs,
-        );
+        let node2_server = Server::new(NODE2.socket_addr_v4(), &certs);
         node2_server
             .run(
                 db,
@@ -5266,45 +3115,19 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
+    let ingest_sensors = build_ingest_sensors();
 
-    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+    let peers = Arc::new(RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
-        PeerInfo {
-            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-            graphql_port: None,
-            publish_port: Some(NODE2_PORT),
-        },
+        NODE2.peer_info(),
     )])));
 
     let mut peer_identities = HashSet::new();
-    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
-    peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers,
-        hostname: NODE2_HOST.to_string(),
-    });
+    let _addr_to_peers = NODE2.socket_addr_v4();
+    peer_identities.insert(NODE2.peer_identity_v4());
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
+    let certs = build_test_certs();
 
     tokio::spawn(server().run(
         db.clone(),
@@ -5317,46 +3140,12 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         Arc::new(Notify::new()),
     ));
     let publish = TestClient::new().await;
-    let (mut send_pub_req, mut recv_pub_resp) =
-        publish.conn.open_bi().await.expect("failed to open stream");
-
-    let start = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(1970, 1, 1)
-            .expect("valid date")
-            .and_hms_opt(00, 00, 00)
-            .expect("valid time"),
-        Utc,
-    );
-    let end = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2050, 12, 31)
-            .expect("valid date")
-            .and_hms_opt(23, 59, 59)
-            .expect("valid time"),
-        Utc,
-    );
-    let message = RequestRange {
-        sensor: String::from(SAMPLING_POLICY_ID_AS_SENSOR),
-        kind: String::from(KIND),
-        start: start.timestamp_nanos_opt().unwrap(),
-        end: end.timestamp_nanos_opt().unwrap(),
-        count: 5,
-    };
-
-    send_range_data_request(&mut send_pub_req, PUBLISH_RANGE_MESSAGE_CODE, message)
-        .await
-        .unwrap();
-
-    let mut result_data = Vec::new();
-    loop {
-        let resp_data = receive_range_data::<Option<(i64, String, Vec<f64>)>>(&mut recv_pub_resp)
-            .await
-            .unwrap();
-
-        result_data.push(resp_data.clone());
-        if resp_data.is_none() {
-            break;
-        }
-    }
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<f64>)>(
+            PUBLISH_RANGE_MESSAGE_CODE,
+            build_range_request(SAMPLING_POLICY_ID_AS_SENSOR, KIND),
+        )
+        .await;
 
     let raw_data = if let Ok(v) = oneshot_recv.await {
         v
@@ -5365,13 +3154,11 @@ async fn request_range_data_with_period_time_series_giganto_cluster() {
         Vec::new()
     };
 
-    assert_eq!(
-        PeriodicTimeSeries::response_done().unwrap(),
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
-    );
-    assert_eq!(
-        raw_data,
-        bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&result_data.pop().unwrap()).unwrap()
+    assert_range_result(
+        result_data,
+        raw_data.as_slice(),
+        PeriodicTimeSeries::response_done().unwrap().as_slice(),
+        KIND,
     );
 
     publish.conn.close(0u32.into(), b"publish_time_done");
@@ -5394,42 +3181,17 @@ async fn request_raw_events_giganto_cluster() {
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
         let pcap_sensors = new_pcap_sensors();
         let stream_direct_channels = new_stream_direct_channels();
-        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-            NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-        ));
+        let ingest_sensors = NODE2.build_ingest_sensors();
 
-        let cert_pem = fs::read(NODE2_CERT_PATH).unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read(NODE2_KEY_PATH).unwrap();
-        let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let root = to_root_cert(&ca_cert_path).unwrap();
-        let certs = Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        });
+        let certs = NODE2.build_certs();
 
-        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+        let peers = Arc::new(RwLock::new(HashMap::from([(
             Ipv6Addr::LOCALHOST.to_string(),
-            PeerInfo {
-                ingest_sensors: NODE1_GIGANTO_INGEST_SENSORS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<String>>(),
-                graphql_port: None,
-                publish_port: Some(NODE1_TEST_PORT),
-            },
+            NODE1.peer_info(),
         )])));
 
         let mut peer_identities = HashSet::new();
-        peer_identities.insert(PeerIdentity {
-            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), NODE1_TEST_PORT),
-            hostname: NODE1_HOST.to_string(),
-        });
+        peer_identities.insert(NODE1.peer_identity());
         let peer_idents = Arc::new(RwLock::new(peer_identities));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -5445,10 +3207,7 @@ async fn request_raw_events_giganto_cluster() {
             eprintln!("the receiver is dropped");
         }
 
-        let node2_server = Server::new(
-            SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT),
-            &certs,
-        );
+        let node2_server = Server::new(NODE2.socket_addr_v4(), &certs);
         node2_server
             .run(
                 db,
@@ -5468,45 +3227,19 @@ async fn request_raw_events_giganto_cluster() {
     let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
     let pcap_sensors = new_pcap_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
-        NODE1_GIGANTO_INGEST_SENSORS
-            .into_iter()
-            .map(str::to_string)
-            .collect::<HashSet<String>>(),
-    ));
+    let ingest_sensors = build_ingest_sensors();
 
-    let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+    let peers = Arc::new(RwLock::new(HashMap::from([(
         "127.0.0.1".to_string(),
-        PeerInfo {
-            ingest_sensors: NODE2_GIGANTO_INGEST_SENSORS
-                .into_iter()
-                .map(str::to_string)
-                .collect::<HashSet<String>>(),
-            graphql_port: None,
-            publish_port: Some(NODE2_PORT),
-        },
+        NODE2.peer_info(),
     )])));
 
     let mut peer_identities = HashSet::new();
-    let addr_to_peers = SocketAddr::new("127.0.0.1".parse::<IpAddr>().unwrap(), NODE2_PORT);
-    peer_identities.insert(PeerIdentity {
-        addr: addr_to_peers,
-        hostname: NODE2_HOST.to_string(),
-    });
+    let _addr_to_peers = NODE2.socket_addr_v4();
+    peer_identities.insert(NODE2.peer_identity_v4());
     let peer_idents = Arc::new(RwLock::new(peer_identities));
 
-    let cert_pem = fs::read(NODE1_CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(NODE1_KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
-
-    let certs = Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    });
+    let certs = build_test_certs();
 
     tokio::spawn(server().run(
         db.clone(),

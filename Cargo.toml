@@ -67,6 +67,7 @@ async-graphql-poem = "7"
 
 [dev-dependencies]
 mockito = "1"
+rcgen = "0.14"
 regex = "1"
 serial_test = "3"
 tempfile = "3"

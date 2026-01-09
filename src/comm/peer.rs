@@ -749,6 +749,9 @@ pub mod tests {
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify, RwLock};
 
+    use super::*;
+    use crate::server::config_server;
+
     static INIT: OnceLock<()> = OnceLock::new();
 
     fn init_crypto() {
@@ -945,5 +948,143 @@ pub mod tests {
         assert_eq!(msg_type, PeerCode::UpdateSensorList);
         assert!(update_sensor_list.ingest_sensors.contains(&sensor_name));
         assert!(update_sensor_list.ingest_sensors.contains(&sensor_name2));
+    }
+
+    #[test]
+    fn test_get_port_from_config() {
+        let toml_str = r#"
+            graphql_address = "127.0.0.1:8443"
+            publish_address = "127.0.0.1:38371"
+        "#;
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(get_port_from_config("graphql_address", &doc), Some(8443));
+        assert_eq!(get_port_from_config("publish_address", &doc), Some(38371));
+        assert_eq!(get_port_from_config("non_existent", &doc), None);
+    }
+
+    #[test]
+    fn test_get_peer_ports() {
+        let toml_str = format!(
+            "{} = \"127.0.0.1:8443\"\n{} = \"127.0.0.1:38371\"",
+            crate::graphql::status::CONFIG_GRAPHQL_SRV_ADDR,
+            crate::graphql::status::CONFIG_PUBLISH_SRV_ADDR
+        );
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().unwrap();
+        let (graphql, publish) = get_peer_ports(&doc);
+        assert_eq!(graphql, Some(8443));
+        assert_eq!(publish, Some(38371));
+    }
+
+    #[tokio::test]
+    async fn test_send_receive_peer_data() {
+        use std::net::Ipv4Addr;
+        // We can't easily mock SendStream/RecvStream without a real connection.
+        // However, we can use a local loopback connection for a unit-like integration test.
+        init_crypto();
+        let _lock = get_token().lock().await;
+
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let cert_pem = fs::read(CERT_PATH).unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read(KEY_PATH).unwrap();
+        let key = to_private_key(&key_pem).unwrap();
+        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
+        let root = to_root_cert(&ca_cert_path).unwrap();
+
+        let certs = Certs {
+            certs: cert,
+            key,
+            root,
+        };
+
+        let server_config = config_server(&certs).unwrap();
+        let server_endpoint = Endpoint::server(server_config, server_addr).unwrap();
+        let server_actual_addr = server_endpoint.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let server_conn = server_endpoint.accept().await.unwrap().await.unwrap();
+            let (_server_send, mut server_recv) = server_conn.accept_bi().await.unwrap();
+            receive_peer_data(&mut server_recv).await.unwrap()
+        });
+
+        let client_endpoint = init_client();
+
+        let client_conn = client_endpoint
+            .connect(server_actual_addr, HOST)
+            .unwrap()
+            .await
+            .unwrap();
+
+        let (mut client_send, _client_recv) = client_conn.open_bi().await.unwrap();
+
+        let test_info = PeerInfo {
+            ingest_sensors: vec!["sensor1".to_string()].into_iter().collect(),
+            graphql_port: Some(8080),
+            publish_port: Some(9090),
+        };
+
+        send_peer_data(&mut client_send, PeerCode::UpdateSensorList, &test_info)
+            .await
+            .unwrap();
+
+        let (code, buf) = server_handle.await.unwrap();
+        assert_eq!(code, PeerCode::UpdateSensorList);
+        let received_info: PeerInfo = bincode::deserialize(&buf).unwrap();
+        assert_eq!(received_info.graphql_port, Some(8080));
+        assert!(received_info.ingest_sensors.contains("sensor1"));
+    }
+
+    #[tokio::test]
+    async fn test_update_to_new_sensor_list() {
+        let peers = Arc::new(RwLock::new(HashMap::new()));
+        let remote_addr = "127.0.0.1".to_string();
+        let sensor_list = PeerInfo {
+            ingest_sensors: vec!["s1".to_string()].into_iter().collect(),
+            ..PeerInfo::default()
+        };
+
+        update_to_new_sensor_list(sensor_list, remote_addr.clone(), peers.clone()).await;
+
+        let read_peers = peers.read().await;
+        assert!(read_peers.contains_key(&remote_addr));
+        assert!(
+            read_peers
+                .get(&remote_addr)
+                .unwrap()
+                .ingest_sensors
+                .contains("s1")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_to_new_peer_list() {
+        let peer_list = Arc::new(RwLock::new(HashSet::new()));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let local_addr = "127.0.0.1:38383".parse().unwrap();
+        let doc = toml_edit::DocumentMut::new();
+        let tmp_dir = TempDir::new().unwrap();
+        let config_path = tmp_dir.path().join("config.toml");
+        File::create(&config_path).unwrap();
+
+        let mut new_peers = HashSet::new();
+        let peer_ident = PeerIdentity {
+            addr: "127.0.0.2:38383".parse().unwrap(),
+            hostname: "peer2".to_string(),
+        };
+        new_peers.insert(peer_ident.clone());
+
+        update_to_new_peer_list(
+            new_peers,
+            local_addr,
+            peer_list.clone(),
+            sender,
+            doc,
+            config_path.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(peer_list.read().await.contains(&peer_ident));
+        assert_eq!(receiver.recv().await.unwrap(), peer_ident);
     }
 }
