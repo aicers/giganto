@@ -6,6 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Updated root certificate loading logic to validate empty inputs and ensure at
+  least one valid certificate is added.
+
 ### Fixed
 
 - Fixed sub-second timestamp corruption in pcap file generation. The `pcap`

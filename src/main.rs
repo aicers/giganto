@@ -89,39 +89,7 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let args = Args::parse();
-    let mut settings = Settings::from_file(&args.config).or_else(|e| {
-        eprintln!(
-            "failed to read configuration file: {}. Error: {e}",
-            args.config
-        );
-
-        let backup_path = Path::new(&args.config).with_extension("toml.bak");
-        if backup_path.exists() {
-            println!(
-                "attempting to restore backup configuration from: {}",
-                backup_path.display()
-            );
-
-            fs::copy(&backup_path, &args.config).with_context(|| {
-                format!(
-                    "failed to restore configuration from backup: {} to {}",
-                    backup_path.display(),
-                    &args.config
-                )
-            })?;
-
-            println!("configuration restored from backup.");
-
-            Settings::from_file(&args.config).with_context(|| {
-                format!(
-                    "failed to read restored configuration file: {}",
-                    backup_path.display()
-                )
-            })
-        } else {
-            Err(e).context("no valid configuration file available, and no backup found.")
-        }
-    })?;
+    let mut settings = load_config(&args.config)?;
 
     settings.config.validate()?;
 
@@ -374,6 +342,39 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn load_config(path: &str) -> Result<Settings> {
+    Settings::from_file(path).or_else(|e| {
+        eprintln!("failed to read configuration file: {path}. Error: {e}");
+
+        let backup_path = Path::new(path).with_extension("toml.bak");
+        if backup_path.exists() {
+            println!(
+                "attempting to restore backup configuration from: {}",
+                backup_path.display()
+            );
+
+            fs::copy(&backup_path, path).with_context(|| {
+                format!(
+                    "failed to restore configuration from backup: {} to {}",
+                    backup_path.display(),
+                    path
+                )
+            })?;
+
+            println!("configuration restored from backup.");
+
+            Settings::from_file(path).with_context(|| {
+                format!(
+                    "failed to read restored configuration file: {}",
+                    backup_path.display()
+                )
+            })
+        } else {
+            Err(e).context("no valid configuration file available, and no backup found.")
+        }
+    })
+}
+
 /// Initializes the tracing subscriber and returns a `WorkerGuard`.
 ///
 /// Logs will be written to the file specified by `log_path` if provided.
@@ -438,6 +439,19 @@ async fn wait_for_task_shutdown(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        io::Write,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use tempfile::tempdir;
+    use tokio::time::sleep;
+
     use super::*;
 
     #[test]
@@ -447,5 +461,203 @@ mod tests {
 
         let result = create_graphql_client(invalid_cert, invalid_key);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_graphql_client_with_valid_cert() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+            .expect("failed to generate self-signed certificate");
+        let cert_pem = cert.cert.pem();
+        let key_pem = cert.signing_key.serialize_pem();
+
+        let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_task_shutdown_joins_all_handles() {
+        let ingest_done = Arc::new(AtomicBool::new(false));
+        let publish_done = Arc::new(AtomicBool::new(false));
+        let peer_done = Arc::new(AtomicBool::new(false));
+        let retain_done = Arc::new(AtomicBool::new(false));
+
+        let ingest_task_handle = tokio::spawn({
+            let ingest_done = ingest_done.clone();
+            async move {
+                sleep(Duration::from_millis(25)).await;
+                ingest_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let publish_task_handle = tokio::spawn({
+            let publish_done = publish_done.clone();
+            async move {
+                sleep(Duration::from_millis(30)).await;
+                publish_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let peer_task_handle = Some(tokio::spawn({
+            let peer_done = peer_done.clone();
+            async move {
+                sleep(Duration::from_millis(35)).await;
+                peer_done.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }));
+
+        let retain_task_handle = std::thread::spawn({
+            let retain_done = retain_done.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(20));
+                retain_done.store(true, Ordering::SeqCst);
+            }
+        });
+
+        wait_for_task_shutdown(
+            ingest_task_handle,
+            publish_task_handle,
+            peer_task_handle,
+            retain_task_handle,
+        )
+        .await;
+
+        assert!(ingest_done.load(Ordering::SeqCst));
+        assert!(publish_done.load(Ordering::SeqCst));
+        assert!(peer_done.load(Ordering::SeqCst));
+        assert!(retain_done.load(Ordering::SeqCst));
+    }
+
+    #[cfg(test)]
+    const TEST_CONFIG_CONTENT: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+    "#;
+
+    fn get_test_args(config: &str, repair: bool) -> Vec<String> {
+        let mut args = vec![
+            "giganto".to_string(),
+            "-c".to_string(),
+            config.to_string(),
+            "--cert".to_string(),
+            "cert.pem".to_string(),
+            "--key".to_string(),
+            "key.pem".to_string(),
+            "--ca-certs".to_string(),
+            "ca.pem".to_string(),
+        ];
+        if repair {
+            args.push("--repair".to_string());
+        }
+        args
+    }
+
+    #[test]
+    fn test_args_parsing() {
+        let args = Args::parse_from(get_test_args("config.toml", true));
+        assert_eq!(args.config, "config.toml");
+        assert!(args.repair);
+        assert_eq!(args.cert, "cert.pem");
+        assert_eq!(args.key, "key.pem");
+        assert_eq!(args.ca_certs, vec!["ca.pem"]);
+
+        let args = Args::parse_from(get_test_args("other.toml", false));
+        assert_eq!(args.config, "other.toml");
+        assert!(!args.repair);
+    }
+
+    #[test]
+    fn test_args_parsing_missing_required() {
+        // Missing --ca-certs
+        let result = Args::try_parse_from([
+            "giganto",
+            "-c",
+            "config.toml",
+            "--cert",
+            "cert.pem",
+            "--key",
+            "key.pem",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_config_success() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write config content");
+
+        let settings = load_config(config_path.to_str().unwrap());
+        assert!(settings.is_ok());
+    }
+
+    #[test]
+    fn test_load_config_msg_fail_no_backup() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("non_existent.toml");
+        let settings = load_config(config_path.to_str().unwrap());
+        assert!(settings.is_err());
+    }
+
+    #[test]
+    fn test_load_config_backup_restore() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        let mut file = fs::File::create(&backup_path).expect("failed to create backup file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write backup content");
+
+        let settings = load_config(config_path.to_str().unwrap());
+        assert!(settings.is_ok());
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_load_config_backup_restore_copy_failure() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        fs::File::create(&backup_path).expect("failed to create backup file");
+        fs::create_dir(&config_path).expect("failed to create directory at config path");
+
+        let result = load_config(config_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to restore configuration from backup")
+        );
+    }
+
+    #[test]
+    fn test_load_config_backup_restore_read_failure() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        let mut file = fs::File::create(&backup_path).expect("failed to create backup file");
+        writeln!(file, "invalid_toml_content").expect("failed to write invalid content");
+
+        let result = load_config(config_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to read restored configuration file")
+        );
     }
 }
