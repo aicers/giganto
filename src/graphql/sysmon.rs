@@ -2199,7 +2199,7 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         mem,
-        net::IpAddr,
+        net::{IpAddr, SocketAddr},
         str::FromStr,
     };
 
@@ -2211,6 +2211,58 @@ mod tests {
     };
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+
+    async fn run_local_event_query<F>(setup: F, query: &str, expected: &str)
+    where
+        F: FnOnce(&TestSchema),
+    {
+        let schema = TestSchema::new();
+        setup(&schema);
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), expected);
+    }
+
+    async fn run_cluster_event_query(query: &str, expected: &str, peer_response: &str) {
+        let mut peer_server = mockito::Server::new_async().await;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), expected);
+
+        mock.assert_async().await;
+    }
+
+    fn sample_time_timestamps() -> [i64; 4] {
+        [
+            Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+            Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+            Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+            Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        ]
+    }
 
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
@@ -2424,6 +2476,405 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn sysmon_events_last_selects_latest() {
+        let schema = TestSchema::new();
+        let process_create_store = schema.db.process_create_store().unwrap();
+        let file_delete_detected_store = schema.db.file_delete_detected_store().unwrap();
+
+        let time1 = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        let time2 = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+
+        insert_process_create_event(&process_create_store, "src1", time1);
+        insert_file_delete_detected_event(&file_delete_detected_store, "src1", time2);
+
+        let query = r#"
+        {
+            sysmonEvents(
+                filter: {
+                    sensor: "src1",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:09Z" }
+                },
+                last: 1
+            ) {
+                edges {
+                    node {
+                        __typename
+                        ... on ProcessCreateEvent { time }
+                        ... on FileDeleteDetectedEvent { time }
+                    }
+                }
+            }
+        }"#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let node = &data["sysmonEvents"]["edges"][0]["node"];
+        assert_eq!(
+            node["__typename"].as_str().unwrap(),
+            "FileDeleteDetectedEvent"
+        );
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:08+00:00");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn sysmon_events_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            sysmonEvents(
+                filter: { sensor: "src 2" }
+                first: 20
+            ) {
+                edges {
+                    node {
+                        __typename
+                        ... on ProcessCreateEvent { time }
+                        ... on FileCreationTimeChangedEvent { time }
+                        ... on NetworkConnectionEvent { time }
+                        ... on ProcessTerminatedEvent { time }
+                        ... on ImageLoadedEvent { time }
+                        ... on FileCreateEvent { time }
+                        ... on RegistryValueSetEvent { time }
+                        ... on RegistryKeyValueRenameEvent { time }
+                        ... on FileCreateStreamHashEvent { time }
+                        ... on PipeEventEvent { time }
+                        ... on DnsEventEvent { time }
+                        ... on FileDeleteEvent { time }
+                        ... on ProcessTamperingEvent { time }
+                        ... on FileDeleteDetectedEvent { time }
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "sysmonEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "ProcessCreateEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "pc-agent",
+                                "agentId": "pc-agent_id",
+                                "processGuid": "guid",
+                                "processId": "1234",
+                                "image": "proc.exe",
+                                "fileVersion": "1.0",
+                                "description": "desc",
+                                "product": "product",
+                                "company": "company",
+                                "originalFileName": "proc.exe",
+                                "commandLine": "proc.exe /S",
+                                "currentDirectory": "C:\\",
+                                "user": "user",
+                                "logonGuid": "logon_guid",
+                                "logonId": "99",
+                                "terminalSessionId": "1",
+                                "integrityLevel": "high",
+                                "hashes": ["SHA256=abc"],
+                                "parentProcessGuid": "parent_guid",
+                                "parentProcessId": "4321",
+                                "parentImage": "parent.exe",
+                                "parentCommandLine": "parent.exe",
+                                "parentUser": "parent_user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "FileCreationTimeChangedEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "123",
+                                "image": "proc.exe",
+                                "targetFilename": "time.log",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "previousCreationUtcTime": "2023-11-16T15:03:35.291779203+00:00",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "NetworkConnectionEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "1",
+                                "image": "proc.exe",
+                                "user": "user",
+                                "protocol": "TCP",
+                                "initiated": true,
+                                "sourceIsIpv6": false,
+                                "sourceIp": "192.0.2.1",
+                                "sourceHostname": "src-host",
+                                "sourcePort": 1234,
+                                "sourcePortName": "src",
+                                "destinationIsIpv6": false,
+                                "destinationIp": "192.0.2.2",
+                                "destinationHostname": "dst-host",
+                                "destinationPort": 4321,
+                                "destinationPortName": "dst"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "ProcessTerminatedEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "77",
+                                "image": "terminated.exe",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "ImageLoadedEvent",
+                                "time": "2020-06-01T00:01:01+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "99",
+                                "image": "proc.exe",
+                                "imageLoaded": "loaded.dll",
+                                "fileVersion": "1.0.0",
+                                "description": "desc",
+                                "product": "product",
+                                "company": "company",
+                                "originalFileName": "loaded.dll",
+                                "hashes": ["SHA256=123"],
+                                "signed": true,
+                                "signature": "signature",
+                                "signatureStatus": "Valid",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "FileCreateEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "42",
+                                "image": "proc.exe",
+                                "targetFilename": "created.txt",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "RegistryValueSetEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "set",
+                                "processGuid": "guid",
+                                "processId": "44",
+                                "image": "proc.exe",
+                                "targetObject": "HKLM\\Software\\Key",
+                                "details": "value=1",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "RegistryKeyValueRenameEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "rename",
+                                "processGuid": "guid",
+                                "processId": "45",
+                                "image": "proc.exe",
+                                "targetObject": "HKLM\\Software\\Old",
+                                "newName": "HKLM\\Software\\New",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "FileCreateStreamHashEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "9",
+                                "image": "proc.exe",
+                                "targetFilename": "stream.log",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "hash": ["SHA256=stream"],
+                                "contents": "stream-bytes",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "PipeEventEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "create",
+                                "processGuid": "guid",
+                                "processId": "47",
+                                "pipeName": "\\\\pipe\\\\pipe",
+                                "image": "proc.exe",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "DnsEventEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "12",
+                                "queryName": "example.com",
+                                "queryStatus": "0",
+                                "queryResults": ["93.184.216.34"],
+                                "image": "proc.exe",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "FileDeleteEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "49",
+                                "user": "user",
+                                "image": "proc.exe",
+                                "targetFilename": "deleted.txt",
+                                "hashes": ["SHA256=deadbeef"],
+                                "isExecutable": false,
+                                "archived": true
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "ProcessTamperingEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "50",
+                                "image": "proc.exe",
+                                "tamperType": "suspend",
+                                "user": "user"
+                            }
+                        },
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "__typename": "FileDeleteDetectedEvent",
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "51",
+                                "user": "user",
+                                "image": "proc.exe",
+                                "targetFilename": "deleted.txt",
+                                "hashes": ["SHA256=deadbeef"],
+                                "isExecutable": true
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let edges = data["sysmonEvents"]["edges"].as_array().unwrap();
+        let expected_types = [
+            "ProcessCreateEvent",
+            "FileCreationTimeChangedEvent",
+            "NetworkConnectionEvent",
+            "ProcessTerminatedEvent",
+            "ImageLoadedEvent",
+            "FileCreateEvent",
+            "RegistryValueSetEvent",
+            "RegistryKeyValueRenameEvent",
+            "FileCreateStreamHashEvent",
+            "PipeEventEvent",
+            "DnsEventEvent",
+            "FileDeleteEvent",
+            "ProcessTamperingEvent",
+            "FileDeleteDetectedEvent",
+        ];
+        let mut seen = HashSet::new();
+        for edge in edges {
+            let node = edge["node"].as_object().unwrap();
+            let typename = node["__typename"].as_str().unwrap();
+            seen.insert(typename.to_string());
+            let time = node["time"].as_str().unwrap_or_default();
+            assert!(!time.is_empty(), "missing time for {typename}");
+        }
+        assert_eq!(seen.len(), expected_types.len());
+        for expected in expected_types {
+            assert!(
+                seen.contains(expected),
+                "Missing sysmon event type {expected}"
+            );
+        }
+        mock.assert_async().await;
+    }
+
     fn sensor_timestamp_key(sensor: &str, timestamp: i64) -> Vec<u8> {
         let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
         key.extend_from_slice(sensor.as_bytes());
@@ -2432,6 +2883,1706 @@ mod tests {
         key
     }
 
+    #[tokio::test]
+    async fn sysmon_events_local_cases() {
+        for case in EVENT_CASES {
+            run_local_event_query(case.setup, case.query, case.expected).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn sysmon_events_cluster_cases() {
+        for case in CLUSTER_EVENT_CASES {
+            run_cluster_event_query(case.query, case.expected, case.peer_response).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn sysmon_search_local_cases() {
+        for case in SEARCH_CASES {
+            run_local_event_query(case.setup, case.query, case.expected).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn sysmon_search_cluster_cases() {
+        for case in SEARCH_CLUSTER_CASES {
+            run_cluster_event_query(case.query, case.expected, case.peer_response).await;
+        }
+    }
+
+    struct EventCase {
+        query: &'static str,
+        expected: &'static str,
+        setup: fn(&TestSchema),
+    }
+
+    struct ClusterEventCase {
+        query: &'static str,
+        expected: &'static str,
+        peer_response: &'static str,
+    }
+
+    struct SearchCase {
+        query: &'static str,
+        expected: &'static str,
+        setup: fn(&TestSchema),
+    }
+
+    struct SearchClusterCase {
+        query: &'static str,
+        expected: &'static str,
+        peer_response: &'static str,
+    }
+
+    fn setup_process_create(schema: &TestSchema) {
+        let store = schema.db.process_create_store().unwrap();
+        insert_process_create_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_file_create_time(schema: &TestSchema) {
+        let store = schema.db.file_create_time_store().unwrap();
+        let ts = sample_time_timestamps()[0];
+        insert_file_create_time_event(&store, "src 1", ts, ts, ts);
+    }
+
+    fn setup_network_connect(schema: &TestSchema) {
+        let store = schema.db.network_connect_store().unwrap();
+        insert_network_connect_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_process_terminate(schema: &TestSchema) {
+        let store = schema.db.process_terminate_store().unwrap();
+        insert_process_terminated_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_image_load(schema: &TestSchema) {
+        let store = schema.db.image_load_store().unwrap();
+        insert_image_loaded_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_file_create(schema: &TestSchema) {
+        let store = schema.db.file_create_store().unwrap();
+        let ts = sample_time_timestamps()[0];
+        insert_file_create_event(&store, "src 1", ts, ts);
+    }
+
+    fn setup_registry_value_set(schema: &TestSchema) {
+        let store = schema.db.registry_value_set_store().unwrap();
+        insert_registry_value_set_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_registry_key_rename(schema: &TestSchema) {
+        let store = schema.db.registry_key_rename_store().unwrap();
+        insert_registry_key_rename_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_file_create_stream_hash(schema: &TestSchema) {
+        let store = schema.db.file_create_stream_hash_store().unwrap();
+        insert_file_create_stream_hash_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_pipe_event(schema: &TestSchema) {
+        let store = schema.db.pipe_event_store().unwrap();
+        insert_pipe_event_raw_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_dns_query(schema: &TestSchema) {
+        let store = schema.db.dns_query_store().unwrap();
+        insert_dns_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_file_delete(schema: &TestSchema) {
+        let store = schema.db.file_delete_store().unwrap();
+        insert_file_delete_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_process_tamper(schema: &TestSchema) {
+        let store = schema.db.process_tamper_store().unwrap();
+        insert_process_tampering_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_file_delete_detected(schema: &TestSchema) {
+        let store = schema.db.file_delete_detected_store().unwrap();
+        insert_file_delete_detected_event(&store, "src 1", sample_time_timestamps()[0]);
+    }
+
+    fn setup_search_process_create(schema: &TestSchema) {
+        let store = schema.db.process_create_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_process_create_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_file_create_time(schema: &TestSchema) {
+        let store = schema.db.file_create_time_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_file_create_time_event(&store, "src 1", ts, ts, ts);
+        }
+    }
+
+    fn setup_search_network_connect(schema: &TestSchema) {
+        let store = schema.db.network_connect_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_network_connect_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_process_terminate(schema: &TestSchema) {
+        let store = schema.db.process_terminate_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_process_terminated_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_image_load(schema: &TestSchema) {
+        let store = schema.db.image_load_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_image_loaded_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_file_create(schema: &TestSchema) {
+        let store = schema.db.file_create_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_file_create_event(&store, "src 1", ts, ts);
+        }
+    }
+
+    fn setup_search_registry_value_set(schema: &TestSchema) {
+        let store = schema.db.registry_value_set_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_registry_value_set_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_registry_key_rename(schema: &TestSchema) {
+        let store = schema.db.registry_key_rename_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_registry_key_rename_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_file_create_stream_hash(schema: &TestSchema) {
+        let store = schema.db.file_create_stream_hash_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_file_create_stream_hash_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_pipe_event(schema: &TestSchema) {
+        let store = schema.db.pipe_event_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_pipe_event_raw_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_dns_query(schema: &TestSchema) {
+        let store = schema.db.dns_query_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_dns_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_file_delete(schema: &TestSchema) {
+        let store = schema.db.file_delete_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_file_delete_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_process_tamper(schema: &TestSchema) {
+        let store = schema.db.process_tamper_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_process_tampering_event(&store, "src 1", ts);
+        }
+    }
+
+    fn setup_search_file_delete_detected(schema: &TestSchema) {
+        let store = schema.db.file_delete_detected_store().unwrap();
+        for &ts in &sample_time_timestamps() {
+            insert_file_delete_detected_event(&store, "src 1", ts);
+        }
+    }
+
+    const EVENT_CASES: &[EventCase] = &[
+        EventCase {
+            query: r#"
+        {
+            processCreateEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId,
+                    }
+                }
+            }
+        }"#,
+            expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\"}}]}}",
+            setup: setup_process_create,
+        },
+        EventCase {
+            query: r#"
+        {
+            fileCreateTimeEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_file_create_time,
+        },
+        EventCase {
+            query: r#"
+        {
+            networkConnectEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_network_connect,
+        },
+        EventCase {
+            query: r#"
+        {
+            processTerminateEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_process_terminate,
+        },
+        EventCase {
+            query: r#"
+        {
+            imageLoadEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_image_load,
+        },
+        EventCase {
+            query: r#"
+        {
+            fileCreateEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_file_create,
+        },
+        EventCase {
+            query: r#"
+        {
+            registryValueSetEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_registry_value_set,
+        },
+        EventCase {
+            query: r#"
+        {
+            registryKeyRenameEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_registry_key_rename,
+        },
+        EventCase {
+            query: r#"
+        {
+            fileCreateStreamHashEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_file_create_stream_hash,
+        },
+        EventCase {
+            query: r#"
+        {
+            pipeEventEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_pipe_event,
+        },
+        EventCase {
+            query: r#"
+        {
+            dnsQueryEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_dns_query,
+        },
+        EventCase {
+            query: r#"
+        {
+            fileDeleteEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_file_delete,
+        },
+        EventCase {
+            query: r#"
+        {
+            processTamperEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_process_tamper,
+        },
+        EventCase {
+            query: r#"
+        {
+            fileDeleteDetectedEvents(
+                filter: {
+                    sensor: "src 1"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            setup: setup_file_delete_detected,
+        },
+    ];
+
+    const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
+        ClusterEventCase {
+            query: r#"
+        {
+            processCreateEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId,
+                    }
+                }
+            }
+        }"#,
+            expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "processCreateEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "pc-agent",
+                                "agentId": "pc-agent_id",
+                                "processGuid": "guid",
+                                "processId": "1234",
+                                "image": "proc.exe",
+                                "fileVersion": "1.0",
+                                "description": "desc",
+                                "product": "product",
+                                "company": "company",
+                                "originalFileName": "proc.exe",
+                                "commandLine": "proc.exe /S",
+                                "currentDirectory": "C:\\",
+                                "user": "user",
+                                "logonGuid": "logon_guid",
+                                "logonId": "99",
+                                "terminalSessionId": "1",
+                                "integrityLevel": "high",
+                                "hashes": ["SHA256=abc"],
+                                "parentProcessGuid": "parent_guid",
+                                "parentProcessId": "4321",
+                                "parentImage": "parent.exe",
+                                "parentCommandLine": "parent.exe",
+                                "parentUser": "parent_user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            fileCreateTimeEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "fileCreateTimeEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "123",
+                                "image": "proc.exe",
+                                "targetFilename": "time.log",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "previousCreationUtcTime": "2023-11-16T15:03:35.291779203+00:00",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            networkConnectEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "networkConnectEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "1",
+                                "image": "proc.exe",
+                                "user": "user",
+                                "protocol": "TCP",
+                                "initiated": true,
+                                "sourceIsIpv6": false,
+                                "sourceIp": "192.0.2.1",
+                                "sourceHostname": "src-host",
+                                "sourcePort": 1234,
+                                "sourcePortName": "src",
+                                "destinationIsIpv6": false,
+                                "destinationIp": "192.0.2.2",
+                                "destinationHostname": "dst-host",
+                                "destinationPort": 4321,
+                                "destinationPortName": "dst"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            processTerminateEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "processTerminateEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "77",
+                                "image": "terminated.exe",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            imageLoadEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "imageLoadEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2020-06-01T00:01:01+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "99",
+                                "image": "proc.exe",
+                                "imageLoaded": "loaded.dll",
+                                "fileVersion": "1.0.0",
+                                "description": "desc",
+                                "product": "product",
+                                "company": "company",
+                                "originalFileName": "loaded.dll",
+                                "hashes": ["SHA256=123"],
+                                "signed": true,
+                                "signature": "signature",
+                                "signatureStatus": "Valid",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            fileCreateEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "fileCreateEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "42",
+                                "image": "proc.exe",
+                                "targetFilename": "created.txt",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            registryValueSetEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "registryValueSetEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "set",
+                                "processGuid": "guid",
+                                "processId": "44",
+                                "image": "proc.exe",
+                                "targetObject": "HKLM\\Software\\Key",
+                                "details": "value=1",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            registryKeyRenameEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "registryKeyRenameEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "rename",
+                                "processGuid": "guid",
+                                "processId": "45",
+                                "image": "proc.exe",
+                                "targetObject": "HKLM\\Software\\Old",
+                                "newName": "HKLM\\Software\\New",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            fileCreateStreamHashEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "fileCreateStreamHashEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "9",
+                                "image": "proc.exe",
+                                "targetFilename": "stream.log",
+                                "creationUtcTime": "2023-11-16T15:03:45.291779203+00:00",
+                                "hash": ["SHA256=stream"],
+                                "contents": "stream-bytes",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            pipeEventEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "pipeEventEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "eventType": "create",
+                                "processGuid": "guid",
+                                "processId": "47",
+                                "pipeName": "\\\\pipe\\\\pipe",
+                                "image": "proc.exe",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            dnsQueryEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "dnsQueryEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "12",
+                                "queryName": "example.com",
+                                "queryStatus": "0",
+                                "queryResults": ["93.184.216.34"],
+                                "image": "proc.exe",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            fileDeleteEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "fileDeleteEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "49",
+                                "user": "user",
+                                "image": "proc.exe",
+                                "targetFilename": "deleted.txt",
+                                "hashes": ["SHA256=deadbeef"],
+                                "isExecutable": false,
+                                "archived": true
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            processTamperEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "processTamperEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "50",
+                                "image": "proc.exe",
+                                "tamperType": "suspend",
+                                "user": "user"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+        ClusterEventCase {
+            query: r#"
+        {
+            fileDeleteDetectedEvents(
+                filter: {
+                    sensor: "src 2"
+                }
+                first: 1
+            ) {
+                edges {
+                    node {
+                        agentId
+                    }
+                }
+            }
+        }"#,
+            expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\"}}]}}",
+            peer_response: r#"
+        {
+            "data": {
+                "fileDeleteDetectedEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": true,
+                        "hasNextPage": false
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2023-11-16T15:03:45.291779203+00:00",
+                                "agentName": "agent",
+                                "agentId": "agent_id",
+                                "processGuid": "guid",
+                                "processId": "51",
+                                "user": "user",
+                                "image": "proc.exe",
+                                "targetFilename": "deleted.txt",
+                                "hashes": ["SHA256=deadbeef"],
+                                "isExecutable": true
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#,
+        },
+    ];
+
+    const SEARCH_CASES: &[SearchCase] = &[
+        SearchCase {
+            query: r#"
+        {
+            searchProcessCreateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_process_create,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchFileCreateTimeEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_file_create_time,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchNetworkConnectEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_network_connect,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchProcessTerminateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_process_terminate,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchImageLoadEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_image_load,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchFileCreateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_file_create,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchRegistryValueSetEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_registry_value_set,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchRegistryKeyRenameEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_registry_key_rename,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchFileCreateStreamHashEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_file_create_stream_hash,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchPipeEventEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_pipe_event,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchDnsQueryEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_dns_query,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchFileDeleteEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_file_delete,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchProcessTamperEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_process_tamper,
+        },
+        SearchCase {
+            query: r#"
+        {
+            searchFileDeleteDetectedEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 1"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            setup: setup_search_file_delete_detected,
+        },
+    ];
+
+    const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
+        SearchClusterCase {
+            query: r#"
+        {
+            searchProcessCreateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchProcessCreateEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchFileCreateTimeEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchFileCreateTimeEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchNetworkConnectEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchNetworkConnectEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchProcessTerminateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchProcessTerminateEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchImageLoadEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchImageLoadEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchFileCreateEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchFileCreateEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchRegistryValueSetEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchRegistryValueSetEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchRegistryKeyRenameEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchRegistryKeyRenameEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchFileCreateStreamHashEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchFileCreateStreamHashEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchPipeEventEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchPipeEventEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchDnsQueryEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchDnsQueryEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchFileDeleteEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchFileDeleteEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchProcessTamperEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchProcessTamperEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+        SearchClusterCase {
+            query: r#"
+        {
+            searchFileDeleteDetectedEvents(
+                filter: {
+                    time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                    sensor: "src 2"
+                    times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+                }
+            )
+        }"#,
+            expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+            peer_response: r#"
+        {
+            "data": {
+                "searchFileDeleteDetectedEvents": [
+                    "2020-01-01T00:01:01+00:00",
+                    "2020-01-01T01:01:01+00:00"
+                ]
+            }
+        }
+        "#,
+        },
+    ];
     fn insert_process_create_event(
         store: &RawEventStore<ProcessCreate>,
         sensor: &str,

@@ -370,7 +370,7 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{collections::HashSet, net::SocketAddr};
 
     use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
@@ -379,6 +379,9 @@ mod tests {
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
     };
+    use crate::graphql::statistics::{
+        STATS_ALLOWED_KINDS, convert_to_stats_allowed_type, gen_statistics, get_statistics_iter,
+    };
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
@@ -386,9 +389,36 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
         let now = Utc::now().timestamp_nanos_opt().unwrap();
-        insert_statistics_raw_event(&store, now, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, now, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event_kind(
+            &store,
+            now,
+            "src 1",
+            0,
+            600,
+            RawEventKind::Statistics,
+            1_000_000,
+            300_000_000,
+        );
+        insert_statistics_raw_event_kind(
+            &store,
+            now,
+            "src 1",
+            1,
+            600,
+            RawEventKind::Statistics,
+            2_000_000,
+            600_000_000,
+        );
+        insert_statistics_raw_event_kind(
+            &store,
+            now,
+            "src 1",
+            2,
+            600,
+            RawEventKind::Statistics,
+            3_000_000,
+            900_000_000,
+        );
 
         let query = r#"
     {
@@ -421,7 +451,16 @@ mod tests {
             .unwrap()
             .timestamp_nanos_opt()
             .unwrap();
-        insert_statistics_raw_event(&store, timestamp, "src1", 0, 600, 1_000_000, 100_000_000);
+        insert_statistics_raw_event_kind(
+            &store,
+            timestamp,
+            "src1",
+            0,
+            600,
+            RawEventKind::Statistics,
+            1_000_000,
+            100_000_000,
+        );
 
         let query = r#"
         {
@@ -441,12 +480,115 @@ mod tests {
         assert_eq!(stats["timestamp"].as_str().unwrap(), timestamp.to_string());
     }
 
-    fn insert_statistics_raw_event(
+    #[tokio::test]
+    async fn statistics_with_protocols_and_time_filter() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        insert_statistics_raw_event_kind(
+            &store,
+            timestamp,
+            "src1",
+            0,
+            60,
+            RawEventKind::Dns,
+            120,
+            0,
+        );
+
+        let query = r#"
+        {
+            statistics(
+                sensors: ["src1"]
+                time: { start: "2024-03-04T05:06:00Z", end: "2024-03-04T05:06:10Z" }
+                protocols: ["dns"]
+            ) {
+                stats {
+                    detail {
+                        protocol
+                        bps
+                        pps
+                        eps
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let res_json = res.data.into_json().unwrap();
+        let detail = &res_json["statistics"][0]["stats"][0]["detail"][0];
+        assert_eq!(detail["protocol"].as_str().unwrap(), "Dns");
+        assert!(detail["bps"].is_null());
+        assert!(detail["pps"].is_null());
+    }
+
+    #[test]
+    fn gen_statistics_handles_empty_iters() {
+        let mut stats_iters = Vec::new();
+        let allowed_raw_event_kinds = STATS_ALLOWED_KINDS.into_iter().collect::<HashSet<_>>();
+
+        let stats = gen_statistics(&mut stats_iters, "src1", false, &allowed_raw_event_kinds)
+            .expect("gen_statistics should succeed with empty iter");
+
+        assert!(stats.stats.is_empty());
+    }
+
+    #[test]
+    fn gen_statistics_advances_iter_with_multiple_entries() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let ts1 = 1_702_272_560;
+        let ts2 = 1_702_272_561;
+
+        insert_statistics_raw_event_kind(
+            &store,
+            ts1,
+            "src1",
+            0,
+            60,
+            RawEventKind::Statistics,
+            60,
+            120,
+        );
+        insert_statistics_raw_event_kind(
+            &store,
+            ts2,
+            "src1",
+            0,
+            60,
+            RawEventKind::Statistics,
+            60,
+            120,
+        );
+
+        let iter = get_statistics_iter(&store, 0, "src1", None).peekable();
+        let mut stats_iters = vec![iter];
+        let allowed_raw_event_kinds = STATS_ALLOWED_KINDS.into_iter().collect::<HashSet<_>>();
+
+        let stats = gen_statistics(&mut stats_iters, "src1", false, &allowed_raw_event_kinds)
+            .expect("gen_statistics should succeed");
+
+        assert_eq!(stats.stats.len(), 2);
+    }
+
+    #[test]
+    fn convert_to_stats_allowed_type_rejects_invalid() {
+        let res = convert_to_stats_allowed_type("not-a-protocol");
+        assert!(res.is_err());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_statistics_raw_event_kind(
         store: &RawEventStore<Statistics>,
         timestamp: i64,
         sensor: &str,
         core: u32,
         period: u16,
+        kind: RawEventKind,
         count: u64,
         size: u64,
     ) {
@@ -460,7 +602,7 @@ mod tests {
         let msg = Statistics {
             core,
             period,
-            stats: vec![(RawEventKind::Statistics, count, size)],
+            stats: vec![(kind, count, size)],
         };
         let msg = bincode::serialize(&msg).unwrap();
         store.append(&key, &msg).unwrap();
@@ -631,9 +773,36 @@ mod tests {
         let store = schema.db.statistics_store().unwrap();
         let timestamp: i64 = 1_702_272_560;
 
-        insert_statistics_raw_event(&store, timestamp, "src 1", 0, 600, 1_000_000, 300_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 1, 600, 2_000_000, 600_000_000);
-        insert_statistics_raw_event(&store, timestamp, "src 1", 2, 600, 3_000_000, 900_000_000);
+        insert_statistics_raw_event_kind(
+            &store,
+            timestamp,
+            "src 1",
+            0,
+            600,
+            RawEventKind::Statistics,
+            1_000_000,
+            300_000_000,
+        );
+        insert_statistics_raw_event_kind(
+            &store,
+            timestamp,
+            "src 1",
+            1,
+            600,
+            RawEventKind::Statistics,
+            2_000_000,
+            600_000_000,
+        );
+        insert_statistics_raw_event_kind(
+            &store,
+            timestamp,
+            "src 1",
+            2,
+            600,
+            RawEventKind::Statistics,
+            3_000_000,
+            900_000_000,
+        );
 
         // when
         let res = schema.execute(query).await;

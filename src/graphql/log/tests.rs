@@ -1,9 +1,12 @@
+use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::log::{Log, OpLog, OpLogLevel};
 
-use super::{Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, base64_engine};
+use super::{
+    Engine, LogFilter, LogRawEvent, OpLogFilter, OpLogRawEvent, RawEventFilter, base64_engine,
+};
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::graphql::load_connection;
 use crate::{
@@ -409,6 +412,80 @@ async fn log_empty() {
 }
 
 #[tokio::test]
+async fn log_requires_kind() {
+    let schema = TestSchema::new();
+    let query = r#"
+        {
+            logRawEvents (filter: {sensor: "src 1"}, first: 1) {
+                edges {
+                    node {
+                        log
+                    }
+                }
+            }
+        }"#;
+    let res = schema.execute(query).await;
+    assert!(
+        res.errors
+            .first()
+            .is_some_and(|error| error.message.contains("kind is required"))
+    );
+}
+
+#[tokio::test]
+async fn log_empty_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        logRawEvents (
+            filter: {
+                sensor: "src 2"
+                kind: "Hello"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    log
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "logRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": false,
+                    "hasNextPage": false
+                },
+                "edges": [
+                ]
+            }
+        }
+    }
+    "#;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{logRawEvents: {edges: []}}");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn log_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.log_store().unwrap();
@@ -437,6 +514,75 @@ async fn log_with_data() {
             base64_engine.encode("log 1")
         )
     );
+}
+
+#[tokio::test]
+async fn log_with_data_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        logRawEvents(
+            filter: {
+                sensor: "src 2"
+                kind: "kind 1"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    log
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let encoded_log = base64_engine.encode("log 1");
+    let peer_response_mock_data = format!(
+        r#"
+    {{
+        "data": {{
+            "logRawEvents": {{
+                "pageInfo": {{
+                    "hasPreviousPage": false,
+                    "hasNextPage": false,
+                    "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                    "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                }},
+                "edges": [
+                    {{
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {{
+                            "time": "2024-03-04T05:06:07+00:00",
+                            "log": "{encoded_log}"
+                        }}
+                    }}
+                ]
+            }}
+        }}
+    }}
+    "#
+    );
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        format!("{{logRawEvents: {{edges: [{{node: {{log: \"{encoded_log}\"}}}}]}}}}",)
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -761,4 +907,175 @@ fn insert_oplog_raw_event(
     let value = bincode::serialize(&oplog_body).unwrap();
     store.append(&key, &value).unwrap();
     key
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn op_log_filter_check_cases() {
+    struct Case {
+        name: &'static str,
+        filter: OpLogFilter,
+        log_level: Option<&'static str>,
+        log_contents: Option<&'static str>,
+        sensor: Option<&'static str>,
+        agent_id: Option<&'static str>,
+        expected: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "matches_all_filters",
+            filter: OpLogFilter {
+                time: None,
+                sensor: Some("sensor-a".to_string()),
+                agent_id: Some("agent-1".to_string()),
+                log_level: Some("Info".to_string()),
+                contents: Some("oplog".to_string()),
+            },
+            log_level: Some("Info"),
+            log_contents: Some("my oplog entry"),
+            sensor: Some("sensor-a"),
+            agent_id: Some("agent-1"),
+            expected: true,
+        },
+        Case {
+            name: "rejects_log_level_mismatch",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: None,
+                log_level: Some("Info".to_string()),
+                contents: None,
+            },
+            log_level: Some("Warn"),
+            log_contents: None,
+            sensor: None,
+            agent_id: None,
+            expected: false,
+        },
+        Case {
+            name: "rejects_contents_mismatch",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: None,
+                log_level: None,
+                contents: Some("needle".to_string()),
+            },
+            log_level: None,
+            log_contents: Some("haystack"),
+            sensor: None,
+            agent_id: None,
+            expected: false,
+        },
+        Case {
+            name: "rejects_agent_id_mismatch",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: Some("agent-1".to_string()),
+                log_level: None,
+                contents: None,
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: None,
+            agent_id: Some("agent-2"),
+            expected: false,
+        },
+        Case {
+            name: "rejects_sensor_mismatch",
+            filter: OpLogFilter {
+                time: None,
+                sensor: Some("sensor-a".to_string()),
+                agent_id: None,
+                log_level: None,
+                contents: None,
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: Some("sensor-b"),
+            agent_id: None,
+            expected: false,
+        },
+        Case {
+            name: "allows_missing_log_level",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: None,
+                log_level: Some("Info".to_string()),
+                contents: None,
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: None,
+            agent_id: None,
+            expected: true,
+        },
+        Case {
+            name: "allows_missing_contents",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: None,
+                log_level: None,
+                contents: Some("payload".to_string()),
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: None,
+            agent_id: None,
+            expected: true,
+        },
+        Case {
+            name: "allows_missing_agent_id",
+            filter: OpLogFilter {
+                time: None,
+                sensor: None,
+                agent_id: Some("agent-1".to_string()),
+                log_level: None,
+                contents: None,
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: None,
+            agent_id: None,
+            expected: true,
+        },
+        Case {
+            name: "allows_missing_sensor",
+            filter: OpLogFilter {
+                time: None,
+                sensor: Some("sensor-a".to_string()),
+                agent_id: None,
+                log_level: None,
+                contents: None,
+            },
+            log_level: None,
+            log_contents: None,
+            sensor: None,
+            agent_id: None,
+            expected: true,
+        },
+    ];
+
+    for case in cases {
+        let ok = case
+            .filter
+            .check(
+                None,
+                None,
+                None,
+                None,
+                case.log_level.map(str::to_string),
+                case.log_contents.map(str::to_string),
+                None,
+                case.sensor.map(str::to_string),
+                case.agent_id.map(str::to_string),
+            )
+            .unwrap();
+
+        assert_eq!(ok, case.expected, "case: {}", case.name);
+    }
 }

@@ -888,33 +888,77 @@ pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
     use async_graphql::{
-        SimpleObject,
-        connection::{Edge, EmptyFields},
+        Context, EmptyMutation, EmptySubscription, Object, Request, Schema, SimpleObject,
+        connection::{Connection, Edge, EmptyFields},
     };
     use chrono::{DateTime, Utc};
+    use tokio::sync::RwLock;
 
-    use super::{ClusterSortKey, sort_and_trunk_edges};
+    use super::{
+        ClusterSortKey, combine_results, is_current_giganto_in_charge, sort_and_trunk_edges,
+    };
+    use crate::comm::IngestSensors;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
         time: DateTime<Utc>,
+        secondary: Option<String>,
     }
 
     impl ClusterSortKey for TestNode {
         fn secondary(&self) -> Option<&str> {
-            None
+            self.secondary.as_deref()
         }
     }
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
         vec![
-            Edge::new("warn_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_003".to_string(), TestNode { time: Utc::now() }),
+            Edge::new(
+                "warn_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "danger_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "danger_002".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_002".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_003".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
         ]
     }
 
@@ -971,5 +1015,90 @@ mod tests {
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+    }
+
+    #[test]
+    fn test_sort_and_trunk_edges_secondary_order() {
+        let edges = vec![
+            Edge::new(
+                "same".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: Some("b".to_string()),
+                },
+            ),
+            Edge::new(
+                "same".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: Some("a".to_string()),
+                },
+            ),
+        ];
+        let result = sort_and_trunk_edges(edges, None, None, None);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].node.secondary.as_deref(), Some("a"));
+        assert_eq!(result[1].node.secondary.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn test_combine_results_merges_flags_and_sorts_edges() {
+        let mut current = Connection::new(false, true);
+        current.edges = vec![Edge::new(
+            "b".to_string(),
+            TestNode {
+                time: Utc::now(),
+                secondary: None,
+            },
+        )];
+
+        let mut peer = Connection::new(true, false);
+        peer.edges = vec![Edge::new(
+            "a".to_string(),
+            TestNode {
+                time: Utc::now(),
+                secondary: None,
+            },
+        )];
+
+        let combined = combine_results(current, vec![peer], None, None, None);
+        assert!(combined.has_previous_page);
+        assert!(combined.has_next_page);
+        assert_eq!(combined.edges.len(), 2);
+        assert_eq!(combined.edges[0].cursor, "a");
+        assert_eq!(combined.edges[1].cursor, "b");
+    }
+
+    #[derive(Default)]
+    struct TestQuery;
+
+    #[Object]
+    impl TestQuery {
+        async fn in_charge(&self, ctx: &Context<'_>, sensor: String) -> bool {
+            is_current_giganto_in_charge(ctx, &sensor).await
+        }
+    }
+
+    #[tokio::test]
+    async fn is_current_giganto_in_charge_reads_from_context() {
+        let ingest_sensors: IngestSensors =
+            Arc::new(RwLock::new(HashSet::from(["sensor-a".to_string()])));
+        let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription)
+            .data(ingest_sensors)
+            .finish();
+
+        let res = schema
+            .execute(Request::new(r#"{ inCharge(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{inCharge: true}");
+    }
+
+    #[tokio::test]
+    async fn is_current_giganto_in_charge_defaults_when_missing_data() {
+        let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription).finish();
+        let res = schema
+            .execute(Request::new(r#"{ inCharge(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{inCharge: false}");
     }
 }

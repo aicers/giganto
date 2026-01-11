@@ -1,8 +1,9 @@
 use std::fmt::Write as _;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::{fs, io::ErrorKind, mem, path::PathBuf, str::FromStr};
 
+use anyhow::anyhow;
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use giganto_client::{
     RawEventKind,
@@ -22,11 +23,93 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+use mockito::Server;
+use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
 
+use super::{ExportFilter, export_file, export_oplog_file, to_string_or_empty};
 use crate::comm::ingest::generation::SequenceGenerator;
+use crate::graphql::TimeRange;
 use crate::graphql::tests::TestSchema;
-use crate::storage::RawEventStore;
+use crate::storage::{KeyExtractor, RawEventStore, TimestampKeyExtractor};
+
+#[test]
+fn test_to_string_or_empty() {
+    assert_eq!(to_string_or_empty(Some(42)), "42");
+    assert_eq!(to_string_or_empty::<i32>(None), "-");
+}
+
+fn export_filter_base(protocol: &str) -> ExportFilter {
+    ExportFilter {
+        protocol: protocol.to_string(),
+        sensor_id: "src1".to_string(),
+        agent_name: None,
+        agent_id: None,
+        kind: None,
+        time: None,
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+    }
+}
+
+#[test]
+fn export_filter_mid_key() {
+    let mut filter = export_filter_base("process create");
+    filter.agent_name = Some("agent-name".to_string());
+    filter.agent_id = Some("agent-id".to_string());
+
+    let mid_key = filter.get_mid_key().expect("mid_key should be set");
+    assert_eq!(mid_key, b"agent-name\0agent-id".to_vec());
+}
+
+#[test]
+fn export_filter_time_range_keys() {
+    let mut filter = export_filter_base("conn");
+    assert_eq!(filter.get_range_end_key(), (None, None));
+    assert_eq!(filter.get_range_start_key(), (None, None));
+
+    let start = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 6).unwrap();
+    let end = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 8).unwrap();
+    filter.time = Some(TimeRange {
+        start: Some(start),
+        end: Some(end),
+    });
+
+    assert_eq!(filter.get_range_end_key(), (Some(start), Some(end)));
+    assert_eq!(filter.get_range_start_key(), (Some(start), Some(end)));
+}
+
+#[test]
+fn export_file_warns_on_invalid_data() {
+    let dir = tempdir().unwrap();
+    let progress_path = dir.path().join("progress.dump");
+    let done_path = dir.path().join("done.csv");
+    let filter = export_filter_base("conn");
+    let iter: Vec<anyhow::Result<(Box<[u8]>, Conn)>> =
+        vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
+
+    let result = export_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+
+    assert!(result.is_ok());
+    assert!(done_path.exists());
+}
+
+#[test]
+fn export_oplog_file_warns_on_invalid_data() {
+    let dir = tempdir().unwrap();
+    let progress_path = dir.path().join("progress.dump");
+    let done_path = dir.path().join("done.csv");
+    let filter = export_filter_base("op_log");
+    let iter: Vec<anyhow::Result<(Box<[u8]>, OpLog)>> =
+        vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
+
+    let result = export_oplog_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+
+    assert!(result.is_ok());
+    assert!(done_path.exists());
+}
 
 #[tokio::test]
 async fn invalid_query() {
@@ -86,6 +169,148 @@ async fn invalid_query() {
      }"#;
     let res = schema.execute(query).await;
     assert_eq!(res.data.to_string(), "null");
+
+    // invalid agent filter for non-sysmon protocol
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "conn",
+                sensorId: "src1",
+                agentName: "agent",
+                agentId: "agent_id"
+            }
+            ,exportType:"json")
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "null");
+}
+
+#[tokio::test]
+async fn export_conn_giganto_cluster_with_address_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "conn",
+                sensorId: "src 2",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" },
+                origAddr: { start: "192.0.2.1", end: "192.0.2.9" },
+                respAddr: { start: "192.0.2.10", end: "192.0.2.19" },
+                origPort: { start: 1000, end: 2000 },
+                respPort: { start: 3000, end: 4000 }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-address"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-address\"}");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn export_sysmon_giganto_cluster_with_agent_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "process create",
+                sensorId: "src 2",
+                agentName: "agent-name",
+                agentId: "agent-id",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-agent"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-agent\"}");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn export_log_giganto_cluster_with_kind_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "log",
+                sensorId: "src 2",
+                kind: "kind1",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-kind"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-kind\"}");
+    mock.assert_async().await;
 }
 
 #[tokio::test]

@@ -10,7 +10,10 @@ use giganto_client::ingest::network::{
 use mockito;
 use num_traits::cast::ToPrimitive;
 
-use crate::graphql::tests::TestSchema;
+use crate::graphql::{
+    IpRange, NetworkFilter, PortRange, RawEventFilter, SearchFilter, StringNumberUsize,
+    tests::TestSchema,
+};
 use crate::storage::RawEventStore;
 
 #[tokio::test]
@@ -431,6 +434,698 @@ async fn network_raw_events_timestamp_fomat_stability() {
             "Missing network event type {expected}"
         );
     }
+}
+
+#[tokio::test]
+async fn network_raw_events_last_selects_latest() {
+    let schema = TestSchema::new();
+    let conn_store = schema.db.conn_store().unwrap();
+    let dns_store = schema.db.dns_store().unwrap();
+
+    let time1 = Utc
+        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    let time2 = Utc
+        .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+
+    insert_conn_raw_event(&conn_store, "src 1", time1);
+    insert_dns_raw_event(&dns_store, "src 1", time2);
+
+    let query = r#"
+    {
+        networkRawEvents(
+            filter: {
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:09Z" }
+                sensor: "src 1"
+            }
+            last: 1
+        ) {
+            edges {
+                node {
+                    ... on ConnRawEvent { time }
+                    ... on DnsRawEvent { time }
+                    __typename
+                }
+            }
+        }
+    }"#;
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{networkRawEvents: {edges: [{node: {time: \"2024-03-04T05:06:08+00:00\", __typename: \"DnsRawEvent\"}}]}}"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn network_raw_events_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        networkRawEvents(
+            filter: { sensor: "src 2" }
+            first: 2
+        ) {
+            edges {
+                node {
+                    __typename
+                    ... on ConnRawEvent { time }
+                    ... on DnsRawEvent { time }
+                    ... on MalformedDnsRawEvent { time }
+                    ... on HttpRawEvent { time }
+                    ... on RdpRawEvent { time }
+                    ... on NtlmRawEvent { time }
+                    ... on KerberosRawEvent { time }
+                    ... on SshRawEvent { time }
+                    ... on DceRpcRawEvent { time }
+                    ... on FtpRawEvent { time }
+                    ... on MqttRawEvent { time }
+                    ... on LdapRawEvent { time }
+                    ... on TlsRawEvent { time }
+                    ... on SmbRawEvent { time }
+                    ... on NfsRawEvent { time }
+                    ... on SmtpRawEvent { time }
+                    ... on BootpRawEvent { time }
+                    ... on DhcpRawEvent { time }
+                    ... on RadiusRawEvent { time }
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "networkRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": false,
+                    "hasNextPage": false,
+                    "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                    "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                },
+                "edges": [
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "ConnRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "proto": 6,
+                            "connState": "-",
+                            "service": "-",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origBytes": "0",
+                            "respBytes": "0",
+                            "origPkts": "6",
+                            "respPkts": "0",
+                            "origL2Bytes": "0",
+                            "respL2Bytes": "0"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "DnsRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "proto": 6,
+                            "query": "example.com",
+                            "answer": ["192.168.1.1"],
+                            "transId": 12345,
+                            "rtt": "567",
+                            "qclass": 1,
+                            "qtype": 1,
+                            "rcode": 0,
+                            "aaFlag": true,
+                            "tcFlag": false,
+                            "rdFlag": true,
+                            "raFlag": false,
+                            "ttl": [3600, 1800, 900]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "MalformedDnsRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 80,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1",
+                            "origPkts": "1",
+                            "respPkts": "2",
+                            "origL2Bytes": "32",
+                            "respL2Bytes": "64",
+                            "transId": 1,
+                            "flags": 42,
+                            "questionCount": 1,
+                            "answerCount": 2,
+                            "authorityCount": 3,
+                            "additionalCount": 4,
+                            "queryCount": "5",
+                            "respCount": "6",
+                            "queryBytes": "32",
+                            "respBytes": "64",
+                            "queryBody": [[113]],
+                            "respBody": [[114]]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "HttpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "method": "GET",
+                            "host": "example.com",
+                            "uri": "/path/to/resource",
+                            "referer": "http://referrer.com",
+                            "version": "HTTP/1.1",
+                            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                            "requestLen": "1024",
+                            "responseLen": "2048",
+                            "statusCode": 200,
+                            "statusMsg": "OK",
+                            "username": "user123",
+                            "password": "pass456",
+                            "cookie": "session=abc123",
+                            "contentEncoding": "gzip",
+                            "contentType": "text/html",
+                            "cacheControl": "no-cache",
+                            "filenames": ["file1.txt", "file2.txt", "response1.txt", "response2.txt"],
+                            "mimeTypes": ["text/plain", "text/plain"],
+                            "body": [200, 300],
+                            "state": "OK"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "RdpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "cookie": "session=xyz789"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "NtlmRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.1.200",
+                            "origPort": 12345,
+                            "respPort": 6789,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "username": "john_doe",
+                            "hostname": "client_machine",
+                            "domainname": "example.com",
+                            "success": "true",
+                            "protocol": "6"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "KerberosRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.1.200",
+                            "origPort": 12345,
+                            "respPort": 6789,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "clientTime": "123456789",
+                            "serverTime": "987654321",
+                            "errorCode": "0",
+                            "clientRealm": "client_realm",
+                            "cnameType": 1,
+                            "clientName": ["john_doe"],
+                            "realm": "example.com",
+                            "snameType": 2,
+                            "serviceName": ["service_name_1", "service_name_2"]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "SshRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 22,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "client": "ssh_client",
+                            "server": "ssh_server",
+                            "cipherAlg": "aes256-ctr",
+                            "macAlg": "hmac-sha2-256",
+                            "compressionAlg": "none",
+                            "kexAlg": "diffie-hellman-group14-sha1",
+                            "hostKeyAlg": "ssh-rsa",
+                            "hasshAlgorithms": "hassh_algorithms",
+                            "hassh": "hassh",
+                            "hasshServerAlgorithms": "hassh_server_algorithms",
+                            "hasshServer": "hassh_server",
+                            "clientShka": "client_shka",
+                            "serverShka": "server_shka"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "DceRpcRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 135,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "rtt": "123456",
+                            "namedPipe": "example_pipe",
+                            "endpoint": "rpc_endpoint",
+                            "operation": "rpc_operation"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "FtpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 21,
+                            "respPort": 12345,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "user": "example_user",
+                            "password": "example_password",
+                            "commands": [
+                                {
+                                    "command": "example_command",
+                                    "replyCode": "200",
+                                    "replyMsg": "Command OK",
+                                    "dataPassive": true,
+                                    "dataOrigAddr": "192.168.4.76",
+                                    "dataRespAddr": "192.168.4.76",
+                                    "dataRespPort": 54321,
+                                    "file": "example_file.txt",
+                                    "fileSize": "1024",
+                                    "fileId": "123456789"
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "MqttRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 1883,
+                            "respPort": 5678,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "protocol": "MQTT",
+                            "version": 4,
+                            "clientId": "example_client_id",
+                            "connackReason": 0,
+                            "subscribe": ["topic/example"],
+                            "subackReason": [0]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "LdapRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 389,
+                            "respPort": 636,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "messageId": "123",
+                            "version": 3,
+                            "opcode": ["bind", "search"],
+                            "result": ["success", "noSuchObject"],
+                            "diagnosticMessage": ["", "Object not found"],
+                            "object": ["CN=John Doe", "OU=Users"],
+                            "argument": ["username", "(&(objectClass=user)(sAMAccountName=jdoe))"]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "TlsRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 443,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "serverName": "example.com",
+                            "alpnProtocol": "h2",
+                            "ja3": "aabbccddeeff",
+                            "version": "TLSv1.2",
+                            "clientCipherSuites": [771, 769, 770],
+                            "clientExtensions": [0, 1, 2],
+                            "cipher": 256,
+                            "extensions": [0, 1],
+                            "ja3S": "1122334455",
+                            "serial": "1234567890",
+                            "subjectCountry": "US",
+                            "subjectOrgName": "Organization",
+                            "subjectCommonName": "CommonName",
+                            "validityNotBefore": "1637076000",
+                            "validityNotAfter": "1668612000",
+                            "subjectAltName": "www.example.com",
+                            "issuerCountry": "CA",
+                            "issuerOrgName": "IssuerOrg",
+                            "issuerOrgUnitName": "IssuerUnit",
+                            "issuerCommonName": "IssuerCommon",
+                            "lastAlert": 789012345
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "SmbRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.77",
+                            "origPort": 445,
+                            "respPort": 12345,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "command": 1,
+                            "path": "\\\\share\\\\folder\\\\file.txt",
+                            "service": "IPC",
+                            "fileName": "file.txt",
+                            "fileSize": "1024",
+                            "resourceType": 1,
+                            "fid": 123,
+                            "createTime": "1609459200",
+                            "accessTime": "1637076000",
+                            "writeTime": "1668612000",
+                            "changeTime": "1700148000"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "NfsRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 2049,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "readFiles": ["file1.txt", "file2.txt"],
+                            "writeFiles": ["file3.txt", "file4.txt"]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "SmtpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 25,
+                            "respPort": 587,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "mailfrom": "sender@example.com",
+                            "date": "2023-11-16T15:03:45+00:00",
+                            "from": "sender@example.com",
+                            "to": "recipient@example.com",
+                            "subject": "Test Email",
+                            "agent": "SMTP Client 1.0",
+                            "state": "OK"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "BootpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 80,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "op": 0,
+                            "htype": 0,
+                            "hops": 0,
+                            "xid": "0",
+                            "ciaddr": "192.168.4.1",
+                            "yiaddr": "192.168.4.2",
+                            "siaddr": "192.168.4.3",
+                            "giaddr": "192.168.4.4",
+                            "chaddr": [0, 1, 2],
+                            "sname": "sname",
+                            "file": "file"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "DhcpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 80,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "msgType": 0,
+                            "ciaddr": "192.168.4.1",
+                            "yiaddr": "192.168.4.2",
+                            "siaddr": "192.168.4.3",
+                            "giaddr": "192.168.4.4",
+                            "subnetMask": "192.168.4.5",
+                            "router": ["192.168.1.11", "192.168.1.22"],
+                            "domainNameServer": ["192.168.1.33", "192.168.1.44"],
+                            "reqIpAddr": "192.168.4.6",
+                            "leaseTime": "1",
+                            "serverId": "192.168.4.7",
+                            "paramReqList": [0, 1, 2],
+                            "message": "message",
+                            "renewalTime": "1",
+                            "rebindingTime": "1",
+                            "classId": [0, 1, 2],
+                            "clientIdType": 1,
+                            "clientId": [0, 1, 2]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "RadiusRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 1812,
+                            "respPort": 1813,
+                            "proto": 17,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "id": 123,
+                            "code": 1,
+                            "respCode": 2,
+                            "auth": "00112233445566778899aabbccddeeff",
+                            "respAuth": "ffeeddccbbaa99887766554433221100",
+                            "userName": [116, 101, 115, 116, 95, 117, 115, 101, 114],
+                            "userPasswd": [116, 101, 115, 116, 95, 112, 97, 115, 115, 119, 111, 114, 100],
+                            "chapPasswd": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+                            "nasIp": "192.168.1.1",
+                            "nasPort": "12345",
+                            "state": [3, 3, 3, 3, 3, 3, 3, 3],
+                            "nasId": [116, 101, 115, 116, 95, 110, 97, 115],
+                            "nasPortType": "15",
+                            "message": "test_message"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["networkRawEvents"]["edges"].as_array().unwrap();
+    let expected_types = [
+        "ConnRawEvent",
+        "DnsRawEvent",
+        "MalformedDnsRawEvent",
+        "HttpRawEvent",
+        "RdpRawEvent",
+        "NtlmRawEvent",
+        "KerberosRawEvent",
+        "SshRawEvent",
+        "DceRpcRawEvent",
+        "FtpRawEvent",
+        "MqttRawEvent",
+        "LdapRawEvent",
+        "TlsRawEvent",
+        "SmbRawEvent",
+        "NfsRawEvent",
+        "SmtpRawEvent",
+        "BootpRawEvent",
+        "DhcpRawEvent",
+        "RadiusRawEvent",
+    ];
+    let expected_time = "2023-11-16T15:03:45.291779203+00:00";
+    let mut seen = HashSet::new();
+
+    for edge in edges {
+        let node = edge["node"].as_object().unwrap();
+        let typename = node["__typename"].as_str().unwrap();
+        seen.insert(typename.to_string());
+        assert_eq!(node["time"].as_str().unwrap(), expected_time);
+    }
+    assert_eq!(seen.len(), expected_types.len());
+    for expected in expected_types {
+        assert!(
+            seen.contains(expected),
+            "Missing network event type {expected}"
+        );
+    }
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -4379,6 +5074,181 @@ async fn search_http_with_data() {
     );
 }
 
+#[test]
+fn search_filter_keyword_checks_text() {
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let ok = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("haystack NEEDLE".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(ok);
+
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let missing_text = filter
+        .check(None, None, None, None, None, None, None, None, None)
+        .unwrap();
+    assert!(!missing_text);
+
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let mismatch = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("haystack".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(!mismatch);
+}
+
+#[test]
+fn network_filter_matches_all_fields() {
+    let filter = NetworkFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: Some(IpRange {
+            start: Some("192.168.4.1".to_string()),
+            end: Some("192.168.4.10".to_string()),
+        }),
+        resp_addr: Some(IpRange {
+            start: Some("192.168.4.2".to_string()),
+            end: Some("192.168.4.20".to_string()),
+        }),
+        orig_port: Some(PortRange {
+            start: Some(1000),
+            end: Some(2000),
+        }),
+        resp_port: Some(PortRange {
+            start: Some(1500),
+            end: Some(2500),
+        }),
+        log_level: None,
+        log_contents: None,
+        agent_id: Some("agent-1".to_string()),
+    };
+
+    let ok = filter
+        .check(
+            Some("192.168.4.5".parse().unwrap()),
+            Some("192.168.4.6".parse().unwrap()),
+            Some(1500),
+            Some(1600),
+            None,
+            None,
+            None,
+            None,
+            Some("agent-1".to_string()),
+        )
+        .unwrap();
+    assert!(ok);
+}
+
+#[test]
+fn string_number_usize_from_usize() {
+    let value = StringNumberUsize::from(42usize);
+    assert_eq!(value, StringNumberUsize(42));
+}
+
+#[tokio::test]
+async fn search_http_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchHttpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchHttpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
 #[tokio::test]
 async fn search_conn_with_data() {
     let schema = TestSchema::new();
@@ -5017,6 +5887,55 @@ async fn search_ssh_with_data() {
 }
 
 #[tokio::test]
+async fn search_ssh_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchSshRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchSshRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchSshRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
@@ -5050,6 +5969,55 @@ async fn search_dce_rpc_with_data() {
         res.data.to_string(),
         "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_dce_rpc_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchDceRpcRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchDceRpcRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5089,6 +6057,55 @@ async fn search_ftp_with_data() {
 }
 
 #[tokio::test]
+async fn search_ftp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchFtpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchFtpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
@@ -5122,6 +6139,55 @@ async fn search_mqtt_with_data() {
         res.data.to_string(),
         "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_mqtt_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchMqttRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchMqttRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5161,6 +6227,55 @@ async fn search_ldap_with_data() {
 }
 
 #[tokio::test]
+async fn search_ldap_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchLdapRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchLdapRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchLdapRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
@@ -5194,6 +6309,55 @@ async fn search_tls_with_data() {
         res.data.to_string(),
         "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_tls_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchTlsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchTlsRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5233,6 +6397,55 @@ async fn search_smb_with_data() {
 }
 
 #[tokio::test]
+async fn search_smb_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchSmbRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchSmbRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchSmbRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
@@ -5266,6 +6479,55 @@ async fn search_nfs_with_data() {
         res.data.to_string(),
         "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_nfs_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchNfsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchNfsRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5305,6 +6567,55 @@ async fn search_bootp_with_data() {
 }
 
 #[tokio::test]
+async fn search_bootp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchBootpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchBootpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchBootpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
@@ -5341,6 +6652,55 @@ async fn search_dhcp_with_data() {
 }
 
 #[tokio::test]
+async fn search_dhcp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchDhcpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchDhcpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
@@ -5374,4 +6734,53 @@ async fn search_radius_with_data() {
         res.data.to_string(),
         "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_radius_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchRadiusRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 1810, end: 1815 }
+                respPort: { start: 1810, end: 1815 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchRadiusRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }

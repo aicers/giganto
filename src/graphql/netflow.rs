@@ -327,12 +327,19 @@ impl_from_giganto_netflow_filter_for_graphql_client!(netflow5_raw_events, netflo
 
 #[cfg(test)]
 mod tests {
-    use std::{net::IpAddr, str::FromStr};
+    use std::{
+        net::{IpAddr, SocketAddr},
+        str::FromStr,
+    };
 
     use chrono::{TimeZone, Utc};
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use super::{NetflowFilter, tcp_flags};
+    use crate::{
+        graphql::{IpRange, PortRange, RawEventFilter, TimeRange, tests::TestSchema},
+        storage::{KeyExtractor, RawEventStore},
+    };
 
     #[tokio::test]
     async fn netflow5_timestamp_fomat_stability() {
@@ -416,6 +423,287 @@ mod tests {
         assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
     }
 
+    #[tokio::test]
+    async fn netflow5_empty_giganto_cluster() {
+        let query = r#"
+        {
+            netflow5RawEvents(
+                filter: {
+                    sensor: "ingest src 2",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+                },
+                first: 1
+            ) {
+                edges {
+                    node {
+                        time
+                        srcAddr
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "netflow5RawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": null,
+                        "endCursor": null
+                    },
+                    "edges": [
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{netflow5RawEvents: {edges: []}}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn netflow5_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            netflow5RawEvents(
+                filter: {
+                    sensor: "ingest src 2",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+                },
+                first: 1
+            ) {
+                edges {
+                    node {
+                        time
+                        srcAddr
+                        dstAddr
+                        dPkts
+                        sequence
+                        samplingRate
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "netflow5RawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2024-03-04T05:06:07+00:00",
+                                "srcAddr": "10.0.0.1",
+                                "dstAddr": "10.0.0.2",
+                                "nextHop": "10.0.0.3",
+                                "input": 1,
+                                "output": 2,
+                                "dPkts": "10",
+                                "dOctets": "20",
+                                "first": "123.456",
+                                "last": "123.789",
+                                "srcPort": 1000,
+                                "dstPort": 2000,
+                                "tcpFlags": "FIN-SYN",
+                                "prot": 6,
+                                "tos": "1f",
+                                "srcAs": 12,
+                                "dstAs": 34,
+                                "srcMask": 24,
+                                "dstMask": 24,
+                                "sequence": "55",
+                                "engineType": 1,
+                                "engineId": 2,
+                                "samplingMode": "0",
+                                "samplingRate": 100
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{netflow5RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07+00:00\", \
+             srcAddr: \"10.0.0.1\", dstAddr: \"10.0.0.2\", dPkts: \"10\", sequence: \"55\", \
+             samplingRate: 100}}]}}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn netflow9_empty_giganto_cluster() {
+        let query = r#"
+        {
+            netflow9RawEvents(
+                filter: {
+                    sensor: "ingest src 2",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+                },
+                first: 1
+            ) {
+                edges {
+                    node {
+                        time
+                        origAddr
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "netflow9RawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": null,
+                        "endCursor": null
+                    },
+                    "edges": [
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{netflow9RawEvents: {edges: []}}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn netflow9_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            netflow9RawEvents(
+                filter: {
+                    sensor: "ingest src 2",
+                    time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+                },
+                first: 1
+            ) {
+                edges {
+                    node {
+                        time
+                        origAddr
+                        respAddr
+                        sequence
+                        contents
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "netflow9RawEvents": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "time": "2024-03-04T05:06:07+00:00",
+                                "sequence": "42",
+                                "sourceId": "7",
+                                "templateId": 9,
+                                "origAddr": "10.1.0.1",
+                                "origPort": 345,
+                                "respAddr": "10.1.0.2",
+                                "respPort": 678,
+                                "proto": 17,
+                                "contents": "netflow9_contents"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{netflow9RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07+00:00\", \
+             origAddr: \"10.1.0.1\", respAddr: \"10.1.0.2\", sequence: \"42\", \
+             contents: \"netflow9_contents\"}}]}}"
+        );
+        mock.assert_async().await;
+    }
+
     fn insert_netflow5_raw_event(
         store: &RawEventStore<Netflow5>,
         sensor: &str,
@@ -476,5 +764,95 @@ mod tests {
         };
         let value = bincode::serialize(&event).unwrap();
         store.append(&key, &value).unwrap();
+    }
+
+    #[test]
+    fn test_netflow_filter_range_end_key() {
+        let filter = NetflowFilter {
+            time: None,
+            sensor: "src1".to_string(),
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            contents: None,
+        };
+        assert_eq!(filter.get_range_end_key(), (None, None));
+
+        let start = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 7).unwrap();
+        let end = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 8).unwrap();
+        let filter = NetflowFilter {
+            time: Some(TimeRange {
+                start: Some(start),
+                end: Some(end),
+            }),
+            sensor: "src1".to_string(),
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            contents: None,
+        };
+        assert_eq!(filter.get_range_end_key(), (Some(start), Some(end)));
+    }
+
+    #[test]
+    fn test_netflow_filter_check_matches_and_rejects() {
+        let filter = NetflowFilter {
+            time: None,
+            sensor: "src1".to_string(),
+            orig_addr: Some(IpRange {
+                start: Some("10.0.0.1".to_string()),
+                end: Some("10.0.0.3".to_string()),
+            }),
+            resp_addr: Some(IpRange {
+                start: Some("10.0.0.5".to_string()),
+                end: Some("10.0.0.9".to_string()),
+            }),
+            orig_port: Some(PortRange {
+                start: Some(1000),
+                end: Some(2000),
+            }),
+            resp_port: Some(PortRange {
+                start: Some(3000),
+                end: Some(4000),
+            }),
+            contents: Some("needle".to_string()),
+        };
+
+        let ok = filter
+            .check(
+                Some(IpAddr::from_str("10.0.0.2").unwrap()),
+                Some(IpAddr::from_str("10.0.0.6").unwrap()),
+                Some(1500),
+                Some(3500),
+                None,
+                Some("haystack needle".to_string()),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(ok);
+
+        let reject_contents = filter
+            .check(
+                Some(IpAddr::from_str("10.0.0.2").unwrap()),
+                Some(IpAddr::from_str("10.0.0.6").unwrap()),
+                Some(1500),
+                Some(3500),
+                None,
+                Some("haystack".to_string()),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!reject_contents);
+    }
+
+    #[test]
+    fn test_tcp_flags_returns_none_when_empty() {
+        assert_eq!(tcp_flags(0), "None");
     }
 }
