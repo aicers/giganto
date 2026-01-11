@@ -1659,6 +1659,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
     store.append(&key, &ser_dhcp_body).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_malformed_dns_raw_event(
     store: &RawEventStore<MalformedDns>,
     sensor: &str,
@@ -1698,6 +1699,7 @@ fn insert_malformed_dns_raw_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1735,6 +1737,7 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_statistics_raw_event(
     store: &RawEventStore<Statistics>,
     timestamp: i64,
@@ -1760,6 +1763,7 @@ fn insert_statistics_raw_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_op_log_export_event(
     store: &RawEventStore<'_, OpLog>,
     sensor: &str,
@@ -1784,6 +1788,7 @@ fn insert_op_log_export_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn sensor_timestamp_key(sensor: &str, timestamp: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1792,6 +1797,7 @@ fn sensor_timestamp_key(sensor: &str, timestamp: i64) -> Vec<u8> {
     key
 }
 
+#[allow(dead_code)]
 fn insert_process_create_event(store: &RawEventStore<ProcessCreate>, sensor: &str, timestamp: i64) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = ProcessCreate {
@@ -1823,6 +1829,7 @@ fn insert_process_create_event(store: &RawEventStore<ProcessCreate>, sensor: &st
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_file_create_time_event(
     store: &RawEventStore<FileCreationTimeChanged>,
     sensor: &str,
@@ -1846,6 +1853,7 @@ fn insert_file_create_time_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_network_connect_event(
     store: &RawEventStore<NetworkConnection>,
     sensor: &str,
@@ -1876,6 +1884,7 @@ fn insert_network_connect_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_process_terminated_event(
     store: &RawEventStore<ProcessTerminated>,
     sensor: &str,
@@ -1894,6 +1903,7 @@ fn insert_process_terminated_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_image_loaded_event(store: &RawEventStore<ImageLoaded>, sensor: &str, timestamp: i64) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = ImageLoaded {
@@ -1918,6 +1928,7 @@ fn insert_image_loaded_event(store: &RawEventStore<ImageLoaded>, sensor: &str, t
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_file_create_event(
     store: &RawEventStore<FileCreate>,
     sensor: &str,
@@ -1939,6 +1950,7 @@ fn insert_file_create_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_registry_value_set_event(
     store: &RawEventStore<RegistryValueSet>,
     sensor: &str,
@@ -1960,6 +1972,7 @@ fn insert_registry_value_set_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_registry_key_rename_event(
     store: &RawEventStore<RegistryKeyValueRename>,
     sensor: &str,
@@ -1981,6 +1994,7 @@ fn insert_registry_key_rename_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_file_create_stream_hash_event(
     store: &RawEventStore<FileCreateStreamHash>,
     sensor: &str,
@@ -2003,6 +2017,7 @@ fn insert_file_create_stream_hash_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_pipe_event_raw_event(store: &RawEventStore<PipeEvent>, sensor: &str, timestamp: i64) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = PipeEvent {
@@ -2019,6 +2034,7 @@ fn insert_pipe_event_raw_event(store: &RawEventStore<PipeEvent>, sensor: &str, t
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_dns_event(store: &RawEventStore<DnsEvent>, sensor: &str, timestamp: i64) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = DnsEvent {
@@ -2036,6 +2052,7 @@ fn insert_dns_event(store: &RawEventStore<DnsEvent>, sensor: &str, timestamp: i6
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_file_delete_event(store: &RawEventStore<FileDelete>, sensor: &str, timestamp: i64) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = FileDelete {
@@ -2054,6 +2071,7 @@ fn insert_file_delete_event(store: &RawEventStore<FileDelete>, sensor: &str, tim
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_process_tampering_event(
     store: &RawEventStore<ProcessTampering>,
     sensor: &str,
@@ -2073,6 +2091,7 @@ fn insert_process_tampering_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_file_delete_detected_event(
     store: &RawEventStore<FileDeleteDetected>,
     sensor: &str,
@@ -2094,6 +2113,7 @@ fn insert_file_delete_detected_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_netflow5_raw_event(
     store: &RawEventStore<Netflow5>,
     sensor: &str,
@@ -2135,6 +2155,7 @@ fn insert_netflow5_raw_event(
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_netflow9_raw_event(store: &RawEventStore<Netflow9>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -2156,6 +2177,7 @@ fn insert_netflow9_raw_event(store: &RawEventStore<Netflow9>, sensor: &str, time
     store.append(&key, &value).unwrap();
 }
 
+#[allow(dead_code)]
 fn insert_secu_log_raw_event(
     store: &RawEventStore<SecuLog>,
     kind: &str,
