@@ -8,6 +8,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Improved `OpLog` migration logging to record skipped entries during the
+  migration process.
 - Updated root certificate loading logic to validate empty inputs and ensure at
   least one valid certificate is added.
 

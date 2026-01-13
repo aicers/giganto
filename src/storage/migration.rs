@@ -191,9 +191,11 @@ fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
     info!("Starting migration for oplog");
     let store = db.op_log_store()?;
     let counter = AtomicUsize::new(0);
+    let mut skipped_count = 0;
 
     for raw_event in store.iter_forward() {
         let Ok((key, value)) = raw_event else {
+            skipped_count += 1;
             continue;
         };
 
@@ -201,6 +203,7 @@ fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
             get_timestamp_from_key(&key),
             bincode::deserialize::<OpLogBeforeV24>(&value),
         ) else {
+            skipped_count += 1;
             continue;
         };
 
@@ -209,6 +212,7 @@ fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
             let split_start_key: Vec<_> = old_start_key.split('@').collect();
             let mut convert_new: OpLogFromV24 = old.into();
             let Some(sensor) = split_start_key.get(1) else {
+                skipped_count += 1;
                 continue;
             };
             convert_new.sensor.clone_from(&(*sensor).to_string());
@@ -222,6 +226,9 @@ fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
             store.append(&storage_key.key(), &new)?;
             store.delete(&key)?;
         }
+    }
+    if skipped_count > 0 {
+        info!("Skipped {} oplog entries during migration", skipped_count);
     }
     info!("Completed migration for oplog");
     Ok(())
