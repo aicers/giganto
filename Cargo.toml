@@ -28,7 +28,7 @@ data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.25.0" }
-graphql_client = "0.15"
+graphql_client = "0.16"
 humantime = "2"
 humantime-serde = "1"
 libc = "0.2"
