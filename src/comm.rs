@@ -58,13 +58,11 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
     }
     let mut root_cert = rustls::RootCertStore::empty();
     for file in ca_certs_files {
-        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
             .collect::<Result<_, _>>()
             .context("invalid PEM-encoded certificate")?;
-        if let Some(cert) = root_certs.first() {
-            root_cert
-                .add(cert.to_owned())
-                .context("failed to add root cert")?;
+        for cert in certs {
+            root_cert.add(cert).context("failed to add root cert")?;
             added_any = true;
         }
     }
@@ -193,6 +191,66 @@ mod tests {
         let root_cert = to_root_cert(&paths);
         let result = root_cert;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_certs_single_file() {
+        // Generate two distinct certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+        let pem1 = cert1.cert.pem();
+        let pem2 = cert2.cert.pem();
+
+        // Combine both certs into a single PEM file
+        let combined_pem = format!("{pem1}{pem2}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("multi_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+        let root_cert = to_root_cert(&paths);
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Both certificates should be loaded
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_files_multiple_certs() {
+        // Generate three distinct certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+        let cert3 = generate_test_cert();
+
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // First file: single cert
+        let file_path1 = dir.path().join("ca1.pem");
+        let mut file1 = fs::File::create(&file_path1).expect("failed to create ca1 file");
+        file1
+            .write_all(cert1.cert.pem().as_bytes())
+            .expect("failed to write ca1 file");
+
+        // Second file: two certs combined
+        let file_path2 = dir.path().join("ca2.pem");
+        let combined_pem = format!("{}{}", cert2.cert.pem(), cert3.cert.pem());
+        let mut file2 = fs::File::create(&file_path2).expect("failed to create ca2 file");
+        file2
+            .write_all(combined_pem.as_bytes())
+            .expect("failed to write ca2 file");
+
+        let paths = vec![
+            file_path1.to_str().unwrap().to_string(),
+            file_path2.to_str().unwrap().to_string(),
+        ];
+        let root_cert = to_root_cert(&paths);
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // All three certificates should be loaded
+        assert_eq!(store.len(), 3);
     }
 
     #[tokio::test]
