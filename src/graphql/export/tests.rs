@@ -1,8 +1,9 @@
 use std::fmt::Write as _;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::{fs, io::ErrorKind, mem, path::PathBuf, str::FromStr};
 
+use anyhow::anyhow;
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use giganto_client::{
     RawEventKind,
@@ -22,11 +23,134 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
 };
+use mockito::Server;
+use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
 
+use super::{
+    ExportFilter, export_file, export_oplog_file, export_statistic_file, to_string_or_empty,
+};
 use crate::comm::ingest::generation::SequenceGenerator;
+use crate::graphql::TimeRange;
 use crate::graphql::tests::TestSchema;
-use crate::storage::RawEventStore;
+use crate::storage::{
+    Database, DbOptions, Direction, KeyExtractor, RawEventStore, TimestampKeyExtractor,
+};
+
+#[test]
+fn test_to_string_or_empty() {
+    assert_eq!(to_string_or_empty(Some(42)), "42");
+    assert_eq!(to_string_or_empty::<i32>(None), "-");
+}
+
+fn export_filter_base(protocol: &str) -> ExportFilter {
+    ExportFilter {
+        protocol: protocol.to_string(),
+        sensor_id: "src1".to_string(),
+        agent_name: None,
+        agent_id: None,
+        kind: None,
+        time: None,
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+    }
+}
+
+#[test]
+fn export_filter_mid_key() {
+    let mut filter = export_filter_base("process create");
+    filter.agent_name = Some("agent-name".to_string());
+    filter.agent_id = Some("agent-id".to_string());
+
+    let mid_key = filter.get_mid_key().expect("mid_key should be set");
+    assert_eq!(mid_key, b"agent-name\0agent-id".to_vec());
+}
+
+#[test]
+fn export_filter_time_range_keys() {
+    let mut filter = export_filter_base("conn");
+    assert_eq!(filter.get_range_end_key(), (None, None));
+    assert_eq!(filter.get_range_start_key(), (None, None));
+
+    let start = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 6).unwrap();
+    let end = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 8).unwrap();
+    filter.time = Some(TimeRange {
+        start: Some(start),
+        end: Some(end),
+    });
+
+    assert_eq!(filter.get_range_end_key(), (Some(start), Some(end)));
+    assert_eq!(filter.get_range_start_key(), (Some(start), Some(end)));
+}
+
+#[test]
+fn export_file_warns_on_invalid_data() {
+    let dir = tempdir().unwrap();
+    let progress_path = dir.path().join("progress.dump");
+    let done_path = dir.path().join("done.csv");
+    let filter = export_filter_base("conn");
+    let iter: Vec<anyhow::Result<(Box<[u8]>, Conn)>> =
+        vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
+
+    let result = export_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+
+    assert!(result.is_ok());
+    assert!(done_path.exists());
+}
+
+#[test]
+fn export_oplog_file_warns_on_invalid_data() {
+    let dir = tempdir().unwrap();
+    let progress_path = dir.path().join("progress.dump");
+    let done_path = dir.path().join("done.csv");
+    let filter = export_filter_base("op_log");
+    let iter: Vec<anyhow::Result<(Box<[u8]>, OpLog)>> =
+        vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
+
+    let result = export_oplog_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+
+    assert!(result.is_ok());
+    assert!(done_path.exists());
+}
+
+#[test]
+fn export_statistic_file_orders_multiple_iterators() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+    let store = db.statistics_store().unwrap();
+
+    insert_statistics_raw_event(&store, 5, "sensor-a", 1, 1, 100, 1000);
+    insert_statistics_raw_event(&store, 15, "sensor-a", 1, 1, 200, 2000);
+    insert_statistics_raw_event(&store, 10, "sensor-b", 1, 1, 300, 3000);
+    insert_statistics_raw_event(&store, 20, "sensor-b", 1, 1, 400, 4000);
+
+    let filter = export_filter_base("statistics");
+    let mut bounds = Vec::new();
+    let mut iterators = Vec::new();
+    for sensor in ["sensor-a", "sensor-b"] {
+        bounds.push(sensor_bounds(sensor));
+        let (from, to) = bounds.last().unwrap();
+        iterators.push(store.boundary_iter(from, to, Direction::Forward).peekable());
+    }
+
+    let progress_path = dir.path().join("stats_progress.csv");
+    let done_path = dir.path().join("stats_done.csv");
+    let result = export_statistic_file(iterators, &filter, "csv", &done_path, &progress_path);
+
+    assert!(result.is_ok());
+    assert!(done_path.exists());
+
+    let contents = fs::read_to_string(&done_path).unwrap();
+    let extracted_times: Vec<&str> = contents
+        .lines()
+        .filter_map(|line| line.split('\t').next())
+        .collect();
+    let expected = vec!["0.000000005", "0.000000010", "0.000000015", "0.000000020"];
+
+    assert_eq!(extracted_times, expected);
+}
 
 #[tokio::test]
 async fn invalid_query() {
@@ -45,7 +169,12 @@ async fn invalid_query() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "null");
+    assert!(
+        res.errors
+            .iter()
+            .any(|error| error.message.contains("Invalid ip/port input")),
+        "no error contained Invalid ip/port input"
+    );
 
     // invalid filter combine2 (network proto + kind)
     let query = r#"
@@ -59,7 +188,12 @@ async fn invalid_query() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "null");
+    assert!(
+        res.errors.iter().any(|error| error
+            .message
+            .contains("Invalid kind/agent_name/agent_id input")),
+        "no error contained Invalid kind/agent_name/agent_id input"
+    );
 
     // invalid export format
     let query = r#"
@@ -72,7 +206,12 @@ async fn invalid_query() {
             ,exportType:"ppt")
     }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "null");
+    assert!(
+        res.errors
+            .iter()
+            .any(|error| error.message.contains("Invalid export file format")),
+        "no error contained Invalid export file format"
+    );
 
     // invalid protocol format
     let query = r#"
@@ -85,7 +224,215 @@ async fn invalid_query() {
              ,exportType:"json")
      }"#;
     let res = schema.execute(query).await;
-    assert_eq!(res.data.to_string(), "null");
+    assert!(
+        res.errors
+            .iter()
+            .any(|error| error.message.contains(" Unknown protocol")),
+        "no error contained Unknown protocol"
+    );
+
+    // invalid agent filter for non-sysmon protocol
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "conn",
+                sensorId: "src1",
+                agentName: "agent",
+                agentId: "agent_id"
+            }
+            ,exportType:"json")
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(
+        res.errors.iter().any(|error| error
+            .message
+            .contains("Invalid kind/agent_name/agent_id input")),
+        "no error contained Invalid kind/agent_name/agent_id input"
+    );
+}
+
+#[tokio::test]
+async fn export_conn_giganto_cluster_with_address_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "conn",
+                sensorId: "src 2",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" },
+                origAddr: { start: "192.0.2.1", end: "192.0.2.9" },
+                respAddr: { start: "192.0.2.10", end: "192.0.2.19" },
+                origPort: { start: 1000, end: 2000 },
+                respPort: { start: 3000, end: 4000 }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-address"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-address\"}");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn export_sysmon_giganto_cluster_with_agent_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "process create",
+                sensorId: "src 2",
+                agentName: "agent-name",
+                agentId: "agent-id",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-agent"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-agent\"}");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn export_log_giganto_cluster_with_kind_filter() {
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "log",
+                sensorId: "src 2",
+                kind: "kind1",
+                time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
+            }
+            ,exportType:"json")
+    }"#;
+
+    let mut peer_server = Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "export": "download-token-kind"
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(res.data.to_string(), "{export: \"download-token-kind\"}");
+    mock.assert_async().await;
+}
+
+async fn assert_export_response(
+    schema: &TestSchema,
+    res: &async_graphql::Response,
+    protocol: &str,
+    ext: &str,
+) {
+    let export = res.data.to_string();
+    let path = wait_for_export_file(schema.export_dir.path(), protocol, ext).await;
+    let expected = format!("{{export: \"{}@giganto1\"}}", path.display());
+    assert_eq!(export, expected);
+}
+
+fn find_export_file(
+    dir: &std::path::Path,
+    protocol: &str,
+    ext: &str,
+) -> Option<std::path::PathBuf> {
+    let protocol = protocol.replace(' ', "");
+    let prefix = format!("{protocol}_");
+    let suffix = format!(".{ext}");
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut matches = entries
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(&suffix))
+        })
+        .collect::<Vec<_>>();
+
+    if matches.len() == 1 {
+        return matches.pop();
+    }
+    None
+}
+
+async fn wait_for_export_file(
+    dir: &std::path::Path,
+    protocol: &str,
+    ext: &str,
+) -> std::path::PathBuf {
+    let timeout = Duration::from_secs(2);
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(path) = find_export_file(dir, protocol, ext) {
+            return path;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "export file not found for type {ext}"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test]
@@ -126,7 +473,7 @@ async fn export_conn() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("conn"));
+    assert_export_response(&schema, &res, "conn", "csv").await;
 
     // export json file
     let query = r#"
@@ -144,7 +491,7 @@ async fn export_conn() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("conn"));
+    assert_export_response(&schema, &res, "conn", "json").await;
 }
 
 #[tokio::test]
@@ -907,7 +1254,7 @@ async fn export_dns() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dns"));
+    assert_export_response(&schema, &res, "dns", "csv").await;
 
     // export json file
     let query = r#"
@@ -925,7 +1272,7 @@ async fn export_dns() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dns"));
+    assert_export_response(&schema, &res, "dns", "json").await;
 }
 
 fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
@@ -996,7 +1343,7 @@ async fn export_http() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("http"));
+    assert_export_response(&schema, &res, "http", "csv").await;
 
     // export json file
     let query = r#"
@@ -1014,7 +1361,7 @@ async fn export_http() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("http"));
+    assert_export_response(&schema, &res, "http", "json").await;
 }
 
 fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
@@ -1093,7 +1440,7 @@ async fn export_rdp() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("rdp"));
+    assert_export_response(&schema, &res, "rdp", "csv").await;
 
     // export json file
     let query = r#"
@@ -1111,7 +1458,7 @@ async fn export_rdp() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("rdp"));
+    assert_export_response(&schema, &res, "rdp", "json").await;
 }
 
 fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
@@ -1171,7 +1518,7 @@ async fn export_smtp() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("smtp"));
+    assert_export_response(&schema, &res, "smtp", "csv").await;
 
     // export json file
     let query = r#"
@@ -1189,7 +1536,7 @@ async fn export_smtp() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("smtp"));
+    assert_export_response(&schema, &res, "smtp", "json").await;
 }
 
 fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
@@ -1255,7 +1602,7 @@ async fn export_ntlm() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ntlm"));
+    assert_export_response(&schema, &res, "ntlm", "csv").await;
 
     // export json file
     let query = r#"
@@ -1273,7 +1620,7 @@ async fn export_ntlm() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ntlm"));
+    assert_export_response(&schema, &res, "ntlm", "json").await;
 }
 
 fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
@@ -1337,7 +1684,7 @@ async fn export_kerberos() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("kerberos"));
+    assert_export_response(&schema, &res, "kerberos", "csv").await;
 
     // export json file
     let query = r#"
@@ -1355,7 +1702,7 @@ async fn export_kerberos() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("kerberos"));
+    assert_export_response(&schema, &res, "kerberos", "json").await;
 }
 
 fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
@@ -1423,7 +1770,7 @@ async fn export_ssh() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ssh"));
+    assert_export_response(&schema, &res, "ssh", "csv").await;
 
     // export json file
     let query = r#"
@@ -1441,8 +1788,9 @@ async fn export_ssh() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ssh"));
+    assert_export_response(&schema, &res, "ssh", "json").await;
 }
+
 fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1512,7 +1860,7 @@ async fn export_dce_rpc() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dcerpc"));
+    assert_export_response(&schema, &res, "dce rpc", "csv").await;
 
     // export json file
     let query = r#"
@@ -1530,8 +1878,9 @@ async fn export_dce_rpc() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dcerpc"));
+    assert_export_response(&schema, &res, "dce rpc", "json").await;
 }
+
 fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
@@ -1597,7 +1946,7 @@ async fn export_log() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("log"));
+    assert_export_response(&schema, &res, "log", "csv").await;
 
     // export json file
     let query = r#"
@@ -1612,7 +1961,7 @@ async fn export_log() {
                     ,exportType:"json")
             }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("log"));
+    assert_export_response(&schema, &res, "log", "json").await;
 }
 
 fn insert_log_raw_event(
@@ -1666,7 +2015,7 @@ async fn export_time_series() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("periodictimeseries"));
+    assert_export_response(&schema, &res, "periodic time series", "csv").await;
 
     // export json file
     let query = r#"
@@ -1680,7 +2029,7 @@ async fn export_time_series() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("periodictimeseries"));
+    assert_export_response(&schema, &res, "periodic time series", "json").await;
 }
 
 fn insert_time_series(
@@ -1721,7 +2070,7 @@ async fn export_op_log() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("op_log"));
+    assert_export_response(&schema, &res, "op_log", "csv").await;
 
     // export json file
     let query = r#"
@@ -1734,7 +2083,7 @@ async fn export_op_log() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("op_log"));
+    assert_export_response(&schema, &res, "op_log", "json").await;
 }
 
 fn insert_op_log_raw_event(
@@ -1791,7 +2140,7 @@ async fn export_ftp() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ftp"));
+    assert_export_response(&schema, &res, "ftp", "csv").await;
 
     // export json file
     let query = r#"
@@ -1809,7 +2158,7 @@ async fn export_ftp() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ftp"));
+    assert_export_response(&schema, &res, "ftp", "json").await;
 }
 
 fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
@@ -1882,7 +2231,7 @@ async fn export_mqtt() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("mqtt"));
+    assert_export_response(&schema, &res, "mqtt", "csv").await;
 
     // export json file
     let query = r#"
@@ -1900,7 +2249,7 @@ async fn export_mqtt() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("mqtt"));
+    assert_export_response(&schema, &res, "mqtt", "json").await;
 }
 
 fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
@@ -1965,7 +2314,7 @@ async fn export_ldap() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ldap"));
+    assert_export_response(&schema, &res, "ldap", "csv").await;
 
     // export json file
     let query = r#"
@@ -1983,7 +2332,7 @@ async fn export_ldap() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("ldap"));
+    assert_export_response(&schema, &res, "ldap", "json").await;
 }
 
 fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
@@ -2049,7 +2398,7 @@ async fn export_tls() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("tls"));
+    assert_export_response(&schema, &res, "tls", "csv").await;
 
     // export json file
     let query = r#"
@@ -2067,7 +2416,7 @@ async fn export_tls() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("tls"));
+    assert_export_response(&schema, &res, "tls", "json").await;
 }
 
 fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
@@ -2147,7 +2496,7 @@ async fn export_smb() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("smb"));
+    assert_export_response(&schema, &res, "smb", "csv").await;
 
     // export json file
     let query = r#"
@@ -2165,7 +2514,7 @@ async fn export_smb() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("smb"));
+    assert_export_response(&schema, &res, "smb", "json").await;
 }
 
 fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
@@ -2235,7 +2584,7 @@ async fn export_nfs() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("nfs"));
+    assert_export_response(&schema, &res, "nfs", "csv").await;
 
     // export json file
     let query = r#"
@@ -2253,7 +2602,7 @@ async fn export_nfs() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("nfs"));
+    assert_export_response(&schema, &res, "nfs", "json").await;
 }
 
 fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
@@ -2314,7 +2663,7 @@ async fn export_bootp() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("bootp"));
+    assert_export_response(&schema, &res, "bootp", "csv").await;
 
     // export json file
     let query = r#"
@@ -2332,7 +2681,7 @@ async fn export_bootp() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("bootp"));
+    assert_export_response(&schema, &res, "bootp", "json").await;
 }
 
 fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
@@ -2402,7 +2751,7 @@ async fn export_dhcp() {
             ,exportType:"csv")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dhcp"));
+    assert_export_response(&schema, &res, "dhcp", "csv").await;
 
     // export json file
     let query = r#"
@@ -2420,7 +2769,7 @@ async fn export_dhcp() {
             ,exportType:"json")
     }"#;
     let res = schema.execute(query).await;
-    assert!(res.data.to_string().contains("dhcp"));
+    assert_export_response(&schema, &res, "dhcp", "json").await;
 }
 
 fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
@@ -2605,6 +2954,19 @@ fn sensor_timestamp_key(sensor: &str, timestamp: i64) -> Vec<u8> {
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend_from_slice(&timestamp.to_be_bytes());
+    key
+}
+
+fn sensor_bounds(sensor: &str) -> (Vec<u8>, Vec<u8>) {
+    let from = sensor_prefix(sensor);
+    let mut to = sensor_prefix(sensor);
+    to.extend_from_slice(&[0xFF; 64]);
+    (from, to)
+}
+
+fn sensor_prefix(sensor: &str) -> Vec<u8> {
+    let mut key = sensor.as_bytes().to_vec();
+    key.push(0);
     key
 }
 
