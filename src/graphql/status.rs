@@ -301,7 +301,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::graphql::tests::TestSchema;
+    use std::{net::SocketAddr, str::FromStr, time::Duration};
+
+    use toml_edit::DocumentMut;
+
+    use super::{GRAPHQL_REBOOT_DELAY, insert_toml_peers, parse_toml_element_to_string};
+    use crate::{comm::peer::PeerIdentity, graphql::tests::TestSchema, settings::ConfigVisible};
 
     #[tokio::test]
     async fn test_ping() {
@@ -345,14 +350,42 @@ mod tests {
         let query = format!(
             r#"
             mutation {{
-                updateConfig(old: {old_config:?} new: "")
+                updateConfig(old: {old_config:?} new: "") {{
+                    ingestSrvAddr
+                }}
             }}
             "#
         );
 
         let res = schema.execute(&query).await;
+        assert!(
+            res.errors
+                .first()
+                .is_some_and(|error| error.message.contains("empty new config"))
+        );
+    }
 
-        assert!(!res.errors.is_empty());
+    #[tokio::test]
+    async fn test_update_config_with_same_old_and_new() {
+        let schema = TestSchema::new();
+
+        let old_config = old_config();
+        let query = format!(
+            r"
+            mutation {{
+                updateConfig(old: {old_config:?} new: {old_config:?}) {{
+                    ingestSrvAddr
+                }}
+            }}
+            "
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(
+            res.errors
+                .first()
+                .is_some_and(|error| error.message.contains("same old and new configs"))
+        );
     }
 
     #[tokio::test]
@@ -444,6 +477,228 @@ mod tests {
         let data = res.data.into_json().unwrap();
         let config = data["config"].as_object().unwrap();
         assert_eq!(config["retention"].as_str().unwrap(), "100d");
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn test_properties_cf() {
+        let schema = TestSchema::new();
+        let query = r#"
+        {
+            propertiesCf(filter: { recordType: "conn" }) {
+                estimateLiveDataSize
+                estimateNumKeys
+                stats
+            }
+        }
+        "#;
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let props = data["propertiesCf"].as_object().unwrap();
+        assert!(props.contains_key("estimateLiveDataSize"));
+        assert!(props.contains_key("estimateNumKeys"));
+        assert!(props.contains_key("stats"));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_with_old_mismatch() {
+        let schema = TestSchema::new();
+
+        let mismatched_old_config = toml::toml!(
+            ingest_srv_addr = "0.0.0.0:38370"
+            publish_srv_addr = "0.0.0.0:38371"
+            graphql_srv_addr = "127.0.0.1:8443"
+            data_dir = "tests"
+            retention = "101d"
+            export_dir = "tests"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 8
+            max_subcompactions = 2
+        )
+        .to_string();
+        let new_config = old_config();
+
+        let query = format!(
+            r"
+            mutation {{
+                updateConfig(old: {mismatched_old_config:?} new: {new_config:?}) {{
+                    ingestSrvAddr
+                }}
+            }}
+            "
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(
+            res.errors
+                .first()
+                .is_some_and(|error| error.message.contains("Old config does not match"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_config_with_no_changes() {
+        let schema = TestSchema::new();
+
+        let old_config = old_config();
+        let new_config = format!("{old_config}\n");
+        let query = format!(
+            r"
+            mutation {{
+                updateConfig(old: {old_config:?} new: {new_config:?}) {{
+                    ingestSrvAddr
+                }}
+            }}
+            "
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(
+            res.errors
+                .first()
+                .is_some_and(|error| error.message.contains("No changes"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_config_spawns_reload_task() {
+        let mut schema = TestSchema::new();
+
+        let old_config = old_config();
+        let new_config = toml::toml!(
+            ingest_srv_addr = "0.0.0.0:48370"
+            publish_srv_addr = "0.0.0.0:48371"
+            graphql_srv_addr = "127.0.0.1:8443"
+            data_dir = "tests"
+            retention = "100d"
+            export_dir = "tests"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 10
+            max_subcompactions = 2
+        )
+        .to_string();
+        let expected_config = toml::from_str::<ConfigVisible>(&new_config).unwrap();
+        let query = format!(
+            r"
+            mutation {{
+                updateConfig(old: {old_config:?} new: {new_config:?}) {{
+                    ingestSrvAddr
+                    publishSrvAddr
+                    graphqlSrvAddr
+                    dataDir
+                    retention
+                    exportDir
+                    ackTransmission
+                    maxOpenFiles
+                    maxMbOfLevelBase
+                    numOfThread
+                    maxSubcompactions
+                }}
+            }}
+            "
+        );
+
+        let res = schema.execute(&query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
+        );
+
+        let reload_rx = schema
+            .reload_rx
+            .as_mut()
+            .expect("reload channel was not initialized");
+        let received_config = tokio::time::timeout(
+            Duration::from_millis(GRAPHQL_REBOOT_DELAY + 50),
+            reload_rx.recv(),
+        )
+        .await
+        .expect("reload task never sent a config")
+        .expect("reload channel closed before sending the config");
+
+        assert_eq!(received_config, expected_config);
+    }
+
+    #[tokio::test]
+    async fn test_stop() {
+        let schema = TestSchema::new();
+        let query = "mutation { stop }";
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{stop: true}");
+    }
+
+    #[tokio::test]
+    async fn test_reboot() {
+        let schema = TestSchema::new();
+        let query = "mutation { reboot }";
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{reboot: true}");
+    }
+
+    #[tokio::test]
+    async fn test_shutdown() {
+        let schema = TestSchema::new();
+        let query = "mutation { shutdown }";
+        let res = schema.execute(query).await;
+        assert_eq!(res.data.to_string(), "{shutdown: true}");
+    }
+
+    #[test]
+    fn parse_toml_element_to_string_handles_errors_and_success() {
+        let doc = "title = \"ok\"\ncount = 3\n"
+            .parse::<DocumentMut>()
+            .unwrap();
+
+        let ok = parse_toml_element_to_string("title", &doc).unwrap();
+        assert_eq!(ok, "ok");
+
+        let missing = parse_toml_element_to_string("missing", &doc).unwrap_err();
+        assert!(
+            missing.message.contains("missing not found"),
+            "unexpected error: {missing:?}"
+        );
+
+        let non_string = parse_toml_element_to_string("count", &doc).unwrap_err();
+        assert!(
+            non_string
+                .message
+                .contains("parse failed: count's item format is not available"),
+            "unexpected error: {non_string:?}"
+        );
+    }
+
+    #[test]
+    fn test_insert_toml_peers() {
+        let mut doc = "peers = []\n".parse::<DocumentMut>().unwrap();
+        let peers = vec![PeerIdentity {
+            addr: SocketAddr::from_str("127.0.0.1:38384").unwrap(),
+            hostname: "node1".to_string(),
+        }];
+
+        insert_toml_peers(&mut doc, Some(peers)).unwrap();
+        let out = doc.to_string();
+        assert!(out.contains("127.0.0.1:38384"));
+        assert!(out.contains("node1"));
+
+        insert_toml_peers::<PeerIdentity>(&mut doc, None).unwrap();
+
+        let mut missing = "title = \"ok\"\n".parse::<DocumentMut>().unwrap();
+        let peers = vec![PeerIdentity {
+            addr: SocketAddr::from_str("127.0.0.1:38384").unwrap(),
+            hostname: "node1".to_string(),
+        }];
+        let err = insert_toml_peers(&mut missing, Some(peers)).unwrap_err();
+        assert!(
+            err.message
+                .contains("insert failed: peers option not found"),
+            "unexpected error: {err:?}"
+        );
     }
 
     fn old_config() -> String {
