@@ -917,20 +917,28 @@ impl_string_number!(StringNumberI64, i64);
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeSet, HashMap, HashSet};
+    use std::net::IpAddr;
     use std::sync::Arc;
 
     use async_graphql::EmptySubscription;
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde::{Deserialize, Serialize};
     use tokio::sync::Notify;
 
     use super::{
-        NodeName, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, schema,
+        NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32, StringNumberU64,
+        StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address, check_agent_id,
+        check_contents, check_port, collect_exist_times, get_time_from_key,
+        get_time_from_key_prefix, min_max_time, pk, schema, time_range, write_run_tcpdump,
     };
     use crate::comm::{
-        IngestSensors, new_pcap_sensors,
+        IngestSensors,
+        ingest::implement::EventFilter,
+        new_pcap_sensors,
         peer::{PeerInfo, Peers},
     };
-    use crate::graphql::{Mutation, Query};
+    use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
     use crate::storage::{Database, DbOptions};
 
@@ -1062,17 +1070,23 @@ mod tests {
         // Test invalid string for StringNumberU64
         let json_str = r#""not_a_number""#;
         let result: Result<StringNumberU64, _> = serde_json::from_str(json_str);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("invalid digit found in string"));
 
         // Test empty string
         let json_str = r#""""#;
         let result: Result<StringNumberU64, _> = serde_json::from_str(json_str);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cannot parse integer from empty string"));
 
         // Test overflow for u32
         let json_str = r#""99999999999999999999""#;
         let result: Result<StringNumberU32, _> = serde_json::from_str(json_str);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("number too large to fit in target type"));
     }
 
     #[test]
@@ -1127,6 +1141,41 @@ mod tests {
     }
 
     #[test]
+    fn time_range_defaults_and_missing_bounds() {
+        let (start, end) = time_range(None);
+        assert_eq!(start, Utc.timestamp_nanos(i64::MIN));
+        assert_eq!(end, Utc.timestamp_nanos(i64::MAX));
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let time = TimeRange {
+            start: Some(start),
+            end: None,
+        };
+        let (range_start, range_end) = time_range(Some(&time));
+        assert_eq!(range_start, start);
+        assert_eq!(range_end, Utc.timestamp_nanos(i64::MAX));
+
+        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let time = TimeRange {
+            start: None,
+            end: Some(end),
+        };
+        let (range_start, range_end) = time_range(Some(&time));
+        assert_eq!(range_start, Utc.timestamp_nanos(i64::MIN));
+        assert_eq!(range_end, end);
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let time = TimeRange {
+            start: Some(start),
+            end: Some(end),
+        };
+        let (range_start, range_end) = time_range(Some(&time));
+        assert_eq!(range_start, start);
+        assert_eq!(range_end, end);
+    }
+
+    #[test]
     fn timestamp_to_sec_nsec_modulo_vs_bitwise_and() {
         use super::timestamp_to_sec_nsec;
 
@@ -1159,5 +1208,261 @@ mod tests {
         // Verify our helper function uses the correct calculation
         let (_, subsec_nanos) = timestamp_to_sec_nsec(timestamp);
         assert_eq!(subsec_nanos, correct_nsec);
+    }
+
+    #[test]
+    fn test_get_time_from_key_prefix() {
+        let timestamp = 1_700_000_000_123_456_789_i64;
+        let mut key = Vec::new();
+        key.extend_from_slice(&timestamp.to_be_bytes());
+        key.extend_from_slice(&[1, 2, 3, 4]);
+
+        let time = get_time_from_key_prefix(&key).unwrap();
+        assert_eq!(time, Utc.timestamp_nanos(timestamp));
+
+        let too_short = vec![0u8; TIMESTAMP_SIZE];
+        let err = get_time_from_key_prefix(&too_short).unwrap_err();
+        assert_eq!(err.to_string(), "invalid database key length");
+    }
+
+    #[test]
+    fn test_get_time_from_key() {
+        let timestamp = 1_700_000_001_987_654_321_i64;
+        let mut key = vec![0xAB, 0xCD, 0xEF];
+        key.extend_from_slice(&timestamp.to_be_bytes());
+
+        let time = get_time_from_key(&key).unwrap();
+        assert_eq!(time, Utc.timestamp_nanos(timestamp));
+
+        let too_short = vec![0u8; TIMESTAMP_SIZE];
+        let err = get_time_from_key(&too_short).unwrap_err();
+        assert_eq!(err.to_string(), "invalid database key length");
+    }
+
+    #[test]
+    fn test_write_run_tcpdump() {
+        let packet = |timestamp, len| pk {
+            packet_timestamp: timestamp,
+            packet: vec![0u8; len],
+        };
+        let packets = vec![
+            packet(1_700_049_600_123_456_789_i64, 60),
+            packet(1_700_049_601_987_654_321_i64, 64),
+        ];
+        let output = write_run_tcpdump(&packets).unwrap();
+        assert!(!output.is_empty());
+        assert!(output.contains("2023-11-15"));
+        assert!(output.contains("123456"));
+        assert!(output.contains("987654"));
+        assert!(output.contains("0x0000"));
+
+        let out_empty = write_run_tcpdump(&vec![]).unwrap();
+        assert!(out_empty.is_empty());
+    }
+
+    #[test]
+    fn test_check_address() {
+        let filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        let in_range = check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap();
+        assert!(in_range);
+
+        let end_exclusive =
+            check_address(Some(&filter), Some("192.168.0.3".parse().unwrap())).unwrap();
+        assert!(!end_exclusive);
+
+        let no_filter = check_address(None, None).unwrap();
+        assert!(no_filter);
+    }
+
+    #[test]
+    fn test_check_address_invalid_ip_string() {
+        let filter = IpRange {
+            start: Some("invalid-ip".to_string()),
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        let err = check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap_err();
+        let msg = err.message;
+        assert!(msg.contains("invalid IP address syntax"));
+    }
+
+    #[test]
+    fn test_check_address_invalid_ip_string_end() {
+        let filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: Some("invalid-ip".to_string()),
+        };
+
+        let err = check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap_err();
+        let msg = err.message;
+        assert!(msg.contains("invalid IP address syntax"));
+    }
+
+    #[test]
+    fn test_check_port() {
+        let filter = PortRange {
+            start: Some(1000),
+            end: Some(1002),
+        };
+
+        assert!(check_port(Some(&filter), Some(1000)));
+        assert!(!check_port(Some(&filter), Some(1002)));
+        assert!(check_port(None, Some(1000)));
+        assert!(check_port(None, None));
+    }
+
+    #[test]
+    fn test_check_contents() {
+        assert!(check_contents(None, None));
+        assert!(check_contents(
+            Some("needle"),
+            Some("haystack needle".to_string())
+        ));
+        assert!(!check_contents(
+            Some("needle"),
+            Some("haystack".to_string())
+        ));
+        assert!(!check_contents(Some("needle"), None));
+        assert!(check_contents(None, Some("haystack".to_string())));
+    }
+
+    #[test]
+    fn test_check_agent_id() {
+        assert!(check_agent_id(Some("agent-1"), Some("agent-1")));
+        assert!(!check_agent_id(Some("agent-1"), Some("agent-2")));
+        assert!(!check_agent_id(Some("agent-1"), None));
+        assert!(check_agent_id(None, Some("agent-1")));
+        assert!(check_agent_id(None, None));
+    }
+
+    #[test]
+    fn test_min_max_time() {
+        assert_eq!(min_max_time(true), DateTime::<Utc>::MAX_UTC);
+        assert_eq!(min_max_time(false), DateTime::<Utc>::MIN_UTC);
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct DummyEvent {
+        orig_addr: Option<IpAddr>,
+        resp_addr: Option<IpAddr>,
+        orig_port: Option<u16>,
+        resp_port: Option<u16>,
+        text: Option<String>,
+        agent_id: Option<String>,
+    }
+
+    impl EventFilter for DummyEvent {
+        fn data_type(&self) -> String {
+            "dummy".to_string()
+        }
+        fn orig_addr(&self) -> Option<IpAddr> {
+            self.orig_addr
+        }
+        fn resp_addr(&self) -> Option<IpAddr> {
+            self.resp_addr
+        }
+        fn orig_port(&self) -> Option<u16> {
+            self.orig_port
+        }
+        fn resp_port(&self) -> Option<u16> {
+            self.resp_port
+        }
+        fn log_level(&self) -> Option<String> {
+            None
+        }
+        fn log_contents(&self) -> Option<String> {
+            None
+        }
+        fn text(&self) -> Option<String> {
+            self.text.clone()
+        }
+        fn agent_id(&self) -> Option<String> {
+            self.agent_id.clone()
+        }
+    }
+
+    #[test]
+    fn collect_exist_times_filters_by_time_and_search_filter() {
+        let t1 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 1, 0).unwrap();
+        let t3 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 2, 0).unwrap();
+        let t4 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 3, 0).unwrap();
+
+        let mut target_data = BTreeSet::new();
+        let ok_event = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("haystack needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        target_data.insert((t1, bincode::serialize(&ok_event).unwrap()));
+
+        let no_keyword_match = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("no match".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        target_data.insert((t2, bincode::serialize(&no_keyword_match).unwrap()));
+
+        let wrong_agent = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("needle".to_string()),
+            agent_id: Some("agent-2".to_string()),
+        };
+        target_data.insert((t2, bincode::serialize(&wrong_agent).unwrap()));
+
+        let end_boundary = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        target_data.insert((t3, bincode::serialize(&end_boundary).unwrap()));
+
+        let out_of_range = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        target_data.insert((t4, bincode::serialize(&out_of_range).unwrap()));
+
+        target_data.insert((t2, vec![0, 1, 2, 3]));
+
+        let filter = SearchFilter {
+            time: Some(TimeRange {
+                start: Some(t1),
+                end: Some(t3),
+            }),
+            sensor: "src 1".to_string(),
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            log_level: None,
+            log_contents: None,
+            times: Vec::new(),
+            keyword: Some("needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+
+        let result = collect_exist_times::<DummyEvent>(&target_data, &filter);
+        assert_eq!(result, vec![t1]);
     }
 }
