@@ -268,6 +268,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn secu_log_empty() {
+        let schema = TestSchema::new();
+        let store = schema.db.secu_log_store().unwrap();
+
+        insert_secu_log_event(&store, "device", "src1", 1);
+
+        let query = r#"
+        {
+            secuLogRawEvents(
+                filter: {
+                    kind: "device",
+                    sensor: "src1",
+                    log: "does-not-match"
+                }
+            ) {
+                edges {
+                    node {
+                        contents
+                    }
+                }
+            }
+        }"#;
+
+        let res = schema.execute(query).await;
+
+        assert_eq!(res.data.to_string(), "{secuLogRawEvents: {edges: []}}");
+    }
+
+    #[tokio::test]
     async fn test_secu_log_event_giganto_cluster() {
         let query = r#"
         {
