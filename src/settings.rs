@@ -275,12 +275,25 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
     use std::{fs, io::Write};
 
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     use super::*;
+
+    fn write_config_file(contents: &str) -> tempfile::NamedTempFile {
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("Failed to create temp file");
+        temp_file
+            .write_all(contents.as_bytes())
+            .expect("Failed to write config");
+        temp_file.flush().expect("Failed to flush");
+        temp_file
+    }
 
     /// Helper function to create a temporary test config file
     fn create_test_config(
@@ -291,11 +304,6 @@ mod tests {
         tempfile::TempDir,
         ConfigVisible,
     ) {
-        let mut temp_file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("Failed to create temp file");
-
         let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
         let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
 
@@ -319,10 +327,7 @@ compression = {}
             compression
         );
 
-        temp_file
-            .write_all(config_content.as_bytes())
-            .expect("Failed to write config");
-        temp_file.flush().expect("Failed to flush");
+        let temp_file = write_config_file(&config_content);
 
         let config_visible = ConfigVisible {
             graphql_srv_addr: "[::]:8443".parse().unwrap(),
@@ -339,6 +344,84 @@ compression = {}
         };
 
         (temp_file, data_dir, export_dir, config_visible)
+    }
+
+    #[test]
+    fn test_load_settings_uses_defaults_for_missing_fields() {
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
+        let config_content = format!(
+            r#"
+data_dir = "{}"
+export_dir = "{}"
+"#,
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
+
+        let temp_file = write_config_file(&config_content);
+        let settings = Settings::load_or_restore(temp_file.path().to_str().unwrap())
+            .expect("Failed to load settings");
+
+        assert_eq!(
+            settings.config.visible.data_dir,
+            data_dir.path().to_path_buf(),
+            "data_dir should be loaded from the config file"
+        );
+        assert_eq!(
+            settings.config.visible.export_dir,
+            export_dir.path().to_path_buf(),
+            "export_dir should be loaded from the config file"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr,
+            DEFAULT_GRAPHQL_SRV_ADDR.parse().unwrap(),
+            "graphql_srv_addr should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr,
+            DEFAULT_INGEST_SRV_ADDR.parse().unwrap(),
+            "ingest_srv_addr should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr,
+            DEFAULT_PUBLISH_SRV_ADDR.parse().unwrap(),
+            "publish_srv_addr should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60),
+            "retention should default to 100 days"
+        );
+        assert_eq!(
+            settings.config.visible.max_open_files, DEFAULT_MAX_OPEN_FILES,
+            "max_open_files should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.max_mb_of_level_base, DEFAULT_MAX_MB_OF_LEVEL_BASE,
+            "max_mb_of_level_base should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.num_of_thread, DEFAULT_NUM_OF_THREAD,
+            "num_of_thread should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.max_subcompactions, DEFAULT_MAX_SUBCOMPACTIONS,
+            "max_subcompactions should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.visible.ack_transmission, DEFAULT_ACK_TRANSMISSION,
+            "ack_transmission should default to the expected value"
+        );
+        assert_eq!(
+            settings.config.addr_to_peers, None,
+            "addr_to_peers should default to None"
+        );
+        assert_eq!(settings.config.peers, None, "peers should default to None");
+        assert!(
+            !settings.config.compression,
+            "compression should default to false"
+        );
     }
 
     #[test]
@@ -375,12 +458,18 @@ compression = {}
         fs::set_permissions(config_path, permissions).expect("Failed to set read-only");
 
         // Attempt to update the config file, which should fail
-        let result = settings.update_config_file(&new_config);
+        let err = settings
+            .update_config_file(&new_config)
+            .expect_err("Operation should have failed");
+        let has_permission_denied = err.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == ErrorKind::PermissionDenied)
+        });
 
-        // Verify that the update failed
         assert!(
-            result.is_err(),
-            "Expected update_config_file to fail on read-only file"
+            has_permission_denied,
+            "expected PermissionDenied in error chain, got: {err:?}"
         );
 
         // Verify that the in-memory config was NOT changed
@@ -389,8 +478,10 @@ compression = {}
             "In-memory config should remain unchanged after failed update"
         );
 
-        // Remove any backup file created during the failed update attempt
         let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
+        assert!(backup_path.exists(), "Backup file should be created");
+
+        // Remove any backup file created during the failed update attempt
         fs::remove_file(backup_path).expect("Failed to remove backup file");
     }
 
@@ -561,11 +652,16 @@ compression = {}
     }
 
     #[test]
-    fn test_load_config_msg_fail_no_backup() {
+    fn test_load_config_fail_no_backup_includes_message() {
         let dir = tempdir().expect("failed to create temp dir");
         let config_path = dir.path().join("non_existent.toml");
         let settings = Settings::load_or_restore(config_path.to_str().unwrap());
-        assert!(settings.is_err());
+        let err = settings.expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("no valid configuration file available, and no backup found."),
+            "Unexpected error message: {err:?}"
+        );
     }
 
     #[test]
@@ -578,8 +674,19 @@ compression = {}
         writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write backup content");
 
         let settings = Settings::load_or_restore(config_path.to_str().unwrap());
-        assert!(settings.is_ok());
+        let settings = settings.expect("Failed to restore from backup");
         assert!(config_path.exists());
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 
     #[test]
@@ -678,5 +785,82 @@ compression = {}
             err.to_string().contains("data directory is invalid"),
             "Unexpected error message: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_deserialize_socket_addr_valid() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_socket_addr")]
+            addr: SocketAddr,
+        }
+
+        let toml_str = r#"addr = "127.0.0.1:8080""#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(
+            wrapper.addr,
+            "127.0.0.1:8080".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_deserialize_socket_addr_invalid() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_socket_addr", rename = "addr")]
+            _addr: SocketAddr,
+        }
+
+        let toml_str = r#"addr = "invalid_addr""#;
+        let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("invalid address \"invalid_addr\""));
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_valid() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr")]
+            addr: Option<SocketAddr>,
+        }
+
+        let toml_str = r#"addr = "127.0.0.1:38383""#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(
+            wrapper.addr,
+            Some("127.0.0.1:38383".parse::<SocketAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_none() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(default, deserialize_with = "deserialize_peer_addr")]
+            addr: Option<SocketAddr>,
+        }
+
+        // Test with missing key
+        let toml_str = r"";
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(wrapper.addr, None);
+
+        // Test with empty string
+        let toml_str = r#"addr = """#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert_eq!(wrapper.addr, None);
+    }
+
+    #[test]
+    fn test_deserialize_peer_addr_invalid() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr", rename = "addr")]
+            _addr: Option<SocketAddr>,
+        }
+
+        let toml_str = r#"addr = "invalid_addr""#;
+        let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("invalid address \"invalid_addr\""));
     }
 }
