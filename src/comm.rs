@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
+use tracing::warn;
 
 use crate::{
     comm::peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
@@ -47,25 +48,26 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
         bail!("no root certificate paths provided");
     }
 
-    let mut ca_certs_files = Vec::new();
+    let mut root_cert = rustls::RootCertStore::empty();
     let mut added_any = false;
 
-    for ca_cert in ca_certs_paths {
-        let file = fs::read(ca_cert)
-            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
+    for path in ca_certs_paths {
+        let pem = fs::read(path)
+            .with_context(|| format!("failed to read root certificate file: {path}"))?;
 
-        ca_certs_files.push(file);
-    }
-    let mut root_cert = rustls::RootCertStore::empty();
-    for file in ca_certs_files {
-        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
             .collect::<Result<_, _>>()
-            .context("invalid PEM-encoded certificate")?;
-        for cert in certs {
-            root_cert.add(cert).context("failed to add root cert")?;
-            added_any = true;
+            .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
+
+        let (valid, invalid) = root_cert.add_parsable_certificates(certs.clone());
+
+        added_any |= valid > 0;
+
+        if invalid > 0 {
+            warn!("some root certificate(s) were skipped in {certs:?}");
         }
     }
+
     if !added_any {
         bail!("no valid root certificates loaded");
     }
