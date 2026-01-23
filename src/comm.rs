@@ -255,6 +255,104 @@ mod tests {
         assert_eq!(store.len(), 3);
     }
 
+    #[test]
+    fn test_to_root_cert_mixed_valid_invalid_single_file() {
+        // Generate a valid certificate
+        let cert = generate_test_cert();
+        let valid_pem = cert.cert.pem();
+
+        // Create an invalid certificate block (valid PEM structure but invalid cert data)
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+
+        // Combine valid and invalid certs in one file
+        let combined_pem = format!("{valid_pem}{invalid_cert}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("mixed_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+        let root_cert = to_root_cert(&paths);
+
+        // Should succeed because at least one valid cert exists
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Only the valid certificate should be loaded
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_files_with_invalid_certs() {
+        // Generate valid certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // First file: valid cert + invalid cert
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+        let file_path1 = dir.path().join("ca1.pem");
+        let combined_pem1 = format!("{}{}", cert1.cert.pem(), invalid_cert);
+        let mut file1 = fs::File::create(&file_path1).expect("failed to create ca1 file");
+        file1
+            .write_all(combined_pem1.as_bytes())
+            .expect("failed to write ca1 file");
+
+        // Second file: valid cert only
+        let file_path2 = dir.path().join("ca2.pem");
+        let mut file2 = fs::File::create(&file_path2).expect("failed to create ca2 file");
+        file2
+            .write_all(cert2.cert.pem().as_bytes())
+            .expect("failed to write ca2 file");
+
+        let paths = vec![
+            file_path1.to_str().unwrap().to_string(),
+            file_path2.to_str().unwrap().to_string(),
+        ];
+        let root_cert = to_root_cert(&paths);
+
+        // Should succeed because valid certs exist
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Only the two valid certificates should be loaded
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_to_root_cert_all_invalid_certs() {
+        // Create invalid certificate blocks (valid PEM structure but invalid cert data)
+        let invalid_cert1 = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+        let invalid_cert2 = "-----BEGIN CERTIFICATE-----\n\
+            QW5vdGhlciBpbnZhbGlkIGNlcnRpZmljYXRlIGRhdGEgaGVyZS4=\n\
+            -----END CERTIFICATE-----\n";
+
+        let combined_pem = format!("{invalid_cert1}{invalid_cert2}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("invalid_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+        let result = to_root_cert(&paths);
+
+        // Should fail because no valid certificates were loaded
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "no valid root certificates loaded"
+        );
+    }
+
     #[tokio::test]
     async fn test_new_pcap_sensors() {
         let sensors = new_pcap_sensors();
