@@ -1,6 +1,7 @@
 //! Configurations for the application.
 use std::{
     collections::HashSet,
+    fs,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
@@ -107,7 +108,7 @@ pub struct ConfigVisible {
 impl Settings {
     /// Creates a new `Settings` instance, populated from the given
     /// configuration file.
-    pub fn from_file(cfg_path: &str) -> Result<Self, ConfigError> {
+    pub fn load(cfg_path: &str) -> Result<Self, ConfigError> {
         let s = default_config_builder()
             .add_source(File::with_name(cfg_path))
             .build()?;
@@ -116,6 +117,42 @@ impl Settings {
         Ok(Self {
             config,
             cfg_path: cfg_path.to_string(),
+        })
+    }
+
+    /// Loads the configuration, restoring from a backup if needed.
+    pub fn load_or_restore(cfg_path: &str) -> anyhow::Result<Self> {
+        Self::load(cfg_path).or_else(|e| {
+            eprintln!("failed to read configuration file: {cfg_path}. Error: {e}");
+
+            let backup_path = Path::new(cfg_path).with_extension("toml.bak");
+
+            if !backup_path.exists() {
+                return Err(e)
+                    .context("no valid configuration file available, and no backup found.");
+            }
+
+            println!(
+                "attempting to restore backup configuration from: {}",
+                backup_path.display()
+            );
+
+            fs::copy(&backup_path, cfg_path).with_context(|| {
+                format!(
+                    "failed to restore configuration from backup: {} to {}",
+                    backup_path.display(),
+                    cfg_path
+                )
+            })?;
+
+            println!("configuration restored from backup.");
+
+            Self::load(cfg_path).with_context(|| {
+                format!(
+                    "failed to read restored configuration file: {}",
+                    backup_path.display()
+                )
+            })
         })
     }
 
@@ -240,6 +277,9 @@ where
 mod tests {
     use std::{fs, io::Write};
 
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
     use super::*;
 
     /// Helper function to create a temporary test config file
@@ -307,7 +347,7 @@ compression = {}
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
-        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+        let mut settings = Settings::load(config_path).expect("Failed to load settings");
 
         // Store the original config for comparison
         let original_visible = settings.config.visible.clone();
@@ -360,7 +400,7 @@ compression = {}
         let config_path = temp_file.path().to_str().unwrap();
 
         // Load settings from the temporary config file
-        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+        let mut settings = Settings::load(config_path).expect("Failed to load settings");
 
         // Create a new config with different values
         let new_config = ConfigVisible {
@@ -397,7 +437,7 @@ compression = {}
 
         // Reload settings from disk to verify persistence
         let reloaded_settings =
-            Settings::from_file(config_path).expect("Failed to reload settings from disk");
+            Settings::load(config_path).expect("Failed to reload settings from disk");
 
         // Verify that the persisted config matches the new config
         assert_eq!(
@@ -430,7 +470,7 @@ compression = {}
         let (temp_file, _data_dir, _export_dir, original_config) = create_test_config(true);
         let config_path = temp_file.path().to_str().unwrap();
 
-        let mut settings = Settings::from_file(config_path).expect("Failed to load settings");
+        let mut settings = Settings::load(config_path).expect("Failed to load settings");
         assert!(
             settings.config.compression,
             "Compression should be loaded from the config file"
@@ -461,7 +501,7 @@ compression = {}
         );
 
         let reloaded_settings =
-            Settings::from_file(config_path).expect("Failed to reload settings from disk");
+            Settings::load(config_path).expect("Failed to reload settings from disk");
         assert!(
             reloaded_settings.config.compression,
             "Persisted compression should be preserved after update"
@@ -470,5 +510,173 @@ compression = {}
         // Clean up the backup file created during the test
         let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
         fs::remove_file(backup_path).expect("Failed to remove backup file");
+    }
+
+    const TEST_CONFIG_CONTENT: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+    "#;
+
+    #[test]
+    fn test_load_config_success() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write config content");
+
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap());
+        let settings = settings.unwrap();
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
+    }
+
+    #[test]
+    fn test_load_config_msg_fail_no_backup() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("non_existent.toml");
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap());
+        assert!(settings.is_err());
+    }
+
+    #[test]
+    fn test_load_config_backup_restore() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        let mut file = fs::File::create(&backup_path).expect("failed to create backup file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write backup content");
+
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap());
+        assert!(settings.is_ok());
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_load_config_backup_restore_copy_failure() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        fs::File::create(&backup_path).expect("failed to create backup file");
+        fs::create_dir(&config_path).expect("failed to create directory at config path");
+
+        let result = Settings::load_or_restore(config_path.to_str().unwrap());
+        let err = result.expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("failed to restore configuration from backup"),
+            "Unexpected error message received: '{err:?}'",
+        );
+    }
+
+    #[test]
+    fn test_load_config_backup_restore_read_failure() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        let mut file = fs::File::create(&backup_path).expect("failed to create backup file");
+        writeln!(file, "invalid_toml_content").expect("failed to write invalid content");
+
+        let result = Settings::load_or_restore(config_path.to_str().unwrap());
+        let err = result.expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("failed to read restored configuration file"),
+            "Unexpected error message received: '{err:?}'",
+        );
+    }
+
+    #[test]
+    fn test_load_config_both_invalid() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let backup_path = dir.path().join("config.toml.bak");
+
+        // Create invalid config file
+        let mut config_file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(config_file, "invalid_toml_content")
+            .expect("failed to write invalid config content");
+
+        // Create invalid backup file
+        let mut backup_file = fs::File::create(&backup_path).expect("failed to create backup file");
+        writeln!(backup_file, "invalid_backup_content")
+            .expect("failed to write invalid backup content");
+
+        let result = Settings::load_or_restore(config_path.to_str().unwrap());
+        let err = result.expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("failed to read restored configuration file"),
+            "Unexpected error message: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_config() {
+        let (_temp_file, data_dir, _export_dir, config_visible) = create_test_config(false);
+        let config = Config {
+            addr_to_peers: None,
+            peers: None,
+            visible: config_visible,
+            compression: false,
+        };
+
+        // Case 1: Valid data directory
+        assert!(config.validate().is_ok());
+
+        // Case 2: Non-existent data directory
+        let mut invalid_config = config.clone();
+        invalid_config.visible.data_dir = PathBuf::from("non_existent_dir");
+        let err = invalid_config
+            .validate()
+            .expect_err("Operation should have failed");
+        assert!(
+            err.to_string().contains("data directory is invalid"),
+            "Unexpected error message: {err:?}"
+        );
+
+        // Case 3: Data directory is a file
+        let file_path = data_dir.path().join("file");
+        fs::File::create(&file_path).expect("Failed to create file");
+        invalid_config.visible.data_dir = file_path;
+        let err = invalid_config
+            .validate()
+            .expect_err("Operation should have failed");
+        assert!(
+            err.to_string().contains("data directory is invalid"),
+            "Unexpected error message: {err:?}"
+        );
     }
 }
