@@ -30,7 +30,7 @@ static TCP_FLAGS: [(u8, &str); 8] = [
     (0x10, "ACK"),
     (0x20, "URG"),
     (0x40, "ECE"),
-    (0x08, "CWR"),
+    (0x80, "CWR"),
 ];
 
 #[derive(Default)]
@@ -332,6 +332,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 
+    use super::tcp_flags;
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
     #[tokio::test]
@@ -414,6 +415,17 @@ mod tests {
             .as_object()
             .unwrap();
         assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+    }
+
+    #[test]
+    fn tcp_flags_cwr_set() {
+        assert_eq!(tcp_flags(0x80), "CWR");
+    }
+
+    #[test]
+    fn tcp_flags_cwr_not_set() {
+        assert_ne!(tcp_flags(0x08), "CWR");
+        assert_eq!(tcp_flags(0x08), "PSH");
     }
 
     fn insert_netflow5_raw_event(
