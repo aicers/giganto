@@ -18,6 +18,8 @@ query Statistics(
         bps
         pps
         eps
+        count
+        size
       }
     }
   }

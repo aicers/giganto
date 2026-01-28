@@ -27,7 +27,7 @@ use crate::graphql::client::{
     derives::{Statistics as Stats, statistics as stats},
 };
 use crate::{
-    graphql::{StringNumberI64, TimeRange, events_in_cluster},
+    graphql::{StringNumberI64, StringNumberU64, TimeRange, events_in_cluster},
     storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
 
@@ -88,6 +88,8 @@ pub struct StatisticsDetail {
     pub bps: Option<f64>,
     pub pps: Option<f64>,
     pub eps: Option<f64>,
+    pub count: Option<StringNumberU64>,
+    pub size: Option<StringNumberU64>,
 }
 
 #[cfg(feature = "count_events")]
@@ -317,6 +319,8 @@ fn gen_statistics(
         for (r_type, (count, size)) in total_stats {
             let mut stats_detail = StatisticsDetail {
                 protocol: format!("{r_type:?}"),
+                count: Some(StringNumberU64(count)),
+                size: Some(StringNumberU64(size)),
                 ..Default::default()
             };
             if r_type == RawEventKind::Statistics {
@@ -375,6 +379,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
+    use crate::graphql::StringNumberU64;
     #[cfg(feature = "count_events")]
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
@@ -431,6 +436,8 @@ mod tests {
                     protocol,
                     bps,
                     pps,
+                    count,
+                    size,
                 }
             }
         }
@@ -438,7 +445,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0, count: \"6000000\", size: \"1800000000\"}]}]}]}"
         );
     }
 
@@ -513,6 +520,8 @@ mod tests {
                         bps
                         pps
                         eps
+                        count
+                        size
                     }
                 }
             }
@@ -525,6 +534,8 @@ mod tests {
         assert!(detail["bps"].is_null());
         assert!(detail["pps"].is_null());
         assert_eq!(detail["eps"], 2.0);
+        assert_eq!(detail["count"].as_str().unwrap(), "120");
+        assert_eq!(detail["size"].as_str().unwrap(), "0");
     }
 
     #[test]
@@ -585,6 +596,8 @@ mod tests {
             assert_eq!(detail.bps, Some(16.0));
             assert_eq!(detail.pps, Some(1.0));
             assert!(detail.eps.is_none());
+            assert_eq!(detail.count, Some(StringNumberU64(60)));
+            assert_eq!(detail.size, Some(StringNumberU64(120)));
         }
     }
 
@@ -635,6 +648,8 @@ mod tests {
                         protocol,
                         bps,
                         pps,
+                        count,
+                        size,
                     }
                 }
             }
@@ -655,7 +670,9 @@ mod tests {
                                         "protocol": "Statistics",
                                         "bps": 24000000.0,
                                         "pps": 10000.0,
-                                        "eps": 12413.1
+                                        "eps": 12413.1,
+                                        "count": "6000000",
+                                        "size": "1800000000"
                                     }
                                 ]
                             }
@@ -685,7 +702,7 @@ mod tests {
         // then
         assert_eq!(
             res.data.to_string(),
-            "{statistics: [{sensor: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            "{statistics: [{sensor: \"src 2\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0, count: \"6000000\", size: \"1800000000\"}]}]}]}"
         );
 
         mock.assert_async().await;
@@ -707,6 +724,8 @@ mod tests {
                         protocol,
                         bps,
                         pps,
+                        count,
+                        size,
                     }
                 }
             }
@@ -727,7 +746,9 @@ mod tests {
                                         "protocol": "Statistics",
                                         "bps": 24000000.0,
                                         "pps": 10000.0,
-                                        "eps": 12413.1
+                                        "eps": 12413.1,
+                                        "count": "6000000",
+                                        "size": "1800000000"
                                     }
                                 ]
                             }
@@ -743,7 +764,9 @@ mod tests {
                                         "protocol": "Statistics",
                                         "bps": 24000000.0,
                                         "pps": 10000.0,
-                                        "eps": 12413.1
+                                        "eps": 12413.1,
+                                        "count": "6000000",
+                                        "size": "1800000000"
                                     }
                                 ]
                             }
@@ -759,7 +782,9 @@ mod tests {
                                         "protocol": "Statistics",
                                         "bps": 24000000.0,
                                         "pps": 10000.0,
-                                        "eps": 12413.1
+                                        "eps": 12413.1,
+                                        "count": "6000000",
+                                        "size": "1800000000"
                                     }
                                 ]
                             }
@@ -824,12 +849,14 @@ mod tests {
         assert_eq!(
             res.data.to_string(),
             "{statistics: [{sensor: \"src2\", stats: [{timestamp: \"1702272560\", detail: \
-            [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}, {sensor: \"ingest src \
-             2\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \"Statistics\", \
-             bps: 24000000.0, pps: 10000.0}]}]}, {sensor: \"src 2\", stats: [{timestamp: \
-             \"1702272560\", detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}\
-             , {sensor: \"src 1\", stats: [{timestamp: \"1702272560\", detail: [{protocol: \
-             \"Statistics\", bps: 24000000.0, pps: 10000.0}]}]}]}"
+            [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0, count: \"6000000\", \
+            size: \"1800000000\"}]}]}, {sensor: \"ingest src 2\", stats: [{timestamp: \
+            \"1702272560\", detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0, \
+            count: \"6000000\", size: \"1800000000\"}]}]}, {sensor: \"src 2\", stats: \
+            [{timestamp: \"1702272560\", detail: [{protocol: \"Statistics\", bps: 24000000.0, \
+            pps: 10000.0, count: \"6000000\", size: \"1800000000\"}]}]}, {sensor: \"src 1\", \
+            stats: [{timestamp: \"1702272560\", detail: [{protocol: \"Statistics\", \
+            bps: 24000000.0, pps: 10000.0, count: \"6000000\", size: \"1800000000\"}]}]}]}"
         );
 
         mock.assert_async().await;
