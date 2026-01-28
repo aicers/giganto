@@ -27,7 +27,7 @@ use crate::graphql::client::{
     derives::{Statistics as Stats, statistics as stats},
 };
 use crate::{
-    graphql::{StringNumberI64, TimeRange, events_in_cluster},
+    graphql::{StringNumberI64, StringNumberU64, TimeRange, events_in_cluster},
     storage::{Database, RawEventStore, StatisticsIter, StorageKey},
 };
 
@@ -88,6 +88,8 @@ pub struct StatisticsDetail {
     pub bps: Option<f64>,
     pub pps: Option<f64>,
     pub eps: Option<f64>,
+    pub count: Option<StringNumberU64>,
+    pub size: Option<StringNumberU64>,
 }
 
 #[cfg(feature = "count_events")]
@@ -319,6 +321,8 @@ fn gen_statistics(
                 protocol: format!("{r_type:?}"),
                 ..Default::default()
             };
+            stats_detail.count = Some(StringNumberU64(count));
+            stats_detail.size = Some(StringNumberU64(size));
             if r_type == RawEventKind::Statistics {
                 stats_detail.bps = Some(calculate_ps(latest_stats.period, size * BYTE_TO_BIT)); // convert to bit size
                 stats_detail.pps = Some(calculate_ps(latest_stats.period, count));
