@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Exposed `count` and `size` fields on `StatisticsDetail` in the
+  `statistics` GraphQL response. These optional fields provide raw
+  packet/event counts and byte totals, decoupling clients from
+  the ingest sender's period configuration.
+
 ### Changed
 
 - Improved `OpLog` migration logging to record skipped entries during the

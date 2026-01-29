@@ -3413,6 +3413,8 @@ type StatisticsDetail {
 	bps: Float
 	pps: Float
 	eps: Float
+	count: StringNumberU64
+	size: StringNumberU64
 }
 
 type StatisticsInfo {
