@@ -103,24 +103,56 @@ pub(crate) fn new_peers_data(peers_list: Option<HashSet<PeerIdentity>>) -> (Peer
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::io::Write;
+    use std::path::Path;
 
+    use chrono::TimeZone;
+    use rocksdb::{DB, Options};
     use tempfile::tempdir;
 
     use super::*;
+    use crate::storage::{Database, DbOptions};
 
     fn generate_test_cert() -> rcgen::CertifiedKey<rcgen::KeyPair> {
         rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap()
+    }
+
+    async fn assert_string_key_map_inserted<V>(
+        map: &Arc<RwLock<std::collections::HashMap<String, V>>>,
+        key: &str,
+        value: V,
+    ) {
+        assert!(map.read().await.is_empty());
+        map.write().await.insert(key.to_string(), value);
+        let map_read = map.read().await;
+        assert_eq!(map_read.len(), 1);
+        assert!(map_read.contains_key(key));
+    }
+
+    fn read_sensor_timestamp(path: &Path, sensor_id: &str) -> i64 {
+        let db_opts = Options::default();
+        let cf_names = DB::list_cf(&db_opts, path).unwrap_or_default();
+        let cf_names_ref: Vec<&str> = cf_names.iter().map(String::as_str).collect();
+        let read_only_db = DB::open_cf_for_read_only(&db_opts, path, cf_names_ref, false).unwrap();
+        let sensors_cf = read_only_db.cf_handle("sensors").unwrap();
+        let value = read_only_db
+            .get_cf(sensors_cf, sensor_id)
+            .unwrap()
+            .expect("sensor timestamp");
+        let bytes: [u8; 8] = value.try_into().expect("timestamp bytes");
+        i64::from_be_bytes(bytes)
     }
 
     #[test]
     fn test_to_cert_chain_valid() {
         let cert = generate_test_cert();
         let pem = cert.cert.pem();
-        let chain = to_cert_chain(pem.as_bytes());
-        assert!(chain.is_ok());
-        let chain = chain.unwrap();
+        let der = cert.cert.der();
+
+        let chain = to_cert_chain(pem.as_bytes()).unwrap();
         assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].as_ref(), der.as_ref());
     }
 
     #[test]
@@ -135,49 +167,65 @@ mod tests {
     fn test_to_private_key_valid() {
         let cert = generate_test_cert();
         let pem = cert.signing_key.serialize_pem();
-        let key = to_private_key(pem.as_bytes());
-        assert!(key.is_ok());
+        let der_pkcs8 = cert.signing_key.serialize_der();
+        let key = to_private_key(pem.as_bytes()).unwrap();
+
+        match key {
+            PrivateKeyDer::Pkcs8(pkcs8_key) => {
+                assert_eq!(pkcs8_key.secret_pkcs8_der(), der_pkcs8.as_slice());
+            }
+            _ => panic!("Expected a PKCS#8 key"),
+        }
     }
 
     #[test]
     fn test_to_private_key_invalid() {
         let pem = b"invalid pem";
-        let key = to_private_key(pem);
-        assert!(key.is_err());
+        let err = to_private_key(pem).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("private key"));
     }
 
     #[test]
     fn test_to_root_cert_valid() {
-        let cert = generate_test_cert();
-        let pem = cert.cert.pem();
+        let test_cert = generate_test_cert();
+        let pem = test_cert.cert.pem();
+        let original_der = test_cert.cert.der();
 
         let dir = tempdir().expect("failed to create temp dir");
-        let file_path = dir.path().join("ca.pem");
-        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
-        file.write_all(pem.as_bytes())
-            .expect("failed to write ca file");
+        let cert_path = dir.path().join("ca.pem");
+        fs::write(&cert_path, pem.as_bytes()).expect("failed to write ca file");
 
-        let paths = vec![file_path.to_str().unwrap().to_string()];
-        let root_cert = to_root_cert(&paths);
-        assert!(root_cert.is_ok());
-        assert!(!root_cert.unwrap().is_empty());
+        let paths = vec![cert_path.to_string_lossy().into_owned()];
+        let root_cert_store = to_root_cert(&paths).unwrap();
+
+        assert!(!root_cert_store.is_empty());
+        let roots = root_cert_store.roots;
+        assert_eq!(roots.len(), 1);
+
+        let parsed_der = rustls_pemfile::certs(&mut pem.as_bytes())
+            .next()
+            .expect("pem should contain a cert")
+            .expect("cert should parse");
+        assert_eq!(parsed_der.as_ref(), original_der.as_ref());
     }
 
     #[test]
     fn test_to_root_cert_invalid_path() {
         let paths = vec!["/non/existent/path".to_string()];
-        let root_cert = to_root_cert(&paths);
-        assert!(root_cert.is_err());
+        let err = to_root_cert(&paths).expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("failed to read root certificate file")
+        );
     }
 
     #[test]
     fn test_to_root_cert_empty_path() {
         let paths = Vec::new();
-        let result = to_root_cert(&paths);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "no root certificate paths provided"
+        let err = to_root_cert(&paths).expect_err("Operation should have failed");
+        assert!(
+            err.to_string()
+                .contains("no root certificate paths provided")
         );
     }
 
@@ -191,26 +239,53 @@ mod tests {
 
         let paths = vec![file_path.to_str().unwrap().to_string()];
         let root_cert = to_root_cert(&paths);
-        let result = root_cert;
-        assert!(result.is_err());
+        let err = root_cert.expect_err("Operation should have failed");
+        assert_eq!(err.to_string(), "no valid root certificates loaded");
     }
 
     #[tokio::test]
     async fn test_new_pcap_sensors() {
         let sensors = new_pcap_sensors();
-        assert!(sensors.read().await.is_empty());
+        assert_string_key_map_inserted(&sensors, "sensor1", Vec::new()).await;
+    }
+
+    #[tokio::test]
+    async fn test_new_ingest_sensors() {
+        let dir = tempdir().unwrap();
+        let sensor_id = "sensor1";
+        let fixed_time = Utc.with_ymd_and_hms(2026, 1, 20, 10, 0, 0).unwrap();
+        {
+            let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+            let sensor_store = db.sensors_store().unwrap();
+            sensor_store.insert(sensor_id, fixed_time).unwrap();
+
+            let sensors = new_ingest_sensors(&db);
+            let sensors_lock = sensors.read().await;
+            assert_eq!(sensors_lock.len(), 1);
+            assert!(sensors_lock.contains(sensor_id));
+            db.shutdown().unwrap();
+        }
+
+        let expected_ts = fixed_time.timestamp_nanos_opt().unwrap();
+        let stored_ts = read_sensor_timestamp(dir.path(), sensor_id);
+        assert_eq!(stored_ts, expected_ts);
     }
 
     #[tokio::test]
     async fn test_new_runtime_ingest_sensors() {
         let sensors = new_runtime_ingest_sensors();
-        assert!(sensors.read().await.is_empty());
+        let fixed_time = Utc.with_ymd_and_hms(2026, 1, 20, 10, 0, 0).unwrap();
+        assert_string_key_map_inserted(&sensors, "sensor1", fixed_time).await;
+        let sensors_lock = sensors.read().await;
+        assert_eq!(sensors_lock.len(), 1);
+        assert_eq!(sensors_lock.get("sensor1"), Some(&fixed_time));
     }
 
     #[tokio::test]
     async fn test_new_stream_direct_channels() {
         let channels = new_stream_direct_channels();
-        assert!(channels.read().await.is_empty());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        assert_string_key_map_inserted(&channels, "channel1", tx).await;
     }
 
     #[tokio::test]
@@ -219,13 +294,17 @@ mod tests {
         assert!(peers.read().await.is_empty());
         assert!(idents.read().await.is_empty());
 
-        let mut set = HashSet::new();
-        set.insert(PeerIdentity {
-            addr: "127.0.0.1:0".parse().unwrap(),
-            hostname: "test".to_string(),
-        });
-        let (peers, idents) = new_peers_data(Some(set));
+        let mut peer_idents = HashSet::new();
+        let peer_identity = PeerIdentity {
+            addr: "127.0.0.1:8080".parse().unwrap(),
+            hostname: "peer1".to_string(),
+        };
+        peer_idents.insert(peer_identity.clone());
+
+        let (peers, idents) = new_peers_data(Some(peer_idents));
         assert!(peers.read().await.is_empty());
-        assert!(!idents.read().await.is_empty());
+        let idents_lock = idents.read().await;
+        assert_eq!(idents_lock.len(), 1);
+        assert!(idents_lock.contains(&peer_identity));
     }
 }
