@@ -921,7 +921,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_graphql::EmptySubscription;
-    use tokio::sync::Notify;
+    use tokio::sync::{Notify, mpsc};
 
     use super::{
         NodeName, StringNumberI64, StringNumberU32, StringNumberU64, StringNumberUsize, schema,
@@ -943,6 +943,7 @@ mod tests {
         pub _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
         pub db: Database,
         pub schema: Schema,
+        pub reload_rx: Option<mpsc::Receiver<ConfigVisible>>,
     }
 
     impl TestSchema {
@@ -952,7 +953,7 @@ mod tests {
             let pcap_sensors = new_pcap_sensors();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
-            let (reload_tx, _) = tokio::sync::mpsc::channel::<ConfigVisible>(1);
+            let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<ConfigVisible>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
@@ -976,6 +977,7 @@ mod tests {
                 _dir: db_dir,
                 db,
                 schema,
+                reload_rx: Some(reload_rx),
             }
         }
 
