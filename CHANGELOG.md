@@ -17,8 +17,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Improved `OpLog` migration logging to record skipped entries during the
   migration process.
-- Updated root certificate loading logic to validate empty inputs and ensure at
-  least one valid certificate is added.
+- Updated root certificate loading to parse and include all certificates from a
+  single PEM file, instead of only using the first certificate. Users can now
+  supply a PEM file containing multiple root certificates and have all of them
+  correctly added to the trust store.
 
 ### Fixed
 

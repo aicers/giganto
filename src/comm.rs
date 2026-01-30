@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
+use tracing::warn;
 
 use crate::{
     comm::peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
@@ -47,27 +48,26 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
         bail!("no root certificate paths provided");
     }
 
-    let mut ca_certs_files = Vec::new();
+    let mut root_cert = rustls::RootCertStore::empty();
     let mut added_any = false;
 
-    for ca_cert in ca_certs_paths {
-        let file = fs::read(ca_cert)
-            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
+    for path in ca_certs_paths {
+        let pem = fs::read(path)
+            .with_context(|| format!("failed to read root certificate file: {path}"))?;
 
-        ca_certs_files.push(file);
-    }
-    let mut root_cert = rustls::RootCertStore::empty();
-    for file in ca_certs_files {
-        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
             .collect::<Result<_, _>>()
-            .context("invalid PEM-encoded certificate")?;
-        if let Some(cert) = root_certs.first() {
-            root_cert
-                .add(cert.to_owned())
-                .context("failed to add root cert")?;
-            added_any = true;
+            .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
+
+        let (valid, invalid) = root_cert.add_parsable_certificates(certs.clone());
+
+        added_any |= valid > 0;
+
+        if invalid > 0 {
+            warn!("some root certificate(s) were skipped in {certs:?}");
         }
     }
+
     if !added_any {
         bail!("no valid root certificates loaded");
     }
@@ -193,6 +193,160 @@ mod tests {
         let root_cert = to_root_cert(&paths);
         let result = root_cert;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_certs_single_file() {
+        // Generate two distinct certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+        let pem1 = cert1.cert.pem();
+        let pem2 = cert2.cert.pem();
+
+        // Combine both certs into a single PEM file
+        let combined_pem = format!("{pem1}{pem2}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("multi_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+        let root_cert = to_root_cert(&paths);
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Both certificates should be loaded
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_files_multiple_certs() {
+        // Generate three distinct certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+        let cert3 = generate_test_cert();
+
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // First file: single cert
+        let file_path1 = dir.path().join("ca1.pem");
+        let mut file1 = fs::File::create(&file_path1).expect("failed to create ca1 file");
+        file1
+            .write_all(cert1.cert.pem().as_bytes())
+            .expect("failed to write ca1 file");
+
+        // Second file: two certs combined
+        let file_path2 = dir.path().join("ca2.pem");
+        let combined_pem = format!("{}{}", cert2.cert.pem(), cert3.cert.pem());
+        let mut file2 = fs::File::create(&file_path2).expect("failed to create ca2 file");
+        file2
+            .write_all(combined_pem.as_bytes())
+            .expect("failed to write ca2 file");
+
+        let paths = vec![
+            file_path1.to_str().unwrap().to_string(),
+            file_path2.to_str().unwrap().to_string(),
+        ];
+        let root_cert = to_root_cert(&paths);
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // All three certificates should be loaded
+        assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn test_to_root_cert_mixed_valid_invalid_single_file() {
+        // Generate a valid certificate
+        let cert = generate_test_cert();
+        let valid_pem = cert.cert.pem();
+
+        // Create an invalid certificate block (valid PEM structure but invalid cert data)
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+
+        // Combine valid and invalid certs in one file
+        let combined_pem = format!("{valid_pem}{invalid_cert}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("mixed_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+        let root_cert = to_root_cert(&paths);
+
+        // Should succeed because at least one valid cert exists
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Only the valid certificate should be loaded
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_to_root_cert_multiple_files_with_invalid_certs() {
+        // Generate valid certificates
+        let cert1 = generate_test_cert();
+        let cert2 = generate_test_cert();
+
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // First file: valid cert + invalid cert
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+        let file_path1 = dir.path().join("ca1.pem");
+        let combined_pem1 = format!("{}{}", cert1.cert.pem(), invalid_cert);
+        let mut file1 = fs::File::create(&file_path1).expect("failed to create ca1 file");
+        file1
+            .write_all(combined_pem1.as_bytes())
+            .expect("failed to write ca1 file");
+
+        // Second file: valid cert only
+        let file_path2 = dir.path().join("ca2.pem");
+        let mut file2 = fs::File::create(&file_path2).expect("failed to create ca2 file");
+        file2
+            .write_all(cert2.cert.pem().as_bytes())
+            .expect("failed to write ca2 file");
+
+        let paths = vec![
+            file_path1.to_str().unwrap().to_string(),
+            file_path2.to_str().unwrap().to_string(),
+        ];
+        let root_cert = to_root_cert(&paths);
+
+        // Should succeed because valid certs exist
+        assert!(root_cert.is_ok());
+        let store = root_cert.unwrap();
+        // Only the two valid certificates should be loaded
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_to_root_cert_all_invalid_certs() {
+        // Create invalid certificate blocks (valid PEM structure but invalid cert data)
+        let invalid_cert1 = "-----BEGIN CERTIFICATE-----\n\
+            SGVsbG8gV29ybGQhIFRoaXMgaXMgbm90IGEgdmFsaWQgY2VydGlmaWNhdGUu\n\
+            -----END CERTIFICATE-----\n";
+        let invalid_cert2 = "-----BEGIN CERTIFICATE-----\n\
+            QW5vdGhlciBpbnZhbGlkIGNlcnRpZmljYXRlIGRhdGEgaGVyZS4=\n\
+            -----END CERTIFICATE-----\n";
+
+        let combined_pem = format!("{invalid_cert1}{invalid_cert2}");
+
+        let dir = tempdir().expect("failed to create temp dir");
+        let file_path = dir.path().join("invalid_ca.pem");
+        let mut file = fs::File::create(&file_path).expect("failed to create ca file");
+        file.write_all(combined_pem.as_bytes())
+            .expect("failed to write ca file");
+
+        let paths = vec![file_path.to_str().unwrap().to_string()];
+
+        // Should fail because no valid certificates were loaded
+        let err = to_root_cert(&paths).unwrap_err();
+        assert_eq!(err.to_string(), "no valid root certificates loaded");
     }
 
     #[tokio::test]
