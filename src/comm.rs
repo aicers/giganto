@@ -343,14 +343,10 @@ mod tests {
             .expect("failed to write ca file");
 
         let paths = vec![file_path.to_str().unwrap().to_string()];
-        let result = to_root_cert(&paths);
 
         // Should fail because no valid certificates were loaded
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "no valid root certificates loaded"
-        );
+        let err = to_root_cert(&paths).unwrap_err();
+        assert_eq!(err.to_string(), "no valid root certificates loaded");
     }
 
     #[tokio::test]
