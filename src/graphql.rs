@@ -941,6 +941,7 @@ mod tests {
 
     pub struct TestSchema {
         pub _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
+        pub export_dir: tempfile::TempDir, // keep export directory alive for tests
         pub db: Database,
         pub schema: Schema,
     }
@@ -974,6 +975,7 @@ mod tests {
 
             Self {
                 _dir: db_dir,
+                export_dir,
                 db,
                 schema,
             }
