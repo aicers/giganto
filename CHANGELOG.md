@@ -42,7 +42,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   concurrent access and incorrect reset behavior at month boundaries. The
   generator now uses a packed `AtomicU64` with compare-and-swap operations for
   atomic resets, and computes the date key using epoch-days instead of
-  day-of-month only.
+  day-of-month only. Additional improvements include: counter overflow now rolls
+  over to 1 instead of panicking, clock rollback is handled gracefully by
+  triggering a reset, and the CAS loop has been simplified for clarity.
 - Fixed sub-second timestamp corruption in pcap file generation. The `pcap`
   GraphQL API was using bitwise AND (`&`) instead of modulo (`%`) when
   reconstructing the nanosecond portion of packet timestamps, causing incorrect
