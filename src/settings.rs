@@ -19,8 +19,12 @@ use crate::{comm::peer::PeerIdentity, graphql::status::write_toml_file};
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
 pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8443";
-const DEFAULT_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
+
+/// Legacy sentinel address used to represent `None` for `addr_to_peers`.
+/// Kept for backward compatibility during deserialization only.
+/// TODO: Remove this in a future release once all persisted configs have been updated.
+const LEGACY_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
@@ -70,7 +74,11 @@ pub struct Settings {
 /// The application settings.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
-    #[serde(default, deserialize_with = "deserialize_peer_addr")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_peer_addr",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
@@ -229,8 +237,6 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default number of thread")
         .set_default("max_subcompactions", DEFAULT_MAX_SUBCOMPACTIONS)
         .expect("default max subcompactions")
-        .set_default("addr_to_peers", DEFAULT_INVALID_ADDR_TO_PEERS)
-        .expect("default ack transmission")
         .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)
         .expect("ack_transmission")
 }
@@ -251,8 +257,11 @@ where
 
 /// Deserializes a giganto's peer socket address.
 ///
-/// `Ok(None)` is returned if the address is an empty string or there is no `addr_to_peers`
-///  option in the configuration file.
+/// `Ok(None)` is returned if:
+/// - There is no `addr_to_peers` option in the configuration file.
+/// - The address is an empty string.
+/// - The address matches the legacy sentinel value (`254.254.254.254:38383`), which was
+///   previously used to represent `None`. This is kept for backward compatibility.
 ///
 /// # Errors
 ///
@@ -262,8 +271,9 @@ where
     D: Deserializer<'de>,
 {
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
-        // Cluster mode is only available if there is a value for 'Peer Address' in the configuration file.
-        if addr == DEFAULT_INVALID_ADDR_TO_PEERS || addr.is_empty() {
+        // Cluster mode is only available if there is a value for 'Peer Address' in the
+        // configuration file. Empty string or legacy sentinel value means standalone mode.
+        if addr.is_empty() || addr == LEGACY_INVALID_ADDR_TO_PEERS {
             Ok(None)
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
@@ -862,5 +872,173 @@ export_dir = "{}"
         let toml_str = r#"addr = "invalid_addr""#;
         let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
         assert!(err.to_string().contains("invalid address \"invalid_addr\""));
+    }
+
+    #[test]
+    fn test_addr_to_peers_missing_key_deserializes_to_none() {
+        // Config without addr_to_peers should deserialize to None
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert!(
+            settings.config.addr_to_peers.is_none(),
+            "addr_to_peers should be None when key is missing from config"
+        );
+    }
+
+    const TEST_CONFIG_WITH_SENTINEL: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+        addr_to_peers = "254.254.254.254:38383"
+    "#;
+
+    const TEST_CONFIG_WITH_EMPTY_ADDR: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+        addr_to_peers = ""
+    "#;
+
+    const TEST_CONFIG_WITH_VALID_ADDR: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+        addr_to_peers = "192.168.1.1:38383"
+    "#;
+
+    #[test]
+    fn test_addr_to_peers_legacy_sentinel_deserializes_to_none() {
+        // Config with legacy sentinel value should deserialize to None for backward compatibility
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_WITH_SENTINEL}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert!(
+            settings.config.addr_to_peers.is_none(),
+            "addr_to_peers should be None when legacy sentinel value is used"
+        );
+    }
+
+    #[test]
+    fn test_addr_to_peers_empty_string_deserializes_to_none() {
+        // Config with empty string should deserialize to None
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_WITH_EMPTY_ADDR}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert!(
+            settings.config.addr_to_peers.is_none(),
+            "addr_to_peers should be None when empty string is used"
+        );
+    }
+
+    #[test]
+    fn test_addr_to_peers_valid_address_deserializes_to_some() {
+        // Config with valid address should deserialize to Some
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_WITH_VALID_ADDR}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            settings.config.addr_to_peers,
+            Some("192.168.1.1:38383".parse().unwrap()),
+            "addr_to_peers should be Some with valid address"
+        );
+    }
+
+    #[test]
+    fn test_serialization_omits_none_addr_to_peers() {
+        // When addr_to_peers is None, it should not be serialized
+        let config = Config {
+            addr_to_peers: None,
+            peers: None,
+            visible: ConfigVisible {
+                graphql_srv_addr: "[::]:8443".parse().unwrap(),
+                ingest_srv_addr: "[::]:38370".parse().unwrap(),
+                publish_srv_addr: "[::]:38371".parse().unwrap(),
+                retention: Duration::from_secs(100 * 24 * 60 * 60),
+                data_dir: PathBuf::from("data"),
+                export_dir: PathBuf::from("export"),
+                max_open_files: 8000,
+                max_mb_of_level_base: 512,
+                num_of_thread: 8,
+                max_subcompactions: 2,
+                ack_transmission: 1024,
+            },
+            compression: false,
+        };
+
+        let toml_str = toml::to_string(&config).expect("Failed to serialize config");
+        assert!(
+            !toml_str.contains("addr_to_peers"),
+            "Serialized config should not contain addr_to_peers when it is None"
+        );
+    }
+
+    #[test]
+    fn test_serialization_includes_some_addr_to_peers() {
+        // When addr_to_peers is Some, it should be serialized
+        let config = Config {
+            addr_to_peers: Some("192.168.1.1:38383".parse().unwrap()),
+            peers: None,
+            visible: ConfigVisible {
+                graphql_srv_addr: "[::]:8443".parse().unwrap(),
+                ingest_srv_addr: "[::]:38370".parse().unwrap(),
+                publish_srv_addr: "[::]:38371".parse().unwrap(),
+                retention: Duration::from_secs(100 * 24 * 60 * 60),
+                data_dir: PathBuf::from("data"),
+                export_dir: PathBuf::from("export"),
+                max_open_files: 8000,
+                max_mb_of_level_base: 512,
+                num_of_thread: 8,
+                max_subcompactions: 2,
+                ack_transmission: 1024,
+            },
+            compression: false,
+        };
+
+        let toml_str = toml::to_string(&config).expect("Failed to serialize config");
+        assert!(
+            toml_str.contains("addr_to_peers"),
+            "Serialized config should contain addr_to_peers when it is Some"
+        );
+        assert!(
+            toml_str.contains("192.168.1.1:38383"),
+            "Serialized config should contain the actual address value"
+        );
     }
 }
