@@ -10,8 +10,114 @@ use giganto_client::ingest::network::{
 use mockito;
 use num_traits::cast::ToPrimitive;
 
-use crate::graphql::tests::TestSchema;
+use crate::graphql::{
+    IpRange, NetworkFilter, PortRange, RawEventFilter, SearchFilter, StringNumberUsize,
+    tests::TestSchema,
+};
 use crate::storage::RawEventStore;
+
+const FIXED_TIME1: &str = "2026-01-01T00:00:00Z";
+const FIXED_TIME2: &str = "2026-01-01T00:00:01Z";
+
+fn fixed_time_nanos() -> (i64, i64) {
+    let time1 = Utc
+        .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    let time2 = Utc
+        .with_ymd_and_hms(2026, 1, 1, 0, 0, 1)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    (time1, time2)
+}
+
+async fn assert_raw_event_expected(
+    schema: &TestSchema,
+    root: &str,
+    filter: &str,
+    fields: &str,
+    expected: &str,
+) {
+    let query = format!(
+        r"
+    {{
+        {root}(filter: {{ {filter} }}) {{
+            edges {{
+                node {{
+                    {fields}
+                }}
+            }}
+        }}
+    }}"
+    );
+    let res = schema.execute(&query).await;
+    assert_eq!(res.data.to_string(), expected);
+}
+
+async fn assert_time_boundaries(
+    schema: &TestSchema,
+    root: &str,
+    sensor: &str,
+    field: &str,
+    value_repr: &str,
+) {
+    let base = format!(r#"sensor: "{sensor}""#);
+
+    let filter = format!(r#"time: {{ start: "{FIXED_TIME1}", end: "{FIXED_TIME2}" }} {base}"#);
+    let expected = format!("{{{root}: {{edges: [{{node: {{{field}: {value_repr}}}}}]}}}}");
+    assert_raw_event_expected(schema, root, &filter, field, &expected).await;
+
+    let filter = format!(r#"time: {{ start: "{FIXED_TIME1}", end: "{FIXED_TIME1}" }} {base}"#);
+    assert_raw_event_empty(schema, root, &filter, field).await;
+
+    let filter = format!(r#"time: {{ start: "{FIXED_TIME2}", end: "{FIXED_TIME1}" }} {base}"#);
+    assert_raw_event_empty(schema, root, &filter, field).await;
+}
+
+async fn assert_raw_event_empty(schema: &TestSchema, root: &str, filter: &str, fields: &str) {
+    let expected: String = format!("{{{root}: {{edges: []}}}}");
+    assert_raw_event_expected(schema, root, filter, fields, &expected).await;
+}
+
+async fn assert_addr_port_boundaries(
+    schema: &TestSchema,
+    root: &str,
+    sensor: &str,
+    addr: &str,
+    addr_end: &str,
+    port: u16,
+    port_end: u16,
+) {
+    let base = format!(r#"sensor: "{sensor}""#);
+
+    let filter = format!(r#"{base} origAddr: {{ start: "{addr}", end: "{addr_end}" }}"#);
+    let expected = format!(
+        "{{{root}: {{edges: [{{node: {{origAddr: \"{addr}\"}}}}, \
+        {{node: {{origAddr: \"{addr}\"}}}}]}}}}"
+    );
+    assert_raw_event_expected(schema, root, &filter, "origAddr", &expected).await;
+
+    let filter = format!(r#"{base} origAddr: {{ start: "{addr}", end: "{addr}" }}"#);
+    assert_raw_event_empty(schema, root, &filter, "origAddr").await;
+
+    let filter = format!(r#"{base} origAddr: {{ start: "{addr_end}", end: "{addr}" }}"#);
+    assert_raw_event_empty(schema, root, &filter, "origAddr").await;
+
+    let filter = format!(r"{base} origPort: {{ start: {port}, end: {port_end} }}");
+    let expected = format!(
+        "{{{root}: {{edges: [{{node: {{origPort: {port}}}}}, \
+        {{node: {{origPort: {port}}}}}]}}}}"
+    );
+    assert_raw_event_expected(schema, root, &filter, "origPort", &expected).await;
+
+    let filter = format!(r"{base} origPort: {{ start: {port}, end: {port} }}");
+    assert_raw_event_empty(schema, root, &filter, "origPort").await;
+
+    let filter = format!(r"{base} origPort: {{ start: {port_end}, end: {port} }}");
+    assert_raw_event_empty(schema, root, &filter, "origPort").await;
+}
 
 #[tokio::test]
 async fn conn_empty() {
@@ -110,8 +216,9 @@ async fn conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_conn_raw_event(&store, "src 1", time1);
+    insert_conn_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -131,7 +238,13 @@ async fn conn_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    respPort,
+                    proto,
+                    time,
                     startTime,
+                    duration,
+                    connState,
+                    service,
                     origBytes,
                     respBytes,
                     origPkts,
@@ -146,10 +259,31 @@ async fn conn_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"2023-01-20T00:00:00+00:00\", \
+         origPort: 46378, respPort: 80, proto: 6, time: \"2026-01-01T00:00:00+00:00\", \
+         startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", connState: \"sf\", service: \"-\", \
          origBytes: \"77\", respBytes: \"295\", origPkts: \
          \"397\", respPkts: \"511\", origL2Bytes: \"21515\", respL2Bytes: \"27889\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "connRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "connRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 pub(crate) fn insert_conn_raw_event(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64) {
@@ -176,11 +310,7 @@ fn create_conn_body(
         resp_port: resp_port.unwrap_or(80),
         proto: 6,
         conn_state: "sf".to_string(),
-        start_time: Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         service: "-".to_string(),
         orig_bytes: 77,
@@ -238,7 +368,7 @@ async fn conn_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
@@ -246,7 +376,7 @@ async fn conn_with_data_giganto_cluster() {
                             "proto": 6,
                             "connState": "-",
                             "service": "-",
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origBytes": "0",
                             "respBytes": "0",
@@ -281,7 +411,7 @@ async fn conn_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"2023-11-16T15:03:45.291779203+00:00\", \
+         origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", \
          origBytes: \"0\", respBytes: \"0\", \
          origPkts: \"6\", respPkts: \"0\", origL2Bytes: \"0\", respL2Bytes: \"0\"}}]}}"
     );
@@ -291,7 +421,7 @@ async fn conn_with_data_giganto_cluster() {
 
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
-async fn network_raw_events_timestamp_fomat_stability() {
+async fn network_raw_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
     let base_ts = Utc
@@ -434,6 +564,352 @@ async fn network_raw_events_timestamp_fomat_stability() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn network_raw_events_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        networkRawEvents(
+            filter: { sensor: "src 2" }
+            first: 4
+        ) {
+            pageInfo {
+                hasNextPage
+            }
+            edges {
+                node {
+                    __typename
+                    ... on ConnRawEvent {
+                        time
+                        origAddr
+                        respAddr
+                        origPort
+                        respPort
+                        proto
+                        startTime
+                        duration
+                        origPkts
+                        respPkts
+                    }
+                    ... on DnsRawEvent {
+                        time
+                        origAddr
+                        respAddr
+                        origPort
+                        respPort
+                        proto
+                        query
+                        qtype
+                        qclass
+                        rcode
+                    }
+                    ... on HttpRawEvent {
+                        time
+                        origAddr
+                        respAddr
+                        origPort
+                        respPort
+                        method
+                        host
+                        uri
+                        statusCode
+                    }
+                    ... on RdpRawEvent {
+                        time
+                        origAddr
+                        respAddr
+                        origPort
+                        respPort
+                        cookie
+                    }
+                }
+            }
+        }
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "networkRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": false,
+                    "hasNextPage": false,
+                    "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                    "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                },
+                "edges": [
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "ConnRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "proto": 6,
+                            "connState": "-",
+                            "service": "-",
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origBytes": "0",
+                            "respBytes": "0",
+                            "origPkts": "6",
+                            "respPkts": "0",
+                            "origL2Bytes": "0",
+                            "respL2Bytes": "0"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "DnsRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "31.3.245.133",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "proto": 6,
+                            "query": "example.com",
+                            "answer": ["192.168.1.1"],
+                            "transId": 12345,
+                            "rtt": "567",
+                            "qclass": 1,
+                            "qtype": 1,
+                            "rcode": 0,
+                            "aaFlag": true,
+                            "tcFlag": false,
+                            "rdFlag": true,
+                            "raFlag": false,
+                            "ttl": [3600, 1800, 900]
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "HttpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 443,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "method": "GET",
+                            "host": "example.com",
+                            "uri": "/path/to/resource",
+                            "referer": "http://referrer.com",
+                            "version": "HTTP/1.1",
+                            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                            "requestLen": "1024",
+                            "responseLen": "2048",
+                            "statusCode": 200,
+                            "statusMsg": "OK",
+                            "username": "user123",
+                            "password": "pass456",
+                            "cookie": "session=abc123",
+                            "contentEncoding": "gzip",
+                            "contentType": "text/html",
+                            "cacheControl": "no-cache",
+                            "filenames": ["file1.txt", "file2.txt", "response1.txt", "response2.txt"],
+                            "mimeTypes": ["text/plain", "text/plain"],
+                            "body": [200, 300],
+                            "state": "OK"
+                        }
+                    },
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "__typename": "RdpRawEvent",
+                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.76",
+                            "origPort": 46378,
+                            "respPort": 54321,
+                            "proto": 6,
+                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "duration": "1000000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "100",
+                            "respL2Bytes": "200",
+                            "cookie": "session=xyz789"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["networkRawEvents"]["edges"].as_array().unwrap();
+    let page_info = &data["networkRawEvents"]["pageInfo"];
+    let mut seen_types = HashSet::new();
+    let allowed_types: HashSet<&str> =
+        ["ConnRawEvent", "DnsRawEvent", "HttpRawEvent", "RdpRawEvent"]
+            .into_iter()
+            .collect();
+    assert_eq!(edges.len(), 4, "first: 4 should return 4 edges");
+    assert!(
+        !page_info["hasNextPage"].as_bool().unwrap(),
+        "first: 4 should not have next page for 4 edges"
+    );
+
+    let expected_order = [
+        ("2023-11-16T15:03:45.291779203+00:00", "ConnRawEvent"),
+        ("2023-11-16T15:03:45.291779203+00:00", "DnsRawEvent"),
+        ("2023-11-16T15:03:45.291779203+00:00", "HttpRawEvent"),
+        ("2023-11-16T15:03:45.291779203+00:00", "RdpRawEvent"),
+    ];
+    let actual_order: Vec<(&str, &str)> = edges
+        .iter()
+        .map(|e| {
+            let node = e["node"].as_object().unwrap();
+            (
+                node["time"].as_str().unwrap(),
+                node["__typename"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(actual_order, expected_order);
+
+    for edge in edges {
+        let node = edge["node"].as_object().unwrap();
+        let typename = node["__typename"].as_str().unwrap();
+        seen_types.insert(typename);
+
+        match typename {
+            "ConnRawEvent" => {
+                assert_eq!(
+                    (
+                        node["origAddr"].as_str().unwrap(),
+                        node["respAddr"].as_str().unwrap(),
+                        node["origPort"].as_u64().unwrap(),
+                        node["respPort"].as_u64().unwrap(),
+                        node["proto"].as_u64().unwrap(),
+                        node["startTime"].as_str().unwrap(),
+                        node["duration"].as_str().unwrap(),
+                        node["origPkts"].as_str().unwrap(),
+                        node["respPkts"].as_str().unwrap()
+                    ),
+                    (
+                        "192.168.4.76",
+                        "192.168.4.76",
+                        46378,
+                        443,
+                        6,
+                        "2023-11-16T15:03:45.291779203+00:00",
+                        "1000000000",
+                        "6",
+                        "0"
+                    )
+                );
+            }
+            "DnsRawEvent" => {
+                assert_eq!(
+                    (
+                        node["query"].as_str().unwrap(),
+                        node["qtype"].as_u64().unwrap(),
+                        node["qclass"].as_u64().unwrap(),
+                        node["rcode"].as_u64().unwrap(),
+                        node["origAddr"].as_str().unwrap(),
+                        node["respAddr"].as_str().unwrap(),
+                        node["origPort"].as_u64().unwrap(),
+                        node["respPort"].as_u64().unwrap(),
+                        node["proto"].as_u64().unwrap()
+                    ),
+                    (
+                        "example.com",
+                        1,
+                        1,
+                        0,
+                        "192.168.4.76",
+                        "31.3.245.133",
+                        46378,
+                        443,
+                        6
+                    )
+                );
+            }
+            "HttpRawEvent" => {
+                assert_eq!(
+                    (
+                        node["method"].as_str().unwrap(),
+                        node["host"].as_str().unwrap(),
+                        node["uri"].as_str().unwrap(),
+                        node["statusCode"].as_u64().unwrap(),
+                        node["origAddr"].as_str().unwrap(),
+                        node["respAddr"].as_str().unwrap(),
+                        node["origPort"].as_u64().unwrap(),
+                        node["respPort"].as_u64().unwrap()
+                    ),
+                    (
+                        "GET",
+                        "example.com",
+                        "/path/to/resource",
+                        200,
+                        "192.168.4.76",
+                        "192.168.4.76",
+                        46378,
+                        443
+                    )
+                );
+            }
+            "RdpRawEvent" => {
+                assert_eq!(
+                    (
+                        node["origAddr"].as_str().unwrap(),
+                        node["respAddr"].as_str().unwrap(),
+                        node["origPort"].as_u64().unwrap(),
+                        node["respPort"].as_u64().unwrap(),
+                        node["cookie"].as_str().unwrap(),
+                    ),
+                    (
+                        "192.168.4.76",
+                        "192.168.4.76",
+                        46378,
+                        54321,
+                        "session=xyz789"
+                    )
+                );
+            }
+            _ => panic!("Unexpected network event type {typename}"),
+        }
+    }
+
+    assert_eq!(seen_types, allowed_types, "Unexpected network event types");
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn dns_empty() {
     let schema = TestSchema::new();
     let query = r#"
@@ -541,8 +1017,9 @@ async fn dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_dns_raw_event(&store, "src 1", time1);
+    insert_dns_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -561,7 +1038,27 @@ async fn dns_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    respPort,
+                    proto,
+                    time,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                     rtt,
+                    query,
+                    answer,
+                    transId,
+                    qclass,
+                    qtype,
+                    rcode,
+                    aaFlag,
+                    tcFlag,
+                    rdFlag,
+                    raFlag,
+                    ttl,
                 }
             }
         }
@@ -570,8 +1067,32 @@ async fn dns_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
-        origPort: 46378, rtt: \"1\"}}]}}"
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01+00:00\", \
+        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\", rtt: \"1\", query: \"Hello Server Hello Server Hello Server\", \
+        answer: [\"1.1.1.1\"], transId: 1, qclass: 0, qtype: 0, rcode: 0, aaFlag: false, tcFlag: false, \
+        rdFlag: false, raFlag: false, ttl: [1, 1, 1, 1, 1]}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "dnsRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "dnsRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, timestamp: i64) {
@@ -586,7 +1107,7 @@ pub(crate) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -626,7 +1147,7 @@ fn insert_malformed_dns_raw_event(
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1,
         orig_pkts: 1,
         resp_pkts: 2,
@@ -670,6 +1191,7 @@ async fn dns_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    startTime,
                     rtt,
                 }
             }
@@ -689,12 +1211,12 @@ async fn dns_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
                             "respPort": 443,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -746,7 +1268,7 @@ async fn dns_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
-        origPort: 46378, rtt: \"567\"}}]}}"
+        origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", rtt: \"567\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -849,8 +1371,9 @@ async fn malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_malformed_dns_raw_event(&store, "src 1", time1);
+    insert_malformed_dns_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -868,8 +1391,28 @@ async fn malformed_dns_with_data() {
                 node {
                     origAddr,
                     respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
+                    transId,
+                    flags,
                     questionCount,
+                    answerCount,
+                    authorityCount,
+                    additionalCount,
                     queryCount,
+                    respCount,
+                    queryBytes,
+                    respBytes,
+                    queryBody,
+                    respBody,
                 }
             }
         }
@@ -877,8 +1420,33 @@ async fn malformed_dns_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, queryCount: \"5\"}}]}}"
+        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01+00:00\", \
+        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1\", origPkts: \"1\", respPkts: \"2\", \
+        origL2Bytes: \"32\", respL2Bytes: \"64\", transId: 1, flags: 42, questionCount: 1, answerCount: 2, \
+        authorityCount: 3, additionalCount: 4, queryCount: \"5\", respCount: \"6\", queryBytes: \"32\", \
+        respBytes: \"64\", queryBody: [[113]], respBody: [[114]]}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "malformedDnsRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "malformedDnsRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -901,6 +1469,7 @@ async fn malformed_dns_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     questionCount,
+                    startTime,
                     queryCount,
                 }
             }
@@ -920,13 +1489,13 @@ async fn malformed_dns_with_data_giganto_cluster() {
                     {
                         "cursor": "bWFsZm9ybWVkRG5zQ3Vyc29y",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
                             "respPort": 80,
                             "proto": 17,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1",
                             "origPkts": "1",
                             "respPkts": "2",
@@ -970,7 +1539,7 @@ async fn malformed_dns_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, queryCount: \"5\"}}]}}"
+        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, startTime: \"2026-01-01T00:00:00+00:00\", queryCount: \"5\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1071,22 +1640,9 @@ async fn http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    insert_http_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_http_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    let (time1, time2) = fixed_time_nanos();
+    insert_http_raw_event(&store, "src 1", time1);
+    insert_http_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -1105,8 +1661,35 @@ async fn http_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    method,
+                    host,
+                    uri,
+                    referer,
+                    version,
+                    userAgent,
                     requestLen,
                     responseLen,
+                    statusCode,
+                    statusMsg,
+                    username,
+                    password,
+                    cookie,
+                    contentEncoding,
+                    contentType,
+                    cacheControl,
+                    filenames,
+                    mimeTypes,
+                    body,
+                    state,
+                    respPort,
+                    proto,
+                    time,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -1115,8 +1698,34 @@ async fn http_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, requestLen: \"0\", responseLen: \"0\"}}]}}"
+         origPort: 46378, method: \"POST\", host: \"cluml\", uri: \"/cluml.gif\", \
+         referer: \"cluml.com\", version: \"\", userAgent: \"giganto\", requestLen: \"0\", responseLen: \"0\", \
+         statusCode: 200, statusMsg: \"\", username: \"\", password: \"\", cookie: \"\", \
+         contentEncoding: \"\", contentType: \"\", cacheControl: \"\", filenames: [], mimeTypes: [], \
+         body: [], state: \"\", respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+         startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "httpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "httpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
@@ -1131,11 +1740,7 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(1992, 6, 5, 12, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1188,6 +1793,7 @@ async fn http_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    startTime,
                     requestLen,
                     responseLen,
                 }
@@ -1209,13 +1815,13 @@ async fn http_with_data_giganto_cluster() {
 
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
                             "respPort": 443,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -1280,7 +1886,7 @@ async fn http_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, requestLen: \"1024\", responseLen: \"2048\"}}]}}"
+         origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", requestLen: \"1024\", responseLen: \"2048\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1381,22 +1987,9 @@ async fn rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    insert_rdp_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_rdp_raw_event(
-        &store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 2)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    let (time1, time2) = fixed_time_nanos();
+    insert_rdp_raw_event(&store, "src 1", time1);
+    insert_rdp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -1415,6 +2008,16 @@ async fn rdp_with_data() {
                     origAddr,
                     respAddr,
                     origPort,
+                    respPort,
+                    proto,
+                    time,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
+                    cookie,
                 }
             }
         }
@@ -1422,8 +2025,31 @@ async fn rdp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\", cookie: \"rdp_test\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "rdpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "rdpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {
@@ -1438,11 +2064,7 @@ fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(1992, 6, 5, 12, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1475,6 +2097,7 @@ async fn rdp_with_data_giganto_cluster() {
                     origAddr,
                     respAddr,
                     origPort,
+                    startTime,
                 }
             }
         }
@@ -1493,13 +2116,13 @@ async fn rdp_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 46378,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -1533,7 +2156,7 @@ async fn rdp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378}}]}}"
+        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1544,8 +2167,9 @@ async fn smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_smtp_raw_event(&store, "src 1", time1);
+    insert_smtp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -1558,6 +2182,24 @@ async fn smtp_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    mailfrom,
+                    date,
+                    from,
+                    to,
+                    subject,
+                    agent,
+                    state,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -1565,8 +2207,32 @@ async fn smtp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        mailfrom: \"mailfrom\", date: \"date\", from: \"from\", to: \"to\", subject: \"subject\", \
+        agent: \"agent\", state: \"\", respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "smtpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "smtpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i64) {
@@ -1581,7 +2247,7 @@ fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1614,6 +2280,7 @@ async fn smtp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                 }
             }
         }
@@ -1632,13 +2299,13 @@ async fn smtp_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 25,
                             "respPort": 587,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -1678,7 +2345,7 @@ async fn smtp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1689,8 +2356,9 @@ async fn ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_ntlm_raw_event(&store, "src 1", time1);
+    insert_ntlm_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -1703,6 +2371,22 @@ async fn ntlm_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    username,
+                    hostname,
+                    domainname,
+                    success,
+                    protocol,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -1710,8 +2394,31 @@ async fn ntlm_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        username: \"bly\", hostname: \"host\", domainname: \"domain\", success: \"tf\", protocol: \"protocol\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "ntlmRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "ntlmRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i64) {
@@ -1726,7 +2433,7 @@ fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, timestamp: i
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1757,6 +2464,7 @@ async fn ntlm_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                 }
             }
         }
@@ -1775,13 +2483,13 @@ async fn ntlm_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.1.200",
                             "origPort": 12345,
                             "respPort": 6789,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -1819,7 +2527,7 @@ async fn ntlm_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1830,8 +2538,9 @@ async fn kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_kerberos_raw_event(&store, "src 1", time1);
+    insert_kerberos_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -1844,6 +2553,26 @@ async fn kerberos_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    clientTime,
+                    serverTime,
+                    errorCode,
+                    clientRealm,
+                    cnameType,
+                    clientName,
+                    realm,
+                    snameType,
+                    serviceName,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -1851,8 +2580,32 @@ async fn kerberos_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        clientTime: \"1\", serverTime: \"1\", errorCode: \"1\", clientRealm: \"client_realm\", cnameType: 1, \
+        clientName: [\"client_name\"], realm: \"realm\", snameType: 1, serviceName: [\"service_name\"], \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "kerberosRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "kerberosRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
@@ -1867,7 +2620,7 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -1902,6 +2655,7 @@ async fn kerberos_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     clientTime,
                     serverTime,
                     errorCode,
@@ -1923,13 +2677,13 @@ async fn kerberos_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.1.200",
                             "origPort": 12345,
                             "respPort": 6789,
                             "proto": 17,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -1976,8 +2730,9 @@ async fn kerberos_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", clientTime: \
-        \"123456789\", serverTime: \"987654321\", errorCode: \"0\"}}]}}"
+        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", clientTime: \"123456789\", serverTime: \
+        \"987654321\", errorCode: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1988,8 +2743,9 @@ async fn ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_ssh_raw_event(&store, "src 1", time1);
+    insert_ssh_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2002,6 +2758,30 @@ async fn ssh_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    client,
+                    server,
+                    cipherAlg,
+                    macAlg,
+                    compressionAlg,
+                    kexAlg,
+                    hostKeyAlg,
+                    hasshAlgorithms,
+                    hassh,
+                    hasshServerAlgorithms,
+                    hasshServer,
+                    clientShka,
+                    serverShka,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2009,8 +2789,34 @@ async fn ssh_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        client: \"client\", server: \"server\", cipherAlg: \"cipher_alg\", macAlg: \"mac_alg\", \
+        compressionAlg: \"compression_alg\", kexAlg: \"kex_alg\", hostKeyAlg: \"host_key_alg\", \
+        hasshAlgorithms: \"hassh_algorithms\", hassh: \"hassh\", hasshServerAlgorithms: \"hassh_server_algorithms\", \
+        hasshServer: \"hassh_server\", clientShka: \"client_shka\", serverShka: \"server_shka\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "sshRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "sshRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
@@ -2025,7 +2831,7 @@ fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2064,6 +2870,7 @@ async fn ssh_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                 }
             }
         }
@@ -2082,13 +2889,13 @@ async fn ssh_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 22,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2134,7 +2941,7 @@ async fn ssh_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2145,8 +2952,9 @@ async fn dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_dce_rpc_raw_event(&store, "src 1", time1);
+    insert_dce_rpc_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2159,6 +2967,21 @@ async fn dce_rpc_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    rtt,
+                    namedPipe,
+                    endpoint,
+                    operation,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2166,8 +2989,31 @@ async fn dce_rpc_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        rtt: \"3\", namedPipe: \"named_pipe\", endpoint: \"endpoint\", operation: \"operation\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "dceRpcRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "dceRpcRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timestamp: i64) {
@@ -2182,7 +3028,7 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2212,6 +3058,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     rtt,
                 }
             }
@@ -2231,13 +3078,13 @@ async fn dce_rpc_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 135,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2274,7 +3121,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", rtt: \"123456\"}}]}}"
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", rtt: \"123456\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -2284,8 +3131,9 @@ async fn ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_ftp_raw_event(&store, "src 1", time1);
+    insert_ftp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2298,6 +3146,31 @@ async fn ftp_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    user,
+                    password,
+                    commands {
+                        command,
+                        replyCode,
+                        replyMsg,
+                        dataPassive,
+                        dataOrigAddr,
+                        dataRespAddr,
+                        dataRespPort,
+                        file,
+                        fileSize,
+                        fileId,
+                    },
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2305,8 +3178,34 @@ async fn ftp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        user: \"cluml\", password: \"aice\", commands: [{command: \"command\", replyCode: \"500\", \
+        replyMsg: \"reply_message\", dataPassive: false, dataOrigAddr: \"192.168.4.76\", \
+        dataRespAddr: \"31.3.245.133\", dataRespPort: 80, file: \"ftp_file\", fileSize: \"100\", \
+        fileId: \"1\"}], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "ftpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "ftpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64) {
@@ -2321,7 +3220,7 @@ fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2361,6 +3260,7 @@ async fn ftp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     commands {
                         fileSize,
                     }
@@ -2382,13 +3282,13 @@ async fn ftp_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 21,
                             "respPort": 12345,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2437,7 +3337,8 @@ async fn ftp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", commands: [{fileSize: \"1024\"}]}}]}}"
+        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", commands: [{fileSize: \"1024\"}]}}]}}"
     );
 
     mock.assert_async().await;
@@ -2448,8 +3349,9 @@ async fn mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_mqtt_raw_event(&store, "src 1", time1);
+    insert_mqtt_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2462,6 +3364,23 @@ async fn mqtt_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    protocol,
+                    version,
+                    clientId,
+                    connackReason,
+                    subscribe,
+                    subackReason,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2469,8 +3388,32 @@ async fn mqtt_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        protocol: \"protocol\", version: 1, clientId: \"1\", connackReason: 1, subscribe: [\"subscribe\"], \
+        subackReason: [1], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "mqttRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "mqttRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i64) {
@@ -2485,7 +3428,7 @@ fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2518,6 +3461,7 @@ async fn mqtt_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                 }
             }
         }
@@ -2536,13 +3480,13 @@ async fn mqtt_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 1883,
                             "respPort": 5678,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2585,7 +3529,7 @@ async fn mqtt_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2596,8 +3540,9 @@ async fn ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_ldap_raw_event(&store, "src 1", time1);
+    insert_ldap_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2610,6 +3555,24 @@ async fn ldap_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    messageId,
+                    version,
+                    opcode,
+                    result,
+                    diagnosticMessage,
+                    object,
+                    argument,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2617,8 +3580,32 @@ async fn ldap_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        messageId: \"1\", version: 1, opcode: [\"opcode\"], result: [\"result\"], diagnosticMessage: [], \
+        object: [], argument: [], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "ldapRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "ldapRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i64) {
@@ -2633,7 +3620,7 @@ fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2666,6 +3653,7 @@ async fn ldap_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     messageId,
                 }
             }
@@ -2685,13 +3673,13 @@ async fn ldap_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 389,
                             "respPort": 636,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2746,7 +3734,7 @@ async fn ldap_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", messageId: \"123\"}}]}}"
+        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", messageId: \"123\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2757,8 +3745,9 @@ async fn tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_tls_raw_event(&store, "src 1", time1);
+    insert_tls_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2771,6 +3760,38 @@ async fn tls_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    serverName,
+                    alpnProtocol,
+                    ja3,
+                    version,
+                    clientCipherSuites,
+                    clientExtensions,
+                    cipher,
+                    extensions,
+                    ja3S,
+                    serial,
+                    subjectCountry,
+                    subjectOrgName,
+                    subjectCommonName,
+                    validityNotBefore,
+                    validityNotAfter,
+                    subjectAltName,
+                    issuerCountry,
+                    issuerOrgName,
+                    issuerOrgUnitName,
+                    issuerCommonName,
+                    lastAlert,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2778,8 +3799,37 @@ async fn tls_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        serverName: \"server_name\", alpnProtocol: \"alpn_protocol\", ja3: \"ja3\", version: \"version\", \
+        clientCipherSuites: [771, 769, 770], clientExtensions: [0, 1, 2], cipher: 10, extensions: [0, 1], \
+        ja3S: \"ja3s\", serial: \"serial\", subjectCountry: \"sub_country\", subjectOrgName: \"sub_org\", \
+        subjectCommonName: \"sub_comm\", validityNotBefore: \"11\", validityNotAfter: \"12\", \
+        subjectAltName: \"sub_alt\", issuerCountry: \"issuer_country\", issuerOrgName: \"issuer_org\", \
+        issuerOrgUnitName: \"issuer_org_unit\", issuerCommonName: \"issuer_comm\", lastAlert: 13, \
+        respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "tlsRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "tlsRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64) {
@@ -2794,7 +3844,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -2828,6 +3878,7 @@ fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, timestamp: i64
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn tls_with_data_giganto_cluster() {
     // given
     let query = r#"
@@ -2841,6 +3892,7 @@ async fn tls_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     validityNotBefore,
                     validityNotAfter,
                 }
@@ -2861,13 +3913,13 @@ async fn tls_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 443,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -2932,7 +3984,8 @@ async fn tls_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", validityNotBefore: \
+        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", validityNotBefore: \
         \"1637076000\", validityNotAfter: \"1668612000\"}}]}}"
     );
 
@@ -2944,8 +3997,9 @@ async fn smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_smb_raw_event(&store, "src 1", time1);
+    insert_smb_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -2958,11 +4012,28 @@ async fn smb_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    command,
+                    path,
+                    service,
+                    fileName,
                     fileSize,
+                    resourceType,
+                    fid,
                     createTime,
                     accessTime,
                     writeTime,
                     changeTime,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -2970,10 +4041,33 @@ async fn smb_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"10\", \
-        createTime: \"10000000\", accessTime: \"20000000\", writeTime: \"10000000\", \
-        changeTime: \"20000000\"}}]}}"
+        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        command: 0, path: \"something/path\", service: \"service\", fileName: \"fine_name\", fileSize: \"10\", \
+        resourceType: 20, fid: 30, createTime: \"10000000\", accessTime: \"20000000\", writeTime: \"10000000\", \
+        changeTime: \"20000000\", respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "smbRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "smbRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64) {
@@ -2988,7 +4082,7 @@ fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3025,6 +4119,7 @@ async fn smb_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     fileSize,
                     createTime,
                     accessTime,
@@ -3047,13 +4142,13 @@ async fn smb_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.77",
                             "origPort": 445,
                             "respPort": 12345,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -3097,8 +4192,9 @@ async fn smb_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", fileSize: \"1024\", \
-        createTime: \"1609459200\", accessTime: \"1637076000\", writeTime: \"1668612000\", \
+        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", fileSize: \"1024\", createTime: \
+        \"1609459200\", accessTime: \"1637076000\", writeTime: \"1668612000\", \
         changeTime: \"1700148000\"}}]}}"
     );
 
@@ -3110,8 +4206,9 @@ async fn nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_nfs_raw_event(&store, "src 1", time1);
+    insert_nfs_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -3124,6 +4221,19 @@ async fn nfs_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    readFiles,
+                    writeFiles,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -3131,8 +4241,31 @@ async fn nfs_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        readFiles: [], writeFiles: [], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "nfsRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "nfsRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64) {
@@ -3147,7 +4280,7 @@ fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, timestamp: i64
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3175,6 +4308,7 @@ async fn nfs_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                 }
             }
         }
@@ -3192,13 +4326,13 @@ async fn nfs_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "192.168.4.76",
                             "origPort": 2049,
                             "respPort": 54321,
                             "proto": 6,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -3239,7 +4373,8 @@ async fn nfs_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\"}}]}}"
+        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -3249,8 +4384,9 @@ async fn bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_bootp_raw_event(&store, "src 1", time1);
+    insert_bootp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -3263,7 +4399,28 @@ async fn bootp_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    op,
+                    htype,
+                    hops,
                     xid,
+                    ciaddr,
+                    yiaddr,
+                    siaddr,
+                    giaddr,
+                    chaddr,
+                    sname,
+                    file,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -3271,8 +4428,33 @@ async fn bootp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", xid: \"0\"}}]}}"
+        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        op: 0, htype: 0, hops: 0, xid: \"0\", ciaddr: \"192.168.4.1\", yiaddr: \"192.168.4.2\", \
+        siaddr: \"192.168.4.3\", giaddr: \"192.168.4.4\", chaddr: [0, 1, 2], sname: \"sname\", \
+        file: \"file\", respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "bootpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "bootpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp: i64) {
@@ -3287,7 +4469,7 @@ fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str, timestamp:
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3324,6 +4506,7 @@ async fn bootp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     xid,
                 }
             }
@@ -3343,13 +4526,13 @@ async fn bootp_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
                             "respPort": 80,
                             "proto": 17,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -3393,7 +4576,8 @@ async fn bootp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", xid: \"0\"}}]}}"
+        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", xid: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -3404,8 +4588,9 @@ async fn dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_dhcp_raw_event(&store, "src 1", time1);
+    insert_dhcp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -3418,9 +4603,35 @@ async fn dhcp_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
+                    msgType,
+                    serverId,
                     leaseTime,
                     renewalTime,
                     rebindingTime,
+                    ciaddr,
+                    yiaddr,
+                    siaddr,
+                    giaddr,
+                    subnetMask,
+                    router,
+                    domainNameServer,
+                    reqIpAddr,
+                    paramReqList,
+                    message,
+                    classId,
+                    clientIdType,
+                    clientId,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -3428,9 +4639,35 @@ async fn dhcp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", \
-        renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", msgType: 0, serverId: \"192.168.4.7\", leaseTime: \"1\", renewalTime: \"1\", \
+        rebindingTime: \"1\", ciaddr: \"192.168.4.1\", yiaddr: \"192.168.4.2\", siaddr: \"192.168.4.3\", \
+        giaddr: \"192.168.4.4\", subnetMask: \"192.168.4.5\", router: [\"192.168.1.11\", \"192.168.1.22\"], \
+        domainNameServer: [\"192.168.1.33\", \"192.168.1.44\"], reqIpAddr: \"192.168.4.6\", \
+        paramReqList: [0, 1, 2], message: \"message\", classId: [0, 1, 2], clientIdType: 1, clientId: [0, 1, 2], \
+        respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "dhcpRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        46378,
+        46379,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "dhcpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
@@ -3445,7 +4682,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3495,6 +4732,7 @@ async fn dhcp_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     leaseTime,
                     renewalTime,
                     rebindingTime,
@@ -3516,13 +4754,13 @@ async fn dhcp_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 46378,
                             "respPort": 80,
                             "proto": 17,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -3573,7 +4811,7 @@ async fn dhcp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -3584,8 +4822,9 @@ async fn radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
+    let (time1, time2) = fixed_time_nanos();
+    insert_radius_raw_event(&store, "src 1", time1);
+    insert_radius_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {
@@ -3598,10 +4837,31 @@ async fn radius_with_data() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     nasPort,
                     code,
                     respCode,
                     message,
+                    auth,
+                    id,
+                    respAuth,
+                    userName,
+                    userPasswd,
+                    chapPasswd,
+                    nasIp,
+                    state,
+                    nasId,
+                    nasPortType,
+                    respAddr,
+                    origPort,
+                    respPort,
+                    proto,
+                    time,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
                 }
             }
         }
@@ -3609,9 +4869,38 @@ async fn radius_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", nasPort: \"12345\", \
-        code: 1, respCode: 2, message: \"test_message\"}}]}}"
+        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        nasPort: \"12345\", code: 1, respCode: 2, message: \"test_message\", \
+        auth: \"00112233445566778899aabbccddeeff\", id: 123, respAuth: \"ffeeddccbbaa99887766554433221100\", \
+        userName: [116, 101, 115, 116, 95, 117, 115, 101, 114], \
+        userPasswd: [116, 101, 115, 116, 95, 112, 97, 115, 115, 119, 111, 114, 100], \
+        chapPasswd: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], \
+        nasIp: \"192.168.1.1\", state: [3, 3, 3, 3, 3, 3, 3, 3], \
+        nasId: [116, 101, 115, 116, 95, 110, 97, 115], nasPortType: \"15\", \
+        respAddr: \"31.3.245.133\", origPort: 1812, respPort: 1813, proto: 17, \
+        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
+
+    assert_addr_port_boundaries(
+        &schema,
+        "radiusRawEvents",
+        "src 1",
+        "192.168.4.76",
+        "192.168.4.77",
+        1812,
+        1813,
+    )
+    .await;
+
+    assert_time_boundaries(
+        &schema,
+        "radiusRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
 }
 
 fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestamp: i64) {
@@ -3626,7 +4915,7 @@ fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &str, timestam
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 1813,
         proto: 17,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+        start_time: fixed_time_nanos().0,
         duration: 1_000_000_000,
         orig_pkts: 1,
         resp_pkts: 1,
@@ -3666,6 +4955,7 @@ async fn radius_with_data_giganto_cluster() {
             edges {
                 node {
                     origAddr,
+                    startTime,
                     nasPort,
                     code,
                     respCode,
@@ -3687,13 +4977,13 @@ async fn radius_with_data_giganto_cluster() {
                     {
                         "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
                         "node": {
-                            "time": "2023-11-16T15:03:45.291779203+00:00",
+                            "time": "2026-01-01T00:00:00+00:00",
                             "origAddr": "192.168.4.76",
                             "respAddr": "31.3.245.133",
                             "origPort": 1812,
                             "respPort": 1813,
                             "proto": 17,
-                            "startTime": "2023-11-16T15:03:45.291779203+00:00",
+                            "startTime": "2026-01-01T00:00:00+00:00",
                             "duration": "1000000000",
                             "origPkts": "1",
                             "respPkts": "1",
@@ -3740,8 +5030,9 @@ async fn radius_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", nasPort: \"12345\", \
-        code: 1, respCode: 2, message: \"test_message\"}}]}}"
+        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
+        \"2026-01-01T00:00:00+00:00\", nasPort: \"12345\", code: 1, respCode: 2, \
+        message: \"test_message\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -4377,6 +5668,181 @@ async fn search_http_with_data() {
         res.data.to_string(),
         "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[test]
+fn search_filter_keyword_checks_text() {
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let ok = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("haystack NEEDLE".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(ok);
+
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let missing_text = filter
+        .check(None, None, None, None, None, None, None, None, None)
+        .unwrap();
+    assert!(!missing_text);
+
+    let filter = SearchFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: None,
+        resp_addr: None,
+        orig_port: None,
+        resp_port: None,
+        log_level: None,
+        log_contents: None,
+        times: Vec::new(),
+        keyword: Some("needle".to_string()),
+        agent_id: None,
+    };
+    let mismatch = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("haystack".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(!mismatch);
+}
+
+#[test]
+fn network_filter_matches_all_fields() {
+    let filter = NetworkFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        orig_addr: Some(IpRange {
+            start: Some("192.168.4.1".to_string()),
+            end: Some("192.168.4.10".to_string()),
+        }),
+        resp_addr: Some(IpRange {
+            start: Some("192.168.4.2".to_string()),
+            end: Some("192.168.4.20".to_string()),
+        }),
+        orig_port: Some(PortRange {
+            start: Some(1000),
+            end: Some(2000),
+        }),
+        resp_port: Some(PortRange {
+            start: Some(1500),
+            end: Some(2500),
+        }),
+        log_level: None,
+        log_contents: None,
+        agent_id: Some("agent-1".to_string()),
+    };
+
+    let ok = filter
+        .check(
+            Some("192.168.4.5".parse().unwrap()),
+            Some("192.168.4.6".parse().unwrap()),
+            Some(1500),
+            Some(1600),
+            None,
+            None,
+            None,
+            None,
+            Some("agent-1".to_string()),
+        )
+        .unwrap();
+    assert!(ok);
+}
+
+#[test]
+fn string_number_usize_from_usize() {
+    let value = StringNumberUsize::from(42usize);
+    assert_eq!(value, StringNumberUsize(42));
+}
+
+#[tokio::test]
+async fn search_http_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchHttpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchHttpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5017,6 +6483,55 @@ async fn search_ssh_with_data() {
 }
 
 #[tokio::test]
+async fn search_ssh_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchSshRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchSshRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchSshRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
@@ -5050,6 +6565,55 @@ async fn search_dce_rpc_with_data() {
         res.data.to_string(),
         "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_dce_rpc_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchDceRpcRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchDceRpcRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5089,6 +6653,55 @@ async fn search_ftp_with_data() {
 }
 
 #[tokio::test]
+async fn search_ftp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchFtpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchFtpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
@@ -5122,6 +6735,55 @@ async fn search_mqtt_with_data() {
         res.data.to_string(),
         "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_mqtt_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchMqttRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchMqttRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5161,6 +6823,55 @@ async fn search_ldap_with_data() {
 }
 
 #[tokio::test]
+async fn search_ldap_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchLdapRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchLdapRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchLdapRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
@@ -5194,6 +6905,55 @@ async fn search_tls_with_data() {
         res.data.to_string(),
         "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_tls_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchTlsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchTlsRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5233,6 +6993,55 @@ async fn search_smb_with_data() {
 }
 
 #[tokio::test]
+async fn search_smb_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchSmbRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchSmbRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchSmbRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
@@ -5266,6 +7075,55 @@ async fn search_nfs_with_data() {
         res.data.to_string(),
         "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_nfs_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchNfsRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchNfsRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -5305,6 +7163,55 @@ async fn search_bootp_with_data() {
 }
 
 #[tokio::test]
+async fn search_bootp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchBootpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchBootpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchBootpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
@@ -5341,6 +7248,55 @@ async fn search_dhcp_with_data() {
 }
 
 #[tokio::test]
+async fn search_dhcp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchDhcpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 46377, end: 46380 }
+                respPort: { start: 75, end: 85 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchDhcpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn search_radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
@@ -5374,4 +7330,53 @@ async fn search_radius_with_data() {
         res.data.to_string(),
         "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
+}
+
+#[tokio::test]
+async fn search_radius_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchRadiusRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "31.3.245.130", end: "31.3.245.135" }
+                origPort: { start: 1810, end: 1815 }
+                respPort: { start: 1810, end: 1815 }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchRadiusRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
 }
