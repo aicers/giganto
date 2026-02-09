@@ -232,12 +232,16 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use std::{mem, net::SocketAddr};
 
-    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
+    use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
-    use crate::{graphql::tests::TestSchema, storage::RawEventStore};
+    use super::PacketFilter;
+    use crate::{
+        graphql::{TimeRange, tests::TestSchema},
+        storage::{KeyExtractor, RawEventStore},
+    };
 
     #[tokio::test]
     async fn packets_empty() {
@@ -352,6 +356,144 @@ mod tests {
             res.data.to_string(),
             "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}"
         );
+    }
+
+    #[tokio::test]
+    async fn packets_apply_packet_time_range() {
+        let schema = TestSchema::new();
+        let store = schema.db.packet_store().unwrap();
+
+        let request_dt = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
+        let packet_dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
+        let packet_dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
+        let packet_dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+
+        let request_ts = request_dt.timestamp_nanos_opt().unwrap();
+        let packet_ts1 = packet_dt1.timestamp_nanos_opt().unwrap();
+        let packet_ts2 = packet_dt2.timestamp_nanos_opt().unwrap();
+        let packet_ts3 = packet_dt3.timestamp_nanos_opt().unwrap();
+
+        insert_packet(&store, "src 1", request_ts, packet_ts1);
+        insert_packet(&store, "src 1", request_ts, packet_ts2);
+        insert_packet(&store, "src 1", request_ts, packet_ts3);
+
+        let query = r#"
+        {
+            packets(
+                filter: {
+                    sensor: "src 1"
+                    requestTime: "2023-01-20T00:00:00Z"
+                    packetTime: { start: "2023-01-20T00:00:00Z", end: "2023-01-20T00:00:02Z" }
+                }
+                first: 10
+            ) {
+                edges {
+                    node {
+                        packetTime
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:01+00:00\"}}]}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn packets_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            packets(
+                filter: {
+                    sensor: "ingest src 2"
+                    requestTime: "2023-01-20T00:00:00Z"
+                }
+                first: 1
+            ) {
+                pageInfo {
+                    hasPreviousPage
+                    hasNextPage
+                    startCursor
+                    endCursor
+                }
+                edges {
+                    cursor
+                    node {
+                        packet
+                        packetTime
+                        requestTime
+                    }
+                }
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "packets": {
+                    "pageInfo": {
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    },
+                    "edges": [
+                        {
+                            "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                            "node": {
+                                "requestTime": "2023-01-20T00:00:00+00:00",
+                                "packetTime": "2023-01-20T00:00:00+00:00",
+                                "packet": "AAECAw=="
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let packets = data["packets"].as_object().unwrap();
+        let page_info = packets["pageInfo"].as_object().unwrap();
+        assert_eq!(page_info["hasPreviousPage"].as_bool(), Some(false));
+        assert_eq!(page_info["hasNextPage"].as_bool(), Some(false));
+
+        let edges = packets["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 1);
+
+        let cursor = edges[0]["cursor"].as_str().unwrap();
+        assert_eq!(page_info["startCursor"].as_str(), Some(cursor));
+        assert_eq!(page_info["endCursor"].as_str(), Some(cursor));
+
+        let node = packets["edges"][0]["node"].as_object().unwrap();
+        assert_eq!(node["packet"].as_str(), Some("AAECAw=="));
+        assert_eq!(
+            node["packetTime"].as_str(),
+            Some("2023-01-20T00:00:00+00:00")
+        );
+        assert_eq!(
+            node["requestTime"].as_str(),
+            Some("2023-01-20T00:00:00+00:00")
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -481,7 +623,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn packets_timestamp_fomat_stability() {
+    async fn pcap_with_data_giganto_cluster() {
+        let query = r#"
+        {
+            pcap(
+                filter: {
+                    sensor: "ingest src 2"
+                    requestTime: "2023-01-20T00:00:00.123456789Z"
+                    packetTime: { start: "2023-01-20T00:00:00Z", end: "2023-01-20T00:00:02Z" }
+                }
+            ) {
+                requestTime
+                parsedPcap
+            }
+        }"#;
+
+        let mut peer_server = mockito::Server::new_async().await;
+        let peer_response_mock_data = r#"
+        {
+            "data": {
+                "pcap": {
+                    "requestTime": "2023-01-20T00:00:00.123456789+00:00",
+                    "parsedPcap": "pcap-data"
+                }
+            }
+        }
+        "#;
+
+        let mock = peer_server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(peer_response_mock_data)
+            .create();
+
+        let peer_port = peer_server
+            .host_with_port()
+            .parse::<SocketAddr>()
+            .expect("Port must exist")
+            .port();
+        let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+        let res = schema.execute(query).await;
+        assert_eq!(
+            res.data.to_string(),
+            "{pcap: {requestTime: \"2023-01-20T00:00:00.123456789+00:00\", parsedPcap: \"pcap-data\"}}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn packets_timestamp_format_stability() {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
@@ -531,7 +722,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pcap_timestamp_fomat_stability() {
+    async fn pcap_timestamp_format_stability() {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
@@ -596,5 +787,23 @@ mod tests {
         let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
         let utc_time = local_datetime.with_timezone(&chrono::Utc);
         utc_time.to_string()
+    }
+
+    #[test]
+    fn test_packet_filter_range_end_key() {
+        let start = DateTime::from_timestamp_nanos(1);
+        let end = DateTime::from_timestamp_nanos(2);
+        let filter = PacketFilter {
+            sensor: "sensor".to_string(),
+            request_time: DateTime::from_timestamp_nanos(0),
+            packet_time: Some(TimeRange {
+                start: Some(start),
+                end: Some(end),
+            }),
+        };
+
+        let (range_start, range_end) = filter.get_range_end_key();
+        assert_eq!(range_start, Some(start));
+        assert_eq!(range_end, Some(end));
     }
 }
