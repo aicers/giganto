@@ -4,6 +4,13 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed an issue where combined search results could report incorrect previous/next
+  page availability in giganto cluster mode, affecting pagination.
+
 ## [0.26.2] - 2026-02-12
 
 ### Added
@@ -922,6 +929,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.26.2...main
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
 [0.26.1]: https://github.com/aicers/giganto/compare/0.26.0...0.26.1
 [0.26.0]: https://github.com/aicers/giganto/compare/0.25.1...0.26.0
