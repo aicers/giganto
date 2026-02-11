@@ -810,7 +810,8 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
             let ends_before = port_range.end.is_none_or(|end| port < end);
             starts_after_or_at && ends_before
         }
-        _ => true,
+        (Some(_), None) => false,
+        (None, _) => true,
     }
 }
 
@@ -1152,6 +1153,25 @@ mod tests {
         let (range_start, range_end) = time_range(Some(&time));
         assert_eq!(range_start, start);
         assert_eq!(range_end, Utc.timestamp_nanos(i64::MAX));
+
+        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let time = TimeRange {
+            start: None,
+            end: Some(end),
+        };
+        let (range_start, range_end) = time_range(Some(&time));
+        assert_eq!(range_start, Utc.timestamp_nanos(i64::MIN));
+        assert_eq!(range_end, end);
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let time = TimeRange {
+            start: Some(start),
+            end: Some(end),
+        };
+        let (range_start, range_end) = time_range(Some(&time));
+        assert_eq!(range_start, start);
+        assert_eq!(range_end, end);
     }
 
     #[test]
@@ -1258,6 +1278,30 @@ mod tests {
     }
 
     #[test]
+    fn test_check_address_invalid_ip_string() {
+        let filter = IpRange {
+            start: Some("invalid-ip".to_string()),
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        let err = check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap_err();
+        let msg = err.message;
+        assert!(msg.contains("invalid IP address syntax"));
+    }
+
+    #[test]
+    fn test_check_address_invalid_ip_string_end() {
+        let filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: Some("invalid-ip".to_string()),
+        };
+
+        let err = check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap_err();
+        let msg = err.message;
+        assert!(msg.contains("invalid IP address syntax"));
+    }
+
+    #[test]
     fn test_check_port() {
         let filter = PortRange {
             start: Some(1000),
@@ -1266,6 +1310,8 @@ mod tests {
 
         assert!(check_port(Some(&filter), Some(1000)));
         assert!(!check_port(Some(&filter), Some(1002)));
+        assert!(!check_port(Some(&filter), None));
+        assert!(check_port(None, Some(1000)));
         assert!(check_port(None, None));
     }
 
@@ -1280,12 +1326,16 @@ mod tests {
             Some("needle"),
             Some("haystack".to_string())
         ));
+        assert!(!check_contents(Some("needle"), None));
+        assert!(check_contents(None, Some("haystack".to_string())));
     }
 
     #[test]
     fn test_check_agent_id() {
         assert!(check_agent_id(Some("agent-1"), Some("agent-1")));
         assert!(!check_agent_id(Some("agent-1"), Some("agent-2")));
+        assert!(!check_agent_id(Some("agent-1"), None));
+        assert!(check_agent_id(None, Some("agent-1")));
         assert!(check_agent_id(None, None));
     }
 
