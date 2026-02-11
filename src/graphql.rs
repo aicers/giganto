@@ -810,8 +810,7 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
             let ends_before = port_range.end.is_none_or(|end| port < end);
             starts_after_or_at && ends_before
         }
-        (Some(_), None) => false,
-        (None, _) => true,
+        _ => true,
     }
 }
 
@@ -1310,7 +1309,7 @@ mod tests {
 
         assert!(check_port(Some(&filter), Some(1000)));
         assert!(!check_port(Some(&filter), Some(1002)));
-        assert!(!check_port(Some(&filter), None));
+        assert!(check_port(Some(&filter), None));
         assert!(check_port(None, Some(1000)));
         assert!(check_port(None, None));
     }
