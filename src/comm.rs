@@ -25,10 +25,20 @@ pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
 pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
+/// Parses PEM-encoded certificates and returns a certificate chain.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The PEM input cannot be parsed (invalid certificate chain)
+/// * The parsed certificate chain is empty (empty certificate chain)
 pub(crate) fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
-    let certs = rustls_pemfile::certs(&mut &*pem)
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut &*pem)
         .collect::<Result<_, _>>()
-        .context("cannot parse certificate chain")?;
+        .context("invalid certificate chain")?;
+    if certs.is_empty() {
+        bail!("empty certificate chain");
+    }
     Ok(certs)
 }
 
@@ -197,7 +207,7 @@ mod tests {
     fn test_to_cert_chain_invalid_base64_returns_error() {
         let pem = b"-----BEGIN CERTIFICATE-----\n@@@@\n-----END CERTIFICATE-----\n";
         let err = to_cert_chain(pem).expect_err("Operation should have failed");
-        assert!(err.to_string().contains("cannot parse certificate chain"));
+        assert!(err.to_string().contains("invalid certificate chain"));
     }
 
     #[test]
@@ -208,7 +218,29 @@ mod tests {
         let pem = format!("{valid_pem}{invalid_pem}");
 
         let err = to_cert_chain(pem.as_bytes()).expect_err("Operation should have failed");
-        assert!(err.to_string().contains("cannot parse certificate chain"));
+        assert!(err.to_string().contains("invalid certificate chain"));
+    }
+
+    #[test]
+    fn test_to_cert_chain_empty_pem_returns_error() {
+        let pem = b"";
+        let err = to_cert_chain(pem).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("empty certificate chain"));
+    }
+
+    #[test]
+    fn test_to_cert_chain_no_certificate_blocks_returns_error() {
+        // PEM content without any CERTIFICATE blocks
+        let pem = b"some random text without any PEM blocks";
+        let err = to_cert_chain(pem).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("empty certificate chain"));
+    }
+
+    #[test]
+    fn test_to_cert_chain_whitespace_only_returns_error() {
+        let pem = b"   \n\t\n   ";
+        let err = to_cert_chain(pem).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("empty certificate chain"));
     }
 
     #[test]
