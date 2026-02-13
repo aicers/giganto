@@ -799,7 +799,8 @@ fn check_address(filter_addr: Option<&IpRange>, target_addr: Option<IpAddr>) -> 
 
             Ok(starts_after_or_at && ends_before)
         }
-        _ => Ok(true),
+        (Some(_), None) => Ok(false),
+        (None, _) => Ok(true),
     }
 }
 
@@ -810,7 +811,8 @@ fn check_port(filter_port: Option<&PortRange>, target_port: Option<u16>) -> bool
             let ends_before = port_range.end.is_none_or(|end| port < end);
             starts_after_or_at && ends_before
         }
-        _ => true,
+        (Some(_), None) => false,
+        (None, _) => true,
     }
 }
 
@@ -1087,6 +1089,102 @@ mod tests {
         let err = result.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("number too large to fit in target type"));
+    }
+
+    #[test]
+    fn test_check_address_with_bounded_range() {
+        let filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        assert!(check_address(Some(&filter), Some("192.168.0.1".parse().unwrap())).unwrap());
+        assert!(!check_address(Some(&filter), Some("192.168.0.3".parse().unwrap())).unwrap());
+    }
+
+    #[test]
+    fn test_check_address_with_open_ended_range() {
+        let start_only_filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: None,
+        };
+        let end_only_filter = IpRange {
+            start: None,
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        assert!(
+            check_address(
+                Some(&start_only_filter),
+                Some("192.168.0.1".parse().unwrap())
+            )
+            .unwrap()
+        );
+        assert!(
+            !check_address(
+                Some(&start_only_filter),
+                Some("192.168.0.0".parse().unwrap())
+            )
+            .unwrap()
+        );
+        assert!(
+            check_address(Some(&end_only_filter), Some("192.168.0.2".parse().unwrap())).unwrap()
+        );
+        assert!(
+            !check_address(Some(&end_only_filter), Some("192.168.0.3".parse().unwrap())).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_check_address_with_missing_target_or_filter() {
+        let filter = IpRange {
+            start: Some("192.168.0.1".to_string()),
+            end: Some("192.168.0.3".to_string()),
+        };
+
+        assert!(!check_address(Some(&filter), None).unwrap());
+        assert!(check_address(None, Some("192.168.0.1".parse().unwrap())).unwrap());
+        assert!(check_address(None, None).unwrap());
+    }
+
+    #[test]
+    fn test_check_port_with_bounded_range() {
+        let filter = PortRange {
+            start: Some(1000),
+            end: Some(1002),
+        };
+
+        assert!(check_port(Some(&filter), Some(1000)));
+        assert!(!check_port(Some(&filter), Some(1002)));
+    }
+
+    #[test]
+    fn test_check_port_with_open_ended_range() {
+        let start_only_filter = PortRange {
+            start: Some(1000),
+            end: None,
+        };
+        let end_only_filter = PortRange {
+            start: None,
+            end: Some(1002),
+        };
+
+        assert!(check_port(Some(&start_only_filter), Some(1000)));
+        assert!(!check_port(Some(&start_only_filter), Some(999)));
+        assert!(check_port(Some(&end_only_filter), Some(1001)));
+        assert!(!check_port(Some(&end_only_filter), Some(1002)));
+    }
+
+    #[test]
+    fn test_check_port_with_missing_target_or_filter() {
+        let filter = PortRange {
+            start: Some(1000),
+            end: Some(1002),
+        };
+
+        assert!(!check_port(Some(&filter), None));
+        assert!(check_port(None, Some(1000)));
+        assert!(check_port(None, None));
     }
 
     #[test]
