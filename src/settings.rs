@@ -20,11 +20,6 @@ const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
 pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8443";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
-
-/// Legacy sentinel address used to represent `None` for `addr_to_peers`.
-/// Kept for backward compatibility during deserialization only.
-/// TODO: Remove this in a future release once all persisted configs have been updated.
-const LEGACY_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
@@ -260,8 +255,6 @@ where
 /// `Ok(None)` is returned if:
 /// - There is no `addr_to_peers` option in the configuration file.
 /// - The address is an empty string.
-/// - The address matches the legacy sentinel value (`254.254.254.254:38383`), which was
-///   previously used to represent `None`. This is kept for backward compatibility.
 ///
 /// # Errors
 ///
@@ -272,8 +265,8 @@ where
 {
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
         // Cluster mode is only available if there is a value for 'Peer Address' in the
-        // configuration file. Empty string or legacy sentinel value means standalone mode.
-        if addr.is_empty() || addr == LEGACY_INVALID_ADDR_TO_PEERS {
+        // configuration file. Empty string means standalone mode.
+        if addr.is_empty() {
             Ok(None)
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
@@ -889,21 +882,6 @@ export_dir = "{}"
         );
     }
 
-    const TEST_CONFIG_WITH_SENTINEL: &str = r#"
-        ingest_srv_addr = "0.0.0.0:38370"
-        publish_srv_addr = "0.0.0.0:38371"
-        graphql_srv_addr = "0.0.0.0:38372"
-        data_dir = "data"
-        retention = "100d"
-        max_open_files = 800
-        max_mb_of_level_base = 512
-        num_of_thread = 8
-        max_subcompactions = 2
-        ack_transmission = 1024
-        export_dir = "export"
-        addr_to_peers = "254.254.254.254:38383"
-    "#;
-
     const TEST_CONFIG_WITH_EMPTY_ADDR: &str = r#"
         ingest_srv_addr = "0.0.0.0:38370"
         publish_srv_addr = "0.0.0.0:38371"
@@ -933,21 +911,6 @@ export_dir = "{}"
         export_dir = "export"
         addr_to_peers = "192.168.1.1:38383"
     "#;
-
-    #[test]
-    fn test_addr_to_peers_legacy_sentinel_deserializes_to_none() {
-        // Config with legacy sentinel value should deserialize to None for backward compatibility
-        let dir = tempdir().expect("failed to create temp dir");
-        let config_path = dir.path().join("config.toml");
-        let mut file = fs::File::create(&config_path).expect("failed to create config file");
-        writeln!(file, "{TEST_CONFIG_WITH_SENTINEL}").expect("failed to write config content");
-
-        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
-        assert!(
-            settings.config.addr_to_peers.is_none(),
-            "addr_to_peers should be None when legacy sentinel value is used"
-        );
-    }
 
     #[test]
     fn test_addr_to_peers_empty_string_deserializes_to_none() {
