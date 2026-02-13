@@ -32,6 +32,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The export implementation now uses the correct timestamp-prefix key format
   (`[timestamp:8][sequence_number:8]`) instead of the old sensor-prefix format.
 - Fixed TCP `CWR` flag value from `0x08` to `0x80`.
+- Fixed `check_address`/`check_port` so `(Some(filter), None)` no longer passes.
 
 ## [0.26.1] - 2025-12-18
 
