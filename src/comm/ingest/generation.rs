@@ -51,9 +51,11 @@ impl SequenceGenerator {
     /// sequence numbers. Note that after rollover, duplicate sequence numbers may
     /// occur within the same day if more than `u32::MAX` sequences are generated.
     pub(crate) fn generate_sequence_number(&self) -> usize {
-        let today = Self::get_date_key();
-
         loop {
+            // Recalculate `today` on each iteration to ensure correctness across
+            // date transitions. If a CAS fails near midnight and the date changes
+            // during the retry, we must use the updated date.
+            let today = Self::get_date_key();
             let current = self.state.load(Ordering::Acquire);
             let (cur_date, cur_counter) = Self::unpack(current);
 
@@ -288,26 +290,28 @@ mod tests {
     fn date_key_uses_full_date() {
         use chrono::{Datelike, Utc};
 
-        // This test verifies that the date key uses num_days_from_ce().
-        // We compute expected bounds based on the current year to be year-agnostic.
+        // This test verifies that the date key matches the exact value from
+        // num_days_from_ce(), ensuring the implementation uses the full date
+        // (not just day-of-month or day-of-year).
         let date_key = SequenceGenerator::get_date_key();
-        let current_year = Utc::now().year();
+        let now = Utc::now();
 
-        // Lower bound: start of current year (approximately year * 365)
-        // Upper bound: end of current year + margin
-        // Using conservative estimates: year * 365 for lower, (year + 1) * 366 for upper
-        // current_year is always positive for dates CE, so unwrap is safe
-        let current_year_u32: u32 = current_year.try_into().expect("year should be positive");
-        let lower_bound = current_year_u32.saturating_mul(365);
-        let upper_bound = (current_year_u32 + 1).saturating_mul(366);
+        // Compute the expected value directly using num_days_from_ce()
+        let expected: u32 = now
+            .num_days_from_ce()
+            .try_into()
+            .expect("date should be positive");
 
-        assert!(
-            date_key >= lower_bound,
-            "date_key {date_key} should be >= {lower_bound} (based on year {current_year})"
+        assert_eq!(
+            date_key, expected,
+            "date_key should equal num_days_from_ce()"
         );
+
+        // Additional sanity check: verify the value is reasonable for current era
+        // (days since CE for year 2000+ should be > 730,000)
         assert!(
-            date_key <= upper_bound,
-            "date_key {date_key} should be <= {upper_bound} (based on year {current_year})"
+            date_key > 730_000,
+            "date_key {date_key} should be > 730,000 for dates after year 2000"
         );
     }
 
@@ -370,8 +374,9 @@ mod tests {
 
                     let seq = seq_gen.generate_sequence_number();
 
-                    // If before_date != today and we got seq == 1, we likely did the reset
-                    // This is a heuristic; the key test is that all sequences are unique
+                    // If before_date != today and we got seq == 1, this thread performed
+                    // the reset. This is deterministic: only the thread whose CAS succeeded
+                    // with the reset state (today, 1) will return sequence 1.
                     if before_date != today && seq == 1 {
                         reset_counter.fetch_add(1, Ordering::Relaxed);
                     }
