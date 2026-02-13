@@ -79,7 +79,7 @@ fn combine_results<N>(
 where
     N: OutputType + ClusterSortKey,
 {
-    let (has_next_page_combined, has_prev_page_combined) = peer_results.iter().fold(
+    let (has_prev_page_combined, has_next_page_combined) = peer_results.iter().fold(
         (
             current_giganto_result.has_previous_page,
             current_giganto_result.has_next_page,
@@ -890,11 +890,11 @@ pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
 mod tests {
     use async_graphql::{
         SimpleObject,
-        connection::{Edge, EmptyFields},
+        connection::{Connection, Edge, EmptyFields},
     };
     use chrono::{DateTime, Utc};
 
-    use super::{ClusterSortKey, sort_and_trunk_edges};
+    use super::{ClusterSortKey, combine_results, sort_and_trunk_edges};
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
@@ -971,5 +971,78 @@ mod tests {
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
+    }
+
+    #[test]
+    fn test_combine_results_flag_cross_combination_true_false_and_false_true() {
+        let mut current = Connection::<String, TestNode>::new(true, false);
+        current.edges = Vec::new();
+
+        let mut peer = Connection::<String, TestNode>::new(false, true);
+        peer.edges = Vec::new();
+
+        let combined = combine_results(current, vec![peer], None, None, None);
+
+        assert!(combined.has_previous_page);
+        assert!(combined.has_next_page);
+    }
+
+    #[test]
+    fn test_combine_results_flag_cross_combination_false_false_and_true_false() {
+        let mut current = Connection::<String, TestNode>::new(false, false);
+        current.edges = Vec::new();
+
+        let mut peer = Connection::<String, TestNode>::new(true, false);
+        peer.edges = Vec::new();
+
+        let combined = combine_results(current, vec![peer], None, None, None);
+
+        assert!(combined.has_previous_page);
+        assert!(!combined.has_next_page);
+    }
+
+    #[test]
+    fn test_combine_results_flag_accumulates_across_multiple_peers() {
+        let mut current = Connection::<String, TestNode>::new(false, false);
+        current.edges = Vec::new();
+
+        let mut peer_1 = Connection::<String, TestNode>::new(true, false);
+        peer_1.edges = Vec::new();
+
+        let mut peer_2 = Connection::<String, TestNode>::new(false, true);
+        peer_2.edges = Vec::new();
+
+        let combined = combine_results(current, vec![peer_1, peer_2], None, None, None);
+
+        assert!(combined.has_previous_page);
+        assert!(combined.has_next_page);
+    }
+
+    #[test]
+    fn test_combine_results_with_empty_peer_results_matches_current() {
+        let mut current = Connection::<String, TestNode>::new(true, false);
+        current.edges = vec![
+            Edge::new("a_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new("b_001".to_string(), TestNode { time: Utc::now() }),
+        ];
+
+        let current_has_previous_page = current.has_previous_page;
+        let current_has_next_page = current.has_next_page;
+        let current_cursors = current
+            .edges
+            .iter()
+            .map(|edge| edge.cursor.clone())
+            .collect::<Vec<_>>();
+
+        let combined = combine_results(current, vec![], None, None, None);
+        let combined_cursors = combined
+            .edges
+            .iter()
+            .map(|edge| edge.cursor.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(combined.has_previous_page, current_has_previous_page);
+        assert_eq!(combined.has_next_page, current_has_next_page);
+        assert_eq!(combined_cursors, current_cursors);
     }
 }
