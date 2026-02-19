@@ -16,8 +16,10 @@ use chrono::{Datelike, Utc};
 ///
 /// # Sequence Numbers
 ///
-/// - Counter starts at 0 on initialization and after each daily reset
-/// - First generated sequence number is 1 (counter is incremented before returning)
+/// - On initialization, the counter is stored as 0; the first generated sequence number
+///   is 1 (the counter is incremented before returning)
+/// - On daily reset, the counter is stored as 1 and returned directly, so the first
+///   sequence number after a reset is also 1
 /// - On overflow (`u32::MAX`), the counter rolls over to 1 (not 0) to maintain unique
 ///   non-zero sequence numbers
 ///
