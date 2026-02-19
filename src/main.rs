@@ -112,7 +112,6 @@ async fn main() -> Result<()> {
     let cert_pem = fs::read(&args.cert)
         .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
     let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
-    assert!(!cert.is_empty());
     let key_pem = fs::read(&args.key)
         .with_context(|| format!("failed to read private key file: {}", args.key))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
