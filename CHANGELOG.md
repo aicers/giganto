@@ -11,6 +11,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
 
+### Changed
+
+- Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
+  explicit error instead of an empty certificate chain. This improves mTLS
+  security by treating zero-certificate chains as a failure condition.
+
 ## [0.26.2] - 2026-02-12
 
 ### Added
