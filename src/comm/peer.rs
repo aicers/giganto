@@ -624,6 +624,13 @@ pub async fn receive_peer_data(recv: &mut RecvStream) -> Result<(PeerCode, Vec<u
     Ok((msg_type, buf))
 }
 
+fn ensure_peer_code_matches(expected: PeerCode, actual: PeerCode) -> Result<()> {
+    if expected != actual {
+        bail!("peer code mismatch: expected={expected:?}, actual={actual:?}");
+    }
+    Ok(())
+}
+
 async fn request_init_info<T>(
     send: &mut SendStream,
     recv: &mut RecvStream,
@@ -634,7 +641,8 @@ where
     T: Serialize + DeserializeOwned,
 {
     send_peer_data::<T>(send, init_type, init_data).await?;
-    let (_, recv_data) = receive_peer_data(recv).await?;
+    let (recv_code, recv_data) = receive_peer_data(recv).await?;
+    ensure_peer_code_matches(init_type, recv_code)?;
     let recv_init_data = bincode::deserialize::<T>(&recv_data)?;
     Ok(recv_init_data)
 }
@@ -648,7 +656,8 @@ async fn response_init_info<T>(
 where
     T: Serialize + DeserializeOwned,
 {
-    let (_, recv_data) = receive_peer_data(recv).await?;
+    let (recv_code, recv_data) = receive_peer_data(recv).await?;
+    ensure_peer_code_matches(init_type, recv_code)?;
     let recv_init_data = bincode::deserialize::<T>(&recv_data)?;
     send_peer_data::<T>(send, init_type, init_data).await?;
     Ok(recv_init_data)
@@ -774,6 +783,7 @@ pub mod tests {
             IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns, PeerIdentity, PeerIdents,
             PeerInfo, Peers, client_connection, client_run, read_toml_file, server_connection,
         };
+        use crate::comm::peer::{receive_peer_data, response_init_info};
         use crate::{
             comm::{to_cert_chain, to_private_key, to_root_cert},
             server::{Certs, SERVER_ENDPOINT_DELAY, config_server},
@@ -1239,6 +1249,45 @@ pub mod tests {
                     }
                 }
             }
+        }
+        pub(super) fn spawn_request_init_info_response_server(
+            server_endpoint: Endpoint,
+            response_code: PeerCode,
+            response_payload: Vec<u8>,
+        ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let handle = tokio::spawn(async move {
+                let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
+                let _ = receive_peer_data(&mut recv).await.unwrap();
+                send_peer_code_payload(&mut send, response_code, &response_payload).await;
+                let _ = shutdown_rx.await;
+            });
+            (shutdown_tx, handle)
+        }
+
+        pub(super) fn spawn_response_init_info_server(
+            server_endpoint: Endpoint,
+        ) -> tokio::task::JoinHandle<Result<PeerInfo>> {
+            tokio::spawn(async move {
+                let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
+                response_init_info(
+                    &mut send,
+                    &mut recv,
+                    PeerCode::UpdatePeerList,
+                    PeerInfo::default(),
+                )
+                .await
+            })
+        }
+
+        pub(super) fn assert_peer_code_mismatch(
+            err: &anyhow::Error,
+            expected: PeerCode,
+            actual: PeerCode,
+        ) {
+            assert!(err.to_string().contains(&format!(
+                "peer code mismatch: expected={expected:?}, actual={actual:?}"
+            )));
         }
     }
 
@@ -1868,20 +1917,11 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-
-        let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(async move {
-            let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
-            let _ = receive_peer_data(&mut recv).await.unwrap();
-
-            let response_code: u32 = PeerCode::UpdatePeerList.into();
-            send_bytes(&mut send, &response_code.to_le_bytes())
-                .await
-                .unwrap();
-            send_raw(&mut send, &[0xFF, 0xFF, 0xFF]).await.unwrap();
-            send.finish().ok();
-            let _ = server_shutdown_rx.await;
-        });
+        let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
+            server_endpoint,
+            PeerCode::UpdatePeerList,
+            vec![0xFF, 0xFF, 0xFF],
+        );
 
         let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
 
@@ -1907,21 +1947,12 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-
-        let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(async move {
-            let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
-            let _ = receive_peer_data(&mut recv).await.unwrap();
-
-            let payload_info = peer_info(&["mismatch-sensor"], Some(9191), Some(9292));
-            send_peer_code_payload(
-                &mut send,
-                PeerCode::UpdateSensorList,
-                &bincode::serialize(&payload_info).unwrap(),
-            )
-            .await;
-            let _ = server_shutdown_rx.await;
-        });
+        let expected = peer_info(&["sensor-1"], Some(9191), Some(9292));
+        let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
+            server_endpoint,
+            PeerCode::UpdatePeerList,
+            bincode::serialize(&expected).unwrap(),
+        );
 
         let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
 
@@ -1933,8 +1964,35 @@ pub mod tests {
         )
         .await
         .unwrap();
-        let expected = peer_info(&["mismatch-sensor"], Some(9191), Some(9292));
         assert_peer_info_eq(&recv_info, &expected);
+
+        let _ = server_shutdown_tx.send(());
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_request_init_info_rejects_mismatched_response_code() {
+        init_crypto();
+
+        let (server_endpoint, server_addr) = setup_server_endpoint();
+        let payload_info = peer_info(&["mismatch-sensor"], Some(9191), Some(9292));
+        let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
+            server_endpoint,
+            PeerCode::UpdateSensorList,
+            bincode::serialize(&payload_info).unwrap(),
+        );
+
+        let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
+
+        let err = request_init_info::<PeerInfo>(
+            &mut send,
+            &mut recv,
+            PeerCode::UpdatePeerList,
+            PeerInfo::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_peer_code_mismatch(&err, PeerCode::UpdatePeerList, PeerCode::UpdateSensorList);
 
         let _ = server_shutdown_tx.send(());
         server_handle.await.unwrap();
@@ -1945,17 +2003,7 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-
-        let server_handle = tokio::spawn(async move {
-            let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
-            response_init_info(
-                &mut send,
-                &mut recv,
-                PeerCode::UpdatePeerList,
-                PeerInfo::default(),
-            )
-            .await
-        });
+        let server_handle = spawn_response_init_info_server(server_endpoint);
 
         let (_client_conn, mut send, _recv) = connect_client_handshake(server_addr).await;
 
@@ -1971,6 +2019,26 @@ pub mod tests {
             .chain()
             .any(|cause| cause.is::<bincode::Error>() || cause.is::<bincode::ErrorKind>());
         assert!(has_bincode, "unexpected error: {err:#}");
+    }
+
+    #[tokio::test]
+    async fn test_response_init_info_rejects_mismatched_request_code() {
+        init_crypto();
+
+        let (server_endpoint, server_addr) = setup_server_endpoint();
+        let server_handle = spawn_response_init_info_server(server_endpoint);
+
+        let (_client_conn, mut send, _recv) = connect_client_handshake(server_addr).await;
+        let payload = peer_info(&["request-sensor"], Some(7001), Some(7002));
+        send_peer_code_payload(
+            &mut send,
+            PeerCode::UpdateSensorList,
+            &bincode::serialize(&payload).unwrap(),
+        )
+        .await;
+
+        let err = server_handle.await.unwrap().unwrap_err();
+        assert_peer_code_mismatch(&err, PeerCode::UpdatePeerList, PeerCode::UpdateSensorList);
     }
 
     #[tokio::test]
