@@ -28,6 +28,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel (`254.254.254.254:38383`)
+  and replaced it with proper `Option` semantics for `addr_to_peers`. A missing
+  key or empty string in the configuration file now correctly deserializes to
+  `None`, and serialization omits the field when `None`.
+
 - Improved `OpLog` migration logging to record skipped entries during the
   migration process.
 - Updated root certificate loading to parse and include all certificates from a
