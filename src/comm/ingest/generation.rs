@@ -123,9 +123,56 @@ impl SequenceGenerator {
 mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::thread;
 
     use super::SequenceGenerator;
+
+    /// Sets the generator state to a past date with the given counter value.
+    /// Returns the old date key that was set.
+    fn set_to_yesterday(generator: &SequenceGenerator, counter: u32) -> u32 {
+        let old_date = SequenceGenerator::get_date_key().saturating_sub(1);
+        let old_state = SequenceGenerator::pack(old_date, counter);
+        generator.state.store(old_state, Ordering::Release);
+        old_date
+    }
+
+    /// Spawns multiple threads that each generate sequence numbers concurrently.
+    /// Returns all generated sequence numbers collected from all threads.
+    fn generate_sequences_concurrently(
+        generator: &Arc<SequenceGenerator>,
+        num_threads: usize,
+        iterations_per_thread: usize,
+    ) -> Vec<usize> {
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let seq_gen = Arc::clone(generator);
+                thread::spawn(move || {
+                    (0..iterations_per_thread)
+                        .map(|_| seq_gen.generate_sequence_number())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("thread panicked"))
+            .collect()
+    }
+
+    /// Asserts that all sequences are unique and form a contiguous range from 1 to `total_count`.
+    fn assert_unique_contiguous_sequences(sequences: &[usize], total_count: usize, context: &str) {
+        let unique: HashSet<_> = sequences.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            sequences.len(),
+            "duplicate sequence numbers detected{context}"
+        );
+        for i in 1..=total_count {
+            assert!(unique.contains(&i), "missing sequence number {i}{context}");
+        }
+    }
 
     #[test]
     fn pack_unpack_roundtrip() {
@@ -175,96 +222,35 @@ mod tests {
         let num_threads = 8;
         let iterations_per_thread = 1000;
 
-        let handles: Vec<_> = (0..num_threads)
-            .map(|_| {
-                let seq_gen = Arc::clone(&generator);
-                thread::spawn(move || {
-                    let mut results = Vec::with_capacity(iterations_per_thread);
-                    for _ in 0..iterations_per_thread {
-                        results.push(seq_gen.generate_sequence_number());
-                    }
-                    results
-                })
-            })
-            .collect();
+        let all_sequences =
+            generate_sequences_concurrently(&generator, num_threads, iterations_per_thread);
 
-        let mut all_sequences: Vec<usize> = Vec::new();
-        for handle in handles {
-            all_sequences.extend(handle.join().expect("thread panicked"));
-        }
-
-        // Verify no duplicates
-        let unique: HashSet<_> = all_sequences.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            all_sequences.len(),
-            "duplicate sequence numbers detected"
-        );
-
-        // Verify all expected values are present (1 to total_count)
-        let total_count = num_threads * iterations_per_thread;
-        for i in 1..=total_count {
-            assert!(unique.contains(&i), "missing sequence number {i}");
-        }
+        assert_unique_contiguous_sequences(&all_sequences, num_threads * iterations_per_thread, "");
     }
 
     #[test]
     fn date_reset_produces_unique_sequences() {
-        use std::sync::atomic::Ordering;
-
         // Create generator with yesterday's date to simulate date change
         let generator = SequenceGenerator::new();
-
-        // Manually set state to an old date with counter at 100
-        let old_date = SequenceGenerator::get_date_key().saturating_sub(1);
-        let old_state = SequenceGenerator::pack(old_date, 100);
-        generator.state.store(old_state, Ordering::Release);
+        set_to_yesterday(&generator, 100);
 
         // Spawn multiple threads that will all see the date change
         let generator = Arc::new(generator);
         let num_threads = 8;
         let iterations_per_thread = 100;
 
-        let handles: Vec<_> = (0..num_threads)
-            .map(|_| {
-                let seq_gen = Arc::clone(&generator);
-                thread::spawn(move || {
-                    let mut results = Vec::with_capacity(iterations_per_thread);
-                    for _ in 0..iterations_per_thread {
-                        results.push(seq_gen.generate_sequence_number());
-                    }
-                    results
-                })
-            })
-            .collect();
+        let all_sequences =
+            generate_sequences_concurrently(&generator, num_threads, iterations_per_thread);
 
-        let mut all_sequences: Vec<usize> = Vec::new();
-        for handle in handles {
-            all_sequences.extend(handle.join().expect("thread panicked"));
-        }
-
-        // Verify no duplicates after reset
-        let unique: HashSet<_> = all_sequences.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            all_sequences.len(),
-            "duplicate sequence numbers detected after date reset"
+        assert_unique_contiguous_sequences(
+            &all_sequences,
+            num_threads * iterations_per_thread,
+            " after date reset",
         );
-
-        // Verify sequences start from 1 (after reset)
-        let total_count = num_threads * iterations_per_thread;
-        for i in 1..=total_count {
-            assert!(
-                unique.contains(&i),
-                "missing sequence number {i} after reset"
-            );
-        }
     }
 
     #[test]
-    fn start_value_policy_consistency() {
-        use std::sync::atomic::Ordering;
-
+    fn first_value_is_one_before_and_after_reset() {
         // Test 1: Fresh generator starts counter at 0, first sequence is 1
         let generator = SequenceGenerator::new();
         let (_, initial_counter) =
@@ -276,10 +262,8 @@ mod tests {
             "first sequence should be 1"
         );
 
-        // Test 2: After reset, counter goes to 0, first sequence after reset is 1
-        let old_date = SequenceGenerator::get_date_key().saturating_sub(1);
-        let old_state = SequenceGenerator::pack(old_date, 50);
-        generator.state.store(old_state, Ordering::Release);
+        // Test 2: After reset, counter is set to 1, first sequence after reset is 1
+        set_to_yesterday(&generator, 50);
 
         let first_after_reset = generator.generate_sequence_number();
         assert_eq!(
@@ -319,8 +303,6 @@ mod tests {
 
     #[test]
     fn overflow_rolls_over_to_one() {
-        use std::sync::atomic::Ordering;
-
         // Set counter to u32::MAX to test overflow rollover
         let generator = SequenceGenerator::new();
         let today = SequenceGenerator::get_date_key();
@@ -346,13 +328,11 @@ mod tests {
     #[test]
     fn concurrent_date_rollover_single_reset() {
         use std::sync::Barrier;
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::AtomicUsize;
 
         // Create generator with yesterday's date
         let generator = SequenceGenerator::new();
-        let old_date = SequenceGenerator::get_date_key().saturating_sub(1);
-        let old_state = SequenceGenerator::pack(old_date, 100);
-        generator.state.store(old_state, Ordering::Release);
+        set_to_yesterday(&generator, 100);
 
         let generator = Arc::new(generator);
         let reset_count = Arc::new(AtomicUsize::new(0));
@@ -407,18 +387,16 @@ mod tests {
             "exactly one thread should get sequence 1 after reset"
         );
 
-        // The reset_count should be at least 1 (the thread that did the reset)
+        // The reset_count should be exactly 1 (the thread that did the reset)
         let resets = reset_count.load(Ordering::Relaxed);
-        assert!(
-            resets >= 1,
-            "at least one thread should observe it did the reset"
+        assert_eq!(
+            resets, 1,
+            "exactly one thread should observe it did the reset"
         );
     }
 
     #[test]
     fn clock_rollback_triggers_reset() {
-        use std::sync::atomic::Ordering;
-
         // Set generator to a future date to simulate clock rollback
         let generator = SequenceGenerator::new();
         let future_date = SequenceGenerator::get_date_key().saturating_add(10);
