@@ -880,6 +880,33 @@ export_dir = "{}"
             settings.config.addr_to_peers.is_none(),
             "addr_to_peers should be None when key is missing from config"
         );
+
+        // Verify other key Config fields are loaded correctly
+        assert_eq!(settings.config.peers, None);
+        assert!(!settings.config.compression);
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 
     const TEST_CONFIG_WITH_EMPTY_ADDR: &str = r#"
@@ -925,6 +952,33 @@ export_dir = "{}"
             settings.config.addr_to_peers.is_none(),
             "addr_to_peers should be None when empty string is used"
         );
+
+        // Verify other key Config fields are loaded correctly
+        assert_eq!(settings.config.peers, None);
+        assert!(!settings.config.compression);
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 
     #[test]
@@ -941,6 +995,33 @@ export_dir = "{}"
             Some("192.168.1.1:38383".parse().unwrap()),
             "addr_to_peers should be Some with valid address"
         );
+
+        // Verify other key Config fields are loaded correctly
+        assert_eq!(settings.config.peers, None);
+        assert!(!settings.config.compression);
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 
     #[test]
