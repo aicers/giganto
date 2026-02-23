@@ -9,17 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - Peer init handshake now validates response/request PeerCode.
+- Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
+  explicit error instead of an empty certificate chain. This improves mTLS
+  security by treating zero-certificate chains as a failure condition.
 
 ### Fixed
 
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
-
-### Changed
-
-- Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
-  explicit error instead of an empty certificate chain. This improves mTLS
-  security by treating zero-certificate chains as a failure condition.
 
 ## [0.26.2] - 2026-02-12
 
@@ -265,7 +262,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   GraphQL API.
 - Updated the giganto-client library dependency to 0.22.0. Since this update
   does not break backward compatibility for modules communicating with Giganto
-  via the QUIC protocol, the related version requirements have been adjusted as follows:
+  via the QUIC protocol, the related version requirements have been adjusted as
+  follows:
   - Updated `INGEST_VERSION_REQ` to ">=0.23.0,<0.25.0".
   - Updated `PUBLISH_VERSION_REQ` to ">=0.23.0,<0.25.0".
 - Modify the code related to migration.
