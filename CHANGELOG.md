@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel (`254.254.254.254:38383`)
+  and replaced it with proper `Option` semantics for `addr_to_peers`. A missing
+  key in the configuration file now correctly deserializes to `None`.
 - Peer init handshake now validates response/request PeerCode.
 - Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
   explicit error instead of an empty certificate chain. This improves mTLS
@@ -28,11 +31,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the ingest sender's period configuration.
 
 ### Changed
-
-- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel (`254.254.254.254:38383`)
-  and replaced it with proper `Option` semantics for `addr_to_peers`. A missing
-  key or empty string in the configuration file now correctly deserializes to
-  `None`, and serialization omits the field when `None`.
 
 - Improved `OpLog` migration logging to record skipped entries during the
   migration process.

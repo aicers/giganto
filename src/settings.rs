@@ -69,11 +69,7 @@ pub struct Settings {
 /// The application settings.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
-    #[serde(
-        default,
-        deserialize_with = "deserialize_peer_addr",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "deserialize_peer_addr")]
     pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
@@ -252,22 +248,20 @@ where
 
 /// Deserializes a giganto's peer socket address.
 ///
-/// `Ok(None)` is returned if:
-/// - There is no `addr_to_peers` option in the configuration file.
-/// - The address is an empty string.
+/// `Ok(None)` is returned if there is no `addr_to_peers` option in the configuration file.
 ///
 /// # Errors
 ///
-/// Returns an error if the address is invalid.
+/// Returns an error if the address is invalid or empty.
 fn deserialize_peer_addr<'de, D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
 where
     D: Deserializer<'de>,
 {
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
         // Cluster mode is only available if there is a value for 'Peer Address' in the
-        // configuration file. Empty string means standalone mode.
+        // configuration file.
         if addr.is_empty() {
-            Ok(None)
+            Err(D::Error::custom("invalid address \"\": cannot be empty"))
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
                 D::Error::custom(format!("invalid address \"{addr}\": {e}"))
@@ -847,11 +841,20 @@ export_dir = "{}"
         let toml_str = r"";
         let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
         assert_eq!(wrapper.addr, None);
+    }
 
-        // Test with empty string
+    #[test]
+    fn test_deserialize_peer_addr_empty_string_error() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr", rename = "addr")]
+            _addr: Option<SocketAddr>,
+        }
+
+        // Test with empty string - should return error
         let toml_str = r#"addr = """#;
-        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
-        assert_eq!(wrapper.addr, None);
+        let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("cannot be empty"));
     }
 
     #[test]
@@ -940,45 +943,19 @@ export_dir = "{}"
     "#;
 
     #[test]
-    fn test_addr_to_peers_empty_string_deserializes_to_none() {
-        // Config with empty string should deserialize to None
+    fn test_addr_to_peers_empty_string_returns_error() {
+        // Config with empty string should return a deserialization error
         let dir = tempdir().expect("failed to create temp dir");
         let config_path = dir.path().join("config.toml");
         let mut file = fs::File::create(&config_path).expect("failed to create config file");
         writeln!(file, "{TEST_CONFIG_WITH_EMPTY_ADDR}").expect("failed to write config content");
 
-        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        let err = Settings::load(config_path.to_str().unwrap())
+            .expect_err("Operation should have failed");
         assert!(
-            settings.config.addr_to_peers.is_none(),
-            "addr_to_peers should be None when empty string is used"
+            err.to_string().contains("cannot be empty"),
+            "Unexpected error message: {err:?}"
         );
-
-        // Verify other key Config fields are loaded correctly
-        assert_eq!(settings.config.peers, None);
-        assert!(!settings.config.compression);
-        assert_eq!(
-            settings.config.visible.ingest_srv_addr.to_string(),
-            "0.0.0.0:38370"
-        );
-        assert_eq!(
-            settings.config.visible.publish_srv_addr.to_string(),
-            "0.0.0.0:38371"
-        );
-        assert_eq!(
-            settings.config.visible.graphql_srv_addr.to_string(),
-            "0.0.0.0:38372"
-        );
-        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
-        assert_eq!(
-            settings.config.visible.retention,
-            Duration::from_secs(100 * 24 * 60 * 60)
-        );
-        assert_eq!(settings.config.visible.max_open_files, 800);
-        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
-        assert_eq!(settings.config.visible.num_of_thread, 8);
-        assert_eq!(settings.config.visible.max_subcompactions, 2);
-        assert_eq!(settings.config.visible.ack_transmission, 1024);
-        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 
     #[test]
@@ -1022,67 +999,5 @@ export_dir = "{}"
         assert_eq!(settings.config.visible.max_subcompactions, 2);
         assert_eq!(settings.config.visible.ack_transmission, 1024);
         assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
-    }
-
-    #[test]
-    fn test_serialization_omits_none_addr_to_peers() {
-        // When addr_to_peers is None, it should not be serialized
-        let config = Config {
-            addr_to_peers: None,
-            peers: None,
-            visible: ConfigVisible {
-                graphql_srv_addr: "[::]:8443".parse().unwrap(),
-                ingest_srv_addr: "[::]:38370".parse().unwrap(),
-                publish_srv_addr: "[::]:38371".parse().unwrap(),
-                retention: Duration::from_secs(100 * 24 * 60 * 60),
-                data_dir: PathBuf::from("data"),
-                export_dir: PathBuf::from("export"),
-                max_open_files: 8000,
-                max_mb_of_level_base: 512,
-                num_of_thread: 8,
-                max_subcompactions: 2,
-                ack_transmission: 1024,
-            },
-            compression: false,
-        };
-
-        let toml_str = toml::to_string(&config).expect("Failed to serialize config");
-        assert!(
-            !toml_str.contains("addr_to_peers"),
-            "Serialized config should not contain addr_to_peers when it is None"
-        );
-    }
-
-    #[test]
-    fn test_serialization_includes_some_addr_to_peers() {
-        // When addr_to_peers is Some, it should be serialized
-        let config = Config {
-            addr_to_peers: Some("192.168.1.1:38383".parse().unwrap()),
-            peers: None,
-            visible: ConfigVisible {
-                graphql_srv_addr: "[::]:8443".parse().unwrap(),
-                ingest_srv_addr: "[::]:38370".parse().unwrap(),
-                publish_srv_addr: "[::]:38371".parse().unwrap(),
-                retention: Duration::from_secs(100 * 24 * 60 * 60),
-                data_dir: PathBuf::from("data"),
-                export_dir: PathBuf::from("export"),
-                max_open_files: 8000,
-                max_mb_of_level_base: 512,
-                num_of_thread: 8,
-                max_subcompactions: 2,
-                ack_transmission: 1024,
-            },
-            compression: false,
-        };
-
-        let toml_str = toml::to_string(&config).expect("Failed to serialize config");
-        assert!(
-            toml_str.contains("addr_to_peers"),
-            "Serialized config should contain addr_to_peers when it is Some"
-        );
-        assert!(
-            toml_str.contains("192.168.1.1:38383"),
-            "Serialized config should contain the actual address value"
-        );
     }
 }
