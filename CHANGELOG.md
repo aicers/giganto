@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Peer init handshake now validates response/request PeerCode.
+
 ### Fixed
 
 - Fixed an issue where combined search results could report incorrect previous/next
