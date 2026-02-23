@@ -924,7 +924,7 @@ impl SysmonQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, ImageLoadedEvent>> {
-        let opertation = handle_image_load_events;
+        let operation = handle_image_load_events;
 
         paged_events_in_cluster!(
             ctx,
@@ -934,7 +934,7 @@ impl SysmonQuery {
             before,
             first,
             last,
-            opertation,
+            operation,
             ImageLoadEvents,
             image_load_events::Variables,
             image_load_events::ResponseData,
