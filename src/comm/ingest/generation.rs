@@ -53,11 +53,8 @@ impl SequenceGenerator {
     /// sequence numbers. Note that after rollover, duplicate sequence numbers may
     /// occur within the same day if more than `u32::MAX` sequences are generated.
     pub(crate) fn generate_sequence_number(&self) -> usize {
+        let today = Self::get_date_key();
         loop {
-            // Recalculate `today` on each iteration to ensure correctness across
-            // date transitions. If a CAS fails near midnight and the date changes
-            // during the retry, we must use the updated date.
-            let today = Self::get_date_key();
             let current = self.state.load(Ordering::Acquire);
             let (cur_date, cur_counter) = Self::unpack(current);
 
@@ -73,7 +70,7 @@ impl SequenceGenerator {
 
             if self
                 .state
-                .compare_exchange(current, new_state, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange_weak(current, new_state, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 return Self::unpack(new_state).1 as usize;
