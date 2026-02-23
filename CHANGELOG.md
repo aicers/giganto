@@ -31,6 +31,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Cluster pagination path now rejects unsupported argument
   combinations (e.g., `before` + `first`, `after` + `last`)
   with the same errors as non-cluster resolvers.
+- Fixed inconsistent `pageInfo` in `sysmon_connection` cursor-based pagination.
+  When using `after` with `first`, `hasPreviousPage` is now correctly set to true.
+  When using `before` with `last`, `hasNextPage` is now correctly set to true.
 
 ## [0.26.2] - 2026-02-12
 
