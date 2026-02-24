@@ -893,7 +893,8 @@ fn insert_oplog_raw_event(
     generator: &OnceLock<Arc<SequenceGenerator>>,
 ) -> Vec<u8> {
     let generator = generator.get_or_init(SequenceGenerator::init_generator);
-    let sequence_number = generator.generate_sequence_number();
+    let date_key = SequenceGenerator::get_date_key();
+    let sequence_number = generator.generate_sequence_number(date_key);
 
     let mut key: Vec<u8> = Vec::new();
     let agent_id = format!("{agent_name}@src 1");

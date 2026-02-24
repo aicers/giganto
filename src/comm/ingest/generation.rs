@@ -27,6 +27,12 @@ use chrono::{Datelike, Utc};
 ///
 /// If the system clock is rolled back (e.g., NTP adjustment), the generator treats
 /// the rollback as a date change and resets the counter, ensuring continued operation.
+///
+/// # Performance
+///
+/// The struct is aligned to 64 bytes (cache line size on most modern CPUs) to avoid
+/// false sharing when accessed concurrently from multiple threads.
+#[repr(align(64))]
 pub struct SequenceGenerator {
     /// Packed state: upper 32 bits = `date_key`, lower 32 bits = counter
     state: AtomicU64,
@@ -44,6 +50,14 @@ impl SequenceGenerator {
 
     /// Generates the next sequence number, resetting if the date has changed.
     ///
+    /// # Arguments
+    ///
+    /// * `date_key` - The current date key (days since CE). Callers should compute this
+    ///   once per batch/loop using [`Self::get_date_key()`] and reuse it within that
+    ///   processing unit. This avoids repeated `Utc::now()` calls on the hot path.
+    ///
+    /// # Thread Safety
+    ///
     /// This method is thread-safe and ensures:
     /// - Only one thread performs the reset when the date changes
     /// - No duplicate sequence numbers are generated during concurrent resets
@@ -52,30 +66,33 @@ impl SequenceGenerator {
     /// On counter overflow, the counter rolls over to 1 to maintain unique non-zero
     /// sequence numbers. Note that after rollover, duplicate sequence numbers may
     /// occur within the same day if more than `u32::MAX` sequences are generated.
-    pub(crate) fn generate_sequence_number(&self) -> usize {
-        let today = Self::get_date_key();
-        loop {
-            let current = self.state.load(Ordering::Acquire);
-            let (cur_date, cur_counter) = Self::unpack(current);
+    pub(crate) fn generate_sequence_number(&self, date_key: u32) -> usize {
+        // fetch_update returns the *previous* value on success
+        let prev = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let (cur_date, cur_counter) = Self::unpack(current);
 
-            // Check if date has changed (including clock rollback)
-            let new_state = if cur_date == today {
-                // Same date; increment counter, rolling over to 1 on overflow
-                let new_counter = cur_counter.checked_add(1).unwrap_or(1);
-                Self::pack(cur_date, new_counter)
-            } else {
-                // Date has changed; reset to (today, 1) - first sequence number
-                Self::pack(today, 1)
-            };
+                let new_state = if cur_date == date_key {
+                    // Same date; increment counter, rolling over to 1 on overflow
+                    let new_counter = cur_counter.checked_add(1).unwrap_or(1);
+                    Self::pack(cur_date, new_counter)
+                } else {
+                    // Date has changed; reset to (date_key, 1) - first sequence number
+                    Self::pack(date_key, 1)
+                };
 
-            if self
-                .state
-                .compare_exchange_weak(current, new_state, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return Self::unpack(new_state).1 as usize;
-            }
-            // CAS failed; another thread modified state, retry
+                Some(new_state)
+            })
+            // fetch_update only returns Err when the closure returns None, which never happens
+            .expect("closure always returns Some");
+
+        // Compute the new counter from the previous state
+        let (prev_date, prev_counter) = Self::unpack(prev);
+        if prev_date == date_key {
+            prev_counter.checked_add(1).unwrap_or(1) as usize
+        } else {
+            1
         }
     }
 
@@ -88,7 +105,10 @@ impl SequenceGenerator {
     ///
     /// This provides a stable, monotonically increasing value that correctly
     /// handles month and year boundaries (e.g., January 15 → February 15 are different).
-    fn get_date_key() -> u32 {
+    ///
+    /// Callers should compute this once per batch/loop and reuse it within that
+    /// processing unit to avoid repeated `Utc::now()` calls on the hot path.
+    pub(crate) fn get_date_key() -> u32 {
         let utc_now = Utc::now();
         // num_days_from_ce() returns i32, but it's always positive for dates after year 0.
         // The value grows by ~365 per year; for reference, year 2000 ≈ 730,000 days.
@@ -141,12 +161,13 @@ mod tests {
         num_threads: usize,
         iterations_per_thread: usize,
     ) -> Vec<usize> {
+        let today = SequenceGenerator::get_date_key();
         let handles: Vec<_> = (0..num_threads)
             .map(|_| {
                 let seq_gen = Arc::clone(generator);
                 thread::spawn(move || {
                     (0..iterations_per_thread)
-                        .map(|_| seq_gen.generate_sequence_number())
+                        .map(|_| seq_gen.generate_sequence_number(today))
                         .collect::<Vec<_>>()
                 })
             })
@@ -202,11 +223,12 @@ mod tests {
     #[test]
     fn sequential_generation() {
         let generator = SequenceGenerator::new();
+        let today = SequenceGenerator::get_date_key();
 
         // Generate several sequence numbers and verify they are sequential
-        let seq1 = generator.generate_sequence_number();
-        let seq2 = generator.generate_sequence_number();
-        let seq3 = generator.generate_sequence_number();
+        let seq1 = generator.generate_sequence_number(today);
+        let seq2 = generator.generate_sequence_number(today);
+        let seq3 = generator.generate_sequence_number(today);
 
         assert_eq!(seq1, 1);
         assert_eq!(seq2, 2);
@@ -248,13 +270,15 @@ mod tests {
 
     #[test]
     fn first_value_is_one_before_and_after_reset() {
+        let today = SequenceGenerator::get_date_key();
+
         // Test 1: Fresh generator starts counter at 0, first sequence is 1
         let generator = SequenceGenerator::new();
         let (_, initial_counter) =
             SequenceGenerator::unpack(generator.state.load(Ordering::Acquire));
         assert_eq!(initial_counter, 0, "initial counter should be 0");
         assert_eq!(
-            generator.generate_sequence_number(),
+            generator.generate_sequence_number(today),
             1,
             "first sequence should be 1"
         );
@@ -262,7 +286,7 @@ mod tests {
         // Test 2: After reset, counter is set to 1, first sequence after reset is 1
         set_to_yesterday(&generator, 50);
 
-        let first_after_reset = generator.generate_sequence_number();
+        let first_after_reset = generator.generate_sequence_number(today);
         assert_eq!(
             first_after_reset, 1,
             "first sequence after reset should be 1"
@@ -309,7 +333,7 @@ mod tests {
             .store(near_overflow_state, Ordering::Release);
 
         // Generate should roll over to 1 instead of panicking
-        let seq = generator.generate_sequence_number();
+        let seq = generator.generate_sequence_number(today);
         assert_eq!(seq, 1, "overflow should roll over to 1");
 
         // Verify state was updated correctly
@@ -318,7 +342,7 @@ mod tests {
         assert_eq!(counter, 1, "counter should be 1 after rollover");
 
         // Next sequence should be 2
-        let seq2 = generator.generate_sequence_number();
+        let seq2 = generator.generate_sequence_number(today);
         assert_eq!(seq2, 2, "sequence after rollover should continue normally");
     }
 
@@ -351,7 +375,7 @@ mod tests {
                     let (before_date, _) = SequenceGenerator::unpack(before);
                     let today = SequenceGenerator::get_date_key();
 
-                    let seq = seq_gen.generate_sequence_number();
+                    let seq = seq_gen.generate_sequence_number(today);
 
                     // If before_date != today and we got seq == 1, this thread performed
                     // the reset. This is deterministic: only the thread whose CAS succeeded
@@ -394,19 +418,20 @@ mod tests {
 
     #[test]
     fn clock_rollback_triggers_reset() {
+        let today = SequenceGenerator::get_date_key();
+
         // Set generator to a future date to simulate clock rollback
         let generator = SequenceGenerator::new();
-        let future_date = SequenceGenerator::get_date_key().saturating_add(10);
+        let future_date = today.saturating_add(10);
         let future_state = SequenceGenerator::pack(future_date, 500);
         generator.state.store(future_state, Ordering::Release);
 
         // Generate should reset due to date mismatch (clock went "backwards")
-        let seq = generator.generate_sequence_number();
+        let seq = generator.generate_sequence_number(today);
         assert_eq!(seq, 1, "clock rollback should trigger reset to 1");
 
         // Verify date was updated to today
         let (date, counter) = SequenceGenerator::unpack(generator.state.load(Ordering::Acquire));
-        let today = SequenceGenerator::get_date_key();
         assert_eq!(date, today, "date should be updated to today");
         assert_eq!(counter, 1, "counter should be 1 after reset");
     }
