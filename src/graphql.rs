@@ -241,6 +241,36 @@ fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) 
     (start, end)
 }
 
+/// Validates pagination argument combinations.
+///
+/// Rejects unsupported combinations such as `before` + `first`,
+/// `after` + `last`, `after` + `before`, and `first` + `last`.
+///
+/// # Errors
+///
+/// Returns an error if the pagination arguments contain an
+/// unsupported combination.
+pub(crate) fn validate_pagination_args<A: ?Sized, B: ?Sized, F, L>(
+    after: Option<&A>,
+    before: Option<&B>,
+    first: Option<&F>,
+    last: Option<&L>,
+) -> Result<()> {
+    if before.is_some() && after.is_some() {
+        return Err("cannot use both `after` and `before`".into());
+    }
+    if before.is_some() && first.is_some() {
+        return Err("'before' and 'first' cannot be specified simultaneously".into());
+    }
+    if after.is_some() && last.is_some() {
+        return Err("'after' and 'last' cannot be specified simultaneously".into());
+    }
+    if first.is_some() && last.is_some() {
+        return Err("first and last cannot be used together".into());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn get_connection<T>(
     store: &RawEventStore<'_, T>,
@@ -253,14 +283,14 @@ fn get_connection<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    let (records, has_previous, has_next) = if let Some(before) = before {
-        if after.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if first.is_some() {
-            return Err("'before' and 'first' cannot be specified simultaneously".into());
-        }
+    validate_pagination_args(
+        after.as_ref(),
+        before.as_ref(),
+        first.as_ref(),
+        last.as_ref(),
+    )?;
 
+    let (records, has_previous, has_next) = if let Some(before) = before {
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(before)?;
 
@@ -291,12 +321,6 @@ where
         records.reverse();
         (records, has_previous, false)
     } else if let Some(after) = after {
-        if before.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if last.is_some() {
-            return Err("'after' and 'last' cannot be specified simultaneously".into());
-        }
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(after)?;
 
@@ -326,9 +350,6 @@ where
         let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
     } else if let Some(last) = last {
-        if first.is_some() {
-            return Err("first and last cannot be used together".into());
-        }
         let last = last.min(MAXIMUM_PAGE_SIZE);
 
         // generate storage search key
@@ -380,14 +401,14 @@ fn get_connection_by_prefix_timestamp_key<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    let (records, has_previous, has_next) = if let Some(before) = before {
-        if after.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if first.is_some() {
-            return Err("'before' and 'first' cannot be specified simultaneously".into());
-        }
+    validate_pagination_args(
+        after.as_ref(),
+        before.as_ref(),
+        first.as_ref(),
+        last.as_ref(),
+    )?;
 
+    let (records, has_previous, has_next) = if let Some(before) = before {
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(before)?;
 
@@ -416,12 +437,6 @@ where
         records.reverse();
         (records, has_previous, false)
     } else if let Some(after) = after {
-        if before.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if last.is_some() {
-            return Err("'after' and 'last' cannot be specified simultaneously".into());
-        }
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(after)?;
 
@@ -449,9 +464,6 @@ where
         let (records, has_next) = collect_records(iter, first, filter);
         (records, false, has_next)
     } else if let Some(last) = last {
-        if first.is_some() {
-            return Err("first and last cannot be used together".into());
-        }
         let last = last.min(MAXIMUM_PAGE_SIZE);
 
         // generate storage search key
@@ -643,14 +655,14 @@ fn get_filtered_iter<'c, T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    let (iter, cursor, size) = if let Some(before) = before {
-        if after.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if first.is_some() {
-            return Err("'before' and 'first' cannot be specified simultaneously".into());
-        }
+    validate_pagination_args(
+        after.as_ref(),
+        before.as_ref(),
+        first.as_ref(),
+        last.as_ref(),
+    )?;
 
+    let (iter, cursor, size) = if let Some(before) = before {
         let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(before)?;
 
@@ -671,13 +683,6 @@ where
 
         (FilteredIter::new(iter, filter), Some(cursor), last)
     } else if let Some(after) = after {
-        if before.is_some() {
-            return Err("cannot use both `after` and `before`".into());
-        }
-        if last.is_some() {
-            return Err("'after' and 'last' cannot be specified simultaneously".into());
-        }
-
         let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
         let cursor = base64_engine.decode(after)?;
 
@@ -698,9 +703,6 @@ where
         let iter = store.boundary_iter(&cursor, &to_key.key(), Direction::Forward);
         (FilteredIter::new(iter, filter), Some(cursor), first)
     } else if let Some(last) = last {
-        if first.is_some() {
-            return Err("first and last cannot be used together".into());
-        }
         let last = last.min(MAXIMUM_PAGE_SIZE);
 
         // generate storage search key
@@ -1562,5 +1564,89 @@ mod tests {
 
         let result = collect_exist_times::<DummyEvent>(&target_data, &filter);
         assert_eq!(result, vec![t1]);
+    }
+
+    #[test]
+    fn validate_pagination_args_rejects_before_and_first() {
+        let result =
+            super::validate_pagination_args(None::<&str>, Some(&"cursor"), Some(&10), None::<&i32>);
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.message,
+            "'before' and 'first' cannot be specified simultaneously"
+        );
+    }
+
+    #[test]
+    fn validate_pagination_args_rejects_after_and_last() {
+        let result =
+            super::validate_pagination_args(Some(&"cursor"), None::<&str>, None::<&i32>, Some(&10));
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.message,
+            "'after' and 'last' cannot be specified simultaneously"
+        );
+    }
+
+    #[test]
+    fn validate_pagination_args_rejects_after_and_before() {
+        let result = super::validate_pagination_args(
+            Some(&"cursor_a"),
+            Some(&"cursor_b"),
+            None::<&i32>,
+            None::<&i32>,
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.message, "cannot use both `after` and `before`");
+    }
+
+    #[test]
+    fn validate_pagination_args_rejects_first_and_last() {
+        let result =
+            super::validate_pagination_args(None::<&str>, None::<&str>, Some(&10), Some(&5));
+        let err = result.unwrap_err();
+        assert_eq!(err.message, "first and last cannot be used together");
+    }
+
+    #[test]
+    fn validate_pagination_args_accepts_valid_combinations() {
+        // first only
+        assert!(
+            super::validate_pagination_args(None::<&str>, None::<&str>, Some(&10), None::<&i32>,)
+                .is_ok()
+        );
+
+        // last only
+        assert!(
+            super::validate_pagination_args(None::<&str>, None::<&str>, None::<&i32>, Some(&10),)
+                .is_ok()
+        );
+
+        // after + first
+        assert!(super::validate_pagination_args(
+            Some(&"cursor"),
+            None::<&str>,
+            Some(&10),
+            None::<&i32>,
+        )
+        .is_ok());
+
+        // before + last
+        assert!(super::validate_pagination_args(
+            None::<&str>,
+            Some(&"cursor"),
+            None::<&i32>,
+            Some(&10),
+        )
+        .is_ok());
+
+        // no args
+        assert!(super::validate_pagination_args(
+            None::<&str>,
+            None::<&str>,
+            None::<&i32>,
+            None::<&i32>,
+        )
+        .is_ok());
     }
 }
