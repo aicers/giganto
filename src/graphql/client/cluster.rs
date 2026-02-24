@@ -451,6 +451,7 @@ macro_rules! paged_events_in_cluster {
      $response_data_type:path,
      $field_name:ident
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
+        crate::graphql::validate_pagination_args($after.as_ref(), $before.as_ref(), $first.as_ref(), $last.as_ref())?;
         if crate::graphql::client::cluster::is_current_giganto_in_charge($ctx, &$sensor).await {
             $handler($ctx, $filter, $after, $before, $first, $last).await
         } else {
@@ -525,6 +526,7 @@ macro_rules! paged_events_in_cluster {
      $variables_type:ty,
      $response_data_type:path,
      $field_name:ident) => {{
+        crate::graphql::validate_pagination_args($after.as_ref(), $before.as_ref(), $first.as_ref(), $last.as_ref())?;
         if $request_from_peer.unwrap_or_default() {
             return $handler($ctx, $filter, $after, $before, $first, $last).await;
         }
@@ -607,6 +609,7 @@ macro_rules! paged_events_in_cluster {
         $variables_type:ty,
         $response_data_type:path,
         $field_name:ident) => {{
+            crate::graphql::validate_pagination_args($after.as_ref(), $before.as_ref(), $first.as_ref(), $last.as_ref())?;
             if $request_from_peer.unwrap_or_default() {
                return $handler($ctx, $filter, $after, $before, $first, $last).await;
             }
