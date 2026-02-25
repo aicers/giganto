@@ -15,6 +15,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed `SequenceGenerator` by using `AtomicU64` + CAS (`fetch_update`) to
+  prevent duplicate sequence issuance during concurrent reset races.
+  The generator now keeps state in one atomic value with deterministic rules:
+  reset to `[date_key, epoch=0, counter=1]` only on newer dates, ignore stale
+  dates, and wrap `epoch` (`255 -> 0`) when counter overflow occurs.
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
 
@@ -38,16 +43,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Fixed `SequenceGenerator` to prevent duplicate sequence numbers under
-  concurrent access and incorrect reset behavior at month boundaries. The
-  generator now uses a packed `AtomicU64` with compare-and-swap operations for
-  atomic resets, and computes the date key using epoch-days instead of
-  day-of-month only. Additional improvements include: counter overflow now rolls
-  over to 1 instead of panicking, clock rollback is handled gracefully by
-  triggering a reset, and the CAS loop uses `fetch_update` for clarity.
-  Performance optimizations: the struct is 64-byte aligned to avoid false
-  sharing, and `generate_sequence_number` accepts a pre-computed `date_key`
-  parameter so callers can avoid repeated `Utc::now()` calls on hot paths.
 - Fixed sub-second timestamp corruption in pcap file generation. The `pcap`
   GraphQL API was using bitwise AND (`&`) instead of modulo (`%`) when
   reconstructing the nanosecond portion of packet timestamps, causing incorrect

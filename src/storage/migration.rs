@@ -1,7 +1,7 @@
 //! Routines to check the database format version and migrate it if necessary.
 mod migration_structures;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     fs::{File, create_dir_all},
     io::{Read, Write},
@@ -190,7 +190,7 @@ fn migrate_0_21_to_0_23_secu_log(db: &Database) -> Result<()> {
 fn migrate_0_23_0_to_0_24_0_op_log(db: &Database) -> Result<()> {
     info!("Starting migration for oplog");
     let store = db.op_log_store()?;
-    let counter = AtomicUsize::new(0);
+    let counter = AtomicU64::new(0);
     let mut skipped_count = 0;
 
     for raw_event in store.iter_forward() {
