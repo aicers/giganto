@@ -26,7 +26,7 @@ enum TakeDirection {
 }
 
 #[allow(unused)]
-fn sort_and_trunk_edges<N>(
+fn sort_and_truncate_edges<N>(
     mut edges: Vec<Edge<String, N, EmptyFields>>,
     before: Option<&str>,
     first: Option<i32>,
@@ -97,7 +97,7 @@ where
         .flat_map(|fpr| fpr.edges)
         .chain(current_giganto_result.edges)
         .collect();
-    let edges_combined = sort_and_trunk_edges(edges_combined, before, first, last);
+    let edges_combined = sort_and_truncate_edges(edges_combined, before, first, last);
 
     let mut connection_to_return = Connection::new(has_prev_page_combined, has_next_page_combined);
     connection_to_return.edges = edges_combined;
@@ -888,85 +888,136 @@ pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
     use async_graphql::{
-        SimpleObject,
+        Context, EmptyMutation, EmptySubscription, Object, Request, Schema, SimpleObject,
         connection::{Connection, Edge, EmptyFields},
     };
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
+    use mockito::Server;
+    use serde_json::Value;
+    use tokio::sync::RwLock;
 
-    use super::{ClusterSortKey, combine_results, sort_and_trunk_edges};
+    use super::{
+        ClusterSortKey, combine_results, find_who_are_in_charge, is_current_giganto_in_charge,
+        peer_in_charge_graphql_addr, request_peer, sort_and_truncate_edges,
+    };
+    use crate::comm::{
+        IngestSensors,
+        peer::{PeerInfo, Peers},
+    };
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
         time: DateTime<Utc>,
+        secondary: Option<String>,
     }
 
     impl ClusterSortKey for TestNode {
         fn secondary(&self) -> Option<&str> {
-            None
+            self.secondary.as_deref()
         }
     }
 
     fn edges_fixture() -> Vec<Edge<String, TestNode, EmptyFields>> {
         vec![
-            Edge::new("warn_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("danger_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_002".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("info_003".to_string(), TestNode { time: Utc::now() }),
+            Edge::new(
+                "warn_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "danger_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "danger_002".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_002".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "info_003".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
         ]
     }
 
     #[test]
-    fn test_sort_and_trunk_edges() {
+    fn test_sort_and_truncate_edges() {
         let empty_vec = Vec::<Edge<String, TestNode, EmptyFields>>::new();
-        let result = sort_and_trunk_edges(empty_vec, None, None, None);
+        let result = sort_and_truncate_edges(empty_vec, None, None, None);
         assert!(result.is_empty());
 
-        let result = sort_and_trunk_edges(edges_fixture(), None, None, None);
+        let result = sort_and_truncate_edges(edges_fixture(), None, None, None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), None, Some(5), None);
+        let result = sort_and_truncate_edges(edges_fixture(), None, Some(5), None);
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "info_003".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), None, Some(10), None);
+        let result = sort_and_truncate_edges(edges_fixture(), None, Some(10), None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), None, None, Some(5));
+        let result = sort_and_truncate_edges(edges_fixture(), None, None, Some(5));
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_002".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), None, None, Some(10));
+        let result = sort_and_truncate_edges(edges_fixture(), None, None, Some(10));
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, None);
+        let result = sort_and_truncate_edges(edges_fixture(), Some("zebra_001"), None, None);
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, Some(5));
+        let result = sort_and_truncate_edges(edges_fixture(), Some("zebra_001"), None, Some(5));
         assert_eq!(result.len(), 5);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_002".to_string());
         assert_eq!(result[result.len() - 1].cursor, "warn_001".to_string());
 
-        let result = sort_and_trunk_edges(edges_fixture(), Some("zebra_001"), None, Some(10));
+        let result = sort_and_truncate_edges(edges_fixture(), Some("zebra_001"), None, Some(10));
         assert_eq!(result.len(), 6);
         assert!(result.windows(2).all(|w| w[0].cursor < w[1].cursor));
         assert_eq!(result[0].cursor, "danger_001".to_string());
@@ -1022,8 +1073,20 @@ mod tests {
     fn test_combine_results_with_empty_peer_results_matches_current() {
         let mut current = Connection::<String, TestNode>::new(true, false);
         current.edges = vec![
-            Edge::new("a_001".to_string(), TestNode { time: Utc::now() }),
-            Edge::new("b_001".to_string(), TestNode { time: Utc::now() }),
+            Edge::new(
+                "a_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
+            Edge::new(
+                "b_001".to_string(),
+                TestNode {
+                    time: Utc::now(),
+                    secondary: None,
+                },
+            ),
         ];
 
         let current_has_previous_page = current.has_previous_page;
@@ -1044,5 +1107,295 @@ mod tests {
         assert_eq!(combined.has_previous_page, current_has_previous_page);
         assert_eq!(combined.has_next_page, current_has_next_page);
         assert_eq!(combined_cursors, current_cursors);
+    }
+
+    #[test]
+    fn test_sort_and_truncate_edges_secondary_order() {
+        let time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let make_edges = || {
+            vec![
+                Edge::new(
+                    "same".to_string(),
+                    TestNode {
+                        time,
+                        secondary: Some("b".to_string()),
+                    },
+                ),
+                Edge::new(
+                    "same".to_string(),
+                    TestNode {
+                        time,
+                        secondary: Some("a".to_string()),
+                    },
+                ),
+                Edge::new(
+                    "same".to_string(),
+                    TestNode {
+                        time,
+                        secondary: Some("c".to_string()),
+                    },
+                ),
+                Edge::new(
+                    "same".to_string(),
+                    TestNode {
+                        time,
+                        secondary: None,
+                    },
+                ),
+            ]
+        };
+        let result = sort_and_truncate_edges(make_edges(), None, None, None);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].node.secondary.as_deref(), None);
+        assert_eq!(result[1].node.secondary.as_deref(), Some("a"));
+        assert_eq!(result[2].node.secondary.as_deref(), Some("b"));
+        assert_eq!(result[3].node.secondary.as_deref(), Some("c"));
+
+        let result_first = sort_and_truncate_edges(make_edges(), None, Some(2), None);
+        assert_eq!(result_first.len(), 2);
+        assert_eq!(result_first[0].node.secondary.as_deref(), None);
+        assert_eq!(result_first[1].node.secondary.as_deref(), Some("a"));
+
+        let result_last = sort_and_truncate_edges(make_edges(), Some("any"), None, Some(2));
+        assert_eq!(result_last.len(), 2);
+        assert_eq!(result_last[0].node.secondary.as_deref(), Some("b"));
+        assert_eq!(result_last[1].node.secondary.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn test_combine_results_merges_flags_and_sorts_edges() {
+        let time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let mut current = Connection::new(false, true);
+        current.edges = vec![Edge::new(
+            "b".to_string(),
+            TestNode {
+                time,
+                secondary: None,
+            },
+        )];
+
+        let mut peer = Connection::new(true, false);
+        peer.edges = vec![Edge::new(
+            "a".to_string(),
+            TestNode {
+                time,
+                secondary: None,
+            },
+        )];
+
+        let combined = combine_results(current, vec![peer], None, None, None);
+        assert!(combined.has_previous_page);
+        assert!(combined.has_next_page);
+        assert_eq!(combined.edges.len(), 2);
+        assert_eq!(combined.edges[0].cursor, "a");
+        assert_eq!(combined.edges[1].cursor, "b");
+    }
+
+    #[derive(Default)]
+    struct TestQuery;
+
+    #[Object]
+    impl TestQuery {
+        async fn in_charge(&self, ctx: &Context<'_>, sensor: String) -> bool {
+            is_current_giganto_in_charge(ctx, &sensor).await
+        }
+
+        async fn find_in_charge(&self, ctx: &Context<'_>, sensors: Vec<String>) -> Vec<String> {
+            let sensors_set = sensors.iter().map(String::as_str).collect();
+            let (local_sensors, peer_addrs) = find_who_are_in_charge(ctx, &sensors_set).await;
+
+            let mut combined: Vec<String> = local_sensors
+                .into_iter()
+                .map(|sensor| format!("local:{sensor}"))
+                .collect();
+            combined.extend(peer_addrs.into_iter().map(|addr| format!("peer:{addr}")));
+            combined.sort();
+            combined
+        }
+    }
+
+    #[tokio::test]
+    async fn is_current_giganto_in_charge_reads_from_context() {
+        let ingest_sensors: IngestSensors =
+            Arc::new(RwLock::new(HashSet::from(["sensor-a".to_string()])));
+        let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription)
+            .data(ingest_sensors)
+            .finish();
+
+        let res = schema
+            .execute(Request::new(r#"{ inCharge(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{inCharge: true}");
+    }
+
+    #[tokio::test]
+    async fn is_current_giganto_in_charge_defaults_when_missing_data() {
+        let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription).finish();
+        let res = schema
+            .execute(Request::new(r#"{ inCharge(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{inCharge: false}");
+    }
+
+    #[derive(Default)]
+    struct PeerQuery;
+
+    #[Object]
+    impl PeerQuery {
+        async fn peer_addr(&self, ctx: &Context<'_>, sensor: String) -> Option<String> {
+            peer_in_charge_graphql_addr(ctx, &sensor)
+                .await
+                .map(|addr| addr.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn peer_in_charge_graphql_addr_returns_peer_address() {
+        let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
+            "127.0.0.1".to_string(),
+            PeerInfo {
+                ingest_sensors: HashSet::from(["sensor-a".to_string()]),
+                graphql_port: Some(9000),
+                publish_port: None,
+            },
+        )])));
+
+        let schema = Schema::build(PeerQuery, EmptyMutation, EmptySubscription)
+            .data(peers)
+            .finish();
+        let res = schema
+            .execute(Request::new(r#"{ peerAddr(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{peerAddr: \"127.0.0.1:9000\"}");
+    }
+
+    #[tokio::test]
+    async fn peer_in_charge_graphql_addr_returns_none_when_unknown() {
+        let schema = Schema::build(PeerQuery, EmptyMutation, EmptySubscription).finish();
+        let res = schema
+            .execute(Request::new(r#"{ peerAddr(sensor: "sensor-a") }"#))
+            .await;
+        assert_eq!(res.data.to_string(), "{peerAddr: null}");
+    }
+
+    #[tokio::test]
+    async fn test_find_who_are_in_charge() {
+        let ingest_sensors_data: IngestSensors = Arc::new(RwLock::new(HashSet::from([
+            "sensor-local-1".to_string(),
+            "sensor-local-2".to_string(),
+        ])));
+
+        let mut peer_map = HashMap::new();
+        peer_map.insert(
+            "192.168.1.10".to_string(),
+            PeerInfo {
+                ingest_sensors: HashSet::from([
+                    "sensor-peer-1".to_string(),
+                    "sensor-peer-2".to_string(),
+                ]),
+                graphql_port: Some(8080),
+                publish_port: None,
+            },
+        );
+        let peers_data: Peers = Arc::new(RwLock::new(peer_map));
+
+        let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription)
+            .data(ingest_sensors_data)
+            .data(peers_data)
+            .finish();
+        let res = schema
+            .execute(Request::new(
+                r#"{ findInCharge(sensors: ["sensor-local-1", "sensor-peer-1", "sensor99"]) }"#,
+            ))
+            .await;
+
+        assert_eq!(
+            res.data.to_string(),
+            "{findInCharge: [\"local:sensor-local-1\", \"peer:192.168.1.10:8080\"]}"
+        );
+    }
+
+    struct RequestPeerTestQuery {
+        server_addr: SocketAddr,
+    }
+
+    impl RequestPeerTestQuery {
+        fn new(server_addr: SocketAddr) -> Self {
+            Self { server_addr }
+        }
+    }
+
+    #[Object]
+    impl RequestPeerTestQuery {
+        async fn request_peer_success(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+            let body = graphql_client::QueryBody {
+                variables: (),
+                query: "query { result }",
+                operation_name: "TestQuery",
+            };
+
+            request_peer(ctx, self.server_addr, body, |data: Option<Value>| {
+                data.is_some()
+            })
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_request_peer_success() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data": {"result": "ok"}}"#)
+            .create_async()
+            .await;
+
+        let server_addr = server.socket_address();
+
+        let schema = Schema::build(
+            RequestPeerTestQuery::new(server_addr),
+            EmptyMutation,
+            EmptySubscription,
+        )
+        .data(reqwest::Client::new())
+        .finish();
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+
+        assert_eq!(res.data.to_string(), "{requestPeerSuccess: true}");
+    }
+
+    #[tokio::test]
+    async fn test_request_peer_failure() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/graphql")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"errors": [{"message": "boom"}]}"#)
+            .create_async()
+            .await;
+
+        let server_addr = server.socket_address();
+
+        let schema = Schema::build(
+            RequestPeerTestQuery::new(server_addr),
+            EmptyMutation,
+            EmptySubscription,
+        )
+        .data(reqwest::Client::new())
+        .finish();
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert_eq!(res.data.to_string(), "null");
+        assert!(
+            res.errors.iter().any(|err| {
+                err.message
+                    .contains("Peer giganto's response status is not success.")
+            }),
+            "expected a peer response error, got {res:?}"
+        );
     }
 }
