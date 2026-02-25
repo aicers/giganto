@@ -816,7 +816,7 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn mid_key(mut self, key: usize) -> Self {
+    pub fn mid_key(mut self, key: u64) -> Self {
         let mid_key = key.to_be_bytes();
         self.pre_key.reserve(mid_key.len());
         self.pre_key.extend_from_slice(&mid_key);
