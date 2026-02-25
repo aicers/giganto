@@ -19,7 +19,6 @@ use crate::{comm::peer::PeerIdentity, graphql::status::write_toml_file};
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
 pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8443";
-const DEFAULT_INVALID_ADDR_TO_PEERS: &str = "254.254.254.254:38383";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
@@ -229,8 +228,6 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("default number of thread")
         .set_default("max_subcompactions", DEFAULT_MAX_SUBCOMPACTIONS)
         .expect("default max subcompactions")
-        .set_default("addr_to_peers", DEFAULT_INVALID_ADDR_TO_PEERS)
-        .expect("default ack transmission")
         .set_default("ack_transmission", DEFAULT_ACK_TRANSMISSION)
         .expect("ack_transmission")
 }
@@ -251,20 +248,20 @@ where
 
 /// Deserializes a giganto's peer socket address.
 ///
-/// `Ok(None)` is returned if the address is an empty string or there is no `addr_to_peers`
-///  option in the configuration file.
+/// `Ok(None)` is returned if there is no `addr_to_peers` option in the configuration file.
 ///
 /// # Errors
 ///
-/// Returns an error if the address is invalid.
+/// Returns an error if the address is invalid or empty.
 fn deserialize_peer_addr<'de, D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
 where
     D: Deserializer<'de>,
 {
     (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
-        // Cluster mode is only available if there is a value for 'Peer Address' in the configuration file.
-        if addr == DEFAULT_INVALID_ADDR_TO_PEERS || addr.is_empty() {
-            Ok(None)
+        // Cluster mode is only available if there is a value for 'Peer Address' in the
+        // configuration file.
+        if addr.is_empty() {
+            Err(D::Error::custom("invalid address \"\": cannot be empty"))
         } else {
             Ok(Some(addr.parse::<SocketAddr>().map_err(|e| {
                 D::Error::custom(format!("invalid address \"{addr}\": {e}"))
@@ -844,11 +841,20 @@ export_dir = "{}"
         let toml_str = r"";
         let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
         assert_eq!(wrapper.addr, None);
+    }
 
-        // Test with empty string
+    #[test]
+    fn test_deserialize_peer_addr_empty_string_error() {
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_peer_addr", rename = "addr")]
+            _addr: Option<SocketAddr>,
+        }
+
+        // Test with empty string - should return error
         let toml_str = r#"addr = """#;
-        let wrapper: Wrapper = toml::from_str(toml_str).expect("Failed to deserialize");
-        assert_eq!(wrapper.addr, None);
+        let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
+        assert!(err.to_string().contains("cannot be empty"));
     }
 
     #[test]
@@ -862,5 +868,136 @@ export_dir = "{}"
         let toml_str = r#"addr = "invalid_addr""#;
         let err = toml::from_str::<Wrapper>(toml_str).expect_err("Operation should have failed");
         assert!(err.to_string().contains("invalid address \"invalid_addr\""));
+    }
+
+    #[test]
+    fn test_addr_to_peers_missing_key_deserializes_to_none() {
+        // Config without addr_to_peers should deserialize to None
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_CONTENT}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert!(
+            settings.config.addr_to_peers.is_none(),
+            "addr_to_peers should be None when key is missing from config"
+        );
+
+        // Verify other key Config fields are loaded correctly
+        assert_eq!(settings.config.peers, None);
+        assert!(!settings.config.compression);
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
+    }
+
+    const TEST_CONFIG_WITH_EMPTY_ADDR: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+        addr_to_peers = ""
+    "#;
+
+    const TEST_CONFIG_WITH_VALID_ADDR: &str = r#"
+        ingest_srv_addr = "0.0.0.0:38370"
+        publish_srv_addr = "0.0.0.0:38371"
+        graphql_srv_addr = "0.0.0.0:38372"
+        data_dir = "data"
+        retention = "100d"
+        max_open_files = 800
+        max_mb_of_level_base = 512
+        num_of_thread = 8
+        max_subcompactions = 2
+        ack_transmission = 1024
+        export_dir = "export"
+        addr_to_peers = "192.168.1.1:38383"
+    "#;
+
+    #[test]
+    fn test_addr_to_peers_empty_string_returns_error() {
+        // Config with empty string should return a deserialization error
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_WITH_EMPTY_ADDR}").expect("failed to write config content");
+
+        let err = Settings::load(config_path.to_str().unwrap())
+            .expect_err("Operation should have failed");
+        assert!(
+            err.to_string().contains("cannot be empty"),
+            "Unexpected error message: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_addr_to_peers_valid_address_deserializes_to_some() {
+        // Config with valid address should deserialize to Some
+        let dir = tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("config.toml");
+        let mut file = fs::File::create(&config_path).expect("failed to create config file");
+        writeln!(file, "{TEST_CONFIG_WITH_VALID_ADDR}").expect("failed to write config content");
+
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            settings.config.addr_to_peers,
+            Some("192.168.1.1:38383".parse().unwrap()),
+            "addr_to_peers should be Some with valid address"
+        );
+
+        // Verify other key Config fields are loaded correctly
+        assert_eq!(settings.config.peers, None);
+        assert!(!settings.config.compression);
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr.to_string(),
+            "0.0.0.0:38370"
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr.to_string(),
+            "0.0.0.0:38371"
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr.to_string(),
+            "0.0.0.0:38372"
+        );
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_secs(100 * 24 * 60 * 60)
+        );
+        assert_eq!(settings.config.visible.max_open_files, 800);
+        assert_eq!(settings.config.visible.max_mb_of_level_base, 512);
+        assert_eq!(settings.config.visible.num_of_thread, 8);
+        assert_eq!(settings.config.visible.max_subcompactions, 2);
+        assert_eq!(settings.config.visible.ack_transmission, 1024);
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
     }
 }
