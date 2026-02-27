@@ -18,6 +18,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
 - Fixed `check_address`/`check_port` so `(Some(filter), None)` no longer passes.
+- Fixed inconsistent `pageInfo` in `sysmon_connection` cursor-based
+  pagination. When using `after` with `first`, `hasPreviousPage` is now
+  correctly set to true. When using `before` with `last`, `hasNextPage` is
+  now correctly set to true.
 
 ## [0.26.2] - 2026-02-12
 
