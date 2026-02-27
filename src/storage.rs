@@ -42,7 +42,9 @@ use rocksdb::{
 };
 use serde::de::DeserializeOwned;
 use tokio::{select, sync::Notify, time};
-use tracing::{debug, error, info, warn};
+#[cfg(not(test))]
+use tracing::debug;
+use tracing::{error, info, warn};
 
 use crate::{
     comm::ingest::implement::EventFilter,
@@ -1117,6 +1119,7 @@ pub async fn retain_periodically(
 }
 
 /// Returns the boolean of the disk usages over `USAGE_THRESHOLD` and `USAGE_LOW`.
+#[cfg(not(test))]
 async fn check_db_usage() -> (bool, bool) {
     let resource_usage = roxy::resource_usage().await;
     let total_disk_space = resource_usage
@@ -1129,6 +1132,14 @@ async fn check_db_usage() -> (bool, bool) {
     };
     debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
+}
+
+/// In tests, always report low disk usage so retention logic is not affected
+/// by the actual disk state of the machine running the tests.
+#[cfg(test)]
+#[allow(clippy::unused_async)]
+async fn check_db_usage() -> (bool, bool) {
+    (false, false)
 }
 
 pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
