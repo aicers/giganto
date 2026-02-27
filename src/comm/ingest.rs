@@ -904,6 +904,11 @@ async fn handle_data<T>(
                 let mut packet_size = 0_u64;
                 #[cfg(feature = "benchmark")]
                 let mut packet_count = 0_u64;
+                // Compute date_key once per batch for OpLog sequence generation.
+                // This avoids repeated Utc::now() calls on the hot path.
+                let date_key =
+                    (raw_event_kind == RawEventKind::OpLog).then(SequenceGenerator::get_date_key);
+
                 for (timestamp, mut raw_event) in recv_buf {
                     last_timestamp = timestamp;
                     if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
@@ -957,7 +962,9 @@ async fn handle_data<T>(
 
                             let generator =
                                 GENERATOR.get_or_init(SequenceGenerator::init_generator);
-                            let sequence_number = generator.generate_sequence_number();
+                            let sequence_number = generator.generate_sequence_number(
+                                date_key.expect("date_key must exist for OpLog"),
+                            );
                             StorageKey::timestamp_builder()
                                 .start_key(timestamp)
                                 .mid_key(sequence_number)
