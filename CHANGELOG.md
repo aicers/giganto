@@ -18,6 +18,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
 - Fixed `check_address`/`check_port` so `(Some(filter), None)` no longer passes.
+- Cluster pagination path now rejects unsupported argument
+  combinations (e.g., `before` + `first`, `after` + `last`)
+  with the same errors as non-cluster resolvers.
 
 ## [0.26.2] - 2026-02-12
 
