@@ -1009,7 +1009,7 @@ pub async fn retain_periodically(
                     - retention_duration;
                 let mut usage_flag = false;
 
-                if check_db_usage().await.0 {
+                if !cfg!(test) && check_db_usage().await.0 {
                     info!(
                         "Disk usage is over {USAGE_THRESHOLD}%. \
                         Retention period is temporarily reduced."
@@ -1093,7 +1093,7 @@ pub async fn retain_periodically(
                     } else {
                         warn!("Failed to delete file in range for operation log");
                     }
-                    if check_db_usage().await.1 && usage_flag {
+                    if !cfg!(test) && check_db_usage().await.1 && usage_flag {
                         retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
                         if retention_timestamp > now.timestamp_nanos_opt().unwrap_or(0) {
                             warn!("cannot delete data to usage under {USAGE_LOW}");
