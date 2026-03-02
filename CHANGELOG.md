@@ -8,6 +8,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Removed line numbers from stdout log output to avoid exposing
+  implementation details and to be consistent with file log formatting.
 - Peer init handshake now validates response/request PeerCode.
 - Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
   explicit error instead of an empty certificate chain. This improves mTLS
