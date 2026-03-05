@@ -1043,7 +1043,8 @@ pub(super) fn insert_op_log_export_event(
     generator: &OnceLock<Arc<SequenceGenerator>>,
 ) {
     let generator = generator.get_or_init(SequenceGenerator::init_generator);
-    let sequence_number = generator.generate_sequence_number();
+    let date_key = SequenceGenerator::get_date_key();
+    let sequence_number = generator.generate_sequence_number(date_key);
 
     // OpLog uses timestamp-prefix key format: [timestamp:8][sequence_number:8]
     let mut key = Vec::with_capacity(2 * mem::size_of::<i64>());
@@ -1844,7 +1845,8 @@ pub(super) fn insert_op_log_raw_event(
     generator: &OnceLock<Arc<SequenceGenerator>>,
 ) {
     let generator = generator.get_or_init(SequenceGenerator::init_generator);
-    let sequence_number = generator.generate_sequence_number();
+    let date_key = SequenceGenerator::get_date_key();
+    let sequence_number = generator.generate_sequence_number(date_key);
 
     let mut key: Vec<u8> = Vec::new();
     key.extend_from_slice(&timestamp.to_be_bytes());

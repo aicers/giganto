@@ -17,6 +17,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed `SequenceGenerator` by using `AtomicU64` + CAS (`fetch_update`) to
+  prevent duplicate sequence issuance during concurrent reset races.
+  The generator now keeps state in one atomic value with deterministic rules:
+  reset to `[date_key, counter=1]` only on newer dates, ignore stale dates,
+  and wrap the 40-bit counter back to `1` on overflow.
 - Fixed an issue where combined search results could report incorrect previous/next
   page availability in giganto cluster mode, affecting pagination.
 - Fixed `check_address`/`check_port` so `(Some(filter), None)` no longer passes.
