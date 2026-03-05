@@ -1759,6 +1759,8 @@ async fn handle_sysmon_events(
                 file_delete_detected_iter,
                 size,
                 is_forward,
+                after.is_some(),
+                before.is_some(),
             )
         },
     )
@@ -1783,6 +1785,8 @@ fn sysmon_connection(
     mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected>>,
     size: usize,
     is_forward: bool,
+    has_after: bool,
+    has_before: bool,
 ) -> Result<Connection<String, SysmonEvents>> {
     let time = min_max_time(is_forward);
     let mut result_vec: Vec<Edge<String, SysmonEvents, _>> = Vec::new();
@@ -2116,6 +2120,12 @@ fn sysmon_connection(
             }
             break;
         }
+    }
+
+    if is_forward {
+        has_previous_page = has_after;
+    } else {
+        has_next_page = has_before;
     }
     let mut connection: Connection<String, SysmonEvents> =
         Connection::new(has_previous_page, has_next_page);
