@@ -375,7 +375,6 @@ fn init_tracing(log_path: Option<&Path>) -> Result<WorkerGuard> {
         (
             fmt::Layer::default()
                 .with_ansi(true)
-                .with_line_number(true)
                 .with_writer(stdout_writer)
                 .with_filter(
                     EnvFilter::builder()
@@ -406,16 +405,96 @@ async fn wait_for_task_shutdown(
 #[cfg(test)]
 mod tests {
     use std::{
+        io::Write,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     };
 
+    use regex::Regex;
     use tokio::time::sleep;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
+
+    struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CaptureBuf {
+        type Writer = CaptureBuf;
+
+        fn make_writer(&'a self) -> CaptureBuf {
+            CaptureBuf(Arc::clone(&self.0))
+        }
+    }
+
+    #[test]
+    fn stdout_fmt_layer_excludes_line_numbers() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let writer = CaptureBuf(Arc::clone(&buf));
+
+        let layer = fmt::Layer::default()
+            .with_ansi(false)
+            .with_writer(writer)
+            .with_filter(
+                EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env_lossy(),
+            );
+
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("test log message");
+        });
+
+        let output = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 output");
+        let re = Regex::new(r"\w+\.rs:\d+").expect("valid regex");
+        assert!(
+            !re.is_match(&output),
+            "stdout should not include file:line numbers, got: {output}"
+        );
+    }
+
+    #[test]
+    fn file_fmt_layer_excludes_line_numbers() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let writer = CaptureBuf(Arc::clone(&buf));
+
+        let layer = fmt::Layer::default()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(writer)
+            .with_filter(
+                EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env_lossy(),
+            );
+
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("test log message");
+        });
+
+        let output = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 output");
+        let re = Regex::new(r"\w+\.rs:\d+").expect("valid regex");
+        assert!(
+            !re.is_match(&output),
+            "file log should not include file:line numbers, got: {output}"
+        );
+    }
 
     #[test]
     fn test_create_graphql_client_with_invalid_cert() {
