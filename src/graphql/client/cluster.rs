@@ -912,6 +912,7 @@ mod tests {
         IngestSensors,
         peer::{PeerInfo, Peers},
     };
+    use crate::graphql::validate_pagination_args;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
@@ -1399,6 +1400,175 @@ mod tests {
                     .contains("Peer giganto's response status is not success.")
             }),
             "expected a peer response error, got {res:?}"
+        );
+    }
+
+    // ── Cluster pagination validation tests ─────────────────────────────
+    //
+    // These mirror the tests in `graphql.rs` but use the exact argument
+    // types that the `paged_events_in_cluster!` macro passes to
+    // `validate_pagination_args` (`Option<String>` / `Option<usize>`),
+    // ensuring the cluster path rejects the same invalid combinations.
+
+    #[test]
+    fn cluster_pagination_rejects_before_and_first() {
+        let after: Option<String> = None;
+        let before: Option<String> = Some("cursor".to_string());
+        let first: Option<usize> = Some(10);
+        let last: Option<usize> = None;
+
+        let err = validate_pagination_args(
+            after.as_ref(),
+            before.as_ref(),
+            first.as_ref(),
+            last.as_ref(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "'before' and 'first' cannot be specified simultaneously"
+        );
+    }
+
+    #[test]
+    fn cluster_pagination_rejects_after_and_last() {
+        let after: Option<String> = Some("cursor".to_string());
+        let before: Option<String> = None;
+        let first: Option<usize> = None;
+        let last: Option<usize> = Some(10);
+
+        let err = validate_pagination_args(
+            after.as_ref(),
+            before.as_ref(),
+            first.as_ref(),
+            last.as_ref(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "'after' and 'last' cannot be specified simultaneously"
+        );
+    }
+
+    #[test]
+    fn cluster_pagination_rejects_after_and_before() {
+        let after: Option<String> = Some("cursor_a".to_string());
+        let before: Option<String> = Some("cursor_b".to_string());
+        let first: Option<usize> = None;
+        let last: Option<usize> = None;
+
+        let err = validate_pagination_args(
+            after.as_ref(),
+            before.as_ref(),
+            first.as_ref(),
+            last.as_ref(),
+        )
+        .unwrap_err();
+        assert_eq!(err.message, "cannot use both `after` and `before`");
+    }
+
+    #[test]
+    fn cluster_pagination_rejects_first_and_last() {
+        let after: Option<String> = None;
+        let before: Option<String> = None;
+        let first: Option<usize> = Some(10);
+        let last: Option<usize> = Some(5);
+
+        let err = validate_pagination_args(
+            after.as_ref(),
+            before.as_ref(),
+            first.as_ref(),
+            last.as_ref(),
+        )
+        .unwrap_err();
+        assert_eq!(err.message, "first and last cannot be used together");
+    }
+
+    #[test]
+    fn cluster_pagination_accepts_valid_combinations() {
+        // first only
+        let (after, before, first, last): (
+            Option<String>,
+            Option<String>,
+            Option<usize>,
+            Option<usize>,
+        ) = (None, None, Some(10), None);
+        assert!(
+            validate_pagination_args(
+                after.as_ref(),
+                before.as_ref(),
+                first.as_ref(),
+                last.as_ref()
+            )
+            .is_ok()
+        );
+
+        // last only
+        let (after, before, first, last): (
+            Option<String>,
+            Option<String>,
+            Option<usize>,
+            Option<usize>,
+        ) = (None, None, None, Some(10));
+        assert!(
+            validate_pagination_args(
+                after.as_ref(),
+                before.as_ref(),
+                first.as_ref(),
+                last.as_ref()
+            )
+            .is_ok()
+        );
+
+        // after + first (forward pagination)
+        let (after, before, first, last): (
+            Option<String>,
+            Option<String>,
+            Option<usize>,
+            Option<usize>,
+        ) = (Some("cursor".to_string()), None, Some(10), None);
+        assert!(
+            validate_pagination_args(
+                after.as_ref(),
+                before.as_ref(),
+                first.as_ref(),
+                last.as_ref()
+            )
+            .is_ok()
+        );
+
+        // before + last (backward pagination)
+        let (after, before, first, last): (
+            Option<String>,
+            Option<String>,
+            Option<usize>,
+            Option<usize>,
+        ) = (None, Some("cursor".to_string()), None, Some(10));
+        assert!(
+            validate_pagination_args(
+                after.as_ref(),
+                before.as_ref(),
+                first.as_ref(),
+                last.as_ref()
+            )
+            .is_ok()
+        );
+
+        // no args
+        let (after, before, first, last): (
+            Option<String>,
+            Option<String>,
+            Option<usize>,
+            Option<usize>,
+        ) = (None, None, None, None);
+        assert!(
+            validate_pagination_args(
+                after.as_ref(),
+                before.as_ref(),
+                first.as_ref(),
+                last.as_ref()
+            )
+            .is_ok()
         );
     }
 }
