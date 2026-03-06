@@ -87,7 +87,7 @@ In the config file, you can specify the following options:
 | `max_subcompactions`   | Number of sub-compactions allowed    | No       | 2                     |
 | `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
 | `compression`          | Enable RocksDB compression           | No       | false                 |
-| `addr_to_peers`        | Address to listen for peer QUIC      | No       | 254.254.254.254:38383 |
+| `addr_to_peers`        | Address to listen for peer QUIC      | No       | -                     |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
 
 <!-- markdownlint-enable MD013 -->
