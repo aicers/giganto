@@ -10,6 +10,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
+- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel (`254.254.254.254:38383`)
+  and replaced it with proper `Option` semantics for `addr_to_peers`. A missing
+  key in the configuration file now correctly deserializes to `None`.
 - Peer init handshake now validates response/request PeerCode.
 - Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
   explicit error instead of an empty certificate chain. This improves mTLS
