@@ -2680,3 +2680,177 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
     "#,
     },
 ];
+
+#[tokio::test]
+async fn sysmon_connection_pagination_after_first_sets_has_previous_page() {
+    let schema = TestSchema::new();
+    let sensor = "src1";
+    let base_ts = Utc
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    let step = 1_000_000_000; // 1 second
+
+    // Insert multiple events to test pagination
+    let process_create_store = schema.db.process_create_store().unwrap();
+    for i in 0..5 {
+        insert_process_create_event(&process_create_store, sensor, base_ts + step * i);
+    }
+
+    // First, get some initial results to obtain a cursor
+    let query_first = r#"
+    {
+        sysmonEvents(
+            filter: {
+                sensor: "src1",
+                time: { start: "2024-01-01T00:00:00Z", end: "2024-01-01T00:10:00Z" }
+            },
+            first: 2
+        ) {
+            pageInfo {
+                hasPreviousPage
+                hasNextPage
+            }
+            edges {
+                cursor
+                node {
+                    __typename
+                    ... on ProcessCreateEvent { time }
+                }
+            }
+        }
+    }"#;
+
+    let res = schema.execute(query_first).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["sysmonEvents"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 2);
+    let first_cursor = edges[0]["cursor"].as_str().unwrap();
+
+    // Now test pagination with after cursor
+    let query_after = format!(
+        r#"
+    {{
+        sysmonEvents(
+            filter: {{
+                sensor: "src1",
+                time: {{ start: "2024-01-01T00:00:00Z", end: "2024-01-01T00:10:00Z" }}
+            }},
+            after: "{first_cursor}",
+            first: 2
+        ) {{
+            pageInfo {{
+                hasPreviousPage
+                hasNextPage
+            }}
+            edges {{
+                cursor
+                node {{
+                    __typename
+                    ... on ProcessCreateEvent {{ time }}
+                }}
+            }}
+        }}
+    }}"#
+    );
+
+    let res = schema.execute(&query_after).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let page_info = &data["sysmonEvents"]["pageInfo"];
+
+    // Assert that hasPreviousPage is true when using after cursor
+    assert!(
+        page_info["hasPreviousPage"].as_bool().unwrap(),
+        "hasPreviousPage should be true when using after cursor with first"
+    );
+}
+
+#[tokio::test]
+async fn sysmon_connection_pagination_before_last_sets_has_next_page() {
+    let schema = TestSchema::new();
+    let sensor = "src1";
+    let base_ts = Utc
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
+    let step = 1_000_000_000; // 1 second
+
+    // Insert multiple events to test pagination
+    let process_create_store = schema.db.process_create_store().unwrap();
+    for i in 0..5 {
+        insert_process_create_event(&process_create_store, sensor, base_ts + step * i);
+    }
+
+    // First, get some initial results to obtain a cursor
+    let query_first = r#"
+    {
+        sysmonEvents(
+            filter: {
+                sensor: "src1",
+                time: { start: "2024-01-01T00:00:00Z", end: "2024-01-01T00:10:00Z" }
+            },
+            last: 2
+        ) {
+            pageInfo {
+                hasPreviousPage
+                hasNextPage
+            }
+            edges {
+                cursor
+                node {
+                    __typename
+                    ... on ProcessCreateEvent { time }
+                }
+            }
+        }
+    }"#;
+
+    let res = schema.execute(query_first).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["sysmonEvents"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 2);
+    let last_cursor = edges[edges.len() - 1]["cursor"].as_str().unwrap();
+
+    // Now test pagination with before cursor
+    let query_before = format!(
+        r#"
+    {{
+        sysmonEvents(
+            filter: {{
+                sensor: "src1",
+                time: {{ start: "2024-01-01T00:00:00Z", end: "2024-01-01T00:10:00Z" }}
+            }},
+            before: "{last_cursor}",
+            last: 2
+        ) {{
+            pageInfo {{
+                hasPreviousPage
+                hasNextPage
+            }}
+            edges {{
+                cursor
+                node {{
+                    __typename
+                    ... on ProcessCreateEvent {{ time }}
+                }}
+            }}
+        }}
+    }}"#
+    );
+
+    let res = schema.execute(&query_before).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let page_info = &data["sysmonEvents"]["pageInfo"];
+
+    // Assert that hasNextPage is true when using before cursor
+    assert!(
+        page_info["hasNextPage"].as_bool().unwrap(),
+        "hasNextPage should be true when using before cursor with last"
+    );
+}
