@@ -69,11 +69,7 @@ pub struct Settings {
 /// The application settings.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
-    #[serde(
-        default,
-        deserialize_with = "deserialize_peer_addr",
-        alias = "addr_to_peers"
-    )]
+    #[serde(default, deserialize_with = "deserialize_peer_addr")]
     pub peer_srv_addr: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 

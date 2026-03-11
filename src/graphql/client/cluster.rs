@@ -168,7 +168,7 @@ pub(crate) async fn find_who_are_in_charge(
             .read()
             .await
             .iter()
-            .filter(|&(_addr, peer_info)| {
+            .filter(|&(_peer_addr, peer_info)| {
                 peer_info
                     .ingest_sensors
                     .iter()
@@ -1254,7 +1254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_in_charge_graphql_addr_returns_address() {
+    async fn peer_in_charge_graphql_addr_returns_peer_address() {
         let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
             "127.0.0.1".to_string(),
             PeerInfo {
