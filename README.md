@@ -87,7 +87,7 @@ In the config file, you can specify the following options:
 | `max_subcompactions`   | Number of sub-compactions allowed    | No       | 2                     |
 | `ack_transmission`     | Ack count for ingestion data         | No       | 1024                  |
 | `compression`          | Enable RocksDB compression           | No       | false                 |
-| `addr_to_peers`        | Address to listen for peer QUIC      | No       | -                     |
+| `peer_srv_addr`        | Address to listen for peer QUIC      | No       | -                     |
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
 
 <!-- markdownlint-enable MD013 -->
@@ -106,7 +106,7 @@ max_mb_of_level_base = 512
 num_of_thread = 8
 max_subcompactions = 2
 ack_transmission = 1024
-addr_to_peers = "10.10.11.1:38383"
+peer_srv_addr = "10.10.11.1:38383"
 peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
 ```
 
@@ -119,7 +119,7 @@ These values assume you've used all the way up to level 6, so the actual values
 may change if you want to grow your data further at the level base. So if it's
 less than 512 MB, it's recommended to set default value of 512 MB.
 
-If there is no `addr_to_peers` option in the configuration file, it runs in
+If there is no `peer_srv_addr` option in the configuration file, it runs in
 standalone mode, and if there is, it runs in cluster mode for P2P.
 
 ### Database Compression Metadata
