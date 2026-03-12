@@ -70,7 +70,7 @@ pub struct Settings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
     #[serde(default, deserialize_with = "deserialize_peer_addr")]
-    pub addr_to_peers: Option<SocketAddr>, // IP address & port for peer connection
+    pub peer_srv_addr: Option<SocketAddr>, // IP address & port for peer connection
     pub peers: Option<HashSet<PeerIdentity>>,
 
     #[serde(flatten)]
@@ -158,7 +158,7 @@ impl Settings {
     pub fn update_config_file(&mut self, new_config: &ConfigVisible) -> anyhow::Result<()> {
         // Create a temporary config with the new visible settings to serialize
         let temp_config = Config {
-            addr_to_peers: self.config.addr_to_peers,
+            peer_srv_addr: self.config.peer_srv_addr,
             peers: self.config.peers.clone(),
             visible: new_config.clone(),
             compression: self.config.compression,
@@ -379,10 +379,10 @@ compression = {}
             (temp_file, data_dir, export_dir, config_visible)
         }
 
-        pub(super) fn test_config_content_with_addr_to_peers(addr_to_peers: &str) -> String {
+        pub(super) fn test_config_content_with_peer_srv_addr(peer_srv_addr: &str) -> String {
             format!(
                 r#"{TEST_CONFIG_CONTENT}
-        addr_to_peers = "{addr_to_peers}"
+        peer_srv_addr = "{peer_srv_addr}"
         "#
             )
         }
@@ -472,8 +472,8 @@ export_dir = "{}"
             "ack_transmission should default to the expected value"
         );
         assert_eq!(
-            settings.config.addr_to_peers, None,
-            "addr_to_peers should default to None"
+            settings.config.peer_srv_addr, None,
+            "peer_srv_addr should default to None"
         );
         assert_eq!(settings.config.peers, None, "peers should default to None");
         assert!(
@@ -642,18 +642,18 @@ export_dir = "{}"
     }
 
     #[test]
-    fn test_update_config_file_preserves_addr_to_peers_and_peers() {
+    fn test_update_config_file_preserves_peer_srv_addr_and_peers() {
         let (temp_file, _data_dir, _export_dir, original_config) = create_test_config(false);
         let config_path = temp_file.path().to_str().unwrap();
 
         let mut settings = Settings::load(config_path).expect("Failed to load settings");
-        settings.config.addr_to_peers = Some("10.10.10.10:38383".parse().unwrap());
+        settings.config.peer_srv_addr = Some("10.10.10.10:38383".parse().unwrap());
         settings.config.peers = Some(std::collections::HashSet::from([PeerIdentity {
             addr: "10.10.10.20:38383".parse().unwrap(),
             hostname: "node-1".to_string(),
         }]));
 
-        let original_addr_to_peers = settings.config.addr_to_peers;
+        let original_peer_srv_addr = settings.config.peer_srv_addr;
         let original_peers = settings.config.peers.clone();
 
         let new_config = ConfigVisible {
@@ -674,14 +674,14 @@ export_dir = "{}"
             .update_config_file(&new_config)
             .expect("Expected update_config_file to succeed");
 
-        assert_eq!(settings.config.addr_to_peers, original_addr_to_peers);
+        assert_eq!(settings.config.peer_srv_addr, original_peer_srv_addr);
         assert_eq!(settings.config.peers, original_peers);
 
         let reloaded_settings =
             Settings::load(config_path).expect("Failed to reload settings from disk");
         assert_eq!(
-            reloaded_settings.config.addr_to_peers,
-            original_addr_to_peers
+            reloaded_settings.config.peer_srv_addr,
+            original_peer_srv_addr
         );
         assert_eq!(reloaded_settings.config.peers, original_peers);
 
@@ -812,7 +812,7 @@ export_dir = "{}"
     fn test_validate_config() {
         let (_temp_file, data_dir, _export_dir, config_visible) = create_test_config(false);
         let config = Config {
-            addr_to_peers: None,
+            peer_srv_addr: None,
             peers: None,
             visible: config_visible,
             compression: false,
@@ -962,12 +962,12 @@ export_dir = "{}"
     }
 
     #[test]
-    fn test_addr_to_peers_missing_key_deserializes_to_none() {
+    fn test_peer_srv_addr_missing_key_deserializes_to_none() {
         let (_dir, config_path) = create_config_file(TEST_CONFIG_CONTENT);
         let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
         assert!(
-            settings.config.addr_to_peers.is_none(),
-            "addr_to_peers should be None when key is missing from config"
+            settings.config.peer_srv_addr.is_none(),
+            "peer_srv_addr should be None when key is missing from config"
         );
         assert_eq!(settings.config.peers, None);
         assert!(!settings.config.compression);
@@ -975,24 +975,24 @@ export_dir = "{}"
     }
 
     #[test]
-    fn test_addr_to_peers_empty_string_returns_error() {
-        let (_dir, config_path) = create_config_file(&test_config_content_with_addr_to_peers(""));
+    fn test_peer_srv_addr_empty_string_returns_error() {
+        let (_dir, config_path) = create_config_file(&test_config_content_with_peer_srv_addr(""));
         let err = Settings::load(config_path.to_str().unwrap())
             .expect_err("Operation should have failed");
         let err_msg = err.to_string();
         assert!(err_msg.contains("invalid address \"\""));
-        assert!(err_msg.contains("addr_to_peers"));
+        assert!(err_msg.contains("peer_srv_addr"));
     }
 
     #[test]
-    fn test_addr_to_peers_valid_address_deserializes_to_some() {
+    fn test_peer_srv_addr_valid_address_deserializes_to_some() {
         let (_dir, config_path) =
-            create_config_file(&test_config_content_with_addr_to_peers("192.168.1.1:38383"));
+            create_config_file(&test_config_content_with_peer_srv_addr("192.168.1.1:38383"));
         let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
         assert_eq!(
-            settings.config.addr_to_peers,
+            settings.config.peer_srv_addr,
             Some("192.168.1.1:38383".parse().unwrap()),
-            "addr_to_peers should be Some with valid address"
+            "peer_srv_addr should be Some with valid address"
         );
         assert_eq!(settings.config.peers, None);
         assert!(!settings.config.compression);
@@ -1000,21 +1000,21 @@ export_dir = "{}"
     }
 
     #[test]
-    fn test_addr_to_peers_whitespace_string_returns_error() {
+    fn test_peer_srv_addr_whitespace_string_returns_error() {
         let (_dir, config_path) =
-            create_config_file(&test_config_content_with_addr_to_peers("   "));
+            create_config_file(&test_config_content_with_peer_srv_addr("   "));
         let err = Settings::load(config_path.to_str().unwrap())
             .expect_err("Operation should have failed");
         let err_msg = err.to_string();
         assert!(err_msg.contains("invalid address \"   \""));
-        assert!(err_msg.contains("addr_to_peers"));
+        assert!(err_msg.contains("peer_srv_addr"));
     }
 
     #[test]
-    fn test_addr_to_peers_type_mismatch_returns_error() {
+    fn test_peer_srv_addr_type_mismatch_returns_error() {
         let config = format!(
             r"{TEST_CONFIG_CONTENT}
-        addr_to_peers = 123
+        peer_srv_addr = 123
         "
         );
         let (_dir, config_path) = create_config_file(&config);
@@ -1027,6 +1027,6 @@ export_dir = "{}"
                 || err_msg.contains("invalid address"),
             "Unexpected error message: {err_msg}"
         );
-        assert!(err_msg.contains("addr_to_peers"));
+        assert!(err_msg.contains("peer_srv_addr"));
     }
 }

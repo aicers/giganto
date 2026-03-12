@@ -124,13 +124,13 @@ pub(crate) async fn peer_in_charge_graphql_addr(
                 .read()
                 .await
                 .iter()
-                .find_map(|(addr_to_peers, peer_info)| {
+                .find_map(|(peer_addr, peer_info)| {
                     peer_info
                         .ingest_sensors
                         .contains(sensor_filter)
                         .then(|| {
                             SocketAddr::new(
-                                addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                                peer_addr.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
                                 peer_info.graphql_port.expect("Peer's graphql port must be valid, because it is validated when peer giganto started."),
                             )
                         })
@@ -168,15 +168,15 @@ pub(crate) async fn find_who_are_in_charge(
             .read()
             .await
             .iter()
-            .filter(|&(_addr_to_peers, peer_info)| {
+            .filter(|&(_peer_addr, peer_info)| {
                 peer_info
                     .ingest_sensors
                     .iter()
                     .any(|ingest_sensor| sensors.contains(&ingest_sensor.as_str()))
             })
-            .map(|(addr_to_peers, peer_info)| {
+            .map(|(peer_addr, peer_info)| {
                 SocketAddr::new(
-                    addr_to_peers
+                    peer_addr
                         .parse::<IpAddr>()
                         .expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
                     peer_info
@@ -705,9 +705,9 @@ macro_rules! request_all_peers_for_paged_events_fut {
                     .read()
                     .await
                     .iter()
-                    .map(|(addr_to_peers, peer_info)| {
+                    .map(|(peer_addr, peer_info)| {
                         std::net::SocketAddr::new(
-                            addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                            peer_addr.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
                             peer_info.graphql_port.expect("Peer's graphql port must be valid, because it is validated when peer giganto started."),
                         )
                     }).collect()

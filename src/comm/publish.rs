@@ -1663,13 +1663,13 @@ async fn is_current_giganto_in_charge(ingest_sensors: IngestSensors, sensor: &st
 }
 
 async fn peer_in_charge_publish_addr(peers: Peers, sensor: &str) -> Option<SocketAddr> {
-    peers.read().await.iter().find_map(|(addr_to_peers, peer_info)| {
+    peers.read().await.iter().find_map(|(peer_addr, peer_info)| {
         peer_info
             .ingest_sensors
             .contains(sensor)
             .then(|| {
                 SocketAddr::new(
-                    addr_to_peers.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
+                    peer_addr.parse::<IpAddr>().expect("Peer's IP address must be valid, because it is validated when peer giganto started."),
                     peer_info.publish_port.expect("Peer's publish port must be valid, because it is validated when peer giganto started."),
                 )
             })
