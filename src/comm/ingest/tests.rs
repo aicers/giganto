@@ -1695,13 +1695,9 @@ async fn icmp() {
     send_record_header(&mut send_icmp, RawEventKind::Icmp)
         .await
         .unwrap();
-    send_events(
-        &mut send_icmp,
-        next_timestamp(),
-        icmp_body,
-    )
-    .await
-    .unwrap();
+    send_events(&mut send_icmp, next_timestamp(), icmp_body)
+        .await
+        .unwrap();
 
     send_icmp.finish().expect("failed to shutdown stream");
     let stored = wait_for_raw_event(&harness.db, RawEventKind::Icmp).await;
