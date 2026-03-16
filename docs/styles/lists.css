@@ -1,0 +1,40 @@
+/* Stabilize nested list hierarchy across MkDocs Material pages.
+ * Keep selectors narrow and avoid broad typography overrides.
+ */
+
+.md-typeset ul,
+.md-typeset ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.75em;
+}
+
+.md-typeset li {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+/* Explicit nesting indentation to prevent flattened visual hierarchy. */
+.md-typeset ul ul,
+.md-typeset ul ol,
+.md-typeset ol ul,
+.md-typeset ol ol {
+  margin-top: 0.35em;
+  margin-bottom: 0.5em;
+  margin-left: 1.2em;
+}
+
+/* Keep paragraph blocks inside list items compact and predictable. */
+.md-typeset li > p {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+/* Avoid over-compression in print/PDF output. */
+@media print {
+  .md-typeset ul ul,
+  .md-typeset ul ol,
+  .md-typeset ol ul,
+  .md-typeset ol ol {
+    margin-left: 1em;
+  }
+}
