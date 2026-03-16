@@ -1,0 +1,51 @@
+site_name: Giganto Manual
+site_description: Giganto user manual (EN/KR)
+repo_url: https://github.com/aicers/giganto
+site_url: https://example.invalid/giganto
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          name: English
+          build: true
+          default: true
+          nav:
+            - Overview: index.md
+            - Prerequisites: prerequisites.md
+            - Configuration: configuration.md
+            - Operations: operations.md
+            - GraphQL: graphql.md
+            - Troubleshooting: troubleshooting.md
+        - locale: ko
+          name: 한국어
+          build: true
+          nav:
+            - Overview: index.md
+            - Prerequisites: prerequisites.md
+            - Configuration: configuration.md
+            - Operations: operations.md
+            - GraphQL: graphql.md
+            - Troubleshooting: troubleshooting.md
+          nav_translations:
+            Overview: 개요
+            Prerequisites: 설치 전 준비
+            Configuration: 설정
+            Operations: 실행
+            GraphQL: GraphQL
+            Troubleshooting: 문제 해결
+extra_css:
+  - styles/lists.css
+  - styles/pdf.css
