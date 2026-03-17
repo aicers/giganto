@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::anyhow;
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::{log::OpLog, network::Conn};
 use mockito::Server;
 use tempfile::tempdir;
@@ -12,6 +11,7 @@ use super::{
     ExportFilter, export_file, export_oplog_file, export_statistic_file, to_string_or_empty,
 };
 use crate::comm::ingest::generation::SequenceGenerator;
+use crate::datetime::DateTime;
 use crate::graphql::TimeRange;
 use crate::graphql::export::tests::fixture::{
     assert_export_error, assert_export_response, export_cases, export_filter_base,
@@ -50,8 +50,8 @@ fn export_filter_time_range_keys() {
     assert_eq!(filter.get_range_end_key(), (None, None));
     assert_eq!(filter.get_range_start_key(), (None, None));
 
-    let start = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 6).unwrap();
-    let end = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 8).unwrap();
+    let start = DateTime::from("2024-03-04T05:06:06Z".parse::<jiff::Timestamp>().unwrap());
+    let end = DateTime::from("2024-03-04T05:06:08Z".parse::<jiff::Timestamp>().unwrap());
     filter.time = Some(TimeRange {
         start: Some(start),
         end: Some(end),
@@ -335,22 +335,8 @@ async fn export_conn() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    insert_conn_raw_event(
-        &store,
-        "src1",
-        test_event_timestamp_nanos(),
-        chrono::DateTime::from_timestamp_nanos(12345)
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_conn_raw_event(
-        &store,
-        "ingest src 1",
-        test_event_timestamp_nanos(),
-        chrono::DateTime::from_timestamp_nanos(12345)
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_conn_raw_event(&store, "src1", test_event_timestamp_nanos(), 12345);
+    insert_conn_raw_event(&store, "ingest src 1", test_event_timestamp_nanos(), 12345);
 
     // export csv file
     let query = r#"

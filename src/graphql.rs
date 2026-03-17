@@ -23,7 +23,6 @@ use async_graphql::{
     connection::{Connection, Edge, query},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::Packet as pk;
 use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
@@ -32,6 +31,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::{Notify, mpsc::Sender};
 use tracing::error;
 
+use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 pub(crate) use crate::graphql::client::cluster::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
@@ -83,8 +83,8 @@ pub struct Mutation(status::ConfigMutation);
 /// - Omitting `end` means the range is unbounded above.
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    start: Option<DateTime>,
+    end: Option<DateTime>,
 }
 /// IP address range filter.
 ///
@@ -140,7 +140,7 @@ pub struct SearchFilter {
     resp_port: Option<PortRange>,
     log_level: Option<String>,
     log_contents: Option<String>,
-    pub times: Vec<DateTime<Utc>>,
+    pub times: Vec<DateTime>,
     /// Matches values that contain this keyword, case-insensitively.
     keyword: Option<String>,
     agent_id: Option<String>,
@@ -221,9 +221,9 @@ fn timestamp_to_sec_nsec(timestamp_ns: i64) -> (i64, i64) {
 }
 
 fn collect_exist_times<T>(
-    target_data: &BTreeSet<(DateTime<Utc>, Vec<u8>)>,
+    target_data: &BTreeSet<(DateTime, Vec<u8>)>,
     filter: &SearchFilter,
-) -> Vec<DateTime<Utc>>
+) -> Vec<DateTime>
 where
     T: EventFilter + DeserializeOwned,
 {
@@ -254,14 +254,14 @@ where
         .collect::<Vec<_>>()
 }
 
-fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn time_range(time_range: Option<&TimeRange>) -> (DateTime, DateTime) {
     let (start, end) = if let Some(time) = time_range {
         (time.start, time.end)
     } else {
         (None, None)
     };
-    let start = start.unwrap_or(Utc.timestamp_nanos(i64::MIN));
-    let end = end.unwrap_or(Utc.timestamp_nanos(i64::MAX));
+    let start = start.unwrap_or(DateTime::from_timestamp_nanos(i64::MIN));
+    let end = end.unwrap_or(DateTime::from_timestamp_nanos(i64::MAX));
     (start, end)
 }
 
@@ -632,18 +632,18 @@ where
     (records, has_more)
 }
 
-pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key_prefix(key: &[u8]) -> Result<DateTime, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let timestamp = i64::from_be_bytes(key[0..TIMESTAMP_SIZE].try_into()?);
-        return Ok(Utc.timestamp_nanos(timestamp));
+        return Ok(DateTime::from_timestamp_nanos(timestamp));
     }
     Err(anyhow!("invalid database key length"))
 }
 
-pub fn get_time_from_key(key: &[u8]) -> Result<DateTime<Utc>, anyhow::Error> {
+pub fn get_time_from_key(key: &[u8]) -> Result<DateTime, anyhow::Error> {
     if key.len() > TIMESTAMP_SIZE {
         let nanos = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-        return Ok(Utc.timestamp_nanos(nanos));
+        return Ok(DateTime::from_timestamp_nanos(nanos));
     }
     Err(anyhow!("invalid database key length"))
 }
@@ -863,11 +863,11 @@ fn filter_by_str(filter_str: Option<&str>, target_str: Option<&str>) -> bool {
     })
 }
 
-fn min_max_time(is_forward: bool) -> DateTime<Utc> {
+fn min_max_time(is_forward: bool) -> DateTime {
     if is_forward {
-        DateTime::<Utc>::MAX_UTC
+        DateTime::max_utc()
     } else {
-        DateTime::<Utc>::MIN_UTC
+        DateTime::min_utc()
     }
 }
 
@@ -953,7 +953,6 @@ mod tests {
     use std::sync::Arc;
 
     use async_graphql::EmptySubscription;
-    use chrono::{DateTime, TimeZone, Utc};
     use serde::{Deserialize, Serialize};
     use tokio::sync::Notify;
 
@@ -969,6 +968,7 @@ mod tests {
         new_pcap_sensors,
         peer::{PeerInfo, Peers},
     };
+    use crate::datetime::DateTime;
     use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
     use crate::storage::{Database, DbOptions};
@@ -1270,29 +1270,29 @@ mod tests {
     #[test]
     fn time_range_defaults_and_missing_bounds() {
         let (start, end) = time_range(None);
-        assert_eq!(start, Utc.timestamp_nanos(i64::MIN));
-        assert_eq!(end, Utc.timestamp_nanos(i64::MAX));
+        assert_eq!(start, DateTime::from_timestamp_nanos(i64::MIN));
+        assert_eq!(end, DateTime::from_timestamp_nanos(i64::MAX));
 
-        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let start = DateTime::from("2024-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
         let time = TimeRange {
             start: Some(start),
             end: None,
         };
         let (range_start, range_end) = time_range(Some(&time));
         assert_eq!(range_start, start);
-        assert_eq!(range_end, Utc.timestamp_nanos(i64::MAX));
+        assert_eq!(range_end, DateTime::from_timestamp_nanos(i64::MAX));
 
-        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let end = DateTime::from("2024-01-02T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
         let time = TimeRange {
             start: None,
             end: Some(end),
         };
         let (range_start, range_end) = time_range(Some(&time));
-        assert_eq!(range_start, Utc.timestamp_nanos(i64::MIN));
+        assert_eq!(range_start, DateTime::from_timestamp_nanos(i64::MIN));
         assert_eq!(range_end, end);
 
-        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let end = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let start = DateTime::from("2024-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
+        let end = DateTime::from("2024-01-02T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
         let time = TimeRange {
             start: Some(start),
             end: Some(end),
@@ -1345,7 +1345,7 @@ mod tests {
         key.extend_from_slice(&[1, 2, 3, 4]);
 
         let time = get_time_from_key_prefix(&key).unwrap();
-        assert_eq!(time, Utc.timestamp_nanos(timestamp));
+        assert_eq!(time, DateTime::from_timestamp_nanos(timestamp));
 
         let too_short = vec![0u8; TIMESTAMP_SIZE];
         let err = get_time_from_key_prefix(&too_short).unwrap_err();
@@ -1359,7 +1359,7 @@ mod tests {
         key.extend_from_slice(&timestamp.to_be_bytes());
 
         let time = get_time_from_key(&key).unwrap();
-        assert_eq!(time, Utc.timestamp_nanos(timestamp));
+        assert_eq!(time, DateTime::from_timestamp_nanos(timestamp));
 
         let too_short = vec![0u8; TIMESTAMP_SIZE];
         let err = get_time_from_key(&too_short).unwrap_err();
@@ -1468,8 +1468,8 @@ mod tests {
 
     #[test]
     fn test_min_max_time() {
-        assert_eq!(min_max_time(true), DateTime::<Utc>::MAX_UTC);
-        assert_eq!(min_max_time(false), DateTime::<Utc>::MIN_UTC);
+        assert_eq!(min_max_time(true), DateTime::max_utc());
+        assert_eq!(min_max_time(false), DateTime::min_utc());
     }
 
     #[derive(Serialize, Deserialize)]
@@ -1514,10 +1514,10 @@ mod tests {
 
     #[test]
     fn collect_exist_times_filters_by_time_and_search_filter() {
-        let t1 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
-        let t2 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 1, 0).unwrap();
-        let t3 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 2, 0).unwrap();
-        let t4 = Utc.with_ymd_and_hms(2023, 1, 1, 0, 3, 0).unwrap();
+        let t1 = DateTime::from("2023-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
+        let t2 = DateTime::from("2023-01-01T00:01:00Z".parse::<jiff::Timestamp>().unwrap());
+        let t3 = DateTime::from("2023-01-01T00:02:00Z".parse::<jiff::Timestamp>().unwrap());
+        let t4 = DateTime::from("2023-01-01T00:03:00Z".parse::<jiff::Timestamp>().unwrap());
 
         let mut target_data = BTreeSet::new();
         let ok_event = DummyEvent {
