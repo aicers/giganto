@@ -14,7 +14,7 @@ use giganto_client::connection::client_handshake;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
     Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use giganto_client::ingest::sysmon::{
@@ -917,6 +917,19 @@ async fn handle_request(
                     )
                     .await?;
                 }
+                RawEventKind::Icmp => {
+                    process_range_data::<Icmp, u8>(
+                        &mut send,
+                        db.icmp_store().context("Failed to open icmp store")?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                        false,
+                    )
+                    .await?;
+                }
                 RawEventKind::ProcessCreate => {
                     process_range_data::<ProcessCreate, u8>(
                         &mut send,
@@ -1393,6 +1406,18 @@ async fn handle_request(
                     process_raw_events::<Radius, u8>(
                         &mut send,
                         db.radius_store()?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                    )
+                    .await?;
+                }
+                RawEventKind::Icmp => {
+                    process_raw_events::<Icmp, u8>(
+                        &mut send,
+                        db.icmp_store()?,
                         msg,
                         ingest_sensors,
                         peers,

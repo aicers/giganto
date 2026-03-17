@@ -33,25 +33,26 @@ use crate::graphql::client::{
     },
     derives::{
         BootpRawEvents, ConnRawEvents, DceRpcRawEvents, DhcpRawEvents, DnsRawEvents, FtpRawEvents,
-        HttpRawEvents, KerberosRawEvents, LdapRawEvents, MalformedDnsRawEvents, MqttRawEvents,
-        NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents, RadiusRawEvents,
-        RdpRawEvents, SearchBootpRawEvents, SearchConnRawEvents, SearchDceRpcRawEvents,
-        SearchDhcpRawEvents, SearchDnsRawEvents, SearchFtpRawEvents, SearchHttpRawEvents,
-        SearchKerberosRawEvents, SearchLdapRawEvents, SearchMalformedDnsRawEvents,
-        SearchMqttRawEvents, SearchNfsRawEvents, SearchNtlmRawEvents, SearchRadiusRawEvents,
-        SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents, SearchSshRawEvents,
-        SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents, TlsRawEvents,
-        bootp_raw_events, conn_raw_events, dce_rpc_raw_events, dhcp_raw_events, dns_raw_events,
-        ftp_raw_events, http_raw_events, kerberos_raw_events, ldap_raw_events,
-        malformed_dns_raw_events, mqtt_raw_events, network_raw_events, nfs_raw_events,
-        ntlm_raw_events, radius_raw_events, rdp_raw_events, search_bootp_raw_events,
-        search_conn_raw_events, search_dce_rpc_raw_events, search_dhcp_raw_events,
-        search_dns_raw_events, search_ftp_raw_events, search_http_raw_events,
-        search_kerberos_raw_events, search_ldap_raw_events, search_malformed_dns_raw_events,
-        search_mqtt_raw_events, search_nfs_raw_events, search_ntlm_raw_events,
-        search_radius_raw_events, search_rdp_raw_events, search_smb_raw_events,
-        search_smtp_raw_events, search_ssh_raw_events, search_tls_raw_events, smb_raw_events,
-        smtp_raw_events, ssh_raw_events, tls_raw_events,
+        HttpRawEvents, IcmpRawEvents, KerberosRawEvents, LdapRawEvents, MalformedDnsRawEvents,
+        MqttRawEvents, NetworkRawEvents as GraphQlNetworkRawEvents, NfsRawEvents, NtlmRawEvents,
+        RadiusRawEvents, RdpRawEvents, SearchBootpRawEvents, SearchConnRawEvents,
+        SearchDceRpcRawEvents, SearchDhcpRawEvents, SearchDnsRawEvents, SearchFtpRawEvents,
+        SearchHttpRawEvents, SearchIcmpRawEvents, SearchKerberosRawEvents, SearchLdapRawEvents,
+        SearchMalformedDnsRawEvents, SearchMqttRawEvents, SearchNfsRawEvents, SearchNtlmRawEvents,
+        SearchRadiusRawEvents, SearchRdpRawEvents, SearchSmbRawEvents, SearchSmtpRawEvents,
+        SearchSshRawEvents, SearchTlsRawEvents, SmbRawEvents, SmtpRawEvents, SshRawEvents,
+        TlsRawEvents, bootp_raw_events, conn_raw_events, dce_rpc_raw_events, dhcp_raw_events,
+        dns_raw_events, ftp_raw_events, http_raw_events, icmp_raw_events, kerberos_raw_events,
+        ldap_raw_events, malformed_dns_raw_events, mqtt_raw_events, network_raw_events,
+        nfs_raw_events, ntlm_raw_events, radius_raw_events, rdp_raw_events,
+        search_bootp_raw_events, search_conn_raw_events, search_dce_rpc_raw_events,
+        search_dhcp_raw_events, search_dns_raw_events, search_ftp_raw_events,
+        search_http_raw_events, search_icmp_raw_events, search_kerberos_raw_events,
+        search_ldap_raw_events, search_malformed_dns_raw_events, search_mqtt_raw_events,
+        search_nfs_raw_events, search_ntlm_raw_events, search_radius_raw_events,
+        search_rdp_raw_events, search_smb_raw_events, search_smtp_raw_events,
+        search_ssh_raw_events, search_tls_raw_events, smb_raw_events, smtp_raw_events,
+        ssh_raw_events, tls_raw_events,
     },
 };
 use crate::storage::{Database, FilteredIter, KeyExtractor};
@@ -1300,6 +1301,7 @@ struct RadiusRawEvent {
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
 #[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    icmp_raw_events::IcmpRawEventsIcmpRawEventsEdgesNode,
     network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnIcmpRawEvent
 ]))]
 struct IcmpRawEvent {
@@ -2335,6 +2337,15 @@ async fn handle_network_raw_events(
                 last,
             )?;
 
+            let (icmp_iter, _) = get_peekable_iter(
+                &db.icmp_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
             let mut is_forward: bool = true;
             if before.is_some() || last.is_some() {
                 is_forward = false;
@@ -2360,6 +2371,7 @@ async fn handle_network_raw_events(
                 bootp_iter,
                 dhcp_iter,
                 radius_iter,
+                icmp_iter,
                 size,
                 is_forward,
             )
@@ -2889,7 +2901,21 @@ impl NetworkQuery {
         first: Option<i32>,
         last: Option<i32>,
     ) -> Result<Connection<String, IcmpRawEvent>> {
-        handle_paged_icmp_raw_events(ctx, filter, after, before, first, last).await
+        let handler = handle_paged_icmp_raw_events;
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            IcmpRawEvents,
+            icmp_raw_events::Variables,
+            icmp_raw_events::ResponseData,
+            icmp_raw_events
+        )
     }
 
     async fn network_raw_events(
@@ -3448,14 +3474,27 @@ impl NetworkQuery {
         ctx: &Context<'_>,
         filter: SearchFilter,
     ) -> Result<Vec<DateTime<Utc>>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.icmp_store()?;
-        let exist_data = store
-            .batched_multi_get_from_ts(&filter.sensor, &filter.times)
-            .into_iter()
-            .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.icmp_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
 
-        Ok(collect_exist_times::<Icmp>(&exist_data, &filter))
+            Ok(collect_exist_times::<Icmp>(&exist_data, filter))
+        };
+
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchIcmpRawEvents,
+            search_icmp_raw_events::Variables,
+            search_icmp_raw_events::ResponseData,
+            search_icmp_raw_events
+        )
     }
 }
 
@@ -3480,6 +3519,7 @@ fn network_connection(
     mut bootp_iter: Peekable<FilteredIter<Bootp>>,
     mut dhcp_iter: Peekable<FilteredIter<Dhcp>>,
     mut radius_iter: Peekable<FilteredIter<Radius>>,
+    mut icmp_iter: Peekable<FilteredIter<Icmp>>,
     size: usize,
     is_forward: bool,
 ) -> Result<Connection<String, NetworkRawEvents>> {
@@ -3508,6 +3548,7 @@ fn network_connection(
     let mut bootp_data = bootp_iter.next();
     let mut dhcp_data = dhcp_iter.next();
     let mut radius_data = radius_iter.next();
+    let mut icmp_data = icmp_iter.next();
 
     loop {
         let conn_ts = if let Some((ref key, _)) = conn_data {
@@ -3624,6 +3665,12 @@ fn network_connection(
             min_max_time(is_forward)
         };
 
+        let icmp_ts = if let Some((ref key, _)) = icmp_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
         let selected = if is_forward {
             time.min(dns_ts)
                 .min(malformed_dns_ts)
@@ -3644,6 +3691,7 @@ fn network_connection(
                 .min(bootp_ts)
                 .min(dhcp_ts)
                 .min(radius_ts)
+                .min(icmp_ts)
         } else {
             time.max(dns_ts)
                 .max(malformed_dns_ts)
@@ -3664,6 +3712,7 @@ fn network_connection(
                 .max(bootp_ts)
                 .max(dhcp_ts)
                 .max(radius_ts)
+                .max(icmp_ts)
         };
 
         match selected {
@@ -3848,6 +3897,15 @@ fn network_connection(
                     radius_data = radius_iter.next();
                 }
             }
+            _ if selected == icmp_ts => {
+                if let Some((key, value)) = icmp_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        NetworkRawEvents::IcmpRawEvent(IcmpRawEvent::from_key_value(&key, value)?),
+                    ));
+                    icmp_data = icmp_iter.next();
+                }
+            }
             _ => {}
         }
         if (result_vec.len() >= size)
@@ -3869,7 +3927,8 @@ fn network_connection(
                 && smtp_data.is_none()
                 && bootp_data.is_none()
                 && dhcp_data.is_none()
-                && radius_data.is_none())
+                && radius_data.is_none()
+                && icmp_data.is_none())
         {
             if conn_data.is_some()
                 || dns_data.is_some()
@@ -3890,6 +3949,7 @@ fn network_connection(
                 || bootp_data.is_some()
                 || dhcp_data.is_some()
                 || radius_data.is_some()
+                || icmp_data.is_some()
             {
                 has_next_value = true;
             }
@@ -3931,6 +3991,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
     bootp_raw_events,
     dhcp_raw_events,
     radius_raw_events,
+    icmp_raw_events,
     search_conn_raw_events,
     search_dce_rpc_raw_events,
     search_dns_raw_events,
@@ -3949,7 +4010,8 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_tls_raw_events,
     search_bootp_raw_events,
     search_dhcp_raw_events,
-    search_radius_raw_events
+    search_radius_raw_events,
+    search_icmp_raw_events
 );
 
 #[cfg(feature = "cluster")]
@@ -3973,7 +4035,8 @@ impl_from_giganto_network_filter_for_graphql_client!(
     smb_raw_events,
     bootp_raw_events,
     dhcp_raw_events,
-    radius_raw_events
+    radius_raw_events,
+    icmp_raw_events
 );
 
 #[cfg(feature = "cluster")]
@@ -3996,5 +4059,6 @@ impl_from_giganto_search_filter_for_graphql_client!(
     search_tls_raw_events,
     search_bootp_raw_events,
     search_dhcp_raw_events,
-    search_radius_raw_events
+    search_radius_raw_events,
+    search_icmp_raw_events
 );

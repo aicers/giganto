@@ -5037,6 +5037,178 @@ async fn radius_with_data_giganto_cluster() {
     mock.assert_async().await;
 }
 
+fn insert_icmp_raw_event(store: &RawEventStore<Icmp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: fixed_time_nanos().0,
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+    let ser_icmp_body = bincode::serialize(&icmp_body).unwrap();
+
+    store.append(&key, &ser_icmp_body).unwrap();
+}
+
+#[tokio::test]
+async fn icmp_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    let (time1, time2) = fixed_time_nanos();
+    insert_icmp_raw_event(&store, "src 1", time1);
+    insert_icmp_raw_event(&store, "src 1", time2);
+
+    let query = r#"
+    {
+        icmpRawEvents(
+            filter: {
+                sensor: "src 1"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    proto,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
+                    icmpType,
+                    icmpCode,
+                    id,
+                    seqNum,
+                    dataLen,
+                    payload,
+                    time,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
+        proto: 1, startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000\", origPkts: \"1\", \
+        respPkts: \"1\", origL2Bytes: \"84\", respL2Bytes: \"84\", icmpType: 8, icmpCode: 0, \
+        id: 12345, seqNum: 1, dataLen: 56, payload: [97, 98, 99, 100], \
+        time: \"2026-01-01T00:00:00+00:00\"}}]}}"
+    );
+
+    assert_time_boundaries(
+        &schema,
+        "icmpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn icmp_with_data_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        icmpRawEvents(
+            filter: {
+                sensor: "src 2"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    icmpType,
+                    icmpCode,
+                    id,
+                    seqNum,
+                }
+            }
+        }
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "icmpRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": true,
+                    "hasNextPage": false
+                },
+                "edges": [
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "time": "2026-01-01T00:00:00+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.77",
+                            "proto": 1,
+                            "startTime": "2026-01-01T00:00:00+00:00",
+                            "duration": "1000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "84",
+                            "respL2Bytes": "84",
+                            "icmpType": 8,
+                            "icmpCode": 0,
+                            "id": 12345,
+                            "seqNum": 1,
+                            "dataLen": 56,
+                            "payload": [97, 98, 99, 100]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(
+        res.data.to_string(),
+        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
+        icmpType: 8, icmpCode: 0, id: 12345, seqNum: 1}}]}}"
+    );
+    mock.assert_async().await;
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_search_boundary_for_addr_port() {
@@ -7379,70 +7551,6 @@ async fn search_radius_with_data_giganto_cluster() {
         "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
     mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn icmp_with_data() {
-    let schema = TestSchema::new();
-    let store = schema.db.icmp_store().unwrap();
-
-    insert_icmp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-    insert_icmp_raw_event(&store, "src 1", Utc::now().timestamp_nanos_opt().unwrap());
-
-    let query = r#"
-    {
-        icmpRawEvents(
-            filter: {
-                sensor: "src 1"
-            }
-            first: 1
-        ) {
-            edges {
-                node {
-                    origAddr,
-                    respAddr,
-                    icmpType,
-                    icmpCode,
-                    id,
-                    seqNum,
-                }
-            }
-        }
-    }"#;
-    let res = schema.execute(query).await;
-    assert_eq!(
-        res.data.to_string(),
-        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
-        icmpType: 8, icmpCode: 0, id: 12345, seqNum: 1}}]}}"
-    );
-}
-
-fn insert_icmp_raw_event(store: &RawEventStore<Icmp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
-
-    let icmp_body = Icmp {
-        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
-        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
-        proto: 1,
-        start_time: chrono::Utc::now().timestamp_nanos_opt().unwrap(),
-        duration: 1_000_000,
-        orig_pkts: 1,
-        resp_pkts: 1,
-        orig_l2_bytes: 84,
-        resp_l2_bytes: 84,
-        icmp_type: 8,
-        icmp_code: 0,
-        id: 12345,
-        seq_num: 1,
-        data_len: 56,
-        payload: vec![0x61, 0x62, 0x63, 0x64],
-    };
-    let ser_icmp_body = bincode::serialize(&icmp_body).unwrap();
-
-    store.append(&key, &ser_icmp_body).unwrap();
 }
 
 #[tokio::test]
