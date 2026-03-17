@@ -1,7 +1,6 @@
 use std::net::IpAddr;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use data_encoding::BASE64;
 use giganto_client::ingest::Packet as pk;
 #[cfg(feature = "cluster")]
@@ -14,6 +13,7 @@ use super::{
     Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
     get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
+use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::impl_from_giganto_time_range_struct_for_graphql_client,
@@ -31,7 +31,7 @@ pub(super) struct PacketQuery;
 #[derive(InputObject)]
 pub struct PacketFilter {
     sensor: String,
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     packet_time: Option<TimeRange>,
 }
 
@@ -49,7 +49,7 @@ impl KeyExtractor for PacketFilter {
         )
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.packet_time {
             (time.start, time.end)
         } else {
@@ -82,8 +82,8 @@ impl RawEventFilter for PacketFilter {
 ]))]
 #[allow(clippy::struct_field_names)]
 struct Packet {
-    request_time: DateTime<Utc>,
-    packet_time: DateTime<Utc>,
+    request_time: DateTime,
+    packet_time: DateTime,
     packet: String,
 }
 
@@ -93,7 +93,7 @@ struct Packet {
     pcaps::PcapPcap
 ]))]
 struct Pcap {
-    request_time: DateTime<Utc>,
+    request_time: DateTime,
     parsed_pcap: String,
 }
 
@@ -234,11 +234,12 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::{mem, net::SocketAddr};
 
-    use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
+    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
     use super::PacketFilter;
     use crate::{
+        datetime::DateTime,
         graphql::{TimeRange, tests::TestSchema},
         storage::{KeyExtractor, RawEventStore},
     };

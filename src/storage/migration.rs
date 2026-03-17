@@ -439,6 +439,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::COMPATIBLE_VERSION_REQ;
+    use crate::datetime::DateTime;
     use crate::storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV26,
         Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
@@ -1831,7 +1832,7 @@ mod tests {
         {
             let db = Database::open(&db_path, &db_options).unwrap();
             let sensor_store = db.sensors_store().unwrap();
-            sensor_store.insert("test_sensor", Utc::now()).unwrap();
+            sensor_store.insert("test_sensor", DateTime::now()).unwrap();
         }
 
         // Should succeed without doing anything

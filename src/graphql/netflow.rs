@@ -1,7 +1,6 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -12,6 +11,7 @@ use super::{
     FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
     handle_paged_events, paged_events_in_cluster,
 };
+use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::impl_from_giganto_range_structs_for_graphql_client,
@@ -57,7 +57,7 @@ impl KeyExtractor for NetflowFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -98,7 +98,7 @@ impl RawEventFilter for NetflowFilter {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow5RawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     src_addr: String,
     dst_addr: String,
     next_hop: String,
@@ -162,7 +162,7 @@ impl FromKeyValue<Netflow5> for Netflow5RawEvent {
 ]))]
 #[allow(clippy::module_name_repetitions)]
 pub struct Netflow9RawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     sequence: StringNumberU32,
     source_id: StringNumberU32,
     template_id: u16,
@@ -332,11 +332,11 @@ mod tests {
         str::FromStr,
     };
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 
     use super::{NetflowFilter, tcp_flags};
     use crate::{
+        datetime::DateTime,
         graphql::{IpRange, PortRange, RawEventFilter, TimeRange, tests::TestSchema},
         storage::{KeyExtractor, RawEventStore},
     };
@@ -347,11 +347,12 @@ mod tests {
         let store = schema.db.netflow5_store().unwrap();
 
         let sensor = "src1";
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        let timestamp = "2024-03-04T05:06:07Z"
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+            .as_nanosecond()
+            .try_into()
+            .expect("timestamp fits i64");
         insert_netflow5_raw_event(&store, sensor, timestamp, 123_456, 123_789);
 
         let query = format!(
@@ -406,11 +407,12 @@ mod tests {
         let store = schema.db.netflow9_store().unwrap();
 
         let sensor = "src1";
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        let timestamp = "2024-03-04T05:06:07Z"
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+            .as_nanosecond()
+            .try_into()
+            .expect("timestamp fits i64");
         insert_netflow9_raw_event(&store, sensor, timestamp);
 
         let query = format!(
@@ -789,8 +791,8 @@ mod tests {
         };
         assert_eq!(filter.get_range_end_key(), (None, None));
 
-        let start = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 7).unwrap();
-        let end = Utc.with_ymd_and_hms(2024, 3, 4, 5, 6, 8).unwrap();
+        let start = DateTime::from("2024-03-04T05:06:07Z".parse::<jiff::Timestamp>().unwrap());
+        let end = DateTime::from("2024-03-04T05:06:08Z".parse::<jiff::Timestamp>().unwrap());
         let filter = NetflowFilter {
             time: Some(TimeRange {
                 start: Some(start),
