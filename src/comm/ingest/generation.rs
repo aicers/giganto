@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{Datelike, Utc};
+use jiff::Zoned;
 
 /// Thread-safe daily sequence generator.
 ///
@@ -81,12 +81,12 @@ impl SequenceGenerator {
 
     /// Returns the current date key (`days since CE`).
     pub(crate) fn get_date_key() -> u32 {
-        let utc_now = Utc::now();
-        // `num_days_from_ce()` is i32; current dates fit safely in u32.
-        let date_key: u32 = utc_now
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be in valid range");
+        let now = Zoned::now();
+        let date = now.date();
+        let y = i32::from(date.year()) - 1;
+        let ordinal = i32::from(date.day_of_year());
+        let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+        let date_key: u32 = days.try_into().expect("date should be in valid range");
         Self::normalize_date_key(date_key)
     }
 

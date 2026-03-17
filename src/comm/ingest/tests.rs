@@ -42,6 +42,8 @@ use quinn::{Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::TempDir;
+
+use crate::datetime::DateTime;
 static INIT: OnceLock<()> = OnceLock::new();
 
 fn init_crypto() {
@@ -1859,7 +1861,7 @@ async fn check_sensors_conn_updates_runtime_state() {
     });
 
     let sensor_name = "test_sensor".to_string();
-    let now = Utc::now();
+    let now = DateTime::now();
 
     // Test Connection
     tx.send((sensor_name.clone(), now, ConnState::Connected, false))
@@ -1939,7 +1941,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
     });
 
     let sensor_name = "notify_sensor".to_string();
-    let now = Utc::now();
+    let now = DateTime::now();
 
     tx.send((sensor_name, now, ConnState::Connected, false))
         .await
@@ -2082,7 +2084,7 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
     });
 
     let sensor_name = "notify_sensor_disconnect".to_string();
-    let now = Utc::now();
+    let now = DateTime::now();
 
     pcap_sensors
         .write()
@@ -2184,7 +2186,7 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
     });
 
     let sensor_name = "piglet_sensor".to_string(); // "piglet" implies pcap sensor logic in handle_connection, but here we explicitly set is_pcap_sensor
-    let now = Utc::now();
+    let now = DateTime::now();
 
     tx.send((sensor_name.clone(), now, ConnState::Connected, true))
         .await

@@ -4,10 +4,10 @@ use async_graphql::{
     Context, InputObject, Object, Result, SimpleObject,
     connection::{Connection, query},
 };
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
 use super::{FromKeyValue, get_time_from_key, load_connection};
+use crate::datetime::DateTime;
 use crate::{
     graphql::{RawEventFilter, TimeRange},
     storage::{Database, KeyExtractor},
@@ -33,7 +33,7 @@ impl KeyExtractor for TimeSeriesFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -61,7 +61,7 @@ impl RawEventFilter for TimeSeriesFilter {
 
 #[derive(SimpleObject, Debug)]
 struct TimeSeries {
-    start: DateTime<Utc>,
+    start: DateTime,
     id: String,
     data: Vec<f64>,
 }

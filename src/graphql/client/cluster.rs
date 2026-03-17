@@ -899,7 +899,6 @@ mod tests {
         Context, EmptyMutation, EmptySubscription, Object, Request, Schema, SimpleObject,
         connection::{Connection, Edge, EmptyFields},
     };
-    use chrono::{DateTime, TimeZone, Utc};
     use mockito::Server;
     use serde_json::Value;
     use tokio::sync::RwLock;
@@ -912,11 +911,12 @@ mod tests {
         IngestSensors,
         peer::{PeerInfo, Peers},
     };
+    use crate::datetime::DateTime;
     use crate::graphql::validate_pagination_args;
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
-        time: DateTime<Utc>,
+        time: DateTime,
         secondary: Option<String>,
     }
 
@@ -931,42 +931,42 @@ mod tests {
             Edge::new(
                 "warn_001".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "danger_001".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "danger_002".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "info_001".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "info_002".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "info_003".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
@@ -1080,14 +1080,14 @@ mod tests {
             Edge::new(
                 "a_001".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
             Edge::new(
                 "b_001".to_string(),
                 TestNode {
-                    time: Utc::now(),
+                    time: DateTime::now(),
                     secondary: None,
                 },
             ),
@@ -1115,7 +1115,7 @@ mod tests {
 
     #[test]
     fn test_sort_and_truncate_edges_secondary_order() {
-        let time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let time = DateTime::from("2026-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
         let make_edges = || {
             vec![
                 Edge::new(
@@ -1168,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_combine_results_merges_flags_and_sorts_edges() {
-        let time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let time = DateTime::from("2026-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
         let mut current = Connection::new(false, true);
         current.edges = vec![Edge::new(
             "b".to_string(),

@@ -14,7 +14,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use generation::SequenceGenerator;
 use giganto_client::frame::recv_raw;
 use giganto_client::{
@@ -44,6 +43,7 @@ use x509_parser::nom::AsBytes;
 
 use crate::comm::publish::send_direct_stream;
 use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
+use crate::datetime::DateTime;
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
     subject_from_cert_verbose,
@@ -57,7 +57,7 @@ const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
 const INGEST_VERSION_REQ: &str = ">=0.26.0,<0.27.0";
 
-type SensorInfo = (String, DateTime<Utc>, ConnState, bool);
+type SensorInfo = (String, DateTime, ConnState, bool);
 
 static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
@@ -183,7 +183,7 @@ async fn handle_connection(
     if let Err(error) = sender
         .send((
             sensor.clone(),
-            Utc::now(),
+            DateTime::now(),
             ConnState::Connected,
             is_pcap_sensor,
         ))
@@ -198,7 +198,7 @@ async fn handle_connection(
                 let stream = match stream {
                     Err(conn_err) => {
                         if let Err(error) = sender
-                            .send((sensor, Utc::now(), ConnState::Disconnected, is_pcap_sensor))
+                            .send((sensor, DateTime::now(), ConnState::Disconnected, is_pcap_sensor))
                             .await
                         {
                             error!("Failed to send internal channel data: {error}");
@@ -905,7 +905,7 @@ async fn handle_data<T>(
                 #[cfg(feature = "benchmark")]
                 let mut packet_count = 0_u64;
                 // Compute date_key once per batch for OpLog sequence generation.
-                // This avoids repeated Utc::now() calls on the hot path.
+                // This avoids repeated DateTime::now() calls on the hot path.
                 let date_key =
                     (raw_event_kind == RawEventKind::OpLog).then(SequenceGenerator::get_date_key);
 
@@ -1133,7 +1133,7 @@ async fn check_sensors_conn(
                 let keys: Vec<String> = runtime_sensors.keys().map(std::borrow::ToOwned::to_owned).collect();
 
                 for sensor_key in keys {
-                    let time = Utc::now();
+                    let time = DateTime::now();
                     if sensor_store.insert(&sensor_key, time).is_err(){
                         error!("Failed to append sensor store");
                     }

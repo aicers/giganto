@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
-use chrono::{DateTime, Local, Utc};
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -43,6 +42,7 @@ use super::{
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
 };
+use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::impl_from_giganto_range_structs_for_graphql_client,
@@ -1837,7 +1837,7 @@ impl KeyExtractor for ExportFilter {
         None
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -1847,7 +1847,7 @@ impl KeyExtractor for ExportFilter {
 }
 
 impl TimestampKeyExtractor for ExportFilter {
-    fn get_range_start_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_start_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -1902,7 +1902,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
             .kind
             .as_ref()
             .map_or(String::new(), |k| format!("{k}_")),
-        Local::now().format("%Y%m%d_%H%M%S"),
+        jiff::Zoned::now().strftime("%Y%m%d_%H%M%S"),
     );
     let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
     let export_done_path = path.join(filename.replace(' ', ""));
@@ -2314,9 +2314,7 @@ where
         value.agent_id(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
-            .to_string();
+        let time = DateTime::from_timestamp_nanos(timestamp).format_epoch_nanos();
 
         match export_type {
             "csv" => {
@@ -2352,9 +2350,7 @@ fn write_oplog_data_to_file(
         value.agent_id(),
     ) {
         let timestamp = parse_oplog_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp)
-            .format("%s%.9f")
-            .to_string();
+        let time = DateTime::from_timestamp_nanos(timestamp).format_epoch_nanos();
         // For OpLog, the sensor info is stored in the value itself
         let sensor = &value.sensor;
 
