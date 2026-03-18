@@ -2390,7 +2390,7 @@ where
         value.agent_id(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp).format_epoch_nanos();
+        let time = DateTime::from_timestamp_nanos(timestamp).format_unix_seconds_with_nanos();
 
         match export_type {
             "csv" => {
@@ -2426,7 +2426,7 @@ fn write_oplog_data_to_file(
         value.agent_id(),
     ) {
         let timestamp = parse_oplog_key(key)?;
-        let time = DateTime::from_timestamp_nanos(timestamp).format_epoch_nanos();
+        let time = DateTime::from_timestamp_nanos(timestamp).format_unix_seconds_with_nanos();
         // For OpLog, the sensor info is stored in the value itself
         let sensor = &value.sensor;
 
