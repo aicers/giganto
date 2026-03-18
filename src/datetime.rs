@@ -89,40 +89,47 @@ impl DateTime {
     }
 
     /// Formats the timestamp as RFC 3339, matching chrono's
-    /// `DateTime<Utc>::to_rfc3339()` output exactly:
+    /// `DateTime<Utc>::to_rfc3339()` formatting behavior:
     ///
     /// * No fractional seconds when subsecond nanoseconds are zero.
     /// * 3 digits (millis) when subsecond nanoseconds are a multiple of
     ///   1,000,000.
     /// * 6 digits (micros) when subsecond nanoseconds are a multiple of 1,000.
     /// * 9 digits (nanos) otherwise.
+    /// * Uses chrono-compatible year formatting, including negative years.
     /// * Always uses `+00:00` offset (not `Z`).
     pub fn to_rfc3339(self) -> String {
-        let zdt = self.0.to_zoned(jiff::tz::TimeZone::UTC);
-        let dt = zdt.datetime();
+        let dt = self.0.to_zoned(jiff::tz::TimeZone::UTC).datetime();
         let (y, mo, d) = (dt.year(), dt.month(), dt.day());
         let (h, mi, s) = (dt.hour(), dt.minute(), dt.second());
+        let nanos = dt.subsec_nanosecond();
 
-        let nanos = self.0.subsec_nanosecond();
-        if nanos == 0 {
-            format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
-        } else if nanos % 1_000_000 == 0 {
-            let millis = nanos / 1_000_000;
-            format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}+00:00")
-        } else if nanos % 1_000 == 0 {
-            let micros = nanos / 1_000;
-            format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{micros:06}+00:00")
+        let year = if (0..=9999).contains(&y) {
+            format!("{y:04}")
         } else {
-            format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{nanos:09}+00:00")
-        }
+            format!("{y:+05}")
+        };
+
+        let fraction = if nanos == 0 {
+            String::new()
+        } else if nanos % 1_000_000 == 0 {
+            format!(".{:03}", nanos / 1_000_000)
+        } else if nanos % 1_000 == 0 {
+            format!(".{:06}", nanos / 1_000)
+        } else {
+            format!(".{nanos:09}")
+        };
+
+        format!("{year}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}{fraction}+00:00")
     }
 
     /// Formats as `{unix_seconds}.{nanoseconds:09}`, matching chrono's
     /// `format("%s%.9f")`.
-    pub fn format_epoch_nanos(self) -> String {
-        let secs = self.0.as_second();
-        let nanos = self.0.subsec_nanosecond();
-        format!("{secs}.{nanos:09}")
+    pub fn format_unix_seconds_with_nanos(self) -> String {
+        let nanos = self.0.as_nanosecond();
+        let secs = nanos.div_euclid(1_000_000_000);
+        let subsec = nanos.rem_euclid(1_000_000_000);
+        format!("{secs}.{subsec:09}")
     }
 }
 
@@ -189,7 +196,7 @@ mod tests {
     #[test]
     fn format_epoch_nanos_output() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_000_000_000);
-        assert_eq!(dt.format_epoch_nanos(), "1709528767.000000000");
+        assert_eq!(dt.format_unix_seconds_with_nanos(), "1709528767.000000000");
     }
 
     #[test]
@@ -213,5 +220,35 @@ mod tests {
         assert_eq!(json, "\"2024-03-04T05:06:07.123+00:00\"");
         let parsed: DateTime = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, dt);
+    }
+
+    #[test]
+    fn rfc3339_negative_nanos() {
+        let dt = DateTime::from_timestamp_nanos(-1);
+        assert_eq!(dt.to_rfc3339(), "1969-12-31T23:59:59.999999999+00:00");
+    }
+
+    #[test]
+    fn format_epoch_nanos_negative_nanos() {
+        let dt = DateTime::from_timestamp_nanos(-1);
+        assert_eq!(dt.format_unix_seconds_with_nanos(), "-1.999999999");
+    }
+
+    #[test]
+    fn parse_rfc3339_with_non_utc_offset() {
+        let ts: Timestamp = "2024-03-04T14:06:07+09:00".parse().unwrap();
+        let dt = DateTime::from(ts);
+        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+    }
+
+    #[test]
+    fn rfc3339_negative_year() {
+        let ts = jiff::civil::date(-1, 1, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+        let dt = DateTime::from(ts);
+        assert_eq!(dt.to_rfc3339(), "-0001-01-01T00:00:00+00:00");
     }
 }
