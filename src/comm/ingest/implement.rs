@@ -34,6 +34,9 @@ pub trait EventFilter {
     fn agent_id(&self) -> Option<String> {
         None
     }
+    fn service_name(&self) -> Option<String> {
+        None
+    }
 }
 
 impl EventFilter for Conn {
@@ -329,7 +332,7 @@ impl EventFilter for OpLog {
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
     }
-    fn agent_id(&self) -> Option<String> {
+    fn service_name(&self) -> Option<String> {
         Some(self.service_name.clone())
     }
 

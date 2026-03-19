@@ -50,6 +50,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [aicers/docs-theme](https://github.com/aicers/docs-theme)
   template. Theme assets are now fetched at build time via
   `scripts/fetch-theme.sh` into `docs/.theme/`.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Renamed `OpLogFilter.agent_id` to `OpLogFilter.service_name`
+  and `OpLogRawEvent.agent_name` to `OpLogRawEvent.service_name`
+  for consistent naming in the OpLog domain. The GraphQL fields
+  are now `serviceName` instead of `agentId`/`agentName`.
+- Added `service_name` field to `RawEventFilter` trait and
+  `EventFilter` trait for OpLog service name filtering.
+- Renamed constant `AGENT_PROTOCOL` to
+  `AGENT_FIELD_SUPPORTED_PROTOCOLS` in export for clarity.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.

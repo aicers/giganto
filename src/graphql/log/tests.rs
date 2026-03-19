@@ -637,7 +637,7 @@ async fn oplog_empty() {
     let schema = TestSchema::new();
     let query = r#"
         {
-            opLogRawEvents (filter: {agentId: "giganto@src 1", logLevel: "Info", contents: ""}, first: 1) {
+            opLogRawEvents (filter: {serviceName: "giganto@src 1", logLevel: "Info", contents: ""}, first: 1) {
                 edges {
                     node {
                         level,
@@ -659,7 +659,7 @@ async fn oplog_with_data() {
 
     let query = r#"
         {
-            opLogRawEvents (filter: {agentId: "giganto@src 1", logLevel: "Info"}, first: 1) {
+            opLogRawEvents (filter: {serviceName: "giganto@src 1", logLevel: "Info"}, first: 1) {
                 edges {
                     node {
                         level,
@@ -693,7 +693,7 @@ async fn oplog_timestamp_fomat_stability() {
         {
             opLogRawEvents(
                 filter: {
-                    agentId: "giganto@src 1",
+                    serviceName: "giganto@src 1",
                     logLevel: "Info",
                     time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
                 },
@@ -738,7 +738,7 @@ async fn load_oplog() {
                 start: Some(DateTime::from_timestamp_nanos(5)),
                 end: Some(DateTime::from_timestamp_nanos(7)),
             }),
-            agent_id: None,
+            service_name: None,
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: None,
@@ -780,7 +780,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            service_name: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -804,7 +804,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            service_name: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -828,7 +828,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("manager".to_string()),
+            service_name: Some("manager".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src1".to_string()),
@@ -850,7 +850,7 @@ async fn load_connection_by_prefix_timestamp_key() {
                 start: Some(DateTime::from_timestamp_nanos(1)),
                 end: Some(DateTime::from_timestamp_nanos(10)),
             }),
-            agent_id: Some("sensor".to_string()),
+            service_name: Some("sensor".to_string()),
             log_level: Some("Info".to_string()),
             contents: Some("oplog".to_string()),
             sensor: Some("src2".to_string()),
@@ -924,7 +924,7 @@ fn op_log_filter_check_cases() {
         log_level: Option<&'static str>,
         log_contents: Option<&'static str>,
         sensor: Option<&'static str>,
-        agent_id: Option<&'static str>,
+        service_name: Option<&'static str>,
         expected: bool,
     }
 
@@ -934,14 +934,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: Some("sensor-a".to_string()),
-                agent_id: Some("agent-1".to_string()),
+                service_name: Some("agent-1".to_string()),
                 log_level: Some("Info".to_string()),
                 contents: Some("oplog".to_string()),
             },
             log_level: Some("Info"),
             log_contents: Some("my oplog entry"),
             sensor: Some("sensor-a"),
-            agent_id: Some("agent-1"),
+            service_name: Some("agent-1"),
             expected: true,
         },
         Case {
@@ -949,14 +949,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: None,
+                service_name: None,
                 log_level: Some("Info".to_string()),
                 contents: None,
             },
             log_level: Some("Warn"),
             log_contents: None,
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: false,
         },
         Case {
@@ -964,29 +964,29 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: None,
+                service_name: None,
                 log_level: None,
                 contents: Some("needle".to_string()),
             },
             log_level: None,
             log_contents: Some("haystack"),
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: false,
         },
         Case {
-            name: "rejects_agent_id_mismatch",
+            name: "rejects_service_name_mismatch",
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: Some("agent-1".to_string()),
+                service_name: Some("agent-1".to_string()),
                 log_level: None,
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            agent_id: Some("agent-2"),
+            service_name: Some("agent-2"),
             expected: false,
         },
         Case {
@@ -994,14 +994,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: Some("sensor-a".to_string()),
-                agent_id: None,
+                service_name: None,
                 log_level: None,
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: Some("sensor-b"),
-            agent_id: None,
+            service_name: None,
             expected: false,
         },
         Case {
@@ -1009,14 +1009,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: None,
+                service_name: None,
                 log_level: Some("Info".to_string()),
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: true,
         },
         Case {
@@ -1024,29 +1024,29 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: None,
+                service_name: None,
                 log_level: None,
                 contents: Some("payload".to_string()),
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: true,
         },
         Case {
-            name: "allows_missing_agent_id",
+            name: "allows_missing_service_name",
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                agent_id: Some("agent-1".to_string()),
+                service_name: Some("agent-1".to_string()),
                 log_level: None,
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: true,
         },
         Case {
@@ -1054,14 +1054,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: Some("sensor-a".to_string()),
-                agent_id: None,
+                service_name: None,
                 log_level: None,
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            agent_id: None,
+            service_name: None,
             expected: true,
         },
     ];
@@ -1078,7 +1078,8 @@ fn op_log_filter_check_cases() {
                 case.log_contents.map(str::to_string),
                 None,
                 case.sensor.map(str::to_string),
-                case.agent_id.map(str::to_string),
+                None,
+                case.service_name.map(str::to_string),
             )
             .unwrap();
 
