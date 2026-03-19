@@ -5696,6 +5696,7 @@ fn search_filter_keyword_checks_text() {
             Some("haystack NEEDLE".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
     assert!(ok);
@@ -5714,7 +5715,7 @@ fn search_filter_keyword_checks_text() {
         agent_id: None,
     };
     let missing_text = filter
-        .check(None, None, None, None, None, None, None, None, None)
+        .check(None, None, None, None, None, None, None, None, None, None)
         .unwrap();
     assert!(!missing_text);
 
@@ -5740,6 +5741,7 @@ fn search_filter_keyword_checks_text() {
             None,
             None,
             Some("haystack".to_string()),
+            None,
             None,
             None,
         )
@@ -5784,6 +5786,7 @@ fn network_filter_matches_all_fields() {
             None,
             None,
             Some("agent-1".to_string()),
+            None,
         )
         .unwrap();
     assert!(ok);

@@ -90,6 +90,7 @@ impl RawEventFilter for NetworkFilter {
         _text: Option<String>,
         _sensor: Option<String>,
         agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
@@ -115,6 +116,7 @@ impl RawEventFilter for SearchFilter {
         text: Option<String>,
         _sensor: Option<String>,
         agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         if let Some(keyword) = &self.keyword {
             if let Some(text) = text {
