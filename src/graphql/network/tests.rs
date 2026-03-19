@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
@@ -10,6 +9,7 @@ use giganto_client::ingest::network::{
 use mockito;
 use num_traits::cast::ToPrimitive;
 
+use crate::datetime::DateTime;
 use crate::graphql::{
     IpRange, NetworkFilter, PortRange, RawEventFilter, SearchFilter, StringNumberUsize,
     tests::TestSchema,
@@ -20,14 +20,10 @@ const FIXED_TIME1: &str = "2026-01-01T00:00:00Z";
 const FIXED_TIME2: &str = "2026-01-01T00:00:01Z";
 
 fn fixed_time_nanos() -> (i64, i64) {
-    let time1 = Utc
-        .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
-        .unwrap()
+    let time1 = DateTime::from_ymd_hms(2026, 1, 1, 0, 0, 0)
         .timestamp_nanos_opt()
         .unwrap();
-    let time2 = Utc
-        .with_ymd_and_hms(2026, 1, 1, 0, 0, 1)
-        .unwrap()
+    let time2 = DateTime::from_ymd_hms(2026, 1, 1, 0, 0, 1)
         .timestamp_nanos_opt()
         .unwrap();
     (time1, time2)
@@ -424,9 +420,7 @@ async fn conn_with_data_giganto_cluster() {
 async fn network_raw_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
+    let base_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
         .timestamp_nanos_opt()
         .unwrap();
     let step = 1_000_000;
@@ -539,7 +533,7 @@ async fn network_raw_events_timestamp_format_stability() {
         let idx = idx.to_i64().expect("expected_types length fits in i64");
         expected_times.insert(
             typename,
-            Utc.timestamp_nanos(base_ts + step * idx).to_rfc3339(),
+            DateTime::from_timestamp_nanos(base_ts + step * idx).to_rfc3339(),
         );
     }
     let mut seen = HashSet::new();
@@ -5046,7 +5040,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         "192.168.4.70".parse::<IpAddr>().ok(),
         Some(100),
         "192.168.4.80".parse::<IpAddr>().ok(),
@@ -5055,7 +5049,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         "192.168.4.71".parse::<IpAddr>().ok(),
         Some(101),
         "192.168.4.81".parse::<IpAddr>().ok(),
@@ -5064,7 +5058,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        DateTime::now().timestamp_nanos_opt().unwrap(),
         "192.168.4.72".parse::<IpAddr>().ok(),
         Some(102),
         "192.168.4.82".parse::<IpAddr>().ok(),
@@ -5404,136 +5398,119 @@ async fn union() {
     insert_conn_raw_event(
         &conn_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_dns_raw_event(
         &dns_store,
         "src 1",
-        Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2021, 1, 1, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_http_raw_event(
         &http_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 6, 1, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_rdp_raw_event(
         &rdp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 5, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_ntlm_raw_event(
         &ntlm_store,
         "src 1",
-        Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2022, 1, 5, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_kerberos_raw_event(
         &kerberos_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 5, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_ssh_raw_event(
         &ssh_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_dce_rpc_raw_event(
         &dce_rpc_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 5, 6, 5, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_ftp_raw_event(
         &ftp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 5, 12, 12, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_mqtt_raw_event(
         &mqtt_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 5, 12, 12, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_ldap_raw_event(
         &ldap_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 6, 12, 12, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_tls_raw_event(
         &tls_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 6, 11, 11, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_smb_raw_event(
         &smb_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 6, 12, 12, 10)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_nfs_raw_event(
         &nfs_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 6, 12, 13, 0)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_smtp_raw_event(
         &smtp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 5)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_bootp_raw_event(
         &bootp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59)
-            .unwrap()
+        DateTime::from_ymd_hms(2019, 12, 31, 23, 59, 59)
             .timestamp_nanos_opt()
             .unwrap(),
     );
     insert_dhcp_raw_event(
         &dhcp_store,
         "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10)
-            .unwrap()
+        DateTime::from_ymd_hms(2023, 1, 6, 12, 13, 10)
             .timestamp_nanos_opt()
             .unwrap(),
     );
@@ -5639,10 +5616,10 @@ async fn search_http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_http_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_http_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -5850,10 +5827,10 @@ async fn search_conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_conn_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_conn_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -5936,10 +5913,10 @@ async fn search_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6022,10 +5999,10 @@ async fn search_malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1);
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1);
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1);
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1);
 
     insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6108,10 +6085,10 @@ async fn search_rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_rdp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_rdp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6194,10 +6171,10 @@ async fn search_smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_smtp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_smtp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6280,10 +6257,10 @@ async fn search_ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_ntlm_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_ntlm_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6366,10 +6343,10 @@ async fn search_kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_kerberos_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_kerberos_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6451,10 +6428,10 @@ async fn search_ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_ssh_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_ssh_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6536,10 +6513,10 @@ async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_dce_rpc_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_dce_rpc_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6621,10 +6598,10 @@ async fn search_ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_ftp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_ftp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6706,10 +6683,10 @@ async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_mqtt_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_mqtt_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6791,10 +6768,10 @@ async fn search_ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_ldap_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_ldap_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6876,10 +6853,10 @@ async fn search_tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_tls_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_tls_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -6961,10 +6938,10 @@ async fn search_smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_smb_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_smb_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -7046,10 +7023,10 @@ async fn search_nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_nfs_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_nfs_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -7131,10 +7108,10 @@ async fn search_bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_bootp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_bootp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -7216,10 +7193,10 @@ async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_dhcp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_dhcp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
@@ -7301,10 +7278,10 @@ async fn search_radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let time1 = DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1); //2020-01-01T00:00:01Z
+    let time2 = DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1); //2020-01-01T00:01:01Z
+    let time3 = DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1); //2020-01-01T01:01:01Z
+    let time4 = DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1); //2020-01-02T00:00:01Z
 
     insert_radius_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
     insert_radius_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());

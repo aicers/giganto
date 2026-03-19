@@ -146,6 +146,20 @@ impl From<DateTime> for Timestamp {
 }
 
 #[cfg(test)]
+impl DateTime {
+    /// Creates a `DateTime` from year, month, day, hour, minute, second in UTC.
+    pub fn from_ymd_hms(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Self {
+        Self(
+            jiff::civil::date(year, month, day)
+                .at(hour, minute, second, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .expect("valid UTC datetime")
+                .timestamp(),
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

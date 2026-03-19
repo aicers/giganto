@@ -376,9 +376,9 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::{collections::HashSet, net::SocketAddr};
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
+    use crate::datetime::DateTime;
     use crate::graphql::StringNumberU64;
     #[cfg(feature = "count_events")]
     use crate::graphql::network::tests::{
@@ -393,7 +393,7 @@ mod tests {
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos_opt().unwrap();
         insert_statistics_raw_event_kind(
             &store,
             now,
@@ -453,9 +453,7 @@ mod tests {
     async fn statistics_timestamp_fomat_stability() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
+        let timestamp = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
             .timestamp_nanos_opt()
             .unwrap();
         insert_statistics_raw_event_kind(
@@ -491,9 +489,7 @@ mod tests {
     async fn statistics_with_protocols_and_time_filter() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
+        let timestamp = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
             .timestamp_nanos_opt()
             .unwrap();
         insert_statistics_raw_event_kind(
@@ -926,7 +922,7 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
 
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
+        let now = DateTime::now().timestamp_nanos_opt().unwrap();
 
         // Insert into each CF:
         //   SESSION -> 5 events

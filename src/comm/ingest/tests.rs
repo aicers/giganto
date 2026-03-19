@@ -12,7 +12,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, TimeZone, Utc};
 use giganto_client::frame::SendError;
 use giganto_client::ingest::log::SecuLog;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
@@ -44,6 +43,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use tempfile::TempDir;
 
 use crate::datetime::DateTime;
+
 static INIT: OnceLock<()> = OnceLock::new();
 
 fn init_crypto() {
@@ -312,8 +312,7 @@ fn ip(addr: &str) -> IpAddr {
 }
 
 fn default_start_time() -> i64 {
-    Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-        .unwrap()
+    DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
         .timestamp_nanos_opt()
         .unwrap()
 }
@@ -608,7 +607,6 @@ async fn run_single_event_case(case: &SingleEventCase) {
 
 #[allow(clippy::too_many_lines)]
 fn single_event_cases() -> Vec<SingleEventCase> {
-    let tmp_dur = Duration::nanoseconds(12345);
     vec![
         single_event_case(
             "conn",
@@ -621,7 +619,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 proto: 6,
                 conn_state: "sf".to_string(),
                 start_time: default_start_time(),
-                duration: tmp_dur.num_nanoseconds().unwrap(),
+                duration: 12345,
                 service: "-".to_string(),
                 orig_bytes: 77,
                 resp_bytes: 295,

@@ -3,9 +3,7 @@ use std::{
     net::SocketAddr,
 };
 
-use chrono::{TimeZone, Utc};
-
-use crate::graphql::tests::TestSchema;
+use crate::{datetime::DateTime, graphql::tests::TestSchema};
 
 mod fixtures;
 use fixtures::{
@@ -32,9 +30,7 @@ use fixtures::{
 async fn sysmon_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
+    let base_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
         .timestamp_nanos_opt()
         .unwrap();
     let step = 1_000_000;
@@ -143,59 +139,59 @@ async fn sysmon_events_timestamp_format_stability() {
     let mut expected_times: HashMap<&str, String> = HashMap::new();
     expected_times.insert(
         "ProcessCreateEvent",
-        Utc.timestamp_nanos(base_ts).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts).to_rfc3339(),
     );
     expected_times.insert(
         "FileCreationTimeChangedEvent",
-        Utc.timestamp_nanos(base_ts + step).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step).to_rfc3339(),
     );
     expected_times.insert(
         "NetworkConnectionEvent",
-        Utc.timestamp_nanos(base_ts + step * 2).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 2).to_rfc3339(),
     );
     expected_times.insert(
         "ProcessTerminatedEvent",
-        Utc.timestamp_nanos(base_ts + step * 3).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 3).to_rfc3339(),
     );
     expected_times.insert(
         "ImageLoadedEvent",
-        Utc.timestamp_nanos(base_ts + step * 4).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 4).to_rfc3339(),
     );
     expected_times.insert(
         "FileCreateEvent",
-        Utc.timestamp_nanos(base_ts + step * 5).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 5).to_rfc3339(),
     );
     expected_times.insert(
         "RegistryValueSetEvent",
-        Utc.timestamp_nanos(base_ts + step * 6).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 6).to_rfc3339(),
     );
     expected_times.insert(
         "RegistryKeyValueRenameEvent",
-        Utc.timestamp_nanos(base_ts + step * 7).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 7).to_rfc3339(),
     );
     expected_times.insert(
         "FileCreateStreamHashEvent",
-        Utc.timestamp_nanos(base_ts + step * 8).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 8).to_rfc3339(),
     );
     expected_times.insert(
         "PipeEventEvent",
-        Utc.timestamp_nanos(base_ts + step * 9).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 9).to_rfc3339(),
     );
     expected_times.insert(
         "DnsEventEvent",
-        Utc.timestamp_nanos(base_ts + step * 10).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 10).to_rfc3339(),
     );
     expected_times.insert(
         "FileDeleteEvent",
-        Utc.timestamp_nanos(base_ts + step * 11).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 11).to_rfc3339(),
     );
     expected_times.insert(
         "ProcessTamperingEvent",
-        Utc.timestamp_nanos(base_ts + step * 12).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 12).to_rfc3339(),
     );
     expected_times.insert(
         "FileDeleteDetectedEvent",
-        Utc.timestamp_nanos(base_ts + step * 13).to_rfc3339(),
+        DateTime::from_timestamp_nanos(base_ts + step * 13).to_rfc3339(),
     );
 
     for edge in edges {
@@ -208,23 +204,23 @@ async fn sysmon_events_timestamp_format_stability() {
             "FileCreationTimeChangedEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_time_creation).to_rfc3339()
+                    DateTime::from_timestamp_nanos(file_create_time_creation).to_rfc3339()
                 );
                 assert_eq!(
                     node["previousCreationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_time_previous).to_rfc3339()
+                    DateTime::from_timestamp_nanos(file_create_time_previous).to_rfc3339()
                 );
             }
             "FileCreateEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_creation).to_rfc3339()
+                    DateTime::from_timestamp_nanos(file_create_creation).to_rfc3339()
                 );
             }
             "FileCreateStreamHashEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(base_ts + step * 8).to_rfc3339()
+                    DateTime::from_timestamp_nanos(base_ts + step * 8).to_rfc3339()
                 );
             }
             _ => {}
@@ -245,14 +241,10 @@ async fn sysmon_events_last_selects_latest() {
     let process_create_store = schema.db.process_create_store().unwrap();
     let file_delete_detected_store = schema.db.file_delete_detected_store().unwrap();
 
-    let time1 = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
+    let time1 = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
         .timestamp_nanos_opt()
         .unwrap();
-    let time2 = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-        .unwrap()
+    let time2 = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 8)
         .timestamp_nanos_opt()
         .unwrap();
 
@@ -2685,9 +2677,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
 async fn sysmon_connection_pagination_after_first_sets_has_previous_page() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .unwrap()
+    let base_ts = DateTime::from_ymd_hms(2024, 1, 1, 0, 0, 0)
         .timestamp_nanos_opt()
         .unwrap();
     let step = 1_000_000_000; // 1 second
@@ -2772,9 +2762,7 @@ async fn sysmon_connection_pagination_after_first_sets_has_previous_page() {
 async fn sysmon_connection_pagination_before_last_sets_has_next_page() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .unwrap()
+    let base_ts = DateTime::from_ymd_hms(2024, 1, 1, 0, 0, 0)
         .timestamp_nanos_opt()
         .unwrap();
     let step = 1_000_000_000; // 1 second

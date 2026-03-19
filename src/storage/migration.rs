@@ -431,7 +431,6 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 mod tests {
     use std::{fmt::Debug, fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
-    use chrono::Utc;
     use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
     use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
@@ -841,7 +840,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn migrate_0_24_to_0_26_0_raw_event() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = DateTime::now().timestamp_nanos_opt().unwrap();
         let sensor = "src1";
 
         let db_dir = tempfile::tempdir().unwrap();
@@ -1881,7 +1880,7 @@ mod tests {
 
     #[test]
     fn test_migrate_0_24_to_0_26_http_combines_filenames_and_mime_types() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = DateTime::now().timestamp_nanos_opt().unwrap();
         let sensor = "test_sensor";
 
         let db_dir = tempfile::tempdir().unwrap();

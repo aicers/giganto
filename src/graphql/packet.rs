@@ -234,7 +234,6 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::{mem, net::SocketAddr};
 
-    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
     use giganto_client::ingest::Packet as pk;
 
     use super::PacketFilter;
@@ -273,9 +272,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let dt1 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 0);
+        let dt2 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 1);
+        let dt3 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 2);
 
         let ts1 = dt1.timestamp_nanos_opt().unwrap();
         let ts2 = dt2.timestamp_nanos_opt().unwrap();
@@ -364,10 +363,10 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let packet_dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let packet_dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let packet_dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
+        let request_dt = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 0);
+        let packet_dt1 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 0);
+        let packet_dt2 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 1);
+        let packet_dt3 = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 2);
 
         let request_ts = request_dt.timestamp_nanos_opt().unwrap();
         let packet_ts1 = packet_dt1.timestamp_nanos_opt().unwrap();
@@ -505,25 +504,12 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .with_nanosecond(123_456_789)
+        let base = DateTime::from_ymd_hms(2023, 1, 20, 0, 0, 0)
+            .timestamp_nanos_opt()
             .unwrap();
-        let dt2 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-            .unwrap()
-            .with_nanosecond(234_567_890)
-            .unwrap();
-        let dt3 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-            .unwrap()
-            .with_nanosecond(345_678_901)
-            .unwrap();
-
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = base + 123_456_789;
+        let ts2 = base + 1_000_000_000 + 234_567_890;
+        let ts3 = base + 2_000_000_000 + 345_678_901;
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -551,10 +537,15 @@ mod tests {
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| {
+                jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S%.f", s)
+                    .unwrap()
+                    .to_datetime()
+                    .unwrap()
+            })
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -580,10 +571,15 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| {
+                jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S%.f", s)
+                    .unwrap()
+                    .to_datetime()
+                    .unwrap()
+            })
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -609,10 +605,15 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
+        let timestamps: Vec<jiff::civil::DateTime> = re
             .find_iter(parsed_pcap)
             .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
+            .map(|s| {
+                jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S%.f", s)
+                    .unwrap()
+                    .to_datetime()
+                    .unwrap()
+            })
             .collect();
 
         // Change to the UTC timezone by applying an offset
@@ -677,14 +678,10 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
+        let request_dt = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
             .timestamp_nanos_opt()
             .unwrap();
-        let packet_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-            .unwrap()
+        let packet_dt = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 8)
             .timestamp_nanos_opt()
             .unwrap();
 
@@ -727,14 +724,10 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
+        let request_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
             .timestamp_nanos_opt()
             .unwrap();
-        let packet_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
-            .unwrap()
+        let packet_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 9)
             .timestamp_nanos_opt()
             .unwrap();
         insert_packet(&store, "src1", request_ts, packet_ts);
@@ -784,10 +777,21 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
-        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
-        let utc_time = local_datetime.with_timezone(&chrono::Utc);
-        utc_time.to_string()
+    fn convert_to_utc_timezone(dt: jiff::civil::DateTime) -> String {
+        let zoned = dt.to_zoned(jiff::tz::TimeZone::system()).unwrap();
+        let utc = zoned.with_time_zone(jiff::tz::TimeZone::UTC);
+        let d = utc.datetime();
+        let micros = d.subsec_nanosecond() / 1_000;
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06} UTC",
+            d.year(),
+            d.month(),
+            d.day(),
+            d.hour(),
+            d.minute(),
+            d.second(),
+            micros,
+        )
     }
 
     #[test]

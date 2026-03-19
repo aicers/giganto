@@ -309,21 +309,20 @@ mod tests {
 
     #[test]
     fn get_date_key_matches_num_days_from_ce() {
-        use chrono::{Datelike, Utc};
+        fn days_from_ce(date: jiff::civil::Date) -> u32 {
+            let y = i32::from(date.year()) - 1;
+            let ordinal = i32::from(date.day_of_year());
+            let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+            days.try_into().expect("date should be positive")
+        }
 
-        let before = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
+        let before = days_from_ce(jiff::Zoned::now().date());
         let date_key = SequenceGenerator::get_date_key();
-        let after = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
+        let after = days_from_ce(jiff::Zoned::now().date());
 
         assert!(
             (before..=after).contains(&date_key),
-            "date_key should be within current UTC day boundary window"
+            "date_key should be within current day boundary window"
         );
 
         assert!(
