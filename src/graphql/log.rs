@@ -75,6 +75,9 @@ impl RawEventFilter for LogFilter {
     }
 }
 
+/// Filters for operational log queries.
+///
+/// String filters in this input use substring matching.
 #[derive(InputObject)]
 pub struct OpLogFilter {
     time: Option<TimeRange>,
@@ -207,6 +210,13 @@ async fn handle_log_raw_events(
 
 #[Object]
 impl LogQuery {
+    /// Returns raw log events for the given sensor.
+    ///
+    /// The filter must specify an event kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no event kind is specified in the filter.
     async fn log_raw_events(
         &self,
         ctx: &Context<'_>,

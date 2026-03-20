@@ -9,6 +9,7 @@ pub(super) struct SensorQuery;
 
 #[Object]
 impl SensorQuery {
+    /// Returns the list of registered sensor names, sorted in ascending order.
     async fn sensors(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         let mut total_sensor_list = HashSet::new();
         // Add current giganto's sensors

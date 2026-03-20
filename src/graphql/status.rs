@@ -117,6 +117,7 @@ pub(super) struct ConfigMutation;
 
 #[Object]
 impl StatusQuery {
+    /// Returns the current node status, including CPU, memory, and disk usage.
     async fn status(&self) -> Result<Status> {
         let usg = roxy::resource_usage().await;
         let hostname = roxy::hostname();
@@ -146,12 +147,14 @@ impl StatusQuery {
         })
     }
 
+    /// Returns the current visible Giganto configuration.
     #[allow(clippy::unused_async)]
     async fn config(&self, ctx: &Context<'_>) -> Result<ConfigVisible> {
         let s = ctx.data::<Settings>()?;
         Ok(s.config.visible.clone())
     }
 
+    /// Returns `true` when the GraphQL service is reachable.
     #[allow(clippy::unused_async)]
     async fn ping(&self) -> Result<bool> {
         Ok(true)

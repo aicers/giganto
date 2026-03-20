@@ -74,23 +74,45 @@ pub struct Query(
 #[derive(Default, MergedObject)]
 pub struct Mutation(status::ConfigMutation);
 
+/// Time range filter.
+///
+/// Range semantics:
+/// - `start` is inclusive.
+/// - `end` is exclusive.
+/// - Omitting `start` means the range is unbounded below.
+/// - Omitting `end` means the range is unbounded above.
 #[derive(InputObject, Serialize, Clone, Debug)]
 pub struct TimeRange {
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 }
+/// IP address range filter.
+///
+/// Range semantics:
+/// - `start` is inclusive.
+/// - `end` is exclusive.
+/// - Omitting `start` means the range is unbounded below.
+/// - Omitting `end` means the range is unbounded above.
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
     pub start: Option<String>,
     pub end: Option<String>,
 }
 
+/// Port range filter.
+///
+/// Range semantics:
+/// - `start` is inclusive.
+/// - `end` is exclusive.
+/// - Omitting `start` means the range is unbounded below.
+/// - Omitting `end` means the range is unbounded above.
 #[derive(InputObject, Serialize, Clone)]
 pub struct PortRange {
     pub start: Option<u16>,
     pub end: Option<u16>,
 }
 
+/// Filter options for network queries.
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize)]
 pub struct NetworkFilter {
@@ -106,6 +128,7 @@ pub struct NetworkFilter {
     agent_id: Option<String>,
 }
 
+/// Filter options for text search.
 #[derive(InputObject, Serialize)]
 pub struct SearchFilter {
     pub time: Option<TimeRange>,
@@ -118,6 +141,7 @@ pub struct SearchFilter {
     log_level: Option<String>,
     log_contents: Option<String>,
     pub times: Vec<DateTime<Utc>>,
+    /// Matches values that contain this keyword, case-insensitively.
     keyword: Option<String>,
     agent_id: Option<String>,
 }
@@ -243,13 +267,16 @@ fn time_range(time_range: Option<&TimeRange>) -> (DateTime<Utc>, DateTime<Utc>) 
 
 /// Validates pagination argument combinations.
 ///
-/// Rejects unsupported combinations such as `before` + `first`,
-/// `after` + `last`, `after` + `before`, and `first` + `last`.
+/// Pagination rules:
+/// - `after` and `before` cannot be used together.
+/// - `first` and `last` cannot be used together.
+/// - `before` cannot be used with `first`.
+/// - `after` cannot be used with `last`.
 ///
 /// # Errors
 ///
-/// Returns an error if the pagination arguments contain an
-/// unsupported combination.
+/// Returns an error if the pagination arguments contain an unsupported
+/// combination.
 pub(crate) fn validate_pagination_args<A: ?Sized, B: ?Sized, F, L>(
     after: Option<&A>,
     before: Option<&B>,
