@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Certificate identity parsing now supports
+  Bootroot-issued SAN DNS identities in the form
+  `<instance>.<service>.<hostname>.<domain>`, mapped to
+  `(agent=service, sensor=instance)`. Legacy
+  `CN=agent@sensor` format continues to work as a
+  fallback.
+
 ### Changed
 
 - Removed line numbers from stdout log output to avoid exposing
