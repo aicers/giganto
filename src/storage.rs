@@ -1946,6 +1946,18 @@ mod tests {
         let mut expected_min = 42_i64.to_be_bytes().to_vec();
         expected_min.extend_from_slice(&i64::MIN.to_be_bytes());
         assert_eq!(key_min, expected_min);
+
+        // Out-of-range timestamps still fall back to i64::MAX
+        let overflow_time =
+            DateTime::from("3000-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
+        let key_overflow = StorageKey::timestamp_builder()
+            .start_key(42)
+            .lower_closed_bound_start_key(Some(overflow_time))
+            .build()
+            .key();
+        let mut expected_overflow = 42_i64.to_be_bytes().to_vec();
+        expected_overflow.extend_from_slice(&i64::MAX.to_be_bytes());
+        assert_eq!(key_overflow, expected_overflow);
     }
 
     #[test]
