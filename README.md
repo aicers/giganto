@@ -37,6 +37,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 
 ### Arguments
 
+<!-- markdownlint-disable MD013 -->
+
 | Name             | Description                                     | Required |
 | ---------------- | ----------------------------------------------- | -------- |
 | `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
@@ -44,6 +46,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 | `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
 | `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
 | `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
+
+<!-- markdownlint-enable MD013 -->
 
 #### Notes on Arguments
 
@@ -146,6 +150,31 @@ certificate/key from the tests folder.)
 ```sh
 cargo run -- -c tests/config.toml --cert tests/certs/node1/cert.pem \
 --key tests/certs/node1/key.pem --ca-certs tests/certs/ca_cert.pem
+```
+
+For a reusable Bootroot mTLS validation setup that downstream repositories can
+share, see
+[docs/bootroot-mtls-validation.md](docs/bootroot-mtls-validation.md) and the
+helper script below.
+
+Important:
+
+- The happy-path Bootroot validation flow still depends on the identity support
+  tracked in `giganto#1555`.
+- Without `#1555`, Bootroot-style DNS SAN fixtures can still fail at runtime
+  with `the subject of the certificate is not valid`.
+
+```sh
+./scripts/bootroot-mtls-validation.sh prepare
+./scripts/bootroot-mtls-validation.sh run-server
+```
+
+If you already have real Bootroot-issued cert / key / CA bundle files, you can
+override the generated fixtures and run the real-input smoke check described in
+[docs/bootroot-mtls-validation.md](docs/bootroot-mtls-validation.md):
+
+```sh
+./scripts/bootroot-mtls-validation.sh smoke-real
 ```
 
 ## Development

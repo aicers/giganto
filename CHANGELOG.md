@@ -37,6 +37,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   When using `after` with `first`, `hasPreviousPage` is now correctly set to true.
   When using `before` with `last`, `hasNextPage` is now correctly set to true.
 
+### Added
+
+- Added a reusable Bootroot mTLS validation guide and helper script, including
+  real-certificate override flow and multi-PEM CA bundle validation notes.
+
 ## [0.26.2] - 2026-02-12
 
 ### Added
