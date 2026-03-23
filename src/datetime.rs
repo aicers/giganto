@@ -192,14 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_nanos() {
+    fn timestamp_nanos_roundtrip_preserves_value() {
         let nanos = 1_709_528_767_123_456_789_i64;
         let dt = DateTime::from_timestamp_nanos(nanos);
         assert_eq!(dt.timestamp_nanos_opt(), Some(nanos));
     }
 
     #[test]
-    fn min_max() {
+    fn min_max_utc_match_i64_nanosecond_bounds() {
         let min = DateTime::min_utc();
         let max = DateTime::max_utc();
         assert!(min < max);
@@ -208,20 +208,20 @@ mod tests {
     }
 
     #[test]
-    fn format_epoch_nanos_output() {
+    fn format_unix_seconds_with_nanos_for_positive_timestamp() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_000_000_000);
         assert_eq!(dt.format_unix_seconds_with_nanos(), "1709528767.000000000");
     }
 
     #[test]
-    fn parse_rfc3339_with_z() {
+    fn timestamp_parse_with_z_formats_as_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T05:06:07Z".parse().unwrap();
         let dt = DateTime::from(ts);
         assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
     }
 
     #[test]
-    fn parse_rfc3339_with_offset() {
+    fn timestamp_parse_with_utc_offset_formats_as_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T05:06:07+00:00".parse().unwrap();
         let dt = DateTime::from(ts);
         assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
@@ -243,13 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn format_epoch_nanos_negative_nanos() {
+    fn format_unix_seconds_with_nanos_for_negative_timestamp() {
         let dt = DateTime::from_timestamp_nanos(-1);
         assert_eq!(dt.format_unix_seconds_with_nanos(), "-1.999999999");
     }
 
     #[test]
-    fn parse_rfc3339_with_non_utc_offset() {
+    fn timestamp_parse_with_non_utc_offset_normalizes_to_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T14:06:07+09:00".parse().unwrap();
         let dt = DateTime::from(ts);
         assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
@@ -264,5 +264,76 @@ mod tests {
             .timestamp();
         let dt = DateTime::from(ts);
         assert_eq!(dt.to_rfc3339(), "-0001-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn graphql_to_value_matches_serde_serialization() {
+        let dt = DateTime::from_timestamp_nanos(1_709_528_767_123_000_000);
+        let graphql_value = <DateTime as ScalarType>::to_value(&dt);
+        let serde_json = serde_json::to_string(&dt).unwrap();
+
+        assert_eq!(
+            graphql_value,
+            Value::String("2024-03-04T05:06:07.123+00:00".to_string())
+        );
+        assert_eq!(serde_json, "\"2024-03-04T05:06:07.123+00:00\"");
+    }
+
+    #[test]
+    fn graphql_parse_string_value_succeeds() {
+        let parsed =
+            <DateTime as ScalarType>::parse(Value::String("2024-03-04T14:06:07+09:00".to_string()))
+                .unwrap();
+
+        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+    }
+
+    #[test]
+    fn graphql_parse_non_string_value_fails() {
+        let result = <DateTime as ScalarType>::parse(Value::from(123));
+
+        let err = result.unwrap_err();
+        let message = err.into_server_error(async_graphql::Pos::default()).message;
+        assert_eq!(message, r#"Expected input type "DateTime", found 123."#);
+    }
+
+    #[test]
+    fn graphql_parse_invalid_string_value_fails() {
+        let result = <DateTime as ScalarType>::parse(Value::String("not-a-datetime".to_string()));
+
+        let err = result.unwrap_err();
+        let message = err.into_server_error(async_graphql::Pos::default()).message;
+        assert_eq!(
+            message,
+            r#"Failed to parse "DateTime": invalid DateTime: not-a-datetime"#
+        );
+    }
+
+    #[test]
+    fn serde_deserialize_zulu_string_succeeds() {
+        let parsed: DateTime = serde_json::from_str("\"2024-03-04T05:06:07Z\"").unwrap();
+
+        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+    }
+
+    #[test]
+    fn serde_deserialize_invalid_rfc3339_fails() {
+        let result = serde_json::from_str::<DateTime>("\"not-a-datetime\"");
+
+        let err = result.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("failed to parse year in date"));
+        assert!(message.contains("failed to parse four digit integer as year"));
+    }
+
+    #[test]
+    fn serde_deserialize_non_string_json_fails() {
+        let result = serde_json::from_str::<DateTime>("123");
+
+        let err = result.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("invalid type"));
+        assert!(message.contains("integer `123`"));
+        assert!(message.contains("expected a string"));
     }
 }

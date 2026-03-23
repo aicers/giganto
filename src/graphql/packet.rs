@@ -243,6 +243,38 @@ mod tests {
         storage::{KeyExtractor, RawEventStore},
     };
 
+    fn insert_packet(
+        store: &RawEventStore<pk>,
+        sensor: &str,
+        req_timestamp: i64,
+        pk_timestamp: i64,
+    ) {
+        let mut key = Vec::with_capacity(
+            sensor.len() + 1 + mem::size_of::<i64>() + 1 + mem::size_of::<i64>(),
+        );
+        key.extend_from_slice(sensor.as_bytes());
+        key.push(0);
+        key.extend(req_timestamp.to_be_bytes());
+        key.push(0);
+        key.extend(pk_timestamp.to_be_bytes());
+
+        let packet_body = pk {
+            packet_timestamp: pk_timestamp,
+            packet: vec![0, 1, 2, 3],
+        };
+        let ser_packet_body = bincode::serialize(&packet_body).unwrap();
+
+        store.append(&key, &ser_packet_body).unwrap();
+    }
+
+    fn convert_to_utc_timezone(dt: jiff::civil::DateTime) -> String {
+        dt.to_zoned(jiff::tz::TimeZone::system())
+            .unwrap()
+            .with_time_zone(jiff::tz::TimeZone::UTC)
+            .strftime("%Y-%m-%d %H:%M:%S%.6f UTC")
+            .to_string()
+    }
+
     #[tokio::test]
     async fn packets_empty() {
         let schema = TestSchema::new();
@@ -751,47 +783,6 @@ mod tests {
             node["requestTime"].as_str().unwrap(),
             "2024-03-04T05:06:07+00:00"
         );
-    }
-
-    fn insert_packet(
-        store: &RawEventStore<pk>,
-        sensor: &str,
-        req_timestamp: i64,
-        pk_timestamp: i64,
-    ) {
-        let mut key = Vec::with_capacity(
-            sensor.len() + 1 + mem::size_of::<i64>() + 1 + mem::size_of::<i64>(),
-        );
-        key.extend_from_slice(sensor.as_bytes());
-        key.push(0);
-        key.extend(req_timestamp.to_be_bytes());
-        key.push(0);
-        key.extend(pk_timestamp.to_be_bytes());
-
-        let packet_body = pk {
-            packet_timestamp: pk_timestamp,
-            packet: vec![0, 1, 2, 3],
-        };
-        let ser_packet_body = bincode::serialize(&packet_body).unwrap();
-
-        store.append(&key, &ser_packet_body).unwrap();
-    }
-
-    fn convert_to_utc_timezone(dt: jiff::civil::DateTime) -> String {
-        let zoned = dt.to_zoned(jiff::tz::TimeZone::system()).unwrap();
-        let utc = zoned.with_time_zone(jiff::tz::TimeZone::UTC);
-        let d = utc.datetime();
-        let micros = d.subsec_nanosecond() / 1_000;
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06} UTC",
-            d.year(),
-            d.month(),
-            d.day(),
-            d.hour(),
-            d.minute(),
-            d.second(),
-            micros,
-        )
     }
 
     #[test]
