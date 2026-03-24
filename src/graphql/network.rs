@@ -1718,7 +1718,7 @@ impl FromKeyValue<Icmp> for IcmpRawEvent {
             id: val.id,
             seq_num: val.seq_num,
             data_len: val.data_len,
-            payload: val.payload.clone(),
+            payload: val.payload,
         })
     }
 }

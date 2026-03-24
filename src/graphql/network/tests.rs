@@ -450,6 +450,7 @@ async fn network_raw_events_timestamp_format_stability() {
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
     let radius_store = schema.db.radius_store().unwrap();
+    let icmp_store = schema.db.icmp_store().unwrap();
 
     insert_conn_raw_event(&conn_store, sensor, base_ts);
     insert_dns_raw_event(&dns_store, sensor, base_ts + step);
@@ -470,6 +471,7 @@ async fn network_raw_events_timestamp_format_stability() {
     insert_bootp_raw_event(&bootp_store, sensor, base_ts + step * 16);
     insert_dhcp_raw_event(&dhcp_store, sensor, base_ts + step * 17);
     insert_radius_raw_event(&radius_store, sensor, base_ts + step * 18);
+    insert_icmp_raw_event(&icmp_store, sensor, base_ts + step * 19);
 
     let query = r#"
     {
@@ -502,6 +504,7 @@ async fn network_raw_events_timestamp_format_stability() {
                     ... on BootpRawEvent { time }
                     ... on DhcpRawEvent { time }
                     ... on RadiusRawEvent { time }
+                    ... on IcmpRawEvent { time }
                 }
             }
         }
@@ -532,6 +535,7 @@ async fn network_raw_events_timestamp_format_stability() {
         "BootpRawEvent",
         "DhcpRawEvent",
         "RadiusRawEvent",
+        "IcmpRawEvent",
     ];
 
     let mut expected_times: HashMap<&str, String> = HashMap::new();
@@ -5572,6 +5576,7 @@ async fn union() {
     let smtp_store = schema.db.smtp_store().unwrap();
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
+    let icmp_store = schema.db.icmp_store().unwrap();
 
     insert_conn_raw_event(
         &conn_store,
@@ -5709,8 +5714,16 @@ async fn union() {
             .timestamp_nanos_opt()
             .unwrap(),
     );
+    insert_icmp_raw_event(
+        &icmp_store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
 
-    // order: bootp, ssh, smtp, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
+    // order: bootp, ssh, smtp, conn, rdp, dce_rpc, icmp, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
     let query = r#"
     {
         networkRawEvents(
@@ -5718,7 +5731,7 @@ async fn union() {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
                 sensor: "src 1"
             }
-            first: 20
+            first: 21
             ) {
             edges {
                 node {
@@ -5773,6 +5786,9 @@ async fn union() {
                     ... on DhcpRawEvent {
                         time
                     }
+                    ... on IcmpRawEvent {
+                        time
+                    }
                     __typename
                 }
             }
@@ -5781,7 +5797,7 @@ async fn union() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
+        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-03-01T00:00:00+00:00\", __typename: \"IcmpRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
     );
 }
 

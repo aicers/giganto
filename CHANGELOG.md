@@ -11,8 +11,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
-  code, identifier, sequence number, and payload data. This enables detection
-  of ICMP-based C&C communication channels.
+  code, identifier, sequence number, and payload data. The `Icmp` type is
+  intended to cover both normal and malformed ICMP traffic. This enables
+  detection of ICMP-based C&C communication channels.
 
 ### Changed
 
