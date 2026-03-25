@@ -208,7 +208,10 @@ mod tests {
     };
 
     use quinn::Endpoint;
-    use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose,
+        IsCa, KeyPair, KeyUsagePurpose,
+    };
     use tempfile::TempDir;
     use tokio::time::timeout;
 
@@ -227,11 +230,28 @@ mod tests {
         });
     }
 
-    struct PemFixture {
+    #[derive(Clone, Copy)]
+    enum BundleOrder {
+        IntermediateThenRoot,
+        RootThenIntermediate,
+    }
+
+    #[derive(Clone, Copy)]
+    enum PeerPresentation {
+        LeafOnly,
+        LeafAndIntermediate,
+    }
+
+    struct BootrootChainFixture {
         _temp_dir: TempDir,
-        cert_path: String,
-        key_path: String,
-        ca_path: String,
+        server_leaf_path: String,
+        server_chain_path: String,
+        server_key_path: String,
+        client_leaf_path: String,
+        client_chain_path: String,
+        client_key_path: String,
+        ca_bundle_intermediate_then_root_path: String,
+        ca_bundle_root_then_intermediate_path: String,
         server_name: String,
     }
 
@@ -265,8 +285,46 @@ mod tests {
         }
     }
 
-    fn build_self_signed_pem_fixture(common_name: &str, dns_name: &str) -> PemFixture {
-        let key_pair = KeyPair::generate().expect("generate key pair");
+    fn load_server_client_certs(
+        fixture: &BootrootChainFixture,
+        bundle_order: BundleOrder,
+        peer_presentation: PeerPresentation,
+    ) -> (Certs, Certs) {
+        let ca_path = match bundle_order {
+            BundleOrder::IntermediateThenRoot => &fixture.ca_bundle_intermediate_then_root_path,
+            BundleOrder::RootThenIntermediate => &fixture.ca_bundle_root_then_intermediate_path,
+        };
+
+        let (server_cert_path, client_cert_path) = match peer_presentation {
+            PeerPresentation::LeafOnly => (&fixture.server_leaf_path, &fixture.client_leaf_path),
+            PeerPresentation::LeafAndIntermediate => {
+                (&fixture.server_chain_path, &fixture.client_chain_path)
+            }
+        };
+
+        (
+            load_certs(server_cert_path, &fixture.server_key_path, ca_path),
+            load_certs(client_cert_path, &fixture.client_key_path, ca_path),
+        )
+    }
+
+    fn new_ca_params(common_name: &str, is_ca: IsCa) -> CertificateParams {
+        let mut params = CertificateParams::default();
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        params.is_ca = is_ca;
+        params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        params.use_authority_key_identifier_extension = true;
+        params
+    }
+
+    fn new_leaf_params(common_name: &str, dns_name: &str) -> CertificateParams {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]).expect("cert params");
         params.distinguished_name = rcgen::DistinguishedName::new();
         params
@@ -276,23 +334,98 @@ mod tests {
             ExtendedKeyUsagePurpose::ServerAuth,
             ExtendedKeyUsagePurpose::ClientAuth,
         ];
-        let cert = params.self_signed(&key_pair).expect("self-signed cert");
+        params.use_authority_key_identifier_extension = true;
+        params
+    }
+
+    fn build_bootroot_chain_fixture(
+        client_common_name: &str,
+        client_dns_name: &str,
+    ) -> BootrootChainFixture {
+        let root_key = KeyPair::generate().expect("generate root key");
+        let root = CertifiedIssuer::self_signed(
+            new_ca_params(
+                "Bootroot Root CA",
+                IsCa::Ca(BasicConstraints::Unconstrained),
+            ),
+            root_key,
+        )
+        .expect("build root CA");
+
+        let intermediate_key = KeyPair::generate().expect("generate intermediate key");
+        let intermediate = CertifiedIssuer::signed_by(
+            new_ca_params(
+                "Bootroot Intermediate CA",
+                IsCa::Ca(BasicConstraints::Constrained(0)),
+            ),
+            intermediate_key,
+            &root,
+        )
+        .expect("build intermediate CA");
+
+        let server_key = KeyPair::generate().expect("generate server key");
+        let server_name = "001.data-store.node1.example.test";
+        let server_cert = new_leaf_params(server_name, server_name)
+            .signed_by(&server_key, &intermediate)
+            .expect("build server cert");
+
+        let client_key = KeyPair::generate().expect("generate client key");
+        let client_cert = new_leaf_params(client_common_name, client_dns_name)
+            .signed_by(&client_key, &intermediate)
+            .expect("build client cert");
 
         let temp_dir = tempfile::tempdir().expect("temp dir");
-        let cert_path = temp_dir.path().join("cert.pem");
-        let key_path = temp_dir.path().join("key.pem");
-        let ca_path = temp_dir.path().join("ca_cert.pem");
+        let server_leaf_path = temp_dir.path().join("server-leaf.pem");
+        let server_chain_path = temp_dir.path().join("server-chain.pem");
+        let server_key_path = temp_dir.path().join("server-key.pem");
+        let client_leaf_path = temp_dir.path().join("client-leaf.pem");
+        let client_chain_path = temp_dir.path().join("client-chain.pem");
+        let client_key_path = temp_dir.path().join("client-key.pem");
+        let ca_bundle_intermediate_then_root_path =
+            temp_dir.path().join("ca-bundle-intermediate-root.pem");
+        let ca_bundle_root_then_intermediate_path =
+            temp_dir.path().join("ca-bundle-root-intermediate.pem");
 
-        fs::write(&cert_path, cert.pem()).expect("write cert");
-        fs::write(&key_path, key_pair.serialize_pem()).expect("write key");
-        fs::write(&ca_path, cert.pem()).expect("write ca cert");
+        fs::write(&server_leaf_path, server_cert.pem()).expect("write server leaf");
+        fs::write(
+            &server_chain_path,
+            format!("{}{}", server_cert.pem(), intermediate.pem()),
+        )
+        .expect("write server chain");
+        fs::write(&server_key_path, server_key.serialize_pem()).expect("write server key");
+        fs::write(&client_leaf_path, client_cert.pem()).expect("write client leaf");
+        fs::write(
+            &client_chain_path,
+            format!("{}{}", client_cert.pem(), intermediate.pem()),
+        )
+        .expect("write client chain");
+        fs::write(&client_key_path, client_key.serialize_pem()).expect("write client key");
+        fs::write(
+            &ca_bundle_intermediate_then_root_path,
+            format!("{}{}", intermediate.pem(), root.pem()),
+        )
+        .expect("write canonical ca bundle");
+        fs::write(
+            &ca_bundle_root_then_intermediate_path,
+            format!("{}{}", root.pem(), intermediate.pem()),
+        )
+        .expect("write reversed ca bundle");
 
-        PemFixture {
+        BootrootChainFixture {
             _temp_dir: temp_dir,
-            cert_path: cert_path.to_string_lossy().into_owned(),
-            key_path: key_path.to_string_lossy().into_owned(),
-            ca_path: ca_path.to_string_lossy().into_owned(),
-            server_name: dns_name.to_string(),
+            server_leaf_path: server_leaf_path.to_string_lossy().into_owned(),
+            server_chain_path: server_chain_path.to_string_lossy().into_owned(),
+            server_key_path: server_key_path.to_string_lossy().into_owned(),
+            client_leaf_path: client_leaf_path.to_string_lossy().into_owned(),
+            client_chain_path: client_chain_path.to_string_lossy().into_owned(),
+            client_key_path: client_key_path.to_string_lossy().into_owned(),
+            ca_bundle_intermediate_then_root_path: ca_bundle_intermediate_then_root_path
+                .to_string_lossy()
+                .into_owned(),
+            ca_bundle_root_then_intermediate_path: ca_bundle_root_then_intermediate_path
+                .to_string_lossy()
+                .into_owned(),
+            server_name: server_name.to_string(),
         }
     }
 
@@ -318,6 +451,25 @@ mod tests {
     }
 
     #[test]
+    fn subject_from_cert_prefers_valid_bootroot_san_over_invalid_cn() {
+        let certs =
+            build_self_signed_cert_chain("not-a-legacy-cn", "001.piglet.node1.example.test");
+
+        let identity = subject_from_cert(&certs).expect("bootroot SAN should take precedence");
+
+        assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+    }
+
+    #[test]
+    fn subject_from_cert_falls_back_to_legacy_cn_when_bootroot_san_is_invalid() {
+        let certs = build_self_signed_cert_chain("giganto@node1", "piglet.node1.example.test");
+
+        let identity = subject_from_cert(&certs).expect("legacy CN fallback");
+
+        assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
+    }
+
+    #[test]
     fn subject_from_cert_rejects_invalid_identity() {
         let certs =
             build_self_signed_cert_chain("piglet.node1.example.test", "piglet.node1.example.test");
@@ -330,22 +482,23 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn bootroot_pem_files_complete_mtls_handshake() {
+    async fn assert_bootroot_fixture_mtls_handshake(
+        bundle_order: BundleOrder,
+        peer_presentation: PeerPresentation,
+    ) {
         init_crypto();
 
-        let fixture = build_self_signed_pem_fixture(
+        let fixture = build_bootroot_chain_fixture(
             "001.piglet.node1.example.test",
             "001.piglet.node1.example.test",
         );
-        let certs = Arc::new(load_certs(
-            &fixture.cert_path,
-            &fixture.key_path,
-            &fixture.ca_path,
-        ));
+        let (server_certs, client_certs) =
+            load_server_client_certs(&fixture, bundle_order, peer_presentation);
+        let server_certs = Arc::new(server_certs);
+        let client_certs = Arc::new(client_certs);
 
         let server = Endpoint::server(
-            config_server(&certs).expect("server config"),
+            config_server(&server_certs).expect("server config"),
             SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
         )
         .expect("server endpoint");
@@ -370,7 +523,7 @@ mod tests {
 
         let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
         let mut client = Endpoint::client(client_socket).expect("client endpoint");
-        client.set_default_client_config(config_client(&certs).expect("client config"));
+        client.set_default_client_config(config_client(&client_certs).expect("client config"));
         let connection = client
             .connect(server_addr, &fixture.server_name)
             .expect("connect future")
@@ -384,5 +537,41 @@ mod tests {
             .expect("server task failed");
         client.wait_idle().await;
         server.wait_idle().await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_accepts_intermediate_then_root_with_leaf_only_peers() {
+        assert_bootroot_fixture_mtls_handshake(
+            BundleOrder::IntermediateThenRoot,
+            PeerPresentation::LeafOnly,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_accepts_intermediate_then_root_with_leaf_and_intermediate_peers() {
+        assert_bootroot_fixture_mtls_handshake(
+            BundleOrder::IntermediateThenRoot,
+            PeerPresentation::LeafAndIntermediate,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_accepts_root_then_intermediate_with_leaf_only_peers() {
+        assert_bootroot_fixture_mtls_handshake(
+            BundleOrder::RootThenIntermediate,
+            PeerPresentation::LeafOnly,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_accepts_root_then_intermediate_with_leaf_and_intermediate_peers() {
+        assert_bootroot_fixture_mtls_handshake(
+            BundleOrder::RootThenIntermediate,
+            PeerPresentation::LeafAndIntermediate,
+        )
+        .await;
     }
 }
