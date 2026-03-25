@@ -12,8 +12,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
   code, identifier, sequence number, and payload data. The `Icmp` type is
-  intended to cover both normal and malformed ICMP traffic. This enables
-  detection of ICMP-based C&C communication channels.
+  intended to cover both normal and malformed ICMP traffic.
 
 ### Changed
 

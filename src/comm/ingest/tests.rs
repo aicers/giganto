@@ -16,7 +16,7 @@ use chrono::{Duration, TimeZone, Utc};
 use giganto_client::frame::SendError;
 use giganto_client::ingest::log::SecuLog;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
-use giganto_client::ingest::network::{MalformedDns, Radius};
+use giganto_client::ingest::network::{Icmp, MalformedDns, Radius};
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
@@ -97,6 +97,7 @@ const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::Bootp,
     RawEventKind::Dhcp,
     RawEventKind::Radius,
+    RawEventKind::Icmp,
     RawEventKind::ProcessCreate,
     RawEventKind::FileCreateTime,
     RawEventKind::NetworkConnect,
@@ -1164,6 +1165,27 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 resp_pkts: 1,
                 orig_l2_bytes: 100,
                 resp_l2_bytes: 100,
+            },
+        ),
+        single_event_case(
+            "icmp",
+            RawEventKind::Icmp,
+            Icmp {
+                orig_addr: ip("192.168.4.76"),
+                resp_addr: ip("192.168.4.77"),
+                proto: 1,
+                start_time: default_start_time(),
+                duration: 1_000_000,
+                orig_pkts: 1,
+                resp_pkts: 1,
+                orig_l2_bytes: 84,
+                resp_l2_bytes: 84,
+                icmp_type: 8,
+                icmp_code: 0,
+                id: 12345,
+                seq_num: 1,
+                data_len: 56,
+                payload: vec![0x61, 0x62, 0x63, 0x64],
             },
         ),
         single_event_case(
