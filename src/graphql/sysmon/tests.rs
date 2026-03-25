@@ -30,9 +30,7 @@ use fixtures::{
 async fn sysmon_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = 1_709_528_767_000_000_000_i64;
     let step = 1_000_000;
 
     let process_create_store = schema.db.process_create_store().unwrap();
@@ -136,91 +134,58 @@ async fn sysmon_events_timestamp_format_stability() {
         "FileDeleteDetectedEvent",
     ];
     let mut seen = HashSet::new();
-    let mut expected_times: HashMap<&str, String> = HashMap::new();
-    expected_times.insert(
-        "ProcessCreateEvent",
-        DateTime::from_timestamp_nanos(base_ts).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreationTimeChangedEvent",
-        DateTime::from_timestamp_nanos(base_ts + step).to_rfc3339(),
-    );
-    expected_times.insert(
-        "NetworkConnectionEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 2).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ProcessTerminatedEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 3).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ImageLoadedEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 4).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreateEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 5).to_rfc3339(),
-    );
-    expected_times.insert(
-        "RegistryValueSetEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 6).to_rfc3339(),
-    );
-    expected_times.insert(
-        "RegistryKeyValueRenameEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 7).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreateStreamHashEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 8).to_rfc3339(),
-    );
-    expected_times.insert(
-        "PipeEventEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 9).to_rfc3339(),
-    );
-    expected_times.insert(
-        "DnsEventEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 10).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileDeleteEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 11).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ProcessTamperingEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 12).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileDeleteDetectedEvent",
-        DateTime::from_timestamp_nanos(base_ts + step * 13).to_rfc3339(),
-    );
+    let expected_time_strings = [
+        "2024-03-04T05:06:07+00:00",
+        "2024-03-04T05:06:07.001+00:00",
+        "2024-03-04T05:06:07.002+00:00",
+        "2024-03-04T05:06:07.003+00:00",
+        "2024-03-04T05:06:07.004+00:00",
+        "2024-03-04T05:06:07.005+00:00",
+        "2024-03-04T05:06:07.006+00:00",
+        "2024-03-04T05:06:07.007+00:00",
+        "2024-03-04T05:06:07.008+00:00",
+        "2024-03-04T05:06:07.009+00:00",
+        "2024-03-04T05:06:07.010+00:00",
+        "2024-03-04T05:06:07.011+00:00",
+        "2024-03-04T05:06:07.012+00:00",
+        "2024-03-04T05:06:07.013+00:00",
+    ];
+    let mut expected_times: HashMap<&str, &str> = HashMap::new();
+    for (typename, time_str) in expected_types.iter().zip(expected_time_strings.iter()) {
+        expected_times.insert(typename, time_str);
+    }
 
     for edge in edges {
         let node = edge["node"].as_object().unwrap();
         let typename = node["__typename"].as_str().unwrap();
         seen.insert(typename.to_string());
         let expected_time = expected_times.get(typename).unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), expected_time);
+        assert_eq!(node["time"].as_str().unwrap(), *expected_time);
         match typename {
             "FileCreationTimeChangedEvent" => {
+                // file_create_time_creation = base_ts + step + 10
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    DateTime::from_timestamp_nanos(file_create_time_creation).to_rfc3339()
+                    "2024-03-04T05:06:07.001000010+00:00"
                 );
+                // file_create_time_previous = base_ts + step - 10
                 assert_eq!(
                     node["previousCreationUtcTime"].as_str().unwrap(),
-                    DateTime::from_timestamp_nanos(file_create_time_previous).to_rfc3339()
+                    "2024-03-04T05:06:07.000999990+00:00"
                 );
             }
             "FileCreateEvent" => {
+                // file_create_creation = base_ts + step * 5 + 20
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    DateTime::from_timestamp_nanos(file_create_creation).to_rfc3339()
+                    "2024-03-04T05:06:07.005000020+00:00"
                 );
             }
             "FileCreateStreamHashEvent" => {
+                // base_ts + step * 8
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    DateTime::from_timestamp_nanos(base_ts + step * 8).to_rfc3339()
+                    "2024-03-04T05:06:07.008+00:00"
                 );
             }
             _ => {}

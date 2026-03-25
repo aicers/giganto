@@ -7,7 +7,6 @@ use giganto_client::ingest::network::{
     Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
-use num_traits::cast::ToPrimitive;
 
 use crate::datetime::DateTime;
 use crate::graphql::{
@@ -420,9 +419,7 @@ async fn conn_with_data_giganto_cluster() {
 async fn network_raw_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = 1_709_528_767_000_000_000_i64;
     let step = 1_000_000;
 
     let conn_store = schema.db.conn_store().unwrap();
@@ -528,13 +525,30 @@ async fn network_raw_events_timestamp_format_stability() {
         "RadiusRawEvent",
     ];
 
-    let mut expected_times: HashMap<&str, String> = HashMap::new();
-    for (idx, typename) in expected_types.iter().enumerate() {
-        let idx = idx.to_i64().expect("expected_types length fits in i64");
-        expected_times.insert(
-            typename,
-            DateTime::from_timestamp_nanos(base_ts + step * idx).to_rfc3339(),
-        );
+    let expected_time_strings = [
+        "2024-03-04T05:06:07+00:00",
+        "2024-03-04T05:06:07.001+00:00",
+        "2024-03-04T05:06:07.002+00:00",
+        "2024-03-04T05:06:07.003+00:00",
+        "2024-03-04T05:06:07.004+00:00",
+        "2024-03-04T05:06:07.005+00:00",
+        "2024-03-04T05:06:07.006+00:00",
+        "2024-03-04T05:06:07.007+00:00",
+        "2024-03-04T05:06:07.008+00:00",
+        "2024-03-04T05:06:07.009+00:00",
+        "2024-03-04T05:06:07.010+00:00",
+        "2024-03-04T05:06:07.011+00:00",
+        "2024-03-04T05:06:07.012+00:00",
+        "2024-03-04T05:06:07.013+00:00",
+        "2024-03-04T05:06:07.014+00:00",
+        "2024-03-04T05:06:07.015+00:00",
+        "2024-03-04T05:06:07.016+00:00",
+        "2024-03-04T05:06:07.017+00:00",
+        "2024-03-04T05:06:07.018+00:00",
+    ];
+    let mut expected_times: HashMap<&str, &str> = HashMap::new();
+    for (typename, time_str) in expected_types.iter().zip(expected_time_strings.iter()) {
+        expected_times.insert(typename, time_str);
     }
     let mut seen = HashSet::new();
 
@@ -545,7 +559,7 @@ async fn network_raw_events_timestamp_format_stability() {
         let expected = expected_times
             .get(typename)
             .expect("expected network event type");
-        assert_eq!(node["time"].as_str().unwrap(), expected);
+        assert_eq!(node["time"].as_str().unwrap(), *expected);
     }
 
     assert_eq!(seen.len(), expected_types.len());

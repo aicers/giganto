@@ -148,15 +148,14 @@ impl JsonTimeField {
 
 pub(super) async fn run_export_case(case: ExportTimeFormatParityCase) {
     let schema = TestSchema::new();
-    let dt = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7);
-    let timestamp = dt.timestamp_nanos_opt().unwrap();
+    let timestamp = 1_709_528_767_000_000_000_i64;
     (case.insert)(&schema, &case, timestamp);
 
-    let time_start = DateTime::from_timestamp_nanos(timestamp - 1_000_000_000).to_rfc3339();
-    let time_end = DateTime::from_timestamp_nanos(timestamp + 1_000_000_000).to_rfc3339();
-    let expected_time = dt.format_unix_seconds_with_nanos();
+    let time_start = "2024-03-04T05:06:06+00:00";
+    let time_end = "2024-03-04T05:06:08+00:00";
+    let expected_time = "1709528767.000000000";
 
-    let csv_download = execute_export(case, &schema, &time_start, &time_end, "csv").await;
+    let csv_download = execute_export(case, &schema, time_start, time_end, "csv").await;
     let csv_contents = read_export_file_with_retry(&csv_download).await;
     let csv_line = csv_contents
         .lines()
@@ -167,13 +166,12 @@ pub(super) async fn run_export_case(case: ExportTimeFormatParityCase) {
         .next()
         .expect("csv export must contain a time column");
     assert_eq!(
-        csv_time,
-        expected_time.as_str(),
+        csv_time, expected_time,
         "csv export for protocol {} should expose expected timestamp",
         case.protocol
     );
 
-    let json_download = execute_export(case, &schema, &time_start, &time_end, "json").await;
+    let json_download = execute_export(case, &schema, time_start, time_end, "json").await;
     let json_contents = read_export_file_with_retry(&json_download).await;
     let json_line = json_contents
         .lines()

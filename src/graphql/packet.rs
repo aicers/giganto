@@ -710,12 +710,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_dt = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 8)
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_dt = 1_709_528_767_000_000_000_i64;
+        let packet_dt = 1_709_528_768_000_000_000_i64;
 
         insert_packet(&store, "src1", request_dt, packet_dt);
 
@@ -756,12 +752,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_ts = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 9)
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_ts = 1_709_528_767_000_000_000_i64;
+        let packet_ts = 1_709_528_769_000_000_000_i64;
         insert_packet(&store, "src1", request_ts, packet_ts);
 
         let query = r#"
