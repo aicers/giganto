@@ -250,6 +250,8 @@ mod tests {
         client_leaf_path: String,
         client_chain_path: String,
         client_key_path: String,
+        intermediate_cert_path: String,
+        root_cert_path: String,
         ca_bundle_intermediate_then_root_path: String,
         ca_bundle_root_then_intermediate_path: String,
         server_name: String,
@@ -274,15 +276,30 @@ mod tests {
     }
 
     fn load_certs(cert_path: &str, key_path: &str, ca_path: &str) -> Certs {
+        load_certs_with_ca_paths(cert_path, key_path, &[ca_path.to_string()])
+    }
+
+    fn load_certs_with_ca_paths(cert_path: &str, key_path: &str, ca_paths: &[String]) -> Certs {
         let cert_pem = fs::read(cert_path).expect("read cert");
         let key_pem = fs::read(key_path).expect("read key");
-        let root = to_root_cert(&[ca_path.to_string()]).expect("read ca bundle");
+        let root = to_root_cert(ca_paths).expect("read ca bundle");
 
         Certs {
             certs: to_cert_chain(&cert_pem).expect("parse cert"),
             key: to_private_key(&key_pem).expect("parse key"),
             root,
         }
+    }
+
+    fn config_client_without_cert(ca_paths: &[String]) -> ClientConfig {
+        init_crypto();
+        let root = to_root_cert(ca_paths).expect("read ca bundle");
+        ClientConfig::with_root_certificates(Arc::new(root)).expect("client config")
+    }
+
+    fn config_client_for_tests(certs: &Certs) -> ClientConfig {
+        init_crypto();
+        config_client(certs).expect("client config")
     }
 
     fn load_server_client_certs(
@@ -390,6 +407,8 @@ mod tests {
         let client_leaf_path = temp_dir.path().join("client-leaf.pem");
         let client_chain_path = temp_dir.path().join("client-chain.pem");
         let client_key_path = temp_dir.path().join("client-key.pem");
+        let intermediate_cert_path = temp_dir.path().join("intermediate.pem");
+        let root_cert_path = temp_dir.path().join("root.pem");
         let ca_bundle_intermediate_then_root_path =
             temp_dir.path().join("ca-bundle-intermediate-root.pem");
         let ca_bundle_root_then_intermediate_path =
@@ -409,6 +428,8 @@ mod tests {
         )
         .expect("write client chain");
         fs::write(&client_key_path, client_key.serialize_pem()).expect("write client key");
+        fs::write(&intermediate_cert_path, intermediate.pem()).expect("write intermediate cert");
+        fs::write(&root_cert_path, root.pem()).expect("write root cert");
         fs::write(
             &ca_bundle_intermediate_then_root_path,
             format!("{}{}", intermediate.pem(), root.pem()),
@@ -428,6 +449,8 @@ mod tests {
             client_leaf_path: client_leaf_path.to_string_lossy().into_owned(),
             client_chain_path: client_chain_path.to_string_lossy().into_owned(),
             client_key_path: client_key_path.to_string_lossy().into_owned(),
+            intermediate_cert_path: intermediate_cert_path.to_string_lossy().into_owned(),
+            root_cert_path: root_cert_path.to_string_lossy().into_owned(),
             ca_bundle_intermediate_then_root_path: ca_bundle_intermediate_then_root_path
                 .to_string_lossy()
                 .into_owned(),
@@ -548,6 +571,50 @@ mod tests {
         server.wait_idle().await;
     }
 
+    async fn assert_bootroot_fixture_mtls_handshake_fails(
+        server_certs: Certs,
+        client_config: ClientConfig,
+        server_name: &str,
+    ) -> String {
+        init_crypto();
+
+        let server = Endpoint::server(
+            config_server(&server_certs).expect("server config"),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("server endpoint");
+        let server_addr = server.local_addr().expect("server addr");
+
+        let server_handle = {
+            let server = server.clone();
+            tokio::spawn(async move {
+                if let Some(connecting) = server.accept().await {
+                    let _ = connecting.await;
+                }
+            })
+        };
+
+        let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
+        let mut client = Endpoint::client(client_socket).expect("client endpoint");
+        client.set_default_client_config(client_config);
+        let err = timeout(Duration::from_secs(2), async {
+            client
+                .connect(server_addr, server_name)
+                .expect("connect future")
+                .await
+        })
+        .await
+        .expect("client connect timeout")
+        .expect_err("connection should fail");
+
+        server_handle.abort();
+        let _ = server_handle.await;
+        drop(client);
+        drop(server);
+
+        err.to_string()
+    }
+
     #[tokio::test]
     async fn bootroot_pem_bundle_accepts_intermediate_then_root_with_leaf_only_peers() {
         assert_bootroot_fixture_mtls_handshake(
@@ -582,5 +649,168 @@ mod tests {
             PeerPresentation::LeafAndIntermediate,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_missing_client_certificate_has_no_peer_identity() {
+        init_crypto();
+
+        let fixture = build_bootroot_chain_fixture(
+            "001.piglet.node1.example.test",
+            "001.piglet.node1.example.test",
+        );
+        let server_certs = load_certs(
+            &fixture.server_chain_path,
+            &fixture.server_key_path,
+            &fixture.ca_bundle_intermediate_then_root_path,
+        );
+        let client_config = config_client_without_cert(std::slice::from_ref(
+            &fixture.ca_bundle_intermediate_then_root_path,
+        ));
+
+        let server = Endpoint::server(
+            config_server(&server_certs).expect("server config"),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("server endpoint");
+        let server_addr = server.local_addr().expect("server addr");
+        let server_handle = {
+            let server = server.clone();
+            tokio::spawn(async move {
+                let err = server
+                    .accept()
+                    .await
+                    .expect("server accept")
+                    .await
+                    .expect_err("missing client certificate should fail handshake");
+                assert!(err.to_string().contains("peer sent no certificates"));
+            })
+        };
+
+        let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
+        let mut client = Endpoint::client(client_socket).expect("client endpoint");
+        client.set_default_client_config(client_config);
+        let connection = client
+            .connect(server_addr, &fixture.server_name)
+            .expect("connect future")
+            .await;
+        if let Ok(connection) = connection {
+            connection.close(0_u32.into(), b"done");
+        }
+
+        timeout(Duration::from_secs(2), server_handle)
+            .await
+            .expect("server task timeout")
+            .expect("server task failed");
+        client.wait_idle().await;
+        server.wait_idle().await;
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_rejects_untrusted_ca() {
+        let fixture = build_bootroot_chain_fixture(
+            "001.piglet.node1.example.test",
+            "001.piglet.node1.example.test",
+        );
+        let wrong_fixture = build_bootroot_chain_fixture(
+            "001.piglet.node2.example.test",
+            "001.piglet.node2.example.test",
+        );
+        let server_certs = load_certs(
+            &fixture.server_chain_path,
+            &fixture.server_key_path,
+            &fixture.ca_bundle_intermediate_then_root_path,
+        );
+        let client_certs = load_certs_with_ca_paths(
+            &fixture.client_chain_path,
+            &fixture.client_key_path,
+            std::slice::from_ref(&wrong_fixture.ca_bundle_intermediate_then_root_path),
+        );
+
+        let err = assert_bootroot_fixture_mtls_handshake_fails(
+            server_certs,
+            config_client_for_tests(&client_certs),
+            &fixture.server_name,
+        )
+        .await;
+
+        assert!(
+            !err.is_empty(),
+            "untrusted CA should produce a connection error"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_rejects_server_name_mismatch() {
+        let fixture = build_bootroot_chain_fixture(
+            "001.piglet.node1.example.test",
+            "001.piglet.node1.example.test",
+        );
+        let server_certs = load_certs(
+            &fixture.server_chain_path,
+            &fixture.server_key_path,
+            &fixture.ca_bundle_intermediate_then_root_path,
+        );
+        let client_certs = load_certs(
+            &fixture.client_chain_path,
+            &fixture.client_key_path,
+            &fixture.ca_bundle_intermediate_then_root_path,
+        );
+
+        let err = assert_bootroot_fixture_mtls_handshake_fails(
+            server_certs,
+            config_client_for_tests(&client_certs),
+            "001.data-store.node2.example.test",
+        )
+        .await;
+
+        assert!(
+            !err.is_empty(),
+            "server_name mismatch should produce a connection error"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootroot_pem_bundle_rejects_invalid_server_certificate_chain() {
+        let fixture = build_bootroot_chain_fixture(
+            "001.piglet.node1.example.test",
+            "001.piglet.node1.example.test",
+        );
+        let wrong_fixture = build_bootroot_chain_fixture(
+            "001.piglet.node2.example.test",
+            "001.piglet.node2.example.test",
+        );
+        let broken_server_pem = format!(
+            "{}{}",
+            fs::read_to_string(&fixture.server_leaf_path).expect("read server leaf"),
+            fs::read_to_string(&wrong_fixture.intermediate_cert_path)
+                .expect("read unrelated intermediate"),
+        );
+        let server_certs = Certs {
+            certs: to_cert_chain(broken_server_pem.as_bytes()).expect("parse broken server chain"),
+            key: to_private_key(&fs::read(&fixture.server_key_path).expect("read server key"))
+                .expect("parse server key"),
+            root: to_root_cert(std::slice::from_ref(
+                &fixture.ca_bundle_intermediate_then_root_path,
+            ))
+            .expect("server client-auth roots"),
+        };
+        let client_certs = load_certs_with_ca_paths(
+            &fixture.client_chain_path,
+            &fixture.client_key_path,
+            std::slice::from_ref(&fixture.root_cert_path),
+        );
+
+        let err = assert_bootroot_fixture_mtls_handshake_fails(
+            server_certs,
+            config_client_for_tests(&client_certs),
+            &fixture.server_name,
+        )
+        .await;
+
+        assert!(
+            !err.is_empty(),
+            "invalid server certificate chain should produce a connection error"
+        );
     }
 }
