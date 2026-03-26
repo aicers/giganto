@@ -324,16 +324,17 @@ mod tests {
         params
     }
 
-    fn new_leaf_params(common_name: &str, dns_name: &str) -> CertificateParams {
+    fn new_leaf_params(
+        common_name: &str,
+        dns_name: &str,
+        extended_key_usages: Vec<ExtendedKeyUsagePurpose>,
+    ) -> CertificateParams {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]).expect("cert params");
         params.distinguished_name = rcgen::DistinguishedName::new();
         params
             .distinguished_name
             .push(DnType::CommonName, common_name);
-        params.extended_key_usages = vec![
-            ExtendedKeyUsagePurpose::ServerAuth,
-            ExtendedKeyUsagePurpose::ClientAuth,
-        ];
+        params.extended_key_usages = extended_key_usages;
         params.use_authority_key_identifier_extension = true;
         params
     }
@@ -365,14 +366,22 @@ mod tests {
 
         let server_key = KeyPair::generate().expect("generate server key");
         let server_name = "001.data-store.node1.example.test";
-        let server_cert = new_leaf_params(server_name, server_name)
-            .signed_by(&server_key, &intermediate)
-            .expect("build server cert");
+        let server_cert = new_leaf_params(
+            server_name,
+            server_name,
+            vec![ExtendedKeyUsagePurpose::ServerAuth],
+        )
+        .signed_by(&server_key, &intermediate)
+        .expect("build server cert");
 
         let client_key = KeyPair::generate().expect("generate client key");
-        let client_cert = new_leaf_params(client_common_name, client_dns_name)
-            .signed_by(&client_key, &intermediate)
-            .expect("build client cert");
+        let client_cert = new_leaf_params(
+            client_common_name,
+            client_dns_name,
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        )
+        .signed_by(&client_key, &intermediate)
+        .expect("build client cert");
 
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let server_leaf_path = temp_dir.path().join("server-leaf.pem");
@@ -470,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn subject_from_cert_rejects_invalid_identity() {
+    fn subject_from_cert_rejects_invalid_bootroot_san_without_legacy_cn_fallback() {
         let certs =
             build_self_signed_cert_chain("piglet.node1.example.test", "piglet.node1.example.test");
 
