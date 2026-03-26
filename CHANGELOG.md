@@ -40,6 +40,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   service/hostname extraction matches downstream expectations and invalid
   near-miss SAN shapes are rejected.
 
+### Added
+
+- Added a reusable Bootroot mTLS validation guide and helper script, including
+  real-certificate override flow and multi-PEM CA bundle validation notes.
+
 ## [0.26.2] - 2026-02-12
 
 ### Added
