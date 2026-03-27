@@ -4,8 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
+    Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 use num_traits::cast::ToPrimitive;
@@ -450,6 +450,7 @@ async fn network_raw_events_timestamp_format_stability() {
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
     let radius_store = schema.db.radius_store().unwrap();
+    let icmp_store = schema.db.icmp_store().unwrap();
 
     insert_conn_raw_event(&conn_store, sensor, base_ts);
     insert_dns_raw_event(&dns_store, sensor, base_ts + step);
@@ -470,6 +471,7 @@ async fn network_raw_events_timestamp_format_stability() {
     insert_bootp_raw_event(&bootp_store, sensor, base_ts + step * 16);
     insert_dhcp_raw_event(&dhcp_store, sensor, base_ts + step * 17);
     insert_radius_raw_event(&radius_store, sensor, base_ts + step * 18);
+    insert_icmp_raw_event(&icmp_store, sensor, base_ts + step * 19);
 
     let query = r#"
     {
@@ -502,6 +504,7 @@ async fn network_raw_events_timestamp_format_stability() {
                     ... on BootpRawEvent { time }
                     ... on DhcpRawEvent { time }
                     ... on RadiusRawEvent { time }
+                    ... on IcmpRawEvent { time }
                 }
             }
         }
@@ -532,6 +535,7 @@ async fn network_raw_events_timestamp_format_stability() {
         "BootpRawEvent",
         "DhcpRawEvent",
         "RadiusRawEvent",
+        "IcmpRawEvent",
     ];
 
     let mut expected_times: HashMap<&str, String> = HashMap::new();
@@ -5037,6 +5041,178 @@ async fn radius_with_data_giganto_cluster() {
     mock.assert_async().await;
 }
 
+fn insert_icmp_raw_event(store: &RawEventStore<Icmp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: fixed_time_nanos().0,
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+    let ser_icmp_body = bincode::serialize(&icmp_body).unwrap();
+
+    store.append(&key, &ser_icmp_body).unwrap();
+}
+
+#[tokio::test]
+async fn icmp_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    let (time1, time2) = fixed_time_nanos();
+    insert_icmp_raw_event(&store, "src 1", time1);
+    insert_icmp_raw_event(&store, "src 1", time2);
+
+    let query = r#"
+    {
+        icmpRawEvents(
+            filter: {
+                sensor: "src 1"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    proto,
+                    startTime,
+                    duration,
+                    origPkts,
+                    respPkts,
+                    origL2Bytes,
+                    respL2Bytes,
+                    icmpType,
+                    icmpCode,
+                    id,
+                    seqNum,
+                    dataLen,
+                    payload,
+                    time,
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
+        proto: 1, startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000\", origPkts: \"1\", \
+        respPkts: \"1\", origL2Bytes: \"84\", respL2Bytes: \"84\", icmpType: 8, icmpCode: 0, \
+        id: 12345, seqNum: 1, dataLen: 56, payload: [97, 98, 99, 100], \
+        time: \"2026-01-01T00:00:00+00:00\"}}]}}"
+    );
+
+    assert_time_boundaries(
+        &schema,
+        "icmpRawEvents",
+        "src 1",
+        "origAddr",
+        "\"192.168.4.76\"",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn icmp_with_data_giganto_cluster() {
+    // given
+    let query = r#"
+    {
+        icmpRawEvents(
+            filter: {
+                sensor: "src 2"
+            }
+            first: 1
+        ) {
+            edges {
+                node {
+                    origAddr,
+                    respAddr,
+                    icmpType,
+                    icmpCode,
+                    id,
+                    seqNum,
+                }
+            }
+        }
+    }"#;
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "icmpRawEvents": {
+                "pageInfo": {
+                    "hasPreviousPage": true,
+                    "hasNextPage": false
+                },
+                "edges": [
+                    {
+                        "cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "node": {
+                            "time": "2026-01-01T00:00:00+00:00",
+                            "origAddr": "192.168.4.76",
+                            "respAddr": "192.168.4.77",
+                            "proto": 1,
+                            "startTime": "2026-01-01T00:00:00+00:00",
+                            "duration": "1000000",
+                            "origPkts": "1",
+                            "respPkts": "1",
+                            "origL2Bytes": "84",
+                            "respL2Bytes": "84",
+                            "icmpType": 8,
+                            "icmpCode": 0,
+                            "id": 12345,
+                            "seqNum": 1,
+                            "dataLen": 56,
+                            "payload": [97, 98, 99, 100]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    // when
+    let res = schema.execute(query).await;
+
+    // then
+    assert_eq!(
+        res.data.to_string(),
+        "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
+        icmpType: 8, icmpCode: 0, id: 12345, seqNum: 1}}]}}"
+    );
+    mock.assert_async().await;
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_search_boundary_for_addr_port() {
@@ -5400,6 +5576,7 @@ async fn union() {
     let smtp_store = schema.db.smtp_store().unwrap();
     let bootp_store = schema.db.bootp_store().unwrap();
     let dhcp_store = schema.db.dhcp_store().unwrap();
+    let icmp_store = schema.db.icmp_store().unwrap();
 
     insert_conn_raw_event(
         &conn_store,
@@ -5537,8 +5714,16 @@ async fn union() {
             .timestamp_nanos_opt()
             .unwrap(),
     );
+    insert_icmp_raw_event(
+        &icmp_store,
+        "src 1",
+        Utc.with_ymd_and_hms(2020, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+    );
 
-    // order: bootp, ssh, smtp, conn, rdp, dce_rpc, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
+    // order: bootp, ssh, smtp, conn, rdp, dce_rpc, icmp, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
     let query = r#"
     {
         networkRawEvents(
@@ -5546,7 +5731,7 @@ async fn union() {
                 time: { start: "1992-06-05T00:00:00Z", end: "2025-09-22T00:00:00Z" }
                 sensor: "src 1"
             }
-            first: 20
+            first: 21
             ) {
             edges {
                 node {
@@ -5601,6 +5786,9 @@ async fn union() {
                     ... on DhcpRawEvent {
                         time
                     }
+                    ... on IcmpRawEvent {
+                        time
+                    }
                     __typename
                 }
             }
@@ -5609,7 +5797,7 @@ async fn union() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
+        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-03-01T00:00:00+00:00\", __typename: \"IcmpRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
     );
 }
 
@@ -7377,6 +7565,83 @@ async fn search_radius_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn search_icmp_with_data() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
+    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
+
+    insert_icmp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
+    insert_icmp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+
+    let query = r#"
+    {
+        searchIcmpRawEvents(
+            filter: {
+                sensor: "src 1"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+    );
+}
+
+#[tokio::test]
+async fn search_icmp_with_data_giganto_cluster() {
+    let query = r#"
+    {
+        searchIcmpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 2"
+                origAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                times:["2020-01-01T00:00:01Z","2020-01-01T00:01:01Z","2020-01-01T01:01:01Z","2020-01-02T00:00:01Z"]
+            }
+        )
+    }"#;
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let peer_response_mock_data = r#"
+    {
+        "data": {
+            "searchIcmpRawEvents": [
+                "2020-01-01T00:01:01+00:00",
+                "2020-01-01T01:01:01+00:00"
+            ]
+        }
+    }
+    "#;
+
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let res = schema.execute(query).await;
+    assert_eq!(
+        res.data.to_string(),
+        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
     );
     mock.assert_async().await;
 }

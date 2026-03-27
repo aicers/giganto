@@ -22,8 +22,8 @@ use giganto_client::ingest::{
     log::{Log, OpLog, SecuLog},
     netflow::{Netflow5, Netflow9},
     network::{
-        Bootp, DceRpc, Dhcp, Dns, Ftp, Kerberos, Ldap, MalformedDns as ClientMalformedDns, Mqtt,
-        Nfs, Radius, Rdp, Smb,
+        Bootp, DceRpc, Dhcp, Dns, Ftp, Icmp, Kerberos, Ldap, MalformedDns as ClientMalformedDns,
+        Mqtt, Nfs, Radius, Rdp, Smb,
     },
     statistics::Statistics,
     sysmon::{
@@ -49,7 +49,7 @@ use crate::{
     graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
 };
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 41] = [
+const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "conn",
     "dns",
     "malformed_dns",
@@ -74,6 +74,7 @@ const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 41] = [
     "bootp",
     "dhcp",
     "radius",
+    "icmp",
     "process create",
     "file create time",
     "network connect",
@@ -425,6 +426,12 @@ impl Database {
     /// Returns the store for radius
     pub fn radius_store(&self) -> Result<RawEventStore<'_, Radius>> {
         let cf = self.get_cf_handle("radius")?;
+        Ok(RawEventStore::new(&self.db, cf))
+    }
+
+    /// Returns the store for icmp
+    pub fn icmp_store(&self) -> Result<RawEventStore<'_, Icmp>> {
+        let cf = self.get_cf_handle("icmp")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 

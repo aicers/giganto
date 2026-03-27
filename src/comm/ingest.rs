@@ -583,6 +583,20 @@ async fn handle_request(
             )
             .await?;
         }
+        RawEventKind::Icmp => {
+            handle_data(
+                send,
+                recv,
+                RawEventKind::Icmp,
+                Some(NetworkKey::new(&sensor, "icmp")),
+                sensor,
+                db.icmp_store()?,
+                stream_direct_channels,
+                shutdown_signal,
+                ack_trans_cnt,
+            )
+            .await?;
+        }
         RawEventKind::ProcessCreate => {
             handle_data(
                 send,

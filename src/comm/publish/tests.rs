@@ -23,8 +23,8 @@ use giganto_client::{
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
-            Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap,
+            MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         sysmon::{
             DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -1319,6 +1319,15 @@ mod fixtures {
         build_expected_response::<Dhcp>(&ser_body, timestamp, sensor)
     }
 
+    pub(super) fn build_icmp_range_expected(
+        db: &Database,
+        sensor: &str,
+        timestamp: i64,
+    ) -> Vec<u8> {
+        let ser_body = insert_icmp_raw_event(&db.icmp_store().unwrap(), sensor, timestamp);
+        build_expected_response::<Icmp>(&ser_body, timestamp, sensor)
+    }
+
     pub(super) fn build_radius_range_expected(
         db: &Database,
         sensor: &str,
@@ -1584,6 +1593,10 @@ mod fixtures {
             kind: "radius",
             build_expected: build_radius_range_expected,
         },
+        RangeCaseSpec {
+            kind: "icmp",
+            build_expected: build_icmp_range_expected,
+        },
     ];
 
     pub(super) const SYSMON_RANGE_SPECS: &[RangeCaseSpec] = &[
@@ -1770,6 +1783,12 @@ mod fixtures {
             insert: insert_radius_stream,
             build_expected: build_expected_response::<Radius>,
             validate_payload: Some(validate_csv_payload_with_sensor::<Radius>),
+        },
+        RawEventCase {
+            kind: "icmp",
+            insert: insert_icmp_stream,
+            build_expected: build_expected_response::<Icmp>,
+            validate_payload: Some(validate_csv_payload_with_sensor::<Icmp>),
         },
     ];
 
@@ -2309,6 +2328,16 @@ mod fixtures {
             timestamp,
             |db| db.dhcp_store().unwrap(),
             insert_dhcp_raw_event,
+        )
+    }
+
+    pub(super) fn insert_icmp_stream(db: &Database, sensor: &str, timestamp: i64) -> Vec<u8> {
+        insert_stream_from_store(
+            db,
+            sensor,
+            timestamp,
+            |db| db.icmp_store().unwrap(),
+            insert_icmp_raw_event,
         )
     }
 
@@ -3387,6 +3416,32 @@ mod fixtures {
         bincode::serialize(&dhcp_body).unwrap()
     }
 
+    pub(super) fn gen_icmp_raw_event() -> Vec<u8> {
+        let icmp_body = Icmp {
+            orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+            resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+            proto: 1,
+            start_time: Utc
+                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap(),
+            duration: 1_000_000,
+            orig_pkts: 1,
+            resp_pkts: 1,
+            orig_l2_bytes: 84,
+            resp_l2_bytes: 84,
+            icmp_type: 8,
+            icmp_code: 0,
+            id: 12345,
+            seq_num: 1,
+            data_len: 56,
+            payload: vec![0x61, 0x62, 0x63, 0x64],
+        };
+
+        bincode::serialize(&icmp_body).unwrap()
+    }
+
     pub(super) fn gen_radius_raw_event() -> Vec<u8> {
         let radius_body = Radius {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -3577,6 +3632,14 @@ mod fixtures {
         timestamp: i64,
     ) -> Vec<u8> {
         insert_network_raw_event(store, sensor, timestamp, gen_dhcp_raw_event)
+    }
+
+    pub(super) fn insert_icmp_raw_event(
+        store: &RawEventStore<Icmp>,
+        sensor: &str,
+        timestamp: i64,
+    ) -> Vec<u8> {
+        insert_network_raw_event(store, sensor, timestamp, gen_icmp_raw_event)
     }
 
     pub(super) fn insert_radius_raw_event(

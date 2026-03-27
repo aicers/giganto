@@ -20,8 +20,8 @@ use giganto_client::{
         log::{Log, OpLog, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-            Ntlm, Qclass, Qtype, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt,
+            Nfs, Ntlm, Qclass, Qtype, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -57,7 +57,7 @@ use crate::{
     },
 };
 
-const ADDRESS_PROTOCOL: [&str; 20] = [
+const ADDRESS_PROTOCOL: [&str; 21] = [
     "conn",
     "dns",
     "malformed_dns",
@@ -77,6 +77,7 @@ const ADDRESS_PROTOCOL: [&str; 20] = [
     "bootp",
     "dhcp",
     "radius",
+    "icmp",
     "network connect",
 ];
 const AGENT_PROTOCOL: [&str; 14] = [
@@ -616,6 +617,27 @@ struct RadiusJsonOutput {
     nas_id: Vec<u8>,
     nas_port_type: u32,
     message: String,
+}
+
+#[derive(Serialize, Debug)]
+struct IcmpJsonOutput {
+    time: String,
+    sensor: String,
+    orig_addr: String,
+    resp_addr: String,
+    proto: u8,
+    start_time: i64,
+    duration: i64,
+    orig_pkts: u64,
+    resp_pkts: u64,
+    orig_l2_bytes: u64,
+    resp_l2_bytes: u64,
+    icmp_type: u8,
+    icmp_code: u8,
+    id: u16,
+    seq_num: u16,
+    data_len: u16,
+    payload: Vec<u8>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1427,6 +1449,30 @@ impl JsonOutput<RadiusJsonOutput> for Radius {
     }
 }
 
+impl JsonOutput<IcmpJsonOutput> for Icmp {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<IcmpJsonOutput> {
+        Ok(IcmpJsonOutput {
+            time,
+            sensor,
+            orig_addr: self.orig_addr.to_string(),
+            resp_addr: self.resp_addr.to_string(),
+            proto: self.proto,
+            start_time: self.start_time,
+            duration: self.duration,
+            orig_pkts: self.orig_pkts,
+            resp_pkts: self.resp_pkts,
+            orig_l2_bytes: self.orig_l2_bytes,
+            resp_l2_bytes: self.resp_l2_bytes,
+            icmp_type: self.icmp_type,
+            icmp_code: self.icmp_code,
+            id: self.id,
+            seq_num: self.seq_num,
+            data_len: self.data_len,
+            payload: self.payload.clone(),
+        })
+    }
+}
+
 impl JsonOutput<StatisticsJsonOutput> for Statistics {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<StatisticsJsonOutput> {
         Ok(StatisticsJsonOutput {
@@ -2028,6 +2074,7 @@ fn export_by_protocol(
         "bootp" => spawn_export!(bootp_store, process_export),
         "dhcp" => spawn_export!(dhcp_store, process_export),
         "radius" => spawn_export!(radius_store, process_export),
+        "icmp" => spawn_export!(icmp_store, process_export),
         "statistics" => spawn_export!(statistics_store, process_statistics_export),
         "process create" => spawn_export!(process_create_store, process_export),
         "file create time" => spawn_export!(file_create_time_store, process_export),

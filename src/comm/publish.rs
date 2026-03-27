@@ -14,7 +14,7 @@ use giganto_client::connection::client_handshake;
 use giganto_client::ingest::log::Log;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
     Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use giganto_client::ingest::sysmon::{
@@ -454,6 +454,7 @@ where
         RequestStreamRecord::Bootp => handle_store!(bootp_store, "bootp"),
         RequestStreamRecord::Dhcp => handle_store!(dhcp_store, "dhcp"),
         RequestStreamRecord::Radius => handle_store!(radius_store, "radius"),
+        RequestStreamRecord::Icmp => handle_store!(icmp_store, "icmp"),
         RequestStreamRecord::FileCreate => handle_store!(file_create_store, "file_create"),
         RequestStreamRecord::FileDelete => handle_store!(file_delete_store, "file_delete"),
         RequestStreamRecord::MalformedDns => handle_store!(malformed_dns_store, "malformed_dns"),
@@ -907,6 +908,19 @@ async fn handle_request(
                     process_range_data::<Radius, u8>(
                         &mut send,
                         db.radius_store().context("Failed to open radius store")?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                        false,
+                    )
+                    .await?;
+                }
+                RawEventKind::Icmp => {
+                    process_range_data::<Icmp, u8>(
+                        &mut send,
+                        db.icmp_store().context("Failed to open icmp store")?,
                         msg,
                         ingest_sensors,
                         peers,
@@ -1392,6 +1406,18 @@ async fn handle_request(
                     process_raw_events::<Radius, u8>(
                         &mut send,
                         db.radius_store()?,
+                        msg,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        &certs,
+                    )
+                    .await?;
+                }
+                RawEventKind::Icmp => {
+                    process_raw_events::<Icmp, u8>(
+                        &mut send,
+                        db.icmp_store()?,
                         msg,
                         ingest_sensors,
                         peers,

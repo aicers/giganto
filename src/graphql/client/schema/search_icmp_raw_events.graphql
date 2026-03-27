@@ -1,0 +1,3 @@
+query SearchIcmpRawEvents($filter: SearchFilter!) {
+  searchIcmpRawEvents(filter: $filter)
+}

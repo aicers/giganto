@@ -10,8 +10,8 @@ use giganto_client::{
         log::{Log, OpLog, OpLogLevel, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns,
-            Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap,
+            MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -395,6 +395,12 @@ pub(super) fn export_cases() -> Vec<ExportTimeFormatParityCase> {
             insert: insert_radius_parity,
         },
         ExportTimeFormatParityCase {
+            protocol: "icmp",
+            time_field: JsonTimeField::Time,
+            kind: None,
+            insert: insert_icmp_parity,
+        },
+        ExportTimeFormatParityCase {
             protocol: "statistics",
             time_field: JsonTimeField::Time,
             kind: None,
@@ -710,6 +716,15 @@ pub(super) fn insert_radius_parity(
     insert_radius_raw_event(&store, SENSOR_ID, timestamp);
 }
 
+pub(super) fn insert_icmp_parity(
+    schema: &TestSchema,
+    _case: &ExportTimeFormatParityCase,
+    timestamp: i64,
+) {
+    let store = schema.db.icmp_store().unwrap();
+    insert_icmp_raw_event(&store, SENSOR_ID, timestamp);
+}
+
 pub(super) fn insert_statistics_parity(
     schema: &TestSchema,
     _case: &ExportTimeFormatParityCase,
@@ -1008,6 +1023,37 @@ pub(super) fn insert_radius_raw_event(store: &RawEventStore<Radius>, sensor: &st
         message: "radius message".to_string(),
     };
     let value = bincode::serialize(&radius_body).unwrap();
+    store.append(&key, &value).unwrap();
+}
+
+pub(super) fn insert_icmp_raw_event(store: &RawEventStore<Icmp>, sensor: &str, timestamp: i64) {
+    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
+    key.extend_from_slice(sensor.as_bytes());
+    key.push(0);
+    key.extend(timestamp.to_be_bytes());
+
+    let icmp_body = Icmp {
+        orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
+        resp_addr: "192.168.4.77".parse::<IpAddr>().unwrap(),
+        proto: 1,
+        start_time: Utc
+            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap(),
+        duration: 1_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 84,
+        resp_l2_bytes: 84,
+        icmp_type: 8,
+        icmp_code: 0,
+        id: 12345,
+        seq_num: 1,
+        data_len: 56,
+        payload: vec![0x61, 0x62, 0x63, 0x64],
+    };
+    let value = bincode::serialize(&icmp_body).unwrap();
     store.append(&key, &value).unwrap();
 }
 

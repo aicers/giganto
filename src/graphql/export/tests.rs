@@ -16,11 +16,12 @@ use crate::graphql::TimeRange;
 use crate::graphql::export::tests::fixture::{
     assert_export_error, assert_export_response, export_cases, export_filter_base,
     insert_bootp_raw_event, insert_conn_raw_event, insert_dce_rpc_raw_event, insert_dhcp_raw_event,
-    insert_dns_raw_event, insert_ftp_raw_event, insert_http_raw_event, insert_kerberos_raw_event,
-    insert_ldap_raw_event, insert_log_raw_event, insert_mqtt_raw_event, insert_nfs_raw_event,
-    insert_ntlm_raw_event, insert_op_log_raw_event, insert_rdp_raw_event, insert_smb_raw_event,
-    insert_smtp_raw_event, insert_ssh_raw_event, insert_statistics_raw_event, insert_time_series,
-    insert_tls_raw_event, run_export_case, sensor_bounds, test_event_timestamp_nanos,
+    insert_dns_raw_event, insert_ftp_raw_event, insert_http_raw_event, insert_icmp_raw_event,
+    insert_kerberos_raw_event, insert_ldap_raw_event, insert_log_raw_event, insert_mqtt_raw_event,
+    insert_nfs_raw_event, insert_ntlm_raw_event, insert_op_log_raw_event, insert_rdp_raw_event,
+    insert_smb_raw_event, insert_smtp_raw_event, insert_ssh_raw_event, insert_statistics_raw_event,
+    insert_time_series, insert_tls_raw_event, run_export_case, sensor_bounds,
+    test_event_timestamp_nanos,
 };
 use crate::graphql::tests::TestSchema;
 use crate::storage::{Database, DbOptions, Direction, KeyExtractor, TimestampKeyExtractor};
@@ -1242,4 +1243,45 @@ async fn export_dhcp() {
     }"#;
     let res = schema.execute(query).await;
     assert_export_response(&schema, &res, "dhcp", "json").await;
+}
+
+#[tokio::test]
+async fn export_icmp() {
+    let schema = TestSchema::new();
+    let store = schema.db.icmp_store().unwrap();
+
+    insert_icmp_raw_event(&store, "src1", test_event_timestamp_nanos());
+    insert_icmp_raw_event(&store, "ingest src 1", test_event_timestamp_nanos());
+
+    // export csv file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "icmp",
+                sensorId: "src1",
+                time: { start: "2026-01-01T00:00:00Z", end: "2026-01-02T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+            }
+            ,exportType:"csv")
+    }"#;
+    let res = schema.execute(query).await;
+    assert_export_response(&schema, &res, "icmp", "csv").await;
+
+    // export json file
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "icmp",
+                sensorId: "ingest src 1",
+                time: { start: "2026-01-01T00:00:00Z", end: "2026-01-02T00:00:00Z" }
+                origAddr: { start: "192.168.4.70", end: "192.168.4.78" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+            }
+            ,exportType:"json")
+    }"#;
+    let res = schema.execute(query).await;
+    assert_export_response(&schema, &res, "icmp", "json").await;
 }

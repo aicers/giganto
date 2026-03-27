@@ -5,8 +5,8 @@ use giganto_client::ingest::{
     log::{Log, OpLog, OpLogLevel, SecuLog},
     netflow::{Netflow5, Netflow9},
     network::{
-        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
-        Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+        Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
     },
     statistics::Statistics,
     sysmon::{
@@ -593,6 +593,30 @@ impl EventFilter for Radius {
     }
     fn resp_port(&self) -> Option<u16> {
         Some(self.resp_port)
+    }
+    fn log_level(&self) -> Option<String> {
+        None
+    }
+    fn log_contents(&self) -> Option<String> {
+        None
+    }
+}
+
+impl EventFilter for Icmp {
+    fn data_type(&self) -> String {
+        "icmp".to_string()
+    }
+    fn orig_addr(&self) -> Option<IpAddr> {
+        Some(self.orig_addr)
+    }
+    fn resp_addr(&self) -> Option<IpAddr> {
+        Some(self.resp_addr)
+    }
+    fn orig_port(&self) -> Option<u16> {
+        None
+    }
+    fn resp_port(&self) -> Option<u16> {
+        None
     }
     fn log_level(&self) -> Option<String> {
         None
