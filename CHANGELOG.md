@@ -13,6 +13,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   connection information including source/destination addresses, ICMP type and
   code, identifier, sequence number, and payload data. The `Icmp` type is
   intended to cover both normal and malformed ICMP traffic.
+- Added MkDocs-based multilingual documentation and the initial EN/KO Giganto
+  user guide covering installation, configuration, operations, GraphQL, and
+  troubleshooting.
 
 ### Changed
 
@@ -44,12 +47,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed inconsistent `pageInfo` in `sysmon_connection` cursor-based pagination.
   When using `after` with `first`, `hasPreviousPage` is now correctly set to true.
   When using `before` with `last`, `hasNextPage` is now correctly set to true.
-
-### Added
-
-- Added MkDocs-based multilingual documentation and the initial EN/KO Giganto
-  user guide covering installation, configuration, operations, GraphQL, and
-  troubleshooting.
 
 ## [0.26.2] - 2026-02-12
 
