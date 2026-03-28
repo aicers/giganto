@@ -9,7 +9,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
@@ -17,12 +16,13 @@ use tracing::warn;
 
 use crate::{
     comm::peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
+    datetime::DateTime,
     storage::Database,
 };
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
-pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime<Utc>>>>;
+pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime>>>;
 pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
 
 /// Parses PEM-encoded certificates and returns a certificate chain.
@@ -95,7 +95,7 @@ pub(crate) fn new_ingest_sensors(db: &Database) -> IngestSensors {
 }
 
 pub(crate) fn new_runtime_ingest_sensors() -> RunTimeIngestSensors {
-    Arc::new(RwLock::new(HashMap::<String, DateTime<Utc>>::new()))
+    Arc::new(RwLock::new(HashMap::<String, DateTime>::new()))
 }
 
 pub(crate) fn new_stream_direct_channels() -> StreamDirectChannels {
@@ -116,11 +116,11 @@ mod tests {
     use std::collections::HashSet;
     use std::path::Path;
 
-    use chrono::TimeZone;
     use rocksdb::{DB, Options};
     use tempfile::tempdir;
 
     use super::*;
+    use crate::datetime::DateTime;
     use crate::storage::{Database, DbOptions};
 
     const INVALID_CERT_1: &str = "-----BEGIN CERTIFICATE-----\n\
@@ -462,7 +462,10 @@ gk8wqEpSd+WAAbO1LQBAyBjZWqqrpw7828tkUf7a\n\
     async fn test_new_ingest_sensors_reads_from_db() {
         let dir = tempdir().unwrap();
         let sensor_id = "sensor1";
-        let fixed_time = Utc.with_ymd_and_hms(2026, 1, 20, 10, 0, 0).unwrap();
+        let fixed_time: DateTime = "2026-01-20T10:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .into();
         {
             let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
             let sensor_store = db.sensors_store().unwrap();
@@ -483,7 +486,10 @@ gk8wqEpSd+WAAbO1LQBAyBjZWqqrpw7828tkUf7a\n\
     #[tokio::test]
     async fn test_new_runtime_ingest_sensors() {
         let sensors = new_runtime_ingest_sensors();
-        let fixed_time = Utc.with_ymd_and_hms(2026, 1, 20, 10, 0, 0).unwrap();
+        let fixed_time: DateTime = "2026-01-20T10:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .into();
         assert_string_key_map_inserted(&sensors, "sensor1", fixed_time).await;
         let sensors_lock = sensors.read().await;
         assert_eq!(sensors_lock.len(), 1);

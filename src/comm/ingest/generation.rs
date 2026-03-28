@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{Datelike, Utc};
+use jiff::{Timestamp, tz::TimeZone};
 
 /// Thread-safe daily sequence generator.
 ///
@@ -30,7 +30,7 @@ impl SequenceGenerator {
 
     const MAX_COUNTER: u64 = Self::COUNTER_MASK;
 
-    /// Creates a new `SequenceGenerator` initialized with today's date and counter 0.
+    /// Creates a new `SequenceGenerator` initialized with today's UTC date and counter 0.
     pub(crate) fn new() -> Self {
         let today = Self::get_date_key();
         let initial_state = Self::pack(today, 0);
@@ -79,14 +79,18 @@ impl SequenceGenerator {
         Arc::new(SequenceGenerator::new())
     }
 
-    /// Returns the current date key (`days since CE`).
+    #[inline]
+    fn current_utc_date() -> jiff::civil::Date {
+        Timestamp::now().to_zoned(TimeZone::UTC).date()
+    }
+
+    /// Returns the current UTC date key (`days since CE`).
     pub(crate) fn get_date_key() -> u32 {
-        let utc_now = Utc::now();
-        // `num_days_from_ce()` is i32; current dates fit safely in u32.
-        let date_key: u32 = utc_now
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be in valid range");
+        let date = Self::current_utc_date();
+        let y = i32::from(date.year()) - 1;
+        let ordinal = i32::from(date.day_of_year());
+        let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+        let date_key: u32 = days.try_into().expect("date should be in valid range");
         Self::normalize_date_key(date_key)
     }
 
@@ -309,17 +313,16 @@ mod tests {
 
     #[test]
     fn get_date_key_matches_num_days_from_ce() {
-        use chrono::{Datelike, Utc};
+        fn days_from_ce(date: jiff::civil::Date) -> u32 {
+            let y = i32::from(date.year()) - 1;
+            let ordinal = i32::from(date.day_of_year());
+            let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+            days.try_into().expect("date should be positive")
+        }
 
-        let before = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
+        let before = days_from_ce(SequenceGenerator::current_utc_date());
         let date_key = SequenceGenerator::get_date_key();
-        let after = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
+        let after = days_from_ce(SequenceGenerator::current_utc_date());
 
         assert!(
             (before..=after).contains(&date_key),

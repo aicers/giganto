@@ -3,7 +3,6 @@ use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
 use std::{fs, io::ErrorKind, mem, path::PathBuf, str::FromStr};
 
-use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use giganto_client::{
     RawEventKind,
     ingest::{
@@ -26,12 +25,12 @@ use tokio::time::{Duration, sleep};
 
 use super::ExportFilter;
 use crate::comm::ingest::generation::SequenceGenerator;
+use crate::datetime::DateTime;
 use crate::graphql::tests::TestSchema;
 use crate::storage::RawEventStore;
 
 pub(super) fn test_event_timestamp_nanos() -> i64 {
-    Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
-        .unwrap()
+    DateTime::from_ymd_hms(2026, 1, 1, 0, 0, 0)
         .timestamp_nanos_opt()
         .unwrap()
 }
@@ -149,23 +148,14 @@ impl JsonTimeField {
 
 pub(super) async fn run_export_case(case: ExportTimeFormatParityCase) {
     let schema = TestSchema::new();
-    let timestamp = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let timestamp = 1_709_528_767_000_000_000_i64;
     (case.insert)(&schema, &case, timestamp);
 
-    let dt = chrono::DateTime::from_timestamp_nanos(timestamp);
-    let time_start = (dt - ChronoDuration::seconds(1))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let time_end = (dt + ChronoDuration::seconds(1))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let expected_time = dt.format("%s%.9f").to_string();
+    let time_start = "2024-03-04T05:06:06+00:00";
+    let time_end = "2024-03-04T05:06:08+00:00";
+    let expected_time = "1709528767.000000000";
 
-    let csv_download = execute_export(case, &schema, &time_start, &time_end, "csv").await;
+    let csv_download = execute_export(case, &schema, time_start, time_end, "csv").await;
     let csv_contents = read_export_file_with_retry(&csv_download).await;
     let csv_line = csv_contents
         .lines()
@@ -176,13 +166,12 @@ pub(super) async fn run_export_case(case: ExportTimeFormatParityCase) {
         .next()
         .expect("csv export must contain a time column");
     assert_eq!(
-        csv_time,
-        expected_time.as_str(),
+        csv_time, expected_time,
         "csv export for protocol {} should expose expected timestamp",
         case.protocol
     );
 
-    let json_download = execute_export(case, &schema, &time_start, &time_end, "json").await;
+    let json_download = execute_export(case, &schema, time_start, time_end, "json").await;
     let json_contents = read_export_file_with_retry(&json_download).await;
     let json_line = json_contents
         .lines()
@@ -1553,9 +1542,7 @@ pub(super) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1593,9 +1580,7 @@ pub(super) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1641,9 +1626,7 @@ pub(super) fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, tim
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1670,9 +1653,7 @@ pub(super) fn insert_smtp_raw_event(store: &RawEventStore<Smtp>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1705,9 +1686,7 @@ pub(super) fn insert_ntlm_raw_event(store: &RawEventStore<Ntlm>, sensor: &str, t
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1742,9 +1721,7 @@ pub(super) fn insert_kerberos_raw_event(
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1779,9 +1756,7 @@ pub(super) fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, tim
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1824,9 +1799,7 @@ pub(super) fn insert_dce_rpc_raw_event(
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 6,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1922,9 +1895,7 @@ pub(super) fn insert_ftp_raw_event(store: &RawEventStore<Ftp>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1964,9 +1935,7 @@ pub(super) fn insert_mqtt_raw_event(store: &RawEventStore<Mqtt>, sensor: &str, t
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -1998,9 +1967,7 @@ pub(super) fn insert_ldap_raw_event(store: &RawEventStore<Ldap>, sensor: &str, t
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -2033,9 +2000,7 @@ pub(super) fn insert_tls_raw_event(store: &RawEventStore<Tls>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -2082,9 +2047,7 @@ pub(super) fn insert_smb_raw_event(store: &RawEventStore<Smb>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -2121,9 +2084,7 @@ pub(super) fn insert_nfs_raw_event(store: &RawEventStore<Nfs>, sensor: &str, tim
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -2151,9 +2112,7 @@ pub(super) fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,
@@ -2190,9 +2149,7 @@ pub(super) fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, t
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
         resp_port: 80,
         proto: 17,
-        start_time: Utc
-            .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-            .unwrap()
+        start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
             .timestamp_nanos_opt()
             .unwrap(),
         duration: 1_000_000_000,

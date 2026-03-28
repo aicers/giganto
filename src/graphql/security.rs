@@ -1,7 +1,6 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -12,6 +11,7 @@ use super::{
     FromKeyValue, IpRange, PortRange, check_address, check_contents, check_port, get_time_from_key,
     handle_paged_events, paged_events_in_cluster,
 };
+use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::impl_from_giganto_range_structs_for_graphql_client,
@@ -46,7 +46,7 @@ impl KeyExtractor for SecuLogFilter {
         Some(self.kind.as_bytes().to_vec())
     }
 
-    fn get_range_end_key(&self) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
         if let Some(time) = &self.time {
             (time.start, time.end)
         } else {
@@ -86,7 +86,7 @@ impl RawEventFilter for SecuLogFilter {
     secu_log_raw_events::SecuLogRawEventsSecuLogRawEventsEdgesNode
 ]))]
 struct SecuLogRawEvent {
-    time: DateTime<Utc>,
+    time: DateTime,
     log_type: String,
     version: String,
     orig_addr: Option<String>,
@@ -189,9 +189,9 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::log::SecuLog;
 
+    use crate::datetime::DateTime;
     use crate::graphql::tests::TestSchema;
     use crate::storage::RawEventStore;
 
@@ -233,9 +233,7 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.secu_log_store().unwrap();
 
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
+        let timestamp = DateTime::from_ymd_hms(2024, 3, 4, 5, 6, 7)
             .timestamp_nanos_opt()
             .unwrap();
         insert_secu_log_event(&store, "device", "src1", timestamp);

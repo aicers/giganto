@@ -4,13 +4,13 @@ use std::{
     str::FromStr,
 };
 
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
+use crate::datetime::DateTime;
 use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
 pub(super) async fn run_local_event_query<F>(setup: F, query: &str, expected: &str)
@@ -95,20 +95,16 @@ pub(super) fn make_out_of_range_before_query(query: &str) -> String {
 
 pub(super) fn sample_time_timestamps() -> [i64; 4] {
     [
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 0, 0, 1)
             .timestamp_nanos_opt()
             .unwrap(),
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 0, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
-        Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 1, 1, 1, 1)
             .timestamp_nanos_opt()
             .unwrap(),
-        Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1)
-            .unwrap()
+        DateTime::from_ymd_hms(2020, 1, 2, 0, 0, 1)
             .timestamp_nanos_opt()
             .unwrap(),
     ]

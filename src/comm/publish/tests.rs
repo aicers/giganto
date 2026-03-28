@@ -16,7 +16,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use giganto_client::{
     connection::{client_handshake, server_handshake},
     ingest::{
@@ -56,6 +55,7 @@ use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::Server;
+use crate::datetime::DateTime;
 use crate::{
     comm::{
         IngestSensors, PcapSensors, StreamDirectChannels,
@@ -2713,20 +2713,8 @@ mod fixtures {
     }
 
     pub(super) fn default_time_range() -> (i64, i64) {
-        let start = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .expect("valid date")
-                .and_hms_opt(0, 0, 0)
-                .expect("valid time"),
-            Utc,
-        );
-        let end = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2050, 12, 31)
-                .expect("valid date")
-                .and_hms_opt(23, 59, 59)
-                .expect("valid time"),
-            Utc,
-        );
+        let start = DateTime::from_ymd_hms(1970, 1, 1, 0, 0, 0);
+        let end = DateTime::from_ymd_hms(2050, 12, 31, 23, 59, 59);
         (
             start.timestamp_nanos_opt().unwrap(),
             end.timestamp_nanos_opt().unwrap(),
@@ -2761,7 +2749,6 @@ mod fixtures {
     }
 
     pub(super) fn gen_conn_raw_event() -> Vec<u8> {
-        let tmp_dur = Duration::nanoseconds(12345);
         let conn_body = Conn {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
             orig_port: 46378,
@@ -2769,12 +2756,10 @@ mod fixtures {
             resp_port: 80,
             proto: 6,
             conn_state: "sf".to_string(),
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
-            duration: tmp_dur.num_nanoseconds().unwrap(),
+            duration: 12345,
             service: "-".to_string(),
             orig_bytes: 77,
             resp_bytes: 295,
@@ -2794,9 +2779,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -2828,9 +2811,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1,
@@ -2862,9 +2843,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -2885,9 +2864,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -2927,9 +2904,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -2956,9 +2931,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -2983,9 +2956,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3014,9 +2985,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3049,9 +3018,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3151,9 +3118,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3187,9 +3152,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3215,9 +3178,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3244,9 +3205,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3287,9 +3246,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3320,9 +3277,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3344,9 +3299,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3377,9 +3330,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 80,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 1_000_000_000,
@@ -3449,9 +3400,7 @@ mod fixtures {
             resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
             resp_port: 1813,
             proto: 17,
-            start_time: Utc
-                .with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-                .unwrap()
+            start_time: DateTime::from_ymd_hms(2025, 3, 1, 0, 0, 0)
                 .timestamp_nanos_opt()
                 .unwrap(),
             duration: 2_000_000_000,
