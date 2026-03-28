@@ -3,6 +3,7 @@ mod datetime;
 mod graphql;
 mod server;
 mod settings;
+pub mod shutdown;
 mod storage;
 #[cfg(all(test, feature = "bootroot"))]
 mod test_bootroot;
