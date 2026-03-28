@@ -80,7 +80,7 @@ const ADDRESS_PROTOCOL: [&str; 21] = [
     "icmp",
     "network connect",
 ];
-const AGENT_PROTOCOL: [&str; 14] = [
+const AGENT_FIELD_SUPPORTED_PROTOCOLS: [&str; 14] = [
     "process create",
     "file create time",
     "process terminate",
@@ -658,7 +658,7 @@ struct TimeSeriesJsonOutput {
 #[derive(Serialize, Debug)]
 struct OpLogJsonOutput {
     time: String,
-    agent_id: String,
+    service_name: String,
     level: String,
     contents: String,
 }
@@ -1253,7 +1253,7 @@ impl JsonOutput<OpLogJsonOutput> for OpLog {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<OpLogJsonOutput> {
         Ok(OpLogJsonOutput {
             time,
-            agent_id: sensor,
+            service_name: sensor,
             level: self.log_level().unwrap_or_else(|| "-".to_string()),
             contents: self.contents.clone(),
         })
@@ -1914,6 +1914,7 @@ impl RawEventFilter for ExportFilter {
         _text: Option<String>,
         _sensor: Option<String>,
         agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
@@ -1984,16 +1985,16 @@ impl ExportQuery {
                 return Err(anyhow!("Invalid ip/port input").into());
             }
         }
-        if !AGENT_PROTOCOL.contains(&filter.protocol.as_str()) {
+        if !AGENT_FIELD_SUPPORTED_PROTOCOLS.contains(&filter.protocol.as_str()) {
             // check network/log type/time_series/netflow/statistics filter format
             if filter.agent_name.is_some() || filter.agent_id.is_some() {
-                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
+                return Err(anyhow!("Invalid kind/agent_name/agent_id/service_name input").into());
             }
         }
         if !KIND_PROTOCOL.contains(&filter.protocol.as_str()) {
             // check sysmon/network/time_series/netflow/statistics filter format
             if filter.kind.is_some() {
-                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
+                return Err(anyhow!("Invalid kind/agent_name/agent_id/service_name input").into());
             }
         }
 
@@ -2359,6 +2360,7 @@ where
         value.text(),
         value.sensor(),
         value.agent_id(),
+        value.service_name(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp)
@@ -2397,6 +2399,7 @@ fn write_oplog_data_to_file(
         value.text(),
         value.sensor(),
         value.agent_id(),
+        value.service_name(),
     ) {
         let timestamp = parse_oplog_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp)

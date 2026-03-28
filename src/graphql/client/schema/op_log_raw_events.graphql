@@ -24,7 +24,7 @@ query OpLogRawEvents(
         time
         level
         contents
-        agentName
+        serviceName
         sensor
       }
     }
