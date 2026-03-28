@@ -1156,6 +1156,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "toml",
  "toml_edit 0.25.11+spec-1.1.0",
  "tracing",
@@ -3573,6 +3574,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
