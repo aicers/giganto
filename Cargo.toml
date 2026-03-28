@@ -62,6 +62,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
 tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["rt"] }
 async-graphql-poem = "7"
 jiff = { version = "0.2", features = ["serde"] }
 
