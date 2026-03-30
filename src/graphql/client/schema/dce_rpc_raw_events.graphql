@@ -33,10 +33,18 @@ query DceRpcRawEvents(
         respPkts
         origL2Bytes
         respL2Bytes
-        rtt
-        namedPipe
-        endpoint
-        operation
+        context {
+          id
+          abstractSyntax
+          abstractMajor
+          abstractMinor
+          transferSyntax
+          transferMajor
+          transferMinor
+          acceptance
+          reason
+        }
+        request
       }
     }
   }

@@ -1226,10 +1226,8 @@ mod tests {
             resp_pkts: 0,
             orig_l2_bytes: 0,
             resp_l2_bytes: 0,
-            rtt: dcerpc_old.rtt,
-            named_pipe: dcerpc_old.named_pipe.clone(),
-            endpoint: dcerpc_old.endpoint.clone(),
-            operation: dcerpc_old.operation.clone(),
+            context: Vec::new(),
+            request: Vec::new(),
         };
         migrate_and_assert_raw_event::<DceRpcBeforeV26, DceRpcFromV26>(
             &dcerpc_store,

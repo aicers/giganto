@@ -21,6 +21,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
+- Updated `DceRpc` event format to use `context[]` and `request[]`
+  fields, replacing the legacy `rtt`, `named_pipe`, `endpoint`, and
+  `operation` fields. Bumped `giganto-client` to 0.26.0.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
