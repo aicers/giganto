@@ -274,6 +274,48 @@ The input/output is a string in RFC3339 format.
 scalar DateTime
 
 """
+Represents a DCE-RPC bind context entry.
+"""
+type DceRpcContextRawEvent {
+	"""
+	Context ID
+	"""
+	id: Int!
+	"""
+	Abstract Syntax UUID
+	"""
+	abstractSyntax: String!
+	"""
+	Abstract Syntax Major Version
+	"""
+	abstractMajor: Int!
+	"""
+	Abstract Syntax Minor Version
+	"""
+	abstractMinor: Int!
+	"""
+	Transfer Syntax UUID
+	"""
+	transferSyntax: String!
+	"""
+	Transfer Syntax Major Version
+	"""
+	transferMajor: Int!
+	"""
+	Transfer Syntax Minor Version
+	"""
+	transferMinor: Int!
+	"""
+	Acceptance Result
+	"""
+	acceptance: Int!
+	"""
+	Rejection Reason
+	"""
+	reason: Int!
+}
+
+"""
 Represents an event extracted from the DCE-RPC protocol.
 """
 type DceRpcRawEvent {
@@ -330,21 +372,13 @@ type DceRpcRawEvent {
 	"""
 	respL2Bytes: StringNumberU64!
 	"""
-	Round-Trip Time
+	Bind Contexts
 	"""
-	rtt: StringNumberI64!
+	context: [DceRpcContextRawEvent!]!
 	"""
-	Named Pipe
+	Requests
 	"""
-	namedPipe: String!
-	"""
-	Endpoint
-	"""
-	endpoint: String!
-	"""
-	Operation
-	"""
-	operation: String!
+	request: [String!]!
 }
 
 type DceRpcRawEventConnection {

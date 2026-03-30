@@ -30,8 +30,8 @@ use giganto_client::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm,
-            Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, DceRpcContext, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap,
+            Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         statistics::Statistics,
@@ -877,10 +877,8 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 resp_pkts: 1,
                 orig_l2_bytes: 100,
                 resp_l2_bytes: 200,
-                rtt: 3,
-                named_pipe: "named_pipe".to_string(),
-                endpoint: "endpoint".to_string(),
-                operation: "operation".to_string(),
+                context: vec![DceRpcContext::default()],
+                request: vec!["request_op".to_string()],
             },
         ),
         single_event_case(

@@ -4,8 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
-    Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, DceRpcContext, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap,
+    MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
 use num_traits::cast::ToPrimitive;
@@ -2972,10 +2972,18 @@ async fn dce_rpc_with_data() {
                 node {
                     origAddr,
                     startTime,
-                    rtt,
-                    namedPipe,
-                    endpoint,
-                    operation,
+                    context {
+                        id,
+                        abstractSyntax,
+                        abstractMajor,
+                        abstractMinor,
+                        transferSyntax,
+                        transferMajor,
+                        transferMinor,
+                        acceptance,
+                        reason,
+                    },
+                    request,
                     respAddr,
                     origPort,
                     respPort,
@@ -2994,7 +3002,9 @@ async fn dce_rpc_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
-        rtt: \"3\", namedPipe: \"named_pipe\", endpoint: \"endpoint\", operation: \"operation\", \
+        context: [{id: 0, abstractSyntax: \"00000000000000000000000000000000\", abstractMajor: 0, abstractMinor: 0, \
+        transferSyntax: \"00000000000000000000000000000000\", transferMajor: 0, transferMinor: 0, acceptance: 0, \
+        reason: 0}], request: [\"request_op\"], \
         respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
@@ -3038,10 +3048,8 @@ fn insert_dce_rpc_raw_event(store: &RawEventStore<DceRpc>, sensor: &str, timesta
         resp_pkts: 1,
         orig_l2_bytes: 100,
         resp_l2_bytes: 200,
-        rtt: 3,
-        named_pipe: "named_pipe".to_string(),
-        endpoint: "endpoint".to_string(),
-        operation: "operation".to_string(),
+        context: vec![DceRpcContext::default()],
+        request: vec!["request_op".to_string()],
     };
     let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
 
@@ -3063,7 +3071,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
                 node {
                     origAddr,
                     startTime,
-                    rtt,
+                    request,
                 }
             }
         }
@@ -3094,10 +3102,8 @@ async fn dce_rpc_with_data_giganto_cluster() {
                             "respPkts": "1",
                             "origL2Bytes": "100",
                             "respL2Bytes": "200",
-                            "rtt": "123456",
-                            "namedPipe": "example_pipe",
-                            "endpoint": "rpc_endpoint",
-                            "operation": "rpc_operation"
+                            "context": [],
+                            "request": ["request_op"]
                         }
                     }
                 ]
@@ -3125,7 +3131,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", rtt: \"123456\"}}]}}"
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", request: [\"request_op\"]}}]}}"
     );
     mock.assert_async().await;
 }
