@@ -1,0 +1,8 @@
+# Generated certificate fixtures (short-lived, test-only)
+checked-fixtures/*.pem
+checked-fixtures/*.key
+
+# Runtime files
+validation-config.toml
+.giganto.pid
+data-store.env

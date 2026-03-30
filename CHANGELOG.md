@@ -16,6 +16,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added MkDocs-based multilingual documentation and the initial EN/KO Giganto
   user guide covering installation, configuration, operations, GraphQL, and
   troubleshooting.
+- Added shared Bootroot mTLS validation environment under
+  `tools/bootroot-validation/` with certificate fixture generator,
+  server startup helper, and mTLS smoke-check scripts. See
+  `docs/en/bootroot-validation.md` for the full runbook.
 
 ### Changed
 

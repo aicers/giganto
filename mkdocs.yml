@@ -29,6 +29,7 @@ plugins:
             - Operations: operations.md
             - GraphQL: graphql.md
             - Troubleshooting: troubleshooting.md
+            - Bootroot Validation: bootroot-validation.md
         - locale: ko
           name: 한국어
           build: true
@@ -39,6 +40,7 @@ plugins:
             - Operations: operations.md
             - GraphQL: graphql.md
             - Troubleshooting: troubleshooting.md
+            - Bootroot Validation: bootroot-validation.md
           nav_translations:
             Overview: 개요
             Prerequisites: 설치 전 준비
@@ -46,6 +48,7 @@ plugins:
             Operations: 실행
             GraphQL: GraphQL
             Troubleshooting: 문제 해결
+            Bootroot Validation: Bootroot 검증
 extra_css:
   - styles/lists.css
   - styles/pdf.css
