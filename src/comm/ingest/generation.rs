@@ -313,22 +313,14 @@ mod tests {
 
     #[test]
     fn get_date_key_matches_num_days_from_ce() {
-        use chrono::{Datelike, Utc};
-
-        let before = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
+        let date = SequenceGenerator::current_utc_date();
+        let y = i32::from(date.year()) - 1;
+        let ordinal = i32::from(date.day_of_year());
+        let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+        let expected: u32 = days.try_into().expect("date should be positive");
         let date_key = SequenceGenerator::get_date_key();
-        let after = Utc::now()
-            .num_days_from_ce()
-            .try_into()
-            .expect("date should be positive");
 
-        assert!(
-            (before..=after).contains(&date_key),
-            "date_key should be within current UTC day boundary window"
-        );
+        assert_eq!(date_key, expected);
 
         assert!(
             date_key > 730_000,

@@ -2,13 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 
-use chrono::{TimeZone, Utc};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
     Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use mockito;
-use num_traits::cast::ToPrimitive;
 
 use crate::graphql::{
     IpRange, NetworkFilter, PortRange, RawEventFilter, SearchFilter, StringNumberUsize,
@@ -18,19 +16,46 @@ use crate::storage::RawEventStore;
 
 const FIXED_TIME1: &str = "2026-01-01T00:00:00Z";
 const FIXED_TIME2: &str = "2026-01-01T00:00:01Z";
+const FIXED_TIME1_NANOS: i64 = 1_767_225_600_000_000_000;
+const FIXED_TIME2_NANOS: i64 = 1_767_225_601_000_000_000;
+const SEARCH_TIME_1_NANOS: i64 = 1_577_836_801_000_000_000;
+const SEARCH_TIME_2_NANOS: i64 = 1_577_836_861_000_000_000;
+const SEARCH_TIME_3_NANOS: i64 = 1_577_840_461_000_000_000;
+const SEARCH_TIME_4_NANOS: i64 = 1_577_923_201_000_000_000;
+const NETWORK_UNION_DNS_TIME_NANOS: i64 = 1_609_459_261_000_000_000;
+const NETWORK_UNION_HTTP_TIME_NANOS: i64 = 1_590_969_661_000_000_000;
+const NETWORK_UNION_RDP_TIME_NANOS: i64 = 1_578_182_461_000_000_000;
+const NETWORK_UNION_NTLM_TIME_NANOS: i64 = 1_641_340_861_000_000_000;
+const NETWORK_UNION_KERBEROS_TIME_NANOS: i64 = 1_672_876_861_000_000_000;
+const NETWORK_UNION_DCE_RPC_TIME_NANOS: i64 = 1_578_204_300_000_000_000;
+const NETWORK_UNION_FTP_TIME_NANOS: i64 = 1_672_920_720_000_000_000;
+const NETWORK_UNION_LDAP_TIME_NANOS: i64 = 1_673_007_120_000_000_000;
+const NETWORK_UNION_TLS_TIME_NANOS: i64 = 1_673_003_460_000_000_000;
+const NETWORK_UNION_SMB_TIME_NANOS: i64 = 1_673_007_130_000_000_000;
+const NETWORK_UNION_NFS_TIME_NANOS: i64 = 1_673_007_180_000_000_000;
+const NETWORK_UNION_SMTP_TIME_NANOS: i64 = 1_577_836_805_000_000_000;
+const NETWORK_UNION_BOOTP_TIME_NANOS: i64 = 1_577_836_799_000_000_000;
+const NETWORK_UNION_DHCP_TIME_NANOS: i64 = 1_673_007_190_000_000_000;
+const NETWORK_UNION_ICMP_TIME_NANOS: i64 = 1_583_020_800_000_000_000;
+const FIXED_ADDR_PORT_TIME_1_NANOS: i64 = 1_709_528_767_000_000_000;
+const FIXED_ADDR_PORT_TIME_2_NANOS: i64 = 1_709_528_768_000_000_000;
+const FIXED_ADDR_PORT_TIME_3_NANOS: i64 = 1_709_528_769_000_000_000;
 
 fn fixed_time_nanos() -> (i64, i64) {
-    let time1 = Utc
-        .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
-    let time2 = Utc
-        .with_ymd_and_hms(2026, 1, 1, 0, 0, 1)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
-    (time1, time2)
+    (FIXED_TIME1_NANOS, FIXED_TIME2_NANOS)
+}
+
+fn fixed_search_time_nanos() -> [i64; 4] {
+    [
+        SEARCH_TIME_1_NANOS,
+        SEARCH_TIME_2_NANOS,
+        SEARCH_TIME_3_NANOS,
+        SEARCH_TIME_4_NANOS,
+    ]
+}
+
+fn fixed_icmp_search_time_nanos() -> [i64; 2] {
+    [SEARCH_TIME_2_NANOS, SEARCH_TIME_3_NANOS]
 }
 
 async fn assert_raw_event_expected(
@@ -424,11 +449,7 @@ async fn conn_with_data_giganto_cluster() {
 async fn network_raw_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = FIXED_ADDR_PORT_TIME_1_NANOS;
     let step = 1_000_000;
 
     let conn_store = schema.db.conn_store().unwrap();
@@ -538,14 +559,28 @@ async fn network_raw_events_timestamp_format_stability() {
         "IcmpRawEvent",
     ];
 
-    let mut expected_times: HashMap<&str, String> = HashMap::new();
-    for (idx, typename) in expected_types.iter().enumerate() {
-        let idx = idx.to_i64().expect("expected_types length fits in i64");
-        expected_times.insert(
-            typename,
-            Utc.timestamp_nanos(base_ts + step * idx).to_rfc3339(),
-        );
-    }
+    let expected_times: HashMap<&str, &str> = HashMap::from([
+        ("ConnRawEvent", "2024-03-04T05:06:07+00:00"),
+        ("DnsRawEvent", "2024-03-04T05:06:07.001+00:00"),
+        ("MalformedDnsRawEvent", "2024-03-04T05:06:07.002+00:00"),
+        ("HttpRawEvent", "2024-03-04T05:06:07.003+00:00"),
+        ("RdpRawEvent", "2024-03-04T05:06:07.004+00:00"),
+        ("NtlmRawEvent", "2024-03-04T05:06:07.005+00:00"),
+        ("KerberosRawEvent", "2024-03-04T05:06:07.006+00:00"),
+        ("SshRawEvent", "2024-03-04T05:06:07.007+00:00"),
+        ("DceRpcRawEvent", "2024-03-04T05:06:07.008+00:00"),
+        ("FtpRawEvent", "2024-03-04T05:06:07.009+00:00"),
+        ("MqttRawEvent", "2024-03-04T05:06:07.010+00:00"),
+        ("LdapRawEvent", "2024-03-04T05:06:07.011+00:00"),
+        ("TlsRawEvent", "2024-03-04T05:06:07.012+00:00"),
+        ("SmbRawEvent", "2024-03-04T05:06:07.013+00:00"),
+        ("NfsRawEvent", "2024-03-04T05:06:07.014+00:00"),
+        ("SmtpRawEvent", "2024-03-04T05:06:07.015+00:00"),
+        ("BootpRawEvent", "2024-03-04T05:06:07.016+00:00"),
+        ("DhcpRawEvent", "2024-03-04T05:06:07.017+00:00"),
+        ("RadiusRawEvent", "2024-03-04T05:06:07.018+00:00"),
+        ("IcmpRawEvent", "2024-03-04T05:06:07.019+00:00"),
+    ]);
     let mut seen = HashSet::new();
 
     for edge in edges {
@@ -555,7 +590,7 @@ async fn network_raw_events_timestamp_format_stability() {
         let expected = expected_times
             .get(typename)
             .expect("expected network event type");
-        assert_eq!(node["time"].as_str().unwrap(), expected);
+        assert_eq!(node["time"].as_str().unwrap(), *expected);
     }
 
     assert_eq!(seen.len(), expected_types.len());
@@ -5222,7 +5257,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        FIXED_ADDR_PORT_TIME_1_NANOS,
         "192.168.4.70".parse::<IpAddr>().ok(),
         Some(100),
         "192.168.4.80".parse::<IpAddr>().ok(),
@@ -5231,7 +5266,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        FIXED_ADDR_PORT_TIME_2_NANOS,
         "192.168.4.71".parse::<IpAddr>().ok(),
         Some(101),
         "192.168.4.81".parse::<IpAddr>().ok(),
@@ -5240,7 +5275,7 @@ async fn test_search_boundary_for_addr_port() {
     insert_conn_raw_event_with_addr_port(
         &store,
         "src 1",
-        Utc::now().timestamp_nanos_opt().unwrap(),
+        FIXED_ADDR_PORT_TIME_3_NANOS,
         "192.168.4.72".parse::<IpAddr>().ok(),
         Some(102),
         "192.168.4.82".parse::<IpAddr>().ok(),
@@ -5578,150 +5613,24 @@ async fn union() {
     let dhcp_store = schema.db.dhcp_store().unwrap();
     let icmp_store = schema.db.icmp_store().unwrap();
 
-    insert_conn_raw_event(
-        &conn_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_dns_raw_event(
-        &dns_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2021, 1, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_http_raw_event(
-        &http_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 6, 1, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_rdp_raw_event(
-        &rdp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ntlm_raw_event(
-        &ntlm_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2022, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_kerberos_raw_event(
-        &kerberos_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 0, 1, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ssh_raw_event(
-        &ssh_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_dce_rpc_raw_event(
-        &dce_rpc_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 5, 6, 5, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ftp_raw_event(
-        &ftp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_mqtt_raw_event(
-        &mqtt_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 5, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_ldap_raw_event(
-        &ldap_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_tls_raw_event(
-        &tls_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 11, 11, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_smb_raw_event(
-        &smb_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 12, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_nfs_raw_event(
-        &nfs_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_smtp_raw_event(
-        &smtp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_bootp_raw_event(
-        &bootp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2019, 12, 31, 23, 59, 59)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_dhcp_raw_event(
-        &dhcp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2023, 1, 6, 12, 13, 10)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
-    insert_icmp_raw_event(
-        &icmp_store,
-        "src 1",
-        Utc.with_ymd_and_hms(2020, 3, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap(),
-    );
+    insert_conn_raw_event(&conn_store, "src 1", SEARCH_TIME_2_NANOS);
+    insert_dns_raw_event(&dns_store, "src 1", NETWORK_UNION_DNS_TIME_NANOS);
+    insert_http_raw_event(&http_store, "src 1", NETWORK_UNION_HTTP_TIME_NANOS);
+    insert_rdp_raw_event(&rdp_store, "src 1", NETWORK_UNION_RDP_TIME_NANOS);
+    insert_ntlm_raw_event(&ntlm_store, "src 1", NETWORK_UNION_NTLM_TIME_NANOS);
+    insert_kerberos_raw_event(&kerberos_store, "src 1", NETWORK_UNION_KERBEROS_TIME_NANOS);
+    insert_ssh_raw_event(&ssh_store, "src 1", SEARCH_TIME_1_NANOS);
+    insert_dce_rpc_raw_event(&dce_rpc_store, "src 1", NETWORK_UNION_DCE_RPC_TIME_NANOS);
+    insert_ftp_raw_event(&ftp_store, "src 1", NETWORK_UNION_FTP_TIME_NANOS);
+    insert_mqtt_raw_event(&mqtt_store, "src 1", NETWORK_UNION_FTP_TIME_NANOS);
+    insert_ldap_raw_event(&ldap_store, "src 1", NETWORK_UNION_LDAP_TIME_NANOS);
+    insert_tls_raw_event(&tls_store, "src 1", NETWORK_UNION_TLS_TIME_NANOS);
+    insert_smb_raw_event(&smb_store, "src 1", NETWORK_UNION_SMB_TIME_NANOS);
+    insert_nfs_raw_event(&nfs_store, "src 1", NETWORK_UNION_NFS_TIME_NANOS);
+    insert_smtp_raw_event(&smtp_store, "src 1", NETWORK_UNION_SMTP_TIME_NANOS);
+    insert_bootp_raw_event(&bootp_store, "src 1", NETWORK_UNION_BOOTP_TIME_NANOS);
+    insert_dhcp_raw_event(&dhcp_store, "src 1", NETWORK_UNION_DHCP_TIME_NANOS);
+    insert_icmp_raw_event(&icmp_store, "src 1", NETWORK_UNION_ICMP_TIME_NANOS);
 
     // order: bootp, ssh, smtp, conn, rdp, dce_rpc, icmp, http, dns, ntlm, kerberos, ftp, mqtt, tls, ldap, smb, nfs, dhcp
     let query = r#"
@@ -5827,15 +5736,12 @@ async fn search_http_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.http_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_http_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_http_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_http_raw_event(&store, "src 1", time1);
+    insert_http_raw_event(&store, "src 1", time2);
+    insert_http_raw_event(&store, "src 1", time3);
+    insert_http_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6038,15 +5944,12 @@ async fn search_conn_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.conn_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_conn_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_conn_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_conn_raw_event(&store, "src 1", time1);
+    insert_conn_raw_event(&store, "src 1", time2);
+    insert_conn_raw_event(&store, "src 1", time3);
+    insert_conn_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6124,15 +6027,12 @@ async fn search_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dns_raw_event(&store, "src 1", time1);
+    insert_dns_raw_event(&store, "src 1", time2);
+    insert_dns_raw_event(&store, "src 1", time3);
+    insert_dns_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6210,15 +6110,12 @@ async fn search_malformed_dns_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.malformed_dns_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap();
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap();
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_malformed_dns_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_malformed_dns_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_malformed_dns_raw_event(&store, "src 1", time1);
+    insert_malformed_dns_raw_event(&store, "src 1", time2);
+    insert_malformed_dns_raw_event(&store, "src 1", time3);
+    insert_malformed_dns_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6296,15 +6193,12 @@ async fn search_rdp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.rdp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_rdp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_rdp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_rdp_raw_event(&store, "src 1", time1);
+    insert_rdp_raw_event(&store, "src 1", time2);
+    insert_rdp_raw_event(&store, "src 1", time3);
+    insert_rdp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6382,15 +6276,12 @@ async fn search_smtp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smtp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_smtp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smtp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smtp_raw_event(&store, "src 1", time1);
+    insert_smtp_raw_event(&store, "src 1", time2);
+    insert_smtp_raw_event(&store, "src 1", time3);
+    insert_smtp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6468,15 +6359,12 @@ async fn search_ntlm_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ntlm_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_ntlm_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ntlm_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ntlm_raw_event(&store, "src 1", time1);
+    insert_ntlm_raw_event(&store, "src 1", time2);
+    insert_ntlm_raw_event(&store, "src 1", time3);
+    insert_ntlm_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6554,15 +6442,12 @@ async fn search_kerberos_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.kerberos_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_kerberos_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_kerberos_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_kerberos_raw_event(&store, "src 1", time1);
+    insert_kerberos_raw_event(&store, "src 1", time2);
+    insert_kerberos_raw_event(&store, "src 1", time3);
+    insert_kerberos_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6639,15 +6524,12 @@ async fn search_ssh_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ssh_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_ssh_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ssh_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ssh_raw_event(&store, "src 1", time1);
+    insert_ssh_raw_event(&store, "src 1", time2);
+    insert_ssh_raw_event(&store, "src 1", time3);
+    insert_ssh_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6724,15 +6606,12 @@ async fn search_dce_rpc_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dce_rpc_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_dce_rpc_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dce_rpc_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dce_rpc_raw_event(&store, "src 1", time1);
+    insert_dce_rpc_raw_event(&store, "src 1", time2);
+    insert_dce_rpc_raw_event(&store, "src 1", time3);
+    insert_dce_rpc_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6809,15 +6688,12 @@ async fn search_ftp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ftp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_ftp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ftp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ftp_raw_event(&store, "src 1", time1);
+    insert_ftp_raw_event(&store, "src 1", time2);
+    insert_ftp_raw_event(&store, "src 1", time3);
+    insert_ftp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6894,15 +6770,12 @@ async fn search_mqtt_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.mqtt_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_mqtt_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_mqtt_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_mqtt_raw_event(&store, "src 1", time1);
+    insert_mqtt_raw_event(&store, "src 1", time2);
+    insert_mqtt_raw_event(&store, "src 1", time3);
+    insert_mqtt_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -6979,15 +6852,12 @@ async fn search_ldap_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.ldap_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_ldap_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_ldap_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_ldap_raw_event(&store, "src 1", time1);
+    insert_ldap_raw_event(&store, "src 1", time2);
+    insert_ldap_raw_event(&store, "src 1", time3);
+    insert_ldap_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7064,15 +6934,12 @@ async fn search_tls_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.tls_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_tls_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_tls_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_tls_raw_event(&store, "src 1", time1);
+    insert_tls_raw_event(&store, "src 1", time2);
+    insert_tls_raw_event(&store, "src 1", time3);
+    insert_tls_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7149,15 +7016,12 @@ async fn search_smb_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.smb_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_smb_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_smb_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_smb_raw_event(&store, "src 1", time1);
+    insert_smb_raw_event(&store, "src 1", time2);
+    insert_smb_raw_event(&store, "src 1", time3);
+    insert_smb_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7234,15 +7098,12 @@ async fn search_nfs_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.nfs_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_nfs_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_nfs_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_nfs_raw_event(&store, "src 1", time1);
+    insert_nfs_raw_event(&store, "src 1", time2);
+    insert_nfs_raw_event(&store, "src 1", time3);
+    insert_nfs_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7319,15 +7180,12 @@ async fn search_bootp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.bootp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_bootp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_bootp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_bootp_raw_event(&store, "src 1", time1);
+    insert_bootp_raw_event(&store, "src 1", time2);
+    insert_bootp_raw_event(&store, "src 1", time3);
+    insert_bootp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7404,15 +7262,12 @@ async fn search_dhcp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.dhcp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_dhcp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_dhcp_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_dhcp_raw_event(&store, "src 1", time1);
+    insert_dhcp_raw_event(&store, "src 1", time2);
+    insert_dhcp_raw_event(&store, "src 1", time3);
+    insert_dhcp_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7489,15 +7344,12 @@ async fn search_radius_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.radius_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 1).unwrap(); //2020-01-01T00:00:01Z
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap(); //2020-01-01T00:01:01Z
-    let time3 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap(); //2020-01-01T01:01:01Z
-    let time4 = Utc.with_ymd_and_hms(2020, 1, 2, 0, 0, 1).unwrap(); //2020-01-02T00:00:01Z
+    let [time1, time2, time3, time4] = fixed_search_time_nanos();
 
-    insert_radius_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time3.timestamp_nanos_opt().unwrap());
-    insert_radius_raw_event(&store, "src 1", time4.timestamp_nanos_opt().unwrap());
+    insert_radius_raw_event(&store, "src 1", time1);
+    insert_radius_raw_event(&store, "src 1", time2);
+    insert_radius_raw_event(&store, "src 1", time3);
+    insert_radius_raw_event(&store, "src 1", time4);
 
     let query = r#"
     {
@@ -7574,11 +7426,10 @@ async fn search_icmp_with_data() {
     let schema = TestSchema::new();
     let store = schema.db.icmp_store().unwrap();
 
-    let time1 = Utc.with_ymd_and_hms(2020, 1, 1, 0, 1, 1).unwrap();
-    let time2 = Utc.with_ymd_and_hms(2020, 1, 1, 1, 1, 1).unwrap();
+    let [time1, time2] = fixed_icmp_search_time_nanos();
 
-    insert_icmp_raw_event(&store, "src 1", time1.timestamp_nanos_opt().unwrap());
-    insert_icmp_raw_event(&store, "src 1", time2.timestamp_nanos_opt().unwrap());
+    insert_icmp_raw_event(&store, "src 1", time1);
+    insert_icmp_raw_event(&store, "src 1", time2);
 
     let query = r#"
     {

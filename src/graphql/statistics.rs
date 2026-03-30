@@ -384,7 +384,6 @@ fn calculate_ps(period: u16, len: u64) -> f64 {
 mod tests {
     use std::{collections::HashSet, net::SocketAddr};
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
     use crate::graphql::StringNumberU64;
@@ -397,14 +396,15 @@ mod tests {
     };
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
+    const FIXED_STATISTICS_TIMESTAMP_NANOS: i64 = 1_709_528_767_000_000_000;
+
     #[tokio::test]
     async fn test_statistics() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
         insert_statistics_raw_event_kind(
             &store,
-            now,
+            FIXED_STATISTICS_TIMESTAMP_NANOS,
             "src 1",
             0,
             600,
@@ -414,7 +414,7 @@ mod tests {
         );
         insert_statistics_raw_event_kind(
             &store,
-            now,
+            FIXED_STATISTICS_TIMESTAMP_NANOS,
             "src 1",
             1,
             600,
@@ -424,7 +424,7 @@ mod tests {
         );
         insert_statistics_raw_event_kind(
             &store,
-            now,
+            FIXED_STATISTICS_TIMESTAMP_NANOS,
             "src 1",
             2,
             600,
@@ -461,11 +461,7 @@ mod tests {
     async fn statistics_timestamp_fomat_stability() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = FIXED_STATISTICS_TIMESTAMP_NANOS;
         insert_statistics_raw_event_kind(
             &store,
             timestamp,
@@ -492,18 +488,14 @@ mod tests {
         assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
         let res_json = res.data.into_json().unwrap();
         let stats = res_json["statistics"][0]["stats"][0].as_object().unwrap();
-        assert_eq!(stats["timestamp"].as_str().unwrap(), timestamp.to_string());
+        assert_eq!(stats["timestamp"].as_str().unwrap(), "1709528767000000000");
     }
 
     #[tokio::test]
     async fn statistics_with_protocols_and_time_filter() {
         let schema = TestSchema::new();
         let store = schema.db.statistics_store().unwrap();
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = FIXED_STATISTICS_TIMESTAMP_NANOS;
         insert_statistics_raw_event_kind(
             &store,
             timestamp,
@@ -934,25 +926,23 @@ mod tests {
         let dns_store = schema.db.dns_store().unwrap();
         let http_store = schema.db.http_store().unwrap();
 
-        let now = Utc::now().timestamp_nanos_opt().unwrap();
-
         // Insert into each CF:
         //   SESSION -> 5 events
         //   DNS     -> 7 events
         //   HTTP    -> 9 events
         for i in 0..5 {
             let sensor = format!("sensor{i}");
-            insert_conn_raw_event(&conn_store, &sensor, now + i);
+            insert_conn_raw_event(&conn_store, &sensor, FIXED_STATISTICS_TIMESTAMP_NANOS + i);
         }
 
         for i in 0..7 {
             let sensor = format!("sensor{i}");
-            insert_dns_raw_event(&dns_store, &sensor, now + i);
+            insert_dns_raw_event(&dns_store, &sensor, FIXED_STATISTICS_TIMESTAMP_NANOS + i);
         }
 
         for i in 0..9 {
             let sensor = format!("sensor{i}");
-            insert_http_raw_event(&http_store, &sensor, now + i);
+            insert_http_raw_event(&http_store, &sensor, FIXED_STATISTICS_TIMESTAMP_NANOS + i);
         }
 
         let query = r"

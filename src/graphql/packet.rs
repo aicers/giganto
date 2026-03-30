@@ -234,7 +234,7 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::{mem, net::SocketAddr};
 
-    use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
+    use chrono::{Local, NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
 
     use super::PacketFilter;
@@ -243,6 +243,16 @@ mod tests {
         graphql::{TimeRange, tests::TestSchema},
         storage::{KeyExtractor, RawEventStore},
     };
+
+    const PACKET_TS_2023_01_20_00_00_00: i64 = 1_674_172_800_000_000_000;
+    const PACKET_TS_2023_01_20_00_00_01: i64 = 1_674_172_801_000_000_000;
+    const PACKET_TS_2023_01_20_00_00_02: i64 = 1_674_172_802_000_000_000;
+    const PACKET_TS_2023_01_20_00_00_00_123456789: i64 = 1_674_172_800_123_456_789;
+    const PACKET_TS_2023_01_20_00_00_01_234567890: i64 = 1_674_172_801_234_567_890;
+    const PACKET_TS_2023_01_20_00_00_02_345678901: i64 = 1_674_172_802_345_678_901;
+    const PACKET_TS_2024_03_04_05_06_07: i64 = 1_709_528_767_000_000_000;
+    const PACKET_TS_2024_03_04_05_06_08: i64 = 1_709_528_768_000_000_000;
+    const PACKET_TS_2024_03_04_05_06_09: i64 = 1_709_528_769_000_000_000;
 
     #[tokio::test]
     async fn packets_empty() {
@@ -273,13 +283,9 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
-
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = PACKET_TS_2023_01_20_00_00_00;
+        let ts2 = PACKET_TS_2023_01_20_00_00_01;
+        let ts3 = PACKET_TS_2023_01_20_00_00_02;
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -364,15 +370,10 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let packet_dt1 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 0).unwrap();
-        let packet_dt2 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 1).unwrap();
-        let packet_dt3 = Utc.with_ymd_and_hms(2023, 1, 20, 0, 0, 2).unwrap();
-
-        let request_ts = request_dt.timestamp_nanos_opt().unwrap();
-        let packet_ts1 = packet_dt1.timestamp_nanos_opt().unwrap();
-        let packet_ts2 = packet_dt2.timestamp_nanos_opt().unwrap();
-        let packet_ts3 = packet_dt3.timestamp_nanos_opt().unwrap();
+        let request_ts = PACKET_TS_2023_01_20_00_00_00;
+        let packet_ts1 = PACKET_TS_2023_01_20_00_00_00;
+        let packet_ts2 = PACKET_TS_2023_01_20_00_00_01;
+        let packet_ts3 = PACKET_TS_2023_01_20_00_00_02;
 
         insert_packet(&store, "src 1", request_ts, packet_ts1);
         insert_packet(&store, "src 1", request_ts, packet_ts2);
@@ -505,25 +506,9 @@ mod tests {
         let pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+";
         let re = regex::Regex::new(pattern).unwrap();
 
-        let dt1 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 0)
-            .unwrap()
-            .with_nanosecond(123_456_789)
-            .unwrap();
-        let dt2 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 1)
-            .unwrap()
-            .with_nanosecond(234_567_890)
-            .unwrap();
-        let dt3 = Utc
-            .with_ymd_and_hms(2023, 1, 20, 0, 0, 2)
-            .unwrap()
-            .with_nanosecond(345_678_901)
-            .unwrap();
-
-        let ts1 = dt1.timestamp_nanos_opt().unwrap();
-        let ts2 = dt2.timestamp_nanos_opt().unwrap();
-        let ts3 = dt3.timestamp_nanos_opt().unwrap();
+        let ts1 = PACKET_TS_2023_01_20_00_00_00_123456789;
+        let ts2 = PACKET_TS_2023_01_20_00_00_01_234567890;
+        let ts3 = PACKET_TS_2023_01_20_00_00_02_345678901;
 
         insert_packet(&store, "src 1", ts1, ts1);
         insert_packet(&store, "src 1", ts1, ts2);
@@ -551,11 +536,7 @@ mod tests {
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
 
-        let timestamps: Vec<chrono::NaiveDateTime> = re
-            .find_iter(parsed_pcap)
-            .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
-            .collect();
+        let timestamps: Vec<&str> = re.find_iter(parsed_pcap).map(|m| m.as_str()).collect();
 
         // Change to the UTC timezone by applying an offset
         let ts1 = convert_to_utc_timezone(timestamps[0]);
@@ -580,11 +561,7 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
-            .find_iter(parsed_pcap)
-            .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
-            .collect();
+        let timestamps: Vec<&str> = re.find_iter(parsed_pcap).map(|m| m.as_str()).collect();
 
         // Change to the UTC timezone by applying an offset
         let ts1 = convert_to_utc_timezone(timestamps[0]);
@@ -609,11 +586,7 @@ mod tests {
         // get response timestamps
         let res_json = res.data.into_json().unwrap();
         let parsed_pcap = res_json["pcap"]["parsedPcap"].as_str().unwrap();
-        let timestamps: Vec<chrono::NaiveDateTime> = re
-            .find_iter(parsed_pcap)
-            .map(|m| m.as_str())
-            .map(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.6f").unwrap())
-            .collect();
+        let timestamps: Vec<&str> = re.find_iter(parsed_pcap).map(|m| m.as_str()).collect();
 
         // Change to the UTC timezone by applying an offset
         let ts1 = convert_to_utc_timezone(timestamps[0]);
@@ -677,16 +650,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_dt = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_dt = PACKET_TS_2024_03_04_05_06_07;
+        let packet_dt = PACKET_TS_2024_03_04_05_06_08;
 
         insert_packet(&store, "src1", request_dt, packet_dt);
 
@@ -727,16 +692,8 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.packet_store().unwrap();
 
-        let request_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let packet_ts = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 9)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let request_ts = PACKET_TS_2024_03_04_05_06_07;
+        let packet_ts = PACKET_TS_2024_03_04_05_06_09;
         insert_packet(&store, "src1", request_ts, packet_ts);
 
         let query = r#"
@@ -784,9 +741,14 @@ mod tests {
         store.append(&key, &ser_packet_body).unwrap();
     }
 
-    fn convert_to_utc_timezone(timestamp: NaiveDateTime) -> String {
-        let local_datetime = chrono::Local.from_local_datetime(&timestamp).unwrap();
-        let utc_time = local_datetime.with_timezone(&chrono::Utc);
+    fn convert_to_utc_timezone(timestamp: &str) -> String {
+        let local_datetime = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.6f")
+            .expect("pcap timestamp should parse as naive datetime");
+        let local_datetime = Local
+            .from_local_datetime(&local_datetime)
+            .single()
+            .expect("local civil datetime should resolve in system timezone");
+        let utc_time = local_datetime.with_timezone(&Utc);
         utc_time.to_string()
     }
 

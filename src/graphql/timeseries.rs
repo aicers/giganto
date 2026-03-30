@@ -105,7 +105,6 @@ impl TimeSeriesQuery {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::timeseries::PeriodicTimeSeries;
 
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
@@ -161,11 +160,7 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.periodic_time_series_store().unwrap();
 
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = 1_709_528_767_000_000_000;
         insert_time_series(&store, "sensor", timestamp, vec![1.0, 2.0, 3.0]);
 
         let query = r#"

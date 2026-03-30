@@ -189,7 +189,6 @@ impl_from_giganto_secu_log_filter_for_graphql_client!(secu_log_raw_events);
 mod tests {
     use std::net::SocketAddr;
 
-    use chrono::{TimeZone, Utc};
     use giganto_client::ingest::log::SecuLog;
 
     use crate::graphql::tests::TestSchema;
@@ -233,11 +232,7 @@ mod tests {
         let schema = TestSchema::new();
         let store = schema.db.secu_log_store().unwrap();
 
-        let timestamp = Utc
-            .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let timestamp = 1_709_528_767_000_000_000;
         insert_secu_log_event(&store, "device", "src1", timestamp);
 
         let query = r#"
