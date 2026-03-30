@@ -743,10 +743,8 @@ impl MigrationNew<DceRpcBeforeV26> for DceRpcFromV26 {
             resp_pkts: 0,
             orig_l2_bytes: 0,
             resp_l2_bytes: 0,
-            rtt: old_data.rtt,
-            named_pipe: old_data.named_pipe,
-            endpoint: old_data.endpoint,
-            operation: old_data.operation,
+            context: Vec::new(),
+            request: Vec::new(),
         }
     }
 }
