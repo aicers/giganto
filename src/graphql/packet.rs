@@ -234,8 +234,8 @@ impl_from_giganto_packet_filter_for_graphql_client!(packets, pcaps);
 mod tests {
     use std::{mem, net::SocketAddr};
 
-    use chrono::{Local, NaiveDateTime, TimeZone, Utc};
     use giganto_client::ingest::Packet as pk;
+    use jiff::{fmt::strtime, tz::TimeZone};
 
     use super::PacketFilter;
     use crate::{
@@ -742,14 +742,16 @@ mod tests {
     }
 
     fn convert_to_utc_timezone(timestamp: &str) -> String {
-        let local_datetime = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.6f")
-            .expect("pcap timestamp should parse as naive datetime");
-        let local_datetime = Local
-            .from_local_datetime(&local_datetime)
-            .single()
-            .expect("local civil datetime should resolve in system timezone");
-        let utc_time = local_datetime.with_timezone(&Utc);
-        utc_time.to_string()
+        let local_datetime = strtime::parse("%Y-%m-%d %H:%M:%S%.f", timestamp)
+            .expect("pcap timestamp should parse as local civil datetime")
+            .to_datetime()
+            .expect("pcap timestamp should contain a full civil datetime");
+        let utc_time = local_datetime
+            .to_zoned(TimeZone::system())
+            .expect("local civil datetime should resolve in system timezone")
+            .in_tz("UTC")
+            .expect("pcap timestamp should convert to UTC");
+        utc_time.strftime("%Y-%m-%d %H:%M:%S%.6f %Z").to_string()
     }
 
     #[test]

@@ -1306,7 +1306,7 @@ struct RadiusRawEvent {
 ]))]
 struct IcmpRawEvent {
     /// Time the event started transmitting from a sensor
-    time: DateTime<Utc>,
+    time: DateTime,
     /// Source IP Address
     orig_addr: String,
     /// Destination IP Address
@@ -1314,7 +1314,7 @@ struct IcmpRawEvent {
     /// Protocol Number
     proto: u8,
     /// Start Time
-    start_time: DateTime<Utc>,
+    start_time: DateTime,
     /// Duration
     ///
     /// It is measured in nanoseconds.
@@ -1707,7 +1707,7 @@ impl FromKeyValue<Icmp> for IcmpRawEvent {
             orig_addr: val.orig_addr.to_string(),
             resp_addr: val.resp_addr.to_string(),
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
@@ -3473,14 +3473,14 @@ impl NetworkQuery {
         &self,
         ctx: &Context<'_>,
         filter: SearchFilter,
-    ) -> Result<Vec<DateTime<Utc>>> {
+    ) -> Result<Vec<DateTime>> {
         let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
             let db = ctx.data::<Database>()?;
             let store = db.icmp_store()?;
             let exist_data = store
                 .batched_multi_get_from_ts(&filter.sensor, &filter.times)
                 .into_iter()
-                .collect::<BTreeSet<(DateTime<Utc>, Vec<u8>)>>();
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
 
             Ok(collect_exist_times::<Icmp>(&exist_data, filter))
         };
