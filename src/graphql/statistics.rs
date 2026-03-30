@@ -145,6 +145,13 @@ async fn handle_statistics(
 
 #[Object]
 impl StatisticsQuery {
+    /// Returns statistics for the given sensors.
+    ///
+    /// When provided, `protocols` must contain only the following `RawEventKind`
+    /// strings supported by the statistics API: `conn`, `dns`, `malformed_dns`,
+    /// `radius`, `rdp`, `http`, `smtp`, `ntlm`, `kerberos`, `ssh`, `dce_rpc`,
+    /// `ftp`, `mqtt`, `ldap`, `tls`, `smb`, `nfs`, `bootp`, `dhcp`, or `statistics`.
+    /// Invalid values are rejected at runtime.
     async fn statistics(
         &self,
         ctx: &Context<'_>,

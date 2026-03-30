@@ -712,6 +712,20 @@ type DnsRawEventEdge {
 	cursor: String!
 }
 
+"""
+Filters for exporting events.
+
+Some fields are only valid for specific protocol categories and will be
+rejected at runtime if used with an incompatible `protocol`.
+
+Protocol-dependent filters:
+- `origAddr`, `respAddr`, `origPort`, `respPort` are only valid for
+network-related protocols.
+- `agentName`, `agentId` are only valid for Sysmon-related protocols.
+- `kind` is only valid for `log` and `secu log`.
+
+The `protocol` value must be one of the supported protocol names.
+"""
 input ExportFilter {
 	protocol: String!
 	sensorId: String!
@@ -1398,6 +1412,15 @@ type ImageLoadedEventEdge {
 	cursor: String!
 }
 
+"""
+IP address range filter.
+
+Range semantics:
+- `start` is inclusive.
+- `end` is exclusive.
+- Omitting `start` means the range is unbounded below.
+- Omitting `end` means the range is unbounded above.
+"""
 input IpRange {
 	start: String
 	end: String
@@ -2105,6 +2128,9 @@ type NetworkConnectionEventEdge {
 	cursor: String!
 }
 
+"""
+Filter options for network queries.
+"""
 input NetworkFilter {
 	time: TimeRange
 	sensor: String!
@@ -2350,6 +2376,11 @@ type NtlmRawEventEdge {
 	cursor: String!
 }
 
+"""
+Filters for operational log queries.
+
+String filters in this input use substring matching.
+"""
 input OpLogFilter {
 	time: TimeRange
 	sensor: String
@@ -2504,6 +2535,15 @@ type PipeEventEventEdge {
 	cursor: String!
 }
 
+"""
+Port range filter.
+
+Range semantics:
+- `start` is inclusive.
+- `end` is exclusive.
+- Omitting `start` means the range is unbounded below.
+- Omitting `end` means the range is unbounded above.
+"""
 input PortRange {
 	start: Int
 	end: Int
@@ -2655,6 +2695,15 @@ input PropertyFilter {
 }
 
 type Query {
+	"""
+	Returns raw log events for the given sensor.
+	
+	The filter must specify an event kind.
+	
+	# Errors
+	
+	Returns an error if no event kind is specified in the filter.
+	"""
 	logRawEvents(filter: LogFilter!, after: String, before: String, first: Int, last: Int): LogRawEventConnection!
 	opLogRawEvents(filter: OpLogFilter!, after: String, before: String, first: Int, last: Int): OpLogRawEventConnection!
 	connRawEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ConnRawEventConnection!
@@ -2698,15 +2747,55 @@ type Query {
 	searchDhcpRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchRadiusRawEvents(filter: SearchFilter!): [DateTime!]!
 	searchIcmpRawEvents(filter: SearchFilter!): [DateTime!]!
+	"""
+	Exports matching events to a file and returns the download path.
+	
+	`exportType` must be either `csv` or `json`.
+	The allowed filter fields depend on the selected protocol.
+	
+	Supported filter categories:
+	- IP/port filters (`origAddr`, `respAddr`, `origPort`, `respPort`) are
+	supported only for network-related protocols.
+	- Agent filters (`agentName`, `agentId`) are supported only for
+	Sysmon-related protocols.
+	- `kind` is supported only for log-related protocols such as `log` and
+	`secu log`.
+	
+	# Errors
+	
+	Returns an error if `exportType` is not supported or if the filter
+	contains fields that are invalid for the selected protocol.
+	"""
 	export(exportType: String!, filter: ExportFilter!): String!
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!
 	periodicTimeSeries(filter: TimeSeriesFilter!, after: String, before: String, first: Int, last: Int): TimeSeriesConnection!
+	"""
+	Returns the current node status, including CPU, memory, and disk usage.
+	"""
 	status: Status!
 	propertiesCf(filter: PropertyFilter!): Properties!
+	"""
+	Returns the current visible Giganto configuration.
+	"""
 	config: Config!
+	"""
+	Returns `true` when the GraphQL service is reachable.
+	"""
 	ping: Boolean!
+	"""
+	Returns the list of registered sensor IDs, sorted in ascending order.
+	"""
 	sensors: [String!]!
+	"""
+	Returns statistics for the given sensors.
+	
+	When provided, `protocols` must contain only the following `RawEventKind`
+	strings supported by the statistics API: `conn`, `dns`, `malformed_dns`,
+	`radius`, `rdp`, `http`, `smtp`, `ntlm`, `kerberos`, `ssh`, `dce_rpc`,
+	`ftp`, `mqtt`, `ldap`, `tls`, `smb`, `nfs`, `bootp`, `dhcp`, or `statistics`.
+	Invalid values are rejected at runtime.
+	"""
 	statistics(sensors: [String!]!, time: TimeRange, protocols: [String!], requestFromPeer: Boolean): [StatisticsRawEvent!]!
 	processCreateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessCreateEventConnection!
 	fileCreateTimeEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreationTimeChangedEventConnection!
@@ -3060,6 +3149,9 @@ type RegistryValueSetEventEdge {
 	cursor: String!
 }
 
+"""
+Filter options for text search.
+"""
 input SearchFilter {
 	time: TimeRange
 	sensor: String!
@@ -3070,6 +3162,9 @@ input SearchFilter {
 	logLevel: String
 	logContents: String
 	times: [DateTime!]!
+	"""
+	Matches values that contain this keyword, case-insensitively.
+	"""
 	keyword: String
 	agentId: String
 }
@@ -3578,6 +3673,15 @@ type SysmonEventsEdge {
 	cursor: String!
 }
 
+"""
+Time range filter.
+
+Range semantics:
+- `start` is inclusive.
+- `end` is exclusive.
+- Omitting `start` means the range is unbounded below.
+- Omitting `end` means the range is unbounded above.
+"""
 input TimeRange {
 	start: DateTime
 	end: DateTime

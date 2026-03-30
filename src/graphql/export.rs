@@ -1846,6 +1846,18 @@ fn to_string_or_empty<T: Display>(option: Option<T>) -> String {
     }
 }
 
+/// Filters for exporting events.
+///
+/// Some fields are only valid for specific protocol categories and will be
+/// rejected at runtime if used with an incompatible `protocol`.
+///
+/// Protocol-dependent filters:
+/// - `origAddr`, `respAddr`, `origPort`, `respPort` are only valid for
+///   network-related protocols.
+/// - `agentName`, `agentId` are only valid for Sysmon-related protocols.
+/// - `kind` is only valid for `log` and `secu log`.
+///
+/// The `protocol` value must be one of the supported protocol names.
 #[allow(clippy::module_name_repetitions)]
 #[derive(InputObject, Serialize, Clone)]
 pub struct ExportFilter {
@@ -1968,6 +1980,23 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
 #[Object]
 #[allow(clippy::unused_async)]
 impl ExportQuery {
+    /// Exports matching events to a file and returns the download path.
+    ///
+    /// `exportType` must be either `csv` or `json`.
+    /// The allowed filter fields depend on the selected protocol.
+    ///
+    /// Supported filter categories:
+    /// - IP/port filters (`origAddr`, `respAddr`, `origPort`, `respPort`) are
+    ///   supported only for network-related protocols.
+    /// - Agent filters (`agentName`, `agentId`) are supported only for
+    ///   Sysmon-related protocols.
+    /// - `kind` is supported only for log-related protocols such as `log` and
+    ///   `secu log`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `exportType` is not supported or if the filter
+    /// contains fields that are invalid for the selected protocol.
     async fn export(
         &self,
         ctx: &Context<'_>,
