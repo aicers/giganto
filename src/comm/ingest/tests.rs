@@ -12,7 +12,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{Duration, TimeZone, Utc};
 use giganto_client::frame::SendError;
 use giganto_client::ingest::log::SecuLog;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
@@ -74,6 +73,7 @@ const KEY_PATH: &str = "tests/certs/node1/key.pem";
 const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const HOST: &str = "node1";
 const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+const FIXED_CONN_DURATION_NANOS: i64 = 12_345;
 const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::Conn,
     RawEventKind::Dns,
@@ -312,11 +312,10 @@ fn ip(addr: &str) -> IpAddr {
     addr.parse().unwrap()
 }
 
+const DEFAULT_START_TIME_NANOS: i64 = 1_740_787_200_000_000_000;
+
 fn default_start_time() -> i64 {
-    Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap()
+    DEFAULT_START_TIME_NANOS
 }
 
 fn next_timestamp() -> i64 {
@@ -610,7 +609,6 @@ async fn run_single_event_case(case: &SingleEventCase) {
 
 #[allow(clippy::too_many_lines)]
 fn single_event_cases() -> Vec<SingleEventCase> {
-    let tmp_dur = Duration::nanoseconds(12345);
     vec![
         single_event_case(
             "conn",
@@ -623,7 +621,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 proto: 6,
                 conn_state: "sf".to_string(),
                 start_time: default_start_time(),
-                duration: tmp_dur.num_nanoseconds().unwrap(),
+                duration: FIXED_CONN_DURATION_NANOS,
                 service: "-".to_string(),
                 orig_bytes: 77,
                 resp_bytes: 295,

@@ -3,8 +3,6 @@ use std::{
     net::SocketAddr,
 };
 
-use chrono::{TimeZone, Utc};
-
 use crate::graphql::tests::TestSchema;
 
 mod fixtures;
@@ -27,16 +25,16 @@ use fixtures::{
     setup_search_registry_value_set,
 };
 
+const FIXED_SYSMON_BASE_TIMESTAMP_NANOS: i64 = 1_709_528_767_000_000_000;
+const FIXED_SYSMON_NEXT_TIMESTAMP_NANOS: i64 = 1_709_528_768_000_000_000;
+const FIXED_SYSMON_PAGINATION_BASE_TIMESTAMP_NANOS: i64 = 1_704_067_200_000_000_000;
+
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn sysmon_events_timestamp_format_stability() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = FIXED_SYSMON_BASE_TIMESTAMP_NANOS;
     let step = 1_000_000;
 
     let process_create_store = schema.db.process_create_store().unwrap();
@@ -140,91 +138,56 @@ async fn sysmon_events_timestamp_format_stability() {
         "FileDeleteDetectedEvent",
     ];
     let mut seen = HashSet::new();
-    let mut expected_times: HashMap<&str, String> = HashMap::new();
-    expected_times.insert(
-        "ProcessCreateEvent",
-        Utc.timestamp_nanos(base_ts).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreationTimeChangedEvent",
-        Utc.timestamp_nanos(base_ts + step).to_rfc3339(),
-    );
-    expected_times.insert(
-        "NetworkConnectionEvent",
-        Utc.timestamp_nanos(base_ts + step * 2).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ProcessTerminatedEvent",
-        Utc.timestamp_nanos(base_ts + step * 3).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ImageLoadedEvent",
-        Utc.timestamp_nanos(base_ts + step * 4).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreateEvent",
-        Utc.timestamp_nanos(base_ts + step * 5).to_rfc3339(),
-    );
-    expected_times.insert(
-        "RegistryValueSetEvent",
-        Utc.timestamp_nanos(base_ts + step * 6).to_rfc3339(),
-    );
-    expected_times.insert(
-        "RegistryKeyValueRenameEvent",
-        Utc.timestamp_nanos(base_ts + step * 7).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileCreateStreamHashEvent",
-        Utc.timestamp_nanos(base_ts + step * 8).to_rfc3339(),
-    );
-    expected_times.insert(
-        "PipeEventEvent",
-        Utc.timestamp_nanos(base_ts + step * 9).to_rfc3339(),
-    );
-    expected_times.insert(
-        "DnsEventEvent",
-        Utc.timestamp_nanos(base_ts + step * 10).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileDeleteEvent",
-        Utc.timestamp_nanos(base_ts + step * 11).to_rfc3339(),
-    );
-    expected_times.insert(
-        "ProcessTamperingEvent",
-        Utc.timestamp_nanos(base_ts + step * 12).to_rfc3339(),
-    );
-    expected_times.insert(
-        "FileDeleteDetectedEvent",
-        Utc.timestamp_nanos(base_ts + step * 13).to_rfc3339(),
-    );
+    let expected_times: HashMap<&str, &str> = HashMap::from([
+        ("ProcessCreateEvent", "2024-03-04T05:06:07+00:00"),
+        (
+            "FileCreationTimeChangedEvent",
+            "2024-03-04T05:06:07.001+00:00",
+        ),
+        ("NetworkConnectionEvent", "2024-03-04T05:06:07.002+00:00"),
+        ("ProcessTerminatedEvent", "2024-03-04T05:06:07.003+00:00"),
+        ("ImageLoadedEvent", "2024-03-04T05:06:07.004+00:00"),
+        ("FileCreateEvent", "2024-03-04T05:06:07.005+00:00"),
+        ("RegistryValueSetEvent", "2024-03-04T05:06:07.006+00:00"),
+        (
+            "RegistryKeyValueRenameEvent",
+            "2024-03-04T05:06:07.007+00:00",
+        ),
+        ("FileCreateStreamHashEvent", "2024-03-04T05:06:07.008+00:00"),
+        ("PipeEventEvent", "2024-03-04T05:06:07.009+00:00"),
+        ("DnsEventEvent", "2024-03-04T05:06:07.010+00:00"),
+        ("FileDeleteEvent", "2024-03-04T05:06:07.011+00:00"),
+        ("ProcessTamperingEvent", "2024-03-04T05:06:07.012+00:00"),
+        ("FileDeleteDetectedEvent", "2024-03-04T05:06:07.013+00:00"),
+    ]);
 
     for edge in edges {
         let node = edge["node"].as_object().unwrap();
         let typename = node["__typename"].as_str().unwrap();
         seen.insert(typename.to_string());
         let expected_time = expected_times.get(typename).unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), expected_time);
+        assert_eq!(node["time"].as_str().unwrap(), *expected_time);
         match typename {
             "FileCreationTimeChangedEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_time_creation).to_rfc3339()
+                    "2024-03-04T05:06:07.001000010+00:00"
                 );
                 assert_eq!(
                     node["previousCreationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_time_previous).to_rfc3339()
+                    "2024-03-04T05:06:07.000999990+00:00"
                 );
             }
             "FileCreateEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(file_create_creation).to_rfc3339()
+                    "2024-03-04T05:06:07.005000020+00:00"
                 );
             }
             "FileCreateStreamHashEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    Utc.timestamp_nanos(base_ts + step * 8).to_rfc3339()
+                    "2024-03-04T05:06:07.008+00:00"
                 );
             }
             _ => {}
@@ -245,16 +208,8 @@ async fn sysmon_events_last_selects_latest() {
     let process_create_store = schema.db.process_create_store().unwrap();
     let file_delete_detected_store = schema.db.file_delete_detected_store().unwrap();
 
-    let time1 = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
-    let time2 = Utc
-        .with_ymd_and_hms(2024, 3, 4, 5, 6, 8)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let time1 = FIXED_SYSMON_BASE_TIMESTAMP_NANOS;
+    let time2 = FIXED_SYSMON_NEXT_TIMESTAMP_NANOS;
 
     insert_process_create_event(&process_create_store, "src1", time1);
     insert_file_delete_detected_event(&file_delete_detected_store, "src1", time2);
@@ -2685,11 +2640,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
 async fn sysmon_connection_pagination_after_first_sets_has_previous_page() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = FIXED_SYSMON_PAGINATION_BASE_TIMESTAMP_NANOS;
     let step = 1_000_000_000; // 1 second
 
     // Insert multiple events to test pagination
@@ -2772,11 +2723,7 @@ async fn sysmon_connection_pagination_after_first_sets_has_previous_page() {
 async fn sysmon_connection_pagination_before_last_sets_has_next_page() {
     let schema = TestSchema::new();
     let sensor = "src1";
-    let base_ts = Utc
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .unwrap()
-        .timestamp_nanos_opt()
-        .unwrap();
+    let base_ts = FIXED_SYSMON_PAGINATION_BASE_TIMESTAMP_NANOS;
     let step = 1_000_000_000; // 1 second
 
     // Insert multiple events to test pagination

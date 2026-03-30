@@ -431,7 +431,6 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
 mod tests {
     use std::{fmt::Debug, fs, fs::File, io::Write, net::IpAddr, path::Path, path::PathBuf};
 
-    use chrono::Utc;
     use giganto_client::ingest::{log::OpLogLevel, network::FtpCommand};
     use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
     use semver::{Version, VersionReq};
@@ -457,6 +456,13 @@ mod tests {
         },
         rocksdb_options,
     };
+
+    const FIXED_MIGRATION_TIMESTAMP_NANOS: i64 = 1_709_528_767_000_000_000;
+    const FIXED_SENSOR_LAST_ACTIVE_NANOS: i64 = 1_735_689_600_000_000_000;
+
+    fn fixed_sensor_last_active() -> DateTime {
+        DateTime::from_timestamp_nanos(FIXED_SENSOR_LAST_ACTIVE_NANOS)
+    }
 
     fn open_with_old_cfs(db_path: &Path, db_opts: &DbOptions) -> Database {
         const OLD_META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sources"];
@@ -841,7 +847,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn migrate_0_24_to_0_26_0_raw_event() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = FIXED_MIGRATION_TIMESTAMP_NANOS;
         let sensor = "src1";
 
         let db_dir = tempfile::tempdir().unwrap();
@@ -1832,7 +1838,9 @@ mod tests {
         {
             let db = Database::open(&db_path, &db_options).unwrap();
             let sensor_store = db.sensors_store().unwrap();
-            sensor_store.insert("test_sensor", DateTime::now()).unwrap();
+            sensor_store
+                .insert("test_sensor", fixed_sensor_last_active())
+                .unwrap();
         }
 
         // Should succeed without doing anything
@@ -1881,7 +1889,7 @@ mod tests {
 
     #[test]
     fn test_migrate_0_24_to_0_26_http_combines_filenames_and_mime_types() {
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap();
+        let timestamp = FIXED_MIGRATION_TIMESTAMP_NANOS;
         let sensor = "test_sensor";
 
         let db_dir = tempfile::tempdir().unwrap();
