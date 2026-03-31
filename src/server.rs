@@ -724,7 +724,7 @@ mod tests {
         let client_certs = load_certs_with_ca_paths(
             &fixture.client_chain_path,
             &fixture.client_key_path,
-            std::slice::from_ref(&wrong_fixture.ca_bundle_intermediate_then_root_path),
+            std::slice::from_ref(&wrong_fixture.root_cert_path),
         );
 
         let err = assert_bootroot_fixture_mtls_handshake_fails(
@@ -735,8 +735,8 @@ mod tests {
         .await;
 
         assert!(
-            !err.is_empty(),
-            "untrusted CA should produce a connection error"
+            err.contains("invalid peer certificate: BadSignature"),
+            "untrusted CA should surface the current rustls validation error, got: {err}"
         );
     }
 
@@ -765,8 +765,8 @@ mod tests {
         .await;
 
         assert!(
-            !err.is_empty(),
-            "server_name mismatch should produce a connection error"
+            err.contains("certificate not valid for name \"001.data-store.node2.example.test\""),
+            "server_name mismatch should name the invalid DNS target, got: {err}"
         );
     }
 
@@ -809,8 +809,8 @@ mod tests {
         .await;
 
         assert!(
-            !err.is_empty(),
-            "invalid server certificate chain should produce a connection error"
+            err.contains("invalid peer certificate: BadSignature"),
+            "invalid server certificate chain should surface a signature validation error, got: {err}"
         );
     }
 }
