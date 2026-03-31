@@ -21,6 +21,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
+- Replaced checked-in MkDocs theme assets (`docs/styles/`,
+  `docs/pdf/`) with the shared
+  [aicers/docs-theme](https://github.com/aicers/docs-theme)
+  template. Theme assets are now fetched at build time via
+  `scripts/fetch-theme.sh` into `docs/.theme/`.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
