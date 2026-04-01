@@ -32,6 +32,8 @@ jobs:
         run: cargo clippy --tests -- -D warnings
       - name: Clippy (Server-only)
         run: cargo clippy --no-default-features --features benchmark --tests -- -D warnings
+      - name: Clippy (Bootroot)
+        run: cargo clippy --all-targets --features bootroot -- -D warnings
       - name: Biome check
         run: biome ci
       - name: Detect Cargo.lock changes
@@ -62,8 +64,10 @@ jobs:
         run: cargo build --verbose
       - name: Schema snapshot check
         run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
-      - name: Run tests
-        run: cargo test --all-features --verbose
+      - name: Run tests (Default)
+        run: cargo test --verbose
+      - name: Run tests (Bootroot)
+        run: cargo test --features bootroot --verbose
 
   coverage:
     runs-on: ubuntu-latest

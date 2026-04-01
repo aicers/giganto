@@ -764,7 +764,6 @@ pub mod tests {
             fs,
             future::Future,
             net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-            path::Path,
             sync::{Arc, OnceLock},
             time::{Duration, Instant},
         };
@@ -773,7 +772,6 @@ pub mod tests {
         use giganto_client::connection::{client_handshake, server_handshake};
         use giganto_client::frame::{send_bytes, send_raw};
         use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
-        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
         use tempfile::TempDir;
         use tokio::sync::{Notify, RwLock, oneshot};
         use tokio::{select, time::sleep};
@@ -784,17 +782,14 @@ pub mod tests {
             PeerInfo, Peers, client_connection, client_run, read_toml_file, server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
-        use crate::{
-            comm::{to_cert_chain, to_private_key, to_root_cert},
-            server::{Certs, SERVER_ENDPOINT_DELAY, config_server},
+        #[cfg(not(feature = "bootroot"))]
+        use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
+        use crate::server::{Certs, SERVER_ENDPOINT_DELAY, config_client, config_server};
+        #[cfg(feature = "bootroot")]
+        use crate::test_bootroot::{
+            TestNode, bootroot_cluster_certs, bootroot_cluster_server_name,
         };
 
-        pub(super) const CERT_PATH: &str = "tests/certs/node1/cert.pem";
-        pub(super) const KEY_PATH: &str = "tests/certs/node1/key.pem";
-        pub(super) const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-        pub(super) const CERT2_PATH: &str = "tests/certs/node2/cert.pem";
-        pub(super) const KEY2_PATH: &str = "tests/certs/node2/key.pem";
-        pub(super) const HOST: &str = "node1";
         pub(super) const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
         pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -807,6 +802,38 @@ pub mod tests {
             INIT.get_or_init(|| {
                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             });
+        }
+
+        #[cfg(not(feature = "bootroot"))]
+        pub(super) fn test_connect_name() -> &'static str {
+            "node1"
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn test_connect_name() -> &'static str {
+            bootroot_cluster_server_name(TestNode::Node1)
+        }
+
+        #[cfg(not(feature = "bootroot"))]
+        pub(super) fn test_connect_name_node2() -> &'static str {
+            "node2"
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn test_connect_name_node2() -> &'static str {
+            bootroot_cluster_server_name(TestNode::Node2)
+        }
+
+        pub(super) fn test_subject_hostname() -> &'static str {
+            #[cfg(not(feature = "bootroot"))]
+            {
+                "node1"
+            }
+
+            #[cfg(feature = "bootroot")]
+            {
+                TestNode::Node1.short_hostname()
+            }
         }
 
         pub(super) struct TempConfig {
@@ -879,7 +906,7 @@ pub mod tests {
             pub(super) async fn new(server_addr: SocketAddr) -> Self {
                 let endpoint = init_client();
                 let conn = endpoint
-                    .connect(server_addr, HOST)
+                    .connect(server_addr, test_connect_name())
                     .expect(
                         "Failed to connect server's endpoint, Please check if the setting value is correct",
                     )
@@ -894,48 +921,7 @@ pub mod tests {
 
         fn client_config() -> ClientConfig {
             CLIENT_CONFIG
-                .get_or_init(|| {
-                    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) = fs::read(CERT_PATH)
-                        .map(|x| {
-                            (x, fs::read(KEY_PATH).expect("Failed to Read key file"))
-                        }) {
-                        x
-                    } else {
-                        panic!(
-                            "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
-                        );
-                    };
-
-                    let pv_key = if Path::new(KEY_PATH).extension().is_some_and(|x| x == "der") {
-                        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
-                    } else {
-                        rustls_pemfile::private_key(&mut &*key)
-                            .expect("malformed PKCS #1 private key")
-                            .expect("no private keys found")
-                    };
-
-                    let cert_chain = if Path::new(CERT_PATH).extension().is_some_and(|x| x == "der")
-                    {
-                        vec![CertificateDer::from(cert)]
-                    } else {
-                        rustls_pemfile::certs(&mut &*cert)
-                            .collect::<Result<_, _>>()
-                            .expect("invalid PEM-encoded certificate")
-                    };
-
-                    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-                    let server_root = to_root_cert(&ca_cert_path).unwrap();
-
-                    let client_crypto = rustls::ClientConfig::builder()
-                        .with_root_certificates(server_root)
-                        .with_client_auth_cert(cert_chain, pv_key)
-                        .expect("the server root, cert chain or private key are not valid");
-
-                    quinn::ClientConfig::new(Arc::new(
-                        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
-                            .expect("Failed to generate QuicClientConfig"),
-                    ))
-                })
+                .get_or_init(|| config_client(&create_certs()).expect("peer test client config"))
                 .clone()
         }
 
@@ -947,24 +933,55 @@ pub mod tests {
             endpoint
         }
 
+        #[cfg(not(feature = "bootroot"))]
         fn create_certs_from_paths(cert_path: &str, key_path: &str) -> Certs {
             Certs {
                 certs: to_cert_chain(&fs::read(cert_path).unwrap()).unwrap(),
                 key: to_private_key(&fs::read(key_path).unwrap()).unwrap(),
-                root: to_root_cert(&[CA_CERT_PATH.to_string()]).unwrap(),
+                root: to_root_cert(&["tests/certs/ca_cert.pem".to_string()]).unwrap(),
             }
         }
 
         pub(super) fn create_certs() -> Certs {
-            CERTS_NODE1
-                .get_or_init(|| create_certs_from_paths(CERT_PATH, KEY_PATH))
-                .clone()
+            #[cfg(not(feature = "bootroot"))]
+            {
+                CERTS_NODE1
+                    .get_or_init(|| {
+                        create_certs_from_paths(
+                            "tests/certs/node1/cert.pem",
+                            "tests/certs/node1/key.pem",
+                        )
+                    })
+                    .clone()
+            }
+
+            #[cfg(feature = "bootroot")]
+            {
+                CERTS_NODE1
+                    .get_or_init(|| bootroot_cluster_certs(TestNode::Node1))
+                    .clone()
+            }
         }
 
         pub(super) fn create_node2_certs() -> Certs {
-            CERTS_NODE2
-                .get_or_init(|| create_certs_from_paths(CERT2_PATH, KEY2_PATH))
-                .clone()
+            #[cfg(not(feature = "bootroot"))]
+            {
+                CERTS_NODE2
+                    .get_or_init(|| {
+                        create_certs_from_paths(
+                            "tests/certs/node2/cert.pem",
+                            "tests/certs/node2/key.pem",
+                        )
+                    })
+                    .clone()
+            }
+
+            #[cfg(feature = "bootroot")]
+            {
+                CERTS_NODE2
+                    .get_or_init(|| bootroot_cluster_certs(TestNode::Node2))
+                    .clone()
+            }
         }
 
         pub(super) fn build_peer_conn_info(local_address: SocketAddr) -> (PeerConns, TempConfig) {
@@ -1036,7 +1053,9 @@ pub mod tests {
             server_addr: SocketAddr,
         ) -> ConnectedPeers {
             let client_endpoint = init_client();
-            let connect_fut = client_endpoint.connect(server_addr, HOST).unwrap();
+            let connect_fut = client_endpoint
+                .connect(server_addr, test_connect_name())
+                .unwrap();
             let accept_fut = async {
                 let incoming = accept_incoming(server_endpoint, "server accept timeout").await;
                 incoming.await.unwrap()
@@ -1057,7 +1076,9 @@ pub mod tests {
             let client_endpoint = init_client();
             let conn = with_timeout(
                 "client connect timeout",
-                client_endpoint.connect(server_addr, HOST).unwrap(),
+                client_endpoint
+                    .connect(server_addr, test_connect_name())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -1091,7 +1112,7 @@ pub mod tests {
             let start = Instant::now();
             let endpoint = init_client();
             loop {
-                let connect = endpoint.connect(server_addr, HOST);
+                let connect = endpoint.connect(server_addr, test_connect_name());
                 if let Ok(connecting) = connect
                     && let Ok(conn) = tokio::time::timeout(Duration::from_secs(1), connecting).await
                     && let Ok(conn) = conn
@@ -1438,7 +1459,8 @@ pub mod tests {
             .await
             .expect("peer server did not report addr");
         let mut client = connect_test_client(run_addr).await;
-        let peer_list: HashSet<PeerIdentity> = HashSet::from([peer_identity(other_addr, "node2")]);
+        let peer_list: HashSet<PeerIdentity> =
+            HashSet::from([peer_identity(other_addr, test_connect_name_node2())]);
         let client_info = peer_info(&["client-sensor"], Some(9201), Some(9202));
         let (_recv_peer_list, recv_sensor_list) =
             request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
@@ -1485,7 +1507,7 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-        let server_identity = peer_identity(server_addr, HOST);
+        let server_identity = peer_identity(server_addr, test_connect_name());
 
         let (server_ready_tx, server_ready_rx) =
             oneshot::channel::<(HashSet<PeerIdentity>, PeerInfo)>();
@@ -1553,7 +1575,7 @@ pub mod tests {
         let notify_shutdown = Arc::new(Notify::new());
         let peer_info = PeerIdentity {
             addr: server_addr,
-            hostname: HOST.to_string(),
+            hostname: test_connect_name().to_string(),
         };
         let client_task = tokio::spawn(client_connection(
             client_endpoint,
@@ -1572,7 +1594,10 @@ pub mod tests {
         assert!(recv_sensor_list.ingest_sensors.contains("client-sensor"));
 
         let recv_peer = with_timeout("peer sender timeout", receiver.recv()).await;
-        assert_eq!(recv_peer, Some(peer_identity(server_addr, HOST)));
+        assert_eq!(
+            recv_peer,
+            Some(peer_identity(server_addr, test_connect_name()))
+        );
 
         wait_for_peer_info("peers update timeout", &peers, |read_peers| {
             read_peers.values().any(|info| {
@@ -1606,7 +1631,7 @@ pub mod tests {
         });
         let existing_client_endpoint = init_client();
         let existing_client_conn = existing_client_endpoint
-            .connect(existing_addr, HOST)
+            .connect(existing_addr, test_connect_name())
             .unwrap()
             .await
             .unwrap();
@@ -1694,7 +1719,9 @@ pub mod tests {
         let client_endpoint = init_client();
         let client_conn = with_timeout(
             "client connect timeout",
-            client_endpoint.connect(server_addr, HOST).unwrap(),
+            client_endpoint
+                .connect(server_addr, test_connect_name())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -1720,7 +1747,9 @@ pub mod tests {
         let client_endpoint = init_client();
         let client_conn = with_timeout(
             "client connect timeout",
-            client_endpoint.connect(server_addr, HOST).unwrap(),
+            client_endpoint
+                .connect(server_addr, test_connect_name())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -1784,7 +1813,9 @@ pub mod tests {
 
         let client_conn = with_timeout(
             "client connect timeout",
-            client_endpoint.connect(server_actual_addr, HOST).unwrap(),
+            client_endpoint
+                .connect(server_actual_addr, test_connect_name())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -1821,7 +1852,9 @@ pub mod tests {
         let client_endpoint = init_client();
         let client_conn = with_timeout(
             "client connect timeout",
-            client_endpoint.connect(server_addr, HOST).unwrap(),
+            client_endpoint
+                .connect(server_addr, test_connect_name())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -2304,7 +2337,7 @@ pub mod tests {
                 .await
                 .unwrap();
 
-        assert_eq!(remote_hostname, "node1");
+        assert_eq!(remote_hostname, test_subject_hostname());
         assert_eq!(remote_addr, server_conn.remote_address().ip().to_string());
         assert!(peer_conn.read().await.is_empty());
     }
@@ -2414,7 +2447,7 @@ pub mod tests {
 
         let peer_info = PeerIdentity {
             addr: server_addr,
-            hostname: HOST.to_string(),
+            hostname: test_connect_name().to_string(),
         };
         let (connection, _send, _recv) = connect(&client_endpoint, &peer_info).await.unwrap();
         let _ = ready_tx.send(());

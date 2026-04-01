@@ -16,6 +16,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added MkDocs-based multilingual documentation and the initial EN/KO Giganto
   user guide covering installation, configuration, operations, GraphQL, and
   troubleshooting.
+- Added a `bootroot` feature flag for the data-store mTLS identity path.
+  The default build now keeps the legacy `CN=agent@sensor` policy, while the
+  `bootroot` feature build enforces Bootroot SAN / DNS identity.
 
 ### Changed
 
@@ -47,9 +50,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed inconsistent `pageInfo` in `sysmon_connection` cursor-based pagination.
   When using `after` with `first`, `hasPreviousPage` is now correctly set to true.
   When using `before` with `last`, `hasNextPage` is now correctly set to true.
-- Fixed Bootroot SAN identity parsing on the data-store mTLS path so
-  service/hostname extraction matches downstream expectations and invalid
-  near-miss SAN shapes are rejected.
 
 ## [0.26.2] - 2026-02-12
 

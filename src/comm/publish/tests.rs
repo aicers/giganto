@@ -1,12 +1,12 @@
 #![allow(clippy::items_after_statements)]
 
+#[cfg(not(feature = "bootroot"))]
+use std::fs;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     future::Future,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::Path,
     pin::Pin,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
@@ -49,13 +49,17 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use rustls::{
     RootCertStore,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tempfile::TempDir;
 use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::Server;
+#[cfg(not(feature = "bootroot"))]
+use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
+#[cfg(feature = "bootroot")]
+use crate::test_bootroot::{TestNode, bootroot_cluster_certs, bootroot_cluster_server_name};
 use crate::{
     comm::{
         IngestSensors, PcapSensors, StreamDirectChannels,
@@ -63,9 +67,8 @@ use crate::{
         new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
         publish::{implement::RequestStreamMessage, send_direct_stream},
-        to_cert_chain, to_private_key, to_root_cert,
     },
-    server::{Certs, config_server},
+    server::{Certs, config_client, config_server},
     storage::{Database, DbOptions, RawEventStore},
 };
 
@@ -75,7 +78,6 @@ const SENSOR_SEMI_SUPERVISED_ONE: &str = "src1";
 const SENSOR_SEMI_SUPERVISED_TWO: &str = "src2";
 const SENSOR_TIME_SERIES_GENERATOR_THREE: &str = "src3";
 const POLICY_ID: u32 = 1;
-const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
 const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LOG_KIND: &str = "Hello";
 const RANGE_MESSAGE_CODE: MessageCode = MessageCode::ReqRange;
@@ -84,6 +86,8 @@ const NODE1: NodeConfig = NodeConfig {
     cert_path: "tests/certs/node1/cert.pem",
     key_path: "tests/certs/node1/key.pem",
     host: "node1",
+    #[cfg(feature = "bootroot")]
+    test_node: TestNode::Node1,
     ingest_sensors: &["src1", "src 1", "ingest src 1"],
 };
 
@@ -91,6 +95,8 @@ const NODE2: NodeConfig = NodeConfig {
     cert_path: "tests/certs/node2/cert.pem",
     key_path: "tests/certs/node2/key.pem",
     host: "node2",
+    #[cfg(feature = "bootroot")]
+    test_node: TestNode::Node2,
     ingest_sensors: &["src2", "src 2", "ingest src 2"],
 };
 
@@ -120,16 +126,27 @@ struct NetworkStreamCase {
     insert_db: StreamInsertFn,
 }
 
+#[allow(dead_code)]
 struct NodeConfig {
     cert_path: &'static str,
     key_path: &'static str,
     host: &'static str,
+    #[cfg(feature = "bootroot")]
+    test_node: TestNode,
     ingest_sensors: &'static [&'static str],
 }
 
 impl NodeConfig {
     fn build_certs(&self) -> Arc<Certs> {
-        build_certs_from_paths(self.cert_path, self.key_path)
+        #[cfg(not(feature = "bootroot"))]
+        {
+            build_certs_from_paths(self.cert_path, self.key_path)
+        }
+
+        #[cfg(feature = "bootroot")]
+        {
+            Arc::new(bootroot_cluster_certs(self.test_node))
+        }
     }
 
     fn build_ingest_sensors(&self) -> IngestSensors {
@@ -151,7 +168,19 @@ impl NodeConfig {
     fn peer_identity_with_addr(&self, addr: SocketAddr) -> PeerIdentity {
         PeerIdentity {
             addr,
-            hostname: self.host.to_string(),
+            hostname: self.server_name().to_string(),
+        }
+    }
+
+    fn server_name(&self) -> &str {
+        #[cfg(not(feature = "bootroot"))]
+        {
+            self.host
+        }
+
+        #[cfg(feature = "bootroot")]
+        {
+            bootroot_cluster_server_name(self.test_node)
         }
     }
 }
@@ -358,7 +387,7 @@ mod fixtures {
         let harness = setup_test_harness().await;
 
         let (sensor_conn, filter_rx, sensor_server_endpoint, sensor_client_endpoint) =
-            setup_pcap_sensor_connection(NODE1.host).await;
+            setup_pcap_sensor_connection(NODE1.server_name()).await;
         harness
             .pcap_sensors
             .write()
@@ -521,19 +550,29 @@ mod fixtures {
         NODE1.build_ingest_sensors()
     }
 
+    #[cfg_attr(feature = "bootroot", allow(dead_code))]
     pub(super) fn build_certs_from_paths(cert_path: &str, key_path: &str) -> Arc<Certs> {
-        let cert_pem = fs::read(cert_path).unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read(key_path).unwrap();
-        let key = to_private_key(&key_pem).unwrap();
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let root = to_root_cert(&ca_cert_path).unwrap();
+        #[cfg(not(feature = "bootroot"))]
+        {
+            let cert_pem = fs::read(cert_path).unwrap();
+            let cert = to_cert_chain(&cert_pem).unwrap();
+            let key_pem = fs::read(key_path).unwrap();
+            let key = to_private_key(&key_pem).unwrap();
+            let ca_cert_path = vec!["tests/certs/ca_cert.pem".to_string()];
+            let root = to_root_cert(&ca_cert_path).unwrap();
 
-        Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        })
+            Arc::new(Certs {
+                certs: cert,
+                key,
+                root,
+            })
+        }
+
+        #[cfg(feature = "bootroot")]
+        {
+            let _ = (cert_path, key_path);
+            unreachable!("bootroot tests use dynamic cluster fixtures")
+        }
     }
 
     pub(super) fn build_test_certs() -> Arc<Certs> {
@@ -566,7 +605,7 @@ mod fixtures {
 
         let publish = tokio::time::timeout(
             StdDuration::from_secs(2),
-            TestClient::new(server_addr, NODE1.host),
+            TestClient::new(server_addr, NODE1.server_name()),
         )
         .await
         .expect("publish client connect timeout");
@@ -879,7 +918,7 @@ mod fixtures {
         sensor: &str,
     ) -> (PcapSensors, mpsc::UnboundedReceiver<PcapFilter>) {
         let (sensor_conn, filter_rx, _sensor_server_endpoint, _sensor_client_endpoint) =
-            setup_pcap_sensor_connection(NODE1.host).await;
+            setup_pcap_sensor_connection(NODE1.server_name()).await;
 
         let pcap_sensors = new_pcap_sensors();
         pcap_sensors
@@ -2556,56 +2595,12 @@ mod fixtures {
     }
 
     pub(super) fn init_client() -> Endpoint {
-        let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) = fs::read(NODE1.cert_path).map(|x| {
-            (
-                x,
-                fs::read(NODE1.key_path).expect("Failed to Read key file"),
-            )
-        }) {
-            x
-        } else {
-            panic!(
-                "failed to read (cert, key) file, {}, {} read file error. Cert or key doesn't exist in default test folder",
-                NODE1.cert_path, NODE1.key_path
-            );
-        };
-
-        let pv_key = if Path::new(NODE1.key_path)
-            .extension()
-            .is_some_and(|x| x == "der")
-        {
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
-        } else {
-            rustls_pemfile::private_key(&mut &*key)
-                .expect("malformed PKCS #1 private key")
-                .expect("no private keys found")
-        };
-
-        let cert_chain = if Path::new(NODE1.cert_path)
-            .extension()
-            .is_some_and(|x| x == "der")
-        {
-            vec![CertificateDer::from(cert)]
-        } else {
-            rustls_pemfile::certs(&mut &*cert)
-                .collect::<Result<_, _>>()
-                .expect("invalid PEM-encoded certificate")
-        };
-        let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-        let server_root = to_root_cert(&ca_cert_path).unwrap();
-
-        let client_crypto = rustls::ClientConfig::builder()
-            .with_root_certificates(server_root)
-            .with_client_auth_cert(cert_chain, pv_key)
-            .expect("the server root, cert chain or private key are not valid");
-
+        let certs = build_test_certs();
         let mut endpoint =
             Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
                 .expect("Failed to create endpoint");
-        endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
-                .expect("Failed to generate QuicClientConfig"),
-        )));
+        endpoint
+            .set_default_client_config(config_client(&certs).expect("publish test client config"));
         endpoint
     }
 
@@ -4471,7 +4466,7 @@ mod fixtures {
             peer_idents_guard.insert(NODE2.peer_identity_with_addr(node2_addr));
         }
 
-        let publish = TestClient::new(node1_addr, NODE1.host).await;
+        let publish = TestClient::new(node1_addr, NODE1.server_name()).await;
 
         ClusterContext {
             publish,
@@ -4548,7 +4543,7 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
         .expect("publish server ready timeout")
         .expect("publish server did not report addr");
 
-    let publish = TestClient::new(server_addr, NODE1.host).await;
+    let publish = TestClient::new(server_addr, NODE1.server_name()).await;
     assert_eq!(publish.conn.remote_address().port(), server_addr.port());
 
     publish.close(b"publish_run_done").await;
@@ -5227,7 +5222,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
 
     let ingest_sensors = build_ingest_sensors_from_list(&[]);
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
-    let peer_idents = build_peer_idents(peer_server.addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
 
     let (mut send, _client_conn) = open_range_stream("raw.peer.handshake").await;
@@ -5466,7 +5461,7 @@ async fn process_range_data_prefers_local_over_peer() {
 
     let ingest_sensors = build_ingest_sensors_from_list(&[SENSOR]);
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
-    let peer_idents = build_peer_idents(peer_server.addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
 
     let request = RequestRange {
@@ -5531,7 +5526,7 @@ async fn process_range_data_forwards_peer_results() {
 
     let ingest_sensors = build_ingest_sensors_from_list(&[]);
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
-    let peer_idents = build_peer_idents(peer_server.addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
 
     let request = RequestRange {
@@ -5585,7 +5580,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
 
     let ingest_sensors = build_ingest_sensors_from_list(&[]);
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
-    let peer_idents = build_peer_idents(peer_server.addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
 
     let request = RequestRange {
@@ -5736,7 +5731,7 @@ async fn process_pcap_extract_filters_continues_after_failure() {
     } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0").await;
 
     let peers = build_peers_for_sensor(SENSOR_FAIL, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     let received_filter = run_pcap_filters_and_recv_single(
         vec![filter_fail, filter_ok.clone()],
@@ -5795,11 +5790,11 @@ async fn process_pcap_extract_filters_continues_after_peer_partial_failure() {
     let peer_idents = Arc::new(RwLock::new(HashSet::from([
         PeerIdentity {
             addr: peer_fail_addr,
-            hostname: NODE2.host.to_string(),
+            hostname: NODE2.server_name().to_string(),
         },
         PeerIdentity {
             addr: peer_ok_addr,
-            hostname: NODE2.host.to_string(),
+            hostname: NODE2.server_name().to_string(),
         },
     ])));
 
@@ -5827,7 +5822,7 @@ async fn process_pcap_extract_filters_local_failure_then_next_peer_filter_succee
     let filter_ok = build_filter_for_sensor(SENSOR_OK, 61, 62);
 
     let (sensor_conn, _filter_rx, _sensor_server_endpoint, _sensor_client_endpoint) =
-        setup_pcap_sensor_connection(NODE1.host).await;
+        setup_pcap_sensor_connection(NODE1.server_name()).await;
     sensor_conn.close(0_u32.into(), b"closed");
 
     let peer_certs_ok = NODE2.build_certs();
@@ -5844,7 +5839,7 @@ async fn process_pcap_extract_filters_local_failure_then_next_peer_filter_succee
         .insert(SENSOR_FAIL.to_string(), vec![sensor_conn]);
 
     let peers = build_peers_for_sensor(SENSOR_OK, peer_ok_addr);
-    let peer_idents = build_peer_idents(peer_ok_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_ok_addr, NODE2.server_name());
 
     let received_filter = run_pcap_filters_and_recv_single(
         vec![filter_fail, filter_ok.clone()],
@@ -5867,7 +5862,7 @@ async fn process_pcap_extract_filters_local_failure_does_not_fallback_to_peer() 
     let filter = build_filter_for_sensor(SENSOR, 131, 132);
 
     let (sensor_conn, _filter_rx, _sensor_server_endpoint, _sensor_client_endpoint) =
-        setup_pcap_sensor_connection(NODE1.host).await;
+        setup_pcap_sensor_connection(NODE1.server_name()).await;
     sensor_conn.close(0_u32.into(), b"closed");
 
     let peer_certs = NODE2.build_certs();
@@ -5884,7 +5879,7 @@ async fn process_pcap_extract_filters_local_failure_does_not_fallback_to_peer() 
         .insert(SENSOR.to_string(), vec![sensor_conn]);
 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
 
@@ -5910,7 +5905,7 @@ async fn process_pcap_extract_filters_peer_ack_failure_then_local_success() {
     } = setup_peer_pcap_server_with_ack(peer_certs, Some("ack_failed")).await;
 
     let peers = build_peers_for_sensor(SENSOR_FAIL, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     let received_filter = run_pcap_filters_and_recv_single(
         vec![filter_fail, filter_ok.clone()],
@@ -5998,7 +5993,7 @@ async fn process_pcap_extract_filters_sends_to_peer_when_no_local_sensor() {
     } = setup_peer_pcap_server(peer_certs).await;
 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     let pcap_sensors = new_pcap_sensors();
     let received_filter = run_pcap_filters_and_recv_single(
@@ -6057,7 +6052,7 @@ async fn process_pcap_extract_filters_logs_peer_ack_failure() {
     } = setup_peer_pcap_server_with_ack(peer_certs, Some("ack_failed")).await;
 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     let pcap_sensors = new_pcap_sensors();
     with_log_capture(|log_capture| async move {
@@ -6074,7 +6069,7 @@ async fn process_pcap_extract_filters_logs_peer_ack_failure() {
 
         let expected_log = format!(
             "Failed to receive ack response from peer. addr: {peer_addr} name: {}",
-            NODE2.host
+            NODE2.server_name()
         );
         assert_log_contains(&log_capture, &expected_log).await;
     })
@@ -6093,7 +6088,7 @@ async fn process_pcap_extract_filters_logs_peer_connect_failure() {
     } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0").await;
 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
-    let peer_idents = build_peer_idents(peer_addr, NODE2.host);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
     let pcap_sensors = new_pcap_sensors();
     with_log_capture(|log_capture| async move {
@@ -6101,7 +6096,7 @@ async fn process_pcap_extract_filters_logs_peer_connect_failure() {
 
         let expected_log = format!(
             "Failed to connect to peer's publish module. addr: {peer_addr} name: {}",
-            NODE2.host
+            NODE2.server_name()
         );
         assert_log_contains(&log_capture, &expected_log).await;
     })
@@ -6253,7 +6248,7 @@ async fn connect_supports_ipv6() {
         let _ = connection.closed().await;
     });
 
-    let connection = super::connect(server_addr, NODE1.host, &certs)
+    let connection = super::connect(server_addr, NODE1.server_name(), &certs)
         .await
         .expect("ipv6 connect failed");
     let remote_addr = connection.remote_address();
