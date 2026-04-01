@@ -173,6 +173,8 @@ Command notes:
   Run once after cloning or when `docs/theme.toml` is updated.
 - `mkdocs serve -a 127.0.0.1:8000 ...`: runs a local docs server.
 - `mkdocs build`: builds static files into `site/`.
+- `pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML`:
+  installs the additional Python packages required for PDF builds.
 - `brew install cairo pango gdk-pixbuf libffi`: installs the native
   dependencies required for PDF generation on macOS.
 - `./scripts/build-docs-pdf.sh en|ko`: builds PDF manuals.
