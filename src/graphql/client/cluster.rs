@@ -1213,7 +1213,7 @@ mod tests {
                 .map(|sensor| format!("local:{sensor}"))
                 .collect();
             combined.extend(peer_addrs.into_iter().map(|addr| format!("peer:{addr}")));
-            combined.sort();
+            combined.sort_unstable();
             combined
         }
     }

@@ -26,7 +26,7 @@ impl SensorQuery {
         }
 
         let mut sensors: Vec<String> = total_sensor_list.into_iter().collect();
-        sensors.sort();
+        sensors.sort_unstable();
         Ok(sensors)
     }
 }
