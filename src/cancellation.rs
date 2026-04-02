@@ -1,4 +1,4 @@
-//! Shutdown primitives for cooperative cancellation and task tracking.
+//! Cancellation primitives for cooperative subsystem shutdown and task tracking.
 //!
 //! This module provides two main primitives:
 //!
@@ -8,37 +8,80 @@
 //!   automatic child token creation, drain-with-timeout, and pending-task
 //!   logging.
 //!
-//! # Usage
+//! These primitives are intended to be shared by subsystems such as
+//! `ingest`, `publish`, `peer`, retention work, and other long-running async
+//! components that need a common cancellation and drain pattern.
 //!
-//! A subsystem creates a [`TaskTracker`] (which owns a root
-//! [`CancellationToken`]) and uses it to spawn worker tasks. Each spawned
-//! task receives a child [`CancellationToken`] and should periodically call
-//! [`CancellationToken::checkpoint`] to cooperate with shutdown requests.
+//! # Intended Pattern
 //!
-//! When the subsystem shuts down, it calls
-//! [`TaskTracker::cancel_and_drain`] which cancels all child tokens and
-//! waits for tasks to complete within a timeout.
+//! A subsystem creates a [`TaskTracker`] and uses it to spawn worker tasks.
+//! Each spawned task receives a child [`CancellationToken`].
 //!
-//! ```rust,no_run
+//! When shutdown begins, the subsystem should:
+//!
+//! 1. stop accepting new work,
+//! 2. signal cancellation to existing work,
+//! 3. drain tracked tasks with a timeout.
+//!
+//! In most cases that means calling [`TaskTracker::cancel_and_drain`].
+//!
+//! ## Subsystem-level usage
+//!
+//! ```ignore
 //! use std::time::Duration;
-//! use giganto_proc_macro; // placeholder for crate reference
 //!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Subsystem creates a tracker:
-//! let tracker = crate::shutdown::TaskTracker::new();
+//! async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
+//!     let tracker = crate::cancellation::TaskTracker::new();
 //!
-//! // Spawn workers:
-//! tracker.spawn("worker-1", |token| async move {
+//!     tracker.spawn("worker-1", |token| async move {
+//!         loop {
+//!             token.checkpoint().await?;
+//!             // ... process one unit of work ...
+//!         }
+//!     })?;
+//!
+//!     // ... later, when shutdown starts ...
+//!     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## `cancel()` vs `cancelled()`
+//!
+//! `cancel()` is used by the controller side to signal shutdown.
+//! `cancelled().await` is used by worker tasks to wait for that signal.
+//!
+//! ```ignore
+//! async fn worker(token: crate::cancellation::CancellationToken) {
+//!     tokio::select! {
+//!         _ = do_work() => {
+//!             // completed normally
+//!         }
+//!         _ = token.cancelled() => {
+//!             // shutdown requested; cleanup and exit
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## `checkpoint()` vs `check_cancelled()`
+//!
+//! Use [`CancellationToken::checkpoint`] in long-running async loops where a
+//! lightweight cooperative shutdown check makes the control flow easier to
+//! read. Use [`CancellationToken::check_cancelled`] in synchronous or hot-path
+//! sections where adding an `.await` would be undesirable.
+//!
+//! ```ignore
+//! async fn consume_batches(
+//!     token: crate::cancellation::CancellationToken,
+//! ) -> Result<(), crate::cancellation::CancelledError> {
 //!     loop {
 //!         token.checkpoint().await?;
-//!         // ... do work ...
+//!         read_next_batch().await;
+//!         token.check_cancelled()?;
+//!         apply_batch();
 //!     }
-//! });
-//!
-//! // On shutdown:
-//! tracker.cancel_and_drain(Duration::from_secs(5)).await?;
-//! # Ok(())
-//! # }
+//! }
 //! ```
 
 use std::{
@@ -51,7 +94,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::task::JoinSet;
+use tokio_util::task::TaskTracker as TokioTaskTracker;
 use tracing::{info, warn};
 
 /// Error returned when a cancellation token has been cancelled.
@@ -98,7 +141,9 @@ impl fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
-/// A hierarchical cancellation token for cooperative shutdown.
+type TaskRegistry = Arc<Mutex<HashMap<u64, TaskMeta>>>;
+
+/// A hierarchical cancellation token for cooperative cancellation.
 ///
 /// Wraps [`tokio_util::sync::CancellationToken`] with convenience methods
 /// including [`checkpoint`](Self::checkpoint) for cooperative cancellation
@@ -129,6 +174,9 @@ impl CancellationToken {
     }
 
     /// Cancels this token (and all its children).
+    ///
+    /// This is typically called by the controlling side of a subsystem when
+    /// shutdown begins and existing tasks should start exiting cooperatively.
     pub fn cancel(&self) {
         self.inner.cancel();
     }
@@ -140,30 +188,44 @@ impl CancellationToken {
     }
 
     /// Returns a future that resolves when this token is cancelled.
+    ///
+    /// This is typically used inside worker tasks that should wait for a
+    /// shutdown signal while doing other async work via `tokio::select!`.
     pub async fn cancelled(&self) {
         self.inner.cancelled().await;
     }
 
-    /// Cooperative cancellation checkpoint.
+    /// Returns an error if the token has already been cancelled.
     ///
-    /// Returns `Ok(())` immediately if the token is not yet cancelled, or
-    /// `Err(CancelledError)` if it has been cancelled. Use this in
-    /// long-running loops to enable prompt cooperative shutdown.
+    /// This is useful in hot paths that want to check cancellation without
+    /// introducing an `.await` point, such as synchronous processing or
+    /// post-I/O validation before mutating local state.
     ///
     /// # Errors
     ///
     /// Returns [`CancelledError`] if the token is cancelled.
+    pub fn check_cancelled(&self) -> Result<(), CancelledError> {
+        if self.is_cancelled() {
+            Err(CancelledError)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Cooperative cancellation checkpoint.
+    ///
+    /// Returns `Ok(())` if the token is not yet cancelled, or
+    /// `Err(CancelledError)` if it has been cancelled.
+    ///
+    /// This is a convenient way to make long-running async loops visibly
+    /// cancellation-aware at clear checkpoint boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CancelledError`] if the token is cancelled.
+    #[allow(clippy::unused_async)]
     pub async fn checkpoint(&self) -> Result<(), CancelledError> {
-        if self.is_cancelled() {
-            return Err(CancelledError);
-        }
-        // Yield to allow other tasks to run and check for cancellation
-        // propagation that may be in progress.
-        tokio::task::yield_now().await;
-        if self.is_cancelled() {
-            return Err(CancelledError);
-        }
-        Ok(())
+        self.check_cancelled()
     }
 }
 
@@ -188,11 +250,18 @@ struct TaskMeta {
     started_at: std::time::Instant,
 }
 
+#[derive(Debug, Clone)]
+struct PendingTask {
+    id: u64,
+    name: String,
+    age: Duration,
+}
+
 /// RAII guard that removes a task from the registry when dropped,
 /// guaranteeing cleanup on all termination paths (normal, cancel, panic).
 struct RegistryGuard {
     id: u64,
-    registry: Arc<Mutex<HashMap<u64, TaskMeta>>>,
+    registry: TaskRegistry,
 }
 
 impl Drop for RegistryGuard {
@@ -203,19 +272,42 @@ impl Drop for RegistryGuard {
     }
 }
 
-/// A task tracker that spawns named tasks with automatic cancellation
-/// token management and graceful drain semantics.
+/// A task tracker that spawns named tasks with cancellation token management
+/// and graceful drain semantics.
 ///
 /// Each spawned task receives a child [`CancellationToken`] tied to the
 /// tracker's root token. The tracker keeps a registry of pending tasks
 /// so it can log stragglers during drain.
 ///
 /// Once [`close`](Self::close) or [`cancel_and_drain`](Self::cancel_and_drain)
-/// is called, no new tasks can be spawned.
+/// is called, the tracker enters a shutdown boundary: new spawn attempts that
+/// observe the closed flag will fail, while tasks that were already admitted
+/// continue to be tracked until they exit.
+///
+/// Typical subsystem usage:
+///
+/// ```ignore
+/// use std::time::Duration;
+///
+/// async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
+///     let tracker = crate::cancellation::TaskTracker::new();
+///
+///     tracker.spawn("worker", |token| async move {
+///         loop {
+///             token.checkpoint().await?;
+///             // ... do one unit of work ...
+///         }
+///     })?;
+///
+///     // ... later, when shutdown starts ...
+///     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
+///     Ok(())
+/// }
+/// ```
 pub struct TaskTracker {
     root_token: CancellationToken,
-    join_set: Mutex<JoinSet<()>>,
-    registry: Arc<Mutex<HashMap<u64, TaskMeta>>>,
+    tasks: TokioTaskTracker,
+    registry: TaskRegistry,
     next_id: AtomicU64,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -232,7 +324,7 @@ impl TaskTracker {
     pub fn with_token(root_token: CancellationToken) -> Self {
         Self {
             root_token,
-            join_set: Mutex::new(JoinSet::new()),
+            tasks: TokioTaskTracker::new(),
             registry: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(0),
             closed: std::sync::atomic::AtomicBool::new(false),
@@ -261,8 +353,13 @@ impl TaskTracker {
     ///
     /// Does **not** cancel existing tasks. Call
     /// [`cancel_children`](Self::cancel_children) separately if needed.
+    ///
+    /// Spawn attempts that have already passed the closed check may still
+    /// complete after this method is called. However, any spawn attempt that
+    /// begins after the closed flag is observed will return [`SpawnError`].
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
+        self.tasks.close();
     }
 
     /// Spawns a named task on the tracker.
@@ -272,6 +369,38 @@ impl TaskTracker {
     /// automatically registered and deregistered in the pending-task
     /// registry on all termination paths (normal completion, cancellation,
     /// or panic).
+    ///
+    /// The spawned future returns `Result<(), CancelledError>`. Ordinary
+    /// work errors should therefore be handled inside the task body, or
+    /// explicitly converted if cancellation is the intended outcome.
+    ///
+    /// ```ignore
+    /// let tracker = crate::cancellation::TaskTracker::new();
+    ///
+    /// tracker.spawn("stream-reader", |token| async move {
+    ///     loop {
+    ///         tokio::select! {
+    ///             _ = token.cancelled() => break,
+    ///             item = read_next_item() => {
+    ///                 let item = match item {
+    ///                     Ok(item) => item,
+    ///                     Err(err) => {
+    ///                         tracing::warn!(?err, "read error; exiting task");
+    ///                         break;
+    ///                     }
+    ///                 };
+    ///
+    ///                 if let Err(err) = handle_item(item).await {
+    ///                     tracing::warn!(?err, "handler error; exiting task");
+    ///                     break;
+    ///                 }
+    ///             }
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), crate::cancellation::SpawnError>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -290,41 +419,32 @@ impl TaskTracker {
             return Err(SpawnError);
         }
 
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let name = name.into();
         let child_token = self.root_token.child_token();
         let registry = Arc::clone(&self.registry);
 
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let meta = TaskMeta {
-            name: name.clone(),
+            name,
             started_at: std::time::Instant::now(),
         };
+        register_task(&registry, id, meta);
 
-        {
-            let mut reg = registry
-                .lock()
-                .expect("task registry lock should not be poisoned");
-            reg.insert(id, meta);
-        }
-
+        let guard = RegistryGuard {
+            id,
+            registry: Arc::clone(&registry),
+        };
         let fut = f(child_token);
         let task = async move {
-            // The guard ensures the registry entry is removed on all
-            // exit paths, including panics.
-            let _guard = RegistryGuard {
-                id,
-                registry: Arc::clone(&registry),
-            };
+            // Move the guard into the future state at construction time so it
+            // still runs if the task is dropped before its first poll.
+            let _guard = guard;
             // Run the user future; ignore CancelledError since that's
             // the expected shutdown path.
             let _result = fut.await;
         };
 
-        let mut js = self
-            .join_set
-            .lock()
-            .expect("join set lock should not be poisoned");
-        js.spawn(task);
+        self.tasks.spawn(task);
         Ok(())
     }
 
@@ -352,20 +472,19 @@ impl TaskTracker {
     ///
     /// Panics if an internal mutex is poisoned.
     pub fn log_pending(&self) {
-        let reg = self
-            .registry
-            .lock()
-            .expect("task registry lock should not be poisoned");
-        if reg.is_empty() {
+        let pending = self.pending_tasks();
+
+        if pending.is_empty() {
             info!("no pending tasks");
             return;
         }
-        warn!("{} task(s) still pending:", reg.len());
-        for (id, meta) in &*reg {
+        warn!("{} task(s) still pending:", pending.len());
+        for pending_task in pending {
             warn!(
                 "  task id={id} name={:?} age={:?}",
-                meta.name,
-                meta.started_at.elapsed()
+                pending_task.name,
+                pending_task.age,
+                id = pending_task.id,
             );
         }
     }
@@ -379,6 +498,17 @@ impl TaskTracker {
     /// If all tasks finish within `timeout`, returns `Ok(())`. Otherwise
     /// logs pending tasks and returns `Err(DrainError)`.
     ///
+    /// ```ignore
+    /// use std::time::Duration;
+    ///
+    /// async fn stop_subsystem(
+    ///     tracker: &crate::cancellation::TaskTracker,
+    /// ) -> Result<(), crate::cancellation::DrainError> {
+    ///     // Caller is expected to stop accepting new work before this point.
+    ///     tracker.cancel_and_drain(Duration::from_secs(5)).await
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`DrainError`] if the timeout elapses before all tasks
@@ -386,10 +516,11 @@ impl TaskTracker {
     pub async fn cancel_and_drain(&self, timeout: Duration) -> Result<(), DrainError> {
         self.close();
         self.cancel_children();
-        self.drain(timeout).await
+        self.drain_after_close(timeout).await
     }
 
-    /// Waits for all tracked tasks to complete, with a timeout.
+    /// Closes the tracker and waits for all tracked tasks to complete,
+    /// with a timeout.
     ///
     /// Does **not** cancel children; call [`cancel_children`](Self::cancel_children)
     /// first if desired.
@@ -403,38 +534,32 @@ impl TaskTracker {
     ///
     /// Panics if an internal mutex is poisoned.
     pub async fn drain(&self, timeout: Duration) -> Result<(), DrainError> {
-        let drain_all = async {
-            loop {
-                let maybe_result = {
-                    let mut js = self
-                        .join_set
-                        .lock()
-                        .expect("join set lock should not be poisoned");
-                    js.try_join_next()
-                };
-                match maybe_result {
-                    Some(Ok(())) => {}
-                    Some(Err(e)) => {
-                        warn!("tracked task panicked: {e}");
-                    }
-                    None if self.pending_count() == 0 => return,
-                    None => {
-                        // Yield and retry to allow tasks to make progress.
-                        tokio::task::yield_now().await;
-                    }
-                }
-            }
-        };
+        self.close();
+        self.drain_after_close(timeout).await
+    }
 
-        tokio::select! {
-            () = drain_all => Ok(()),
-            () = tokio::time::sleep(timeout) => {
-                self.log_pending();
-                Err(DrainError {
-                    pending_count: self.pending_count(),
-                })
-            }
+    async fn drain_after_close(&self, timeout: Duration) -> Result<(), DrainError> {
+        if let Ok(()) = tokio::time::timeout(timeout, self.tasks.wait()).await {
+            Ok(())
+        } else {
+            self.log_pending();
+            Err(DrainError {
+                pending_count: self.pending_count(),
+            })
         }
+    }
+
+    fn pending_tasks(&self) -> Vec<PendingTask> {
+        self.registry
+            .lock()
+            .expect("task registry lock should not be poisoned")
+            .iter()
+            .map(|(id, meta)| PendingTask {
+                id: *id,
+                name: meta.name.clone(),
+                age: meta.started_at.elapsed(),
+            })
+            .collect()
     }
 }
 
@@ -448,16 +573,138 @@ impl fmt::Debug for TaskTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TaskTracker")
             .field("root_token", &self.root_token)
+            .field("is_closed", &self.is_closed())
             .field("pending_count", &self.pending_count())
             .finish_non_exhaustive()
     }
 }
 
+fn register_task(registry: &TaskRegistry, id: u64, meta: TaskMeta) {
+    let mut reg = registry
+        .lock()
+        .expect("task registry lock should not be poisoned");
+    reg.insert(id, meta);
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicU32};
+    use std::{
+        future::Future,
+        io::{self, Write},
+        sync::atomic::{AtomicBool, AtomicU32, AtomicUsize},
+    };
+
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            let bytes = self
+                .0
+                .lock()
+                .expect("log buffer lock should not be poisoned")
+                .clone();
+            String::from_utf8(bytes).expect("test log output should be valid utf-8")
+        }
+    }
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock should not be poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(Arc::clone(&self.0))
+        }
+    }
+
+    struct ReentrantPendingCountWriter {
+        tracker: Arc<TaskTracker>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Write for ReentrantPendingCountWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let _ = self.tracker.pending_count();
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct ReentrantPendingCountBuffer {
+        tracker: Arc<TaskTracker>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ReentrantPendingCountBuffer {
+        fn new(tracker: Arc<TaskTracker>) -> (Self, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    tracker,
+                    calls: Arc::clone(&calls),
+                },
+                calls,
+            )
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for ReentrantPendingCountBuffer {
+        type Writer = ReentrantPendingCountWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            ReentrantPendingCountWriter {
+                tracker: Arc::clone(&self.tracker),
+                calls: Arc::clone(&self.calls),
+            }
+        }
+    }
+
+    const THREAD_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn run_on_current_thread_runtime<T, F>(future: F) -> T
+    where
+        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+    {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime should build");
+            let output = runtime.block_on(future);
+            done_tx.send(output).expect("result channel should be open");
+        });
+
+        done_rx
+            .recv_timeout(THREAD_TEST_TIMEOUT)
+            .expect("threaded runtime should complete without deadlocking")
+    }
 
     // ── CancellationToken tests ─────────────────────────────────────
 
@@ -645,9 +892,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let result = tracker.cancel_and_drain(Duration::from_millis(50)).await;
-        assert!(result.is_err());
-        let err = result.expect_err("should be DrainError");
-        assert_eq!(err.pending_count, 1);
+        assert_eq!(result, Err(DrainError { pending_count: 1 }));
     }
 
     #[tokio::test]
@@ -702,8 +947,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn log_pending_emits_warnings() {
-        // We just verify it doesn't panic and the count is correct.
+    async fn log_pending_reports_task_shape() {
         let tracker = TaskTracker::new();
         tracker
             .spawn("slow", |_token| async {
@@ -713,8 +957,23 @@ mod tests {
             .expect("spawn should succeed");
         tokio::task::yield_now().await;
         assert_eq!(tracker.pending_count(), 1);
-        // This should log without panicking.
+
+        let logs = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
         tracker.log_pending();
+
+        let output = logs.contents();
+        assert!(output.contains("1 task(s) still pending:"));
+        assert!(output.contains("task id="));
+        assert!(output.contains("name=\"slow\""));
+        assert!(output.contains("age="));
     }
 
     // ── Close / shutdown-boundary tests ───────────────────────────────
@@ -796,5 +1055,138 @@ mod tests {
         let result = tracker.drain(Duration::from_millis(100)).await;
         assert!(result.is_ok(), "drain should succeed, not timeout");
         assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[test]
+    fn panicking_task_factory_cleans_up_registry() {
+        let tracker = TaskTracker::new();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("factory-panics", |_token| {
+                panic!("intentional panic while building future");
+                #[allow(unreachable_code)]
+                async {
+                    Ok(())
+                }
+            });
+        }));
+
+        let panic_payload = result.expect_err("future factory should panic");
+        let panic_message = panic_payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic_payload.downcast_ref::<String>().map(String::as_str))
+            .expect("panic payload should be a string");
+        assert_eq!(panic_message, "intentional panic while building future");
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[test]
+    fn dropped_before_first_poll_cleans_up_registry() {
+        let tracker = Arc::new(TaskTracker::new());
+        let polled = Arc::new(AtomicBool::new(false));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime should build");
+
+        {
+            let tracker = Arc::clone(&tracker);
+            let polled = Arc::clone(&polled);
+            runtime.block_on(async move {
+                tracker
+                    .spawn("never-polled", move |_token| {
+                        let polled = Arc::clone(&polled);
+                        async move {
+                            polled.store(true, Ordering::Release);
+                            tokio::task::yield_now().await;
+                            Ok(())
+                        }
+                    })
+                    .expect("spawn should succeed");
+                // Return without yielding so the task remains queued on the
+                // current-thread runtime and gets dropped during shutdown.
+            });
+        }
+
+        drop(runtime);
+
+        assert!(
+            !polled.load(Ordering::Acquire),
+            "task should be dropped before its first poll"
+        );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[test]
+    fn nested_spawn_in_future_factory_does_not_deadlock() {
+        let (spawn_result, drain_result, nested_ran) = run_on_current_thread_runtime(async move {
+            let tracker = Arc::new(TaskTracker::new());
+            let nested_ran = Arc::new(AtomicBool::new(false));
+            let outer_tracker = Arc::clone(&tracker);
+            let nested_flag = Arc::clone(&nested_ran);
+
+            let result = tracker.spawn("outer", move |_token| {
+                let inner_tracker = Arc::clone(&outer_tracker);
+                let inner_flag = Arc::clone(&nested_flag);
+                inner_tracker
+                    .spawn("inner", move |_token| async move {
+                        inner_flag.store(true, Ordering::Release);
+                        Ok(())
+                    })
+                    .expect("nested spawn should succeed");
+                async { Ok(()) }
+            });
+
+            let drained = tracker.drain(Duration::from_secs(1)).await;
+            (result, drained, nested_ran.load(Ordering::Acquire))
+        });
+        assert!(spawn_result.is_ok(), "outer spawn should succeed");
+        assert!(drain_result.is_ok(), "tracker drain should succeed");
+        assert!(nested_ran, "nested task should run");
+    }
+
+    #[test]
+    fn close_in_future_factory_does_not_deadlock() {
+        let (spawn_result, drain_result) = run_on_current_thread_runtime(async move {
+            let tracker = Arc::new(TaskTracker::new());
+            let tracker_for_factory = Arc::clone(&tracker);
+
+            let result = tracker.spawn("close-from-factory", move |_token| {
+                tracker_for_factory.close();
+                async { Ok(()) }
+            });
+
+            let drained = tracker.drain(Duration::from_secs(1)).await;
+            (result, drained)
+        });
+        assert!(spawn_result.is_ok(), "spawn should succeed");
+        assert!(drain_result.is_ok(), "tracker drain should succeed");
+    }
+
+    #[test]
+    fn log_pending_with_reentrant_writer_does_not_deadlock() {
+        let write_calls = run_on_current_thread_runtime(async move {
+            let tracker = Arc::new(TaskTracker::new());
+            tracker
+                .spawn("slow", |_token| async {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Ok(())
+                })
+                .expect("spawn should succeed");
+            tokio::task::yield_now().await;
+
+            let (writer, calls) = ReentrantPendingCountBuffer::new(Arc::clone(&tracker));
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_target(false)
+                .with_writer(writer)
+                .finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            tracker.log_pending();
+            calls.load(Ordering::Relaxed)
+        });
+        assert!(write_calls > 0, "log writer should be invoked");
     }
 }
