@@ -1831,7 +1831,7 @@ impl FromKeyValue<DceRpc> for DceRpcRawEvent {
             orig_port: val.orig_port,
             resp_port: val.resp_port,
             proto: val.proto,
-            start_time: chrono::DateTime::from_timestamp_nanos(val.start_time),
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
             duration: val.duration.into(),
             orig_pkts: val.orig_pkts.into(),
             resp_pkts: val.resp_pkts.into(),
