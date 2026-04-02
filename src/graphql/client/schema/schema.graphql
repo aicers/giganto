@@ -2384,7 +2384,7 @@ String filters in this input use substring matching.
 input OpLogFilter {
 	time: TimeRange
 	sensor: String
-	agentId: String
+	serviceName: String
 	logLevel: String
 	contents: String
 }
@@ -2393,7 +2393,7 @@ type OpLogRawEvent {
 	time: DateTime!
 	level: String!
 	contents: String!
-	agentName: String!
+	serviceName: String!
 	sensor: String!
 }
 

@@ -70,6 +70,7 @@ impl RawEventFilter for LogFilter {
         _text: Option<String>,
         _sensor: Option<String>,
         _agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }
@@ -82,7 +83,7 @@ impl RawEventFilter for LogFilter {
 pub struct OpLogFilter {
     time: Option<TimeRange>,
     sensor: Option<String>,
-    agent_id: Option<String>,
+    service_name: Option<String>,
     log_level: Option<String>,
     contents: Option<String>,
 }
@@ -108,7 +109,8 @@ impl RawEventFilter for OpLogFilter {
         log_contents: Option<String>,
         _text: Option<String>,
         sensor: Option<String>,
-        agent_id: Option<String>,
+        _agent_id: Option<String>,
+        service_name: Option<String>,
     ) -> Result<bool> {
         if let Some(filter_level) = &self.log_level {
             let log_level = if let Some(log_level) = log_level {
@@ -130,13 +132,13 @@ impl RawEventFilter for OpLogFilter {
                 return Ok(false);
             }
         }
-        if let Some(filter_agent_id) = &self.agent_id {
-            let is_agent_id_mismatch = if let Some(agent_id) = agent_id {
-                !agent_id.contains(filter_agent_id)
+        if let Some(filter_service_name) = &self.service_name {
+            let is_service_name_mismatch = if let Some(service_name) = service_name {
+                !service_name.contains(filter_service_name)
             } else {
                 false
             };
-            if is_agent_id_mismatch {
+            if is_service_name_mismatch {
                 return Ok(false);
             }
         }
@@ -178,7 +180,7 @@ struct OpLogRawEvent {
     time: DateTime<Utc>,
     level: String,
     contents: String,
-    agent_name: String,
+    service_name: String,
     sensor: String,
 }
 
@@ -188,7 +190,7 @@ impl FromKeyValue<OpLog> for OpLogRawEvent {
             time: get_time_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
-            agent_name: l.agent_name,
+            service_name: l.agent_name,
             sensor: l.sensor,
         })
     }
