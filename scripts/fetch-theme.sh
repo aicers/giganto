@@ -2,7 +2,7 @@
 # Fetch shared docs-theme release assets into docs/.theme/.
 #
 # Reads repo, version, and template from docs/theme.toml.
-# Uses the GitHub releases API (set GH_TOKEN for private repos).
+# Requires the GitHub CLI (gh) to download release archives.
 #
 # Override via environment variables:
 #   THEME_REPO=aicers/docs-theme THEME_VERSION=0.1.0 THEME_TEMPLATE=manual \
@@ -13,6 +13,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 THEME_TOML="$ROOT_DIR/docs/theme.toml"
 DEST="$ROOT_DIR/docs/.theme"
+
+# ---------------------------------------------------------------------------
+# Require gh CLI
+# ---------------------------------------------------------------------------
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Error: the GitHub CLI (gh) is required. Install it from https://cli.github.com/" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Parse docs/theme.toml (simple key = "value" format)
@@ -44,50 +52,25 @@ fi
 echo "Fetching docs-theme $REPO@$TAG (template=$TEMPLATE) ..."
 
 # ---------------------------------------------------------------------------
-# Helpers: HTTP download with optional GH_TOKEN auth
-# ---------------------------------------------------------------------------
-_curl() {
-  if [ -n "${GH_TOKEN:-}" ]; then
-    curl -fsSL -H "Authorization: token $GH_TOKEN" "$@"
-  else
-    curl -fsSL "$@"
-  fi
-}
-
-_wget() {
-  if [ -n "${GH_TOKEN:-}" ]; then
-    wget -q --header="Authorization: token $GH_TOKEN" "$@"
-  else
-    wget -q "$@"
-  fi
-}
-
-download() {
-  _url="$1"; _out="$2"
-  if command -v curl >/dev/null 2>&1; then
-    _curl -o "$_out" "$_url"
-  elif command -v wget >/dev/null 2>&1; then
-    _wget -O "$_out" "$_url"
-  else
-    echo "Error: curl or wget is required" >&2
-    exit 1
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Download release tarball via GitHub releases API
+# Download release archive via gh
 # ---------------------------------------------------------------------------
 TMPDIR_DL="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_DL"' EXIT
 
-ARCHIVE="$TMPDIR_DL/theme.tar.gz"
-RELEASE_TARBALL="https://api.github.com/repos/$REPO/tarball/$TAG"
+gh release download "$TAG" --repo "$REPO" --archive tar.gz --dir "$TMPDIR_DL"
 
-download "$RELEASE_TARBALL" "$ARCHIVE"
+# ---------------------------------------------------------------------------
+# Extract the archive
+# ---------------------------------------------------------------------------
+ARCHIVE="$(find "$TMPDIR_DL" -name '*.tar.gz' | head -1)"
+if [ -z "$ARCHIVE" ]; then
+  echo "Error: no tar.gz archive found in $TMPDIR_DL" >&2
+  exit 1
+fi
 
 tar -xzf "$ARCHIVE" -C "$TMPDIR_DL"
 
-# The archive extracts into a directory named REPO_NAME-HASH or REPO_NAME-TAG
+# The archive extracts into a directory named REPO_NAME-TAG
 REPO_NAME="$(echo "$REPO" | sed 's|.*/||')"
 EXTRACTED=""
 for d in "$TMPDIR_DL/$REPO_NAME"-*; do

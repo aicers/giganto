@@ -169,8 +169,8 @@ Command notes:
 - `pip install ...`: installs MkDocs tooling into the virtualenv.
   Run once after creating the virtualenv (per clone).
 - `scripts/fetch-theme.sh`: fetches the shared docs-theme assets
-  into `docs/.theme/`. Requires `curl` (or `wget`) and `tar`.
-  Run once after cloning or when `docs/theme.toml` is updated.
+  into `docs/.theme/`. Requires the [GitHub CLI (`gh`)](https://cli.github.com/)
+  and `tar`. Run once after cloning or when `docs/theme.toml` is updated.
 - `mkdocs serve -a 127.0.0.1:8000 ...`: runs a local docs server.
 - `mkdocs build`: builds static files into `site/`.
 - `pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML`:
