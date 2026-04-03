@@ -156,6 +156,7 @@ source .venv/bin/activate
 # fish:
 source .venv/bin/activate.fish
 pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML
+scripts/fetch-theme.sh
 mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload
 ```
 
@@ -163,16 +164,19 @@ Command notes:
 
 - `brew install python`: installs Python (one-time per machine).
 - `python3 -m venv .venv`: creates a local virtualenv for this repo.
-- `source .venv/bin/activate`: activates the virtualenv for the current shell.
+- `source .venv/bin/activate`: activates the virtualenv for the
+  current shell.
 - `pip install ...`: installs MkDocs tooling into the virtualenv.
-- Run the `pip install ...` step once after creating the virtualenv (per clone).
-- `mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload`: runs a local docs
-  server.
+  Run once after creating the virtualenv (per clone).
+- `scripts/fetch-theme.sh`: fetches the shared docs-theme assets
+  into `docs/.theme/`. Requires the [GitHub CLI (`gh`)](https://cli.github.com/)
+  and `tar`. Run once after cloning or when `docs/theme.toml` is updated.
+- `mkdocs serve -a 127.0.0.1:8000 ...`: runs a local docs server.
 - `mkdocs build`: builds static files into `site/`.
-- `pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML`: installs
-  the additional Python packages required for PDF builds.
-- `brew install cairo pango gdk-pixbuf libffi`: installs the native dependencies
-  required for PDF generation on macOS.
+- `pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML`:
+  installs the additional Python packages required for PDF builds.
+- `brew install cairo pango gdk-pixbuf libffi`: installs the native
+  dependencies required for PDF generation on macOS.
 - `./scripts/build-docs-pdf.sh en|ko`: builds PDF manuals.
 
 ## Test

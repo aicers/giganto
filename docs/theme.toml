@@ -1,0 +1,3 @@
+repo = "aicers/docs-theme"
+version = "0.1.0"
+template = "manual"

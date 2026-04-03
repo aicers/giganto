@@ -3,5 +3,6 @@
 .vscode/
 .DS_Store
 .venv/
+docs/.theme/
 site/
 site-pdf-*/
