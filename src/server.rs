@@ -69,22 +69,22 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientIdentity {
     pub service: String,
-    pub hostname: String,
+    pub host_identity: String,
 }
 
 impl ClientIdentity {
     #[cfg(not(feature = "bootroot"))]
     fn from_legacy_subject(subject: &str) -> Option<Self> {
-        let (service, hostname) = subject.split_once('@')?;
+        let (service, host_identity) = subject.split_once('@')?;
 
         Some(Self {
             service: service.to_string(),
-            hostname: hostname.to_string(),
+            host_identity: host_identity.to_string(),
         })
     }
 
     fn into_tuple(self) -> (String, String) {
-        (self.service, self.hostname)
+        (self.service, self.host_identity)
     }
 }
 
@@ -96,9 +96,42 @@ pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String
     let identity = parse_client_identity(cert_info)?;
     info!(
         "Connected client name : {}@{}",
-        identity.service, identity.hostname
+        identity.service, identity.host_identity
     );
     Ok(identity.into_tuple())
+}
+
+pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
+    let Some(cert) = cert_info.first() else {
+        bail!("no certificate in identity");
+    };
+    let mut parser =
+        x509_parser::certificate::X509CertificateParser::new().with_deep_parse_extensions(true);
+    let Ok((_, x509)) = parser.parse(cert.as_ref()) else {
+        bail!("invalid X.509 certificate");
+    };
+
+    #[cfg(feature = "bootroot")]
+    {
+        if let Some(subject_alt_name) = x509
+            .subject_alternative_name()
+            .context("failed to parse subject alternative name")?
+        {
+            for general_name in &subject_alt_name.value.general_names {
+                if let GeneralName::DNSName(dns_name) = general_name
+                    && parse_bootroot_dns_identity(dns_name).is_some()
+                {
+                    return Ok(dns_name.to_string());
+                }
+            }
+        }
+        bail!("the SAN DNS identity of the certificate is not valid");
+    }
+
+    #[cfg(not(feature = "bootroot"))]
+    {
+        Ok(parse_legacy_client_identity(&x509)?.host_identity)
+    }
 }
 
 fn parse_client_identity(cert_info: &[CertificateDer]) -> Result<ClientIdentity> {
@@ -166,25 +199,21 @@ fn parse_bootroot_dns_identity(dns_name: &str) -> Option<ClientIdentity> {
     let instance = labels.next()?;
     let service = labels.next()?;
     let hostname = labels.next()?;
-    let mut has_domain_label = false;
 
     if !is_bootroot_instance_id(instance) || !is_dns_label(service) || !is_dns_label(hostname) {
         return None;
     }
 
-    for label in labels {
-        has_domain_label = true;
-        if !is_dns_label(label) {
-            return None;
-        }
-    }
-    if !has_domain_label {
+    let domain_labels = labels.collect::<Vec<_>>();
+    if domain_labels.is_empty() || domain_labels.iter().any(|label| !is_dns_label(label)) {
         return None;
     }
 
+    let host_identity = format!("{hostname}.{}", domain_labels.join("."));
+
     Some(ClientIdentity {
         service: service.to_string(),
-        hostname: hostname.to_string(),
+        host_identity,
     })
 }
 
@@ -299,6 +328,16 @@ mod tests {
         }
 
         #[test]
+        fn peer_name_from_cert_uses_legacy_hostname_in_default_build() {
+            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+
+            let peer_name =
+                peer_name_from_cert(&certs.certs).expect("legacy peer connect name should parse");
+
+            assert_eq!(peer_name, "node1");
+        }
+
+        #[test]
         fn subject_from_cert_rejects_bootroot_san_identity_in_default_build() {
             let certs = build_self_signed_cert_chain(
                 "001.piglet.node1.example.test",
@@ -373,7 +412,10 @@ mod tests {
                     let identity =
                         subject_from_cert(&extract_cert_from_conn(&connection).expect("peer cert"))
                             .expect("peer identity");
-                    assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+                    assert_eq!(
+                        identity,
+                        ("piglet".to_string(), "node1.example.test".to_string())
+                    );
                     connection.close(0_u32.into(), b"done");
                 })
             };
@@ -449,7 +491,23 @@ mod tests {
 
             let identity = subject_from_cert(&certs).expect("bootroot SAN identity");
 
-            assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+            assert_eq!(
+                identity,
+                ("piglet".to_string(), "node1.example.test".to_string())
+            );
+        }
+
+        #[test]
+        fn peer_name_from_cert_preserves_full_bootroot_dns_name() {
+            let certs = build_self_signed_cert_chain(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+
+            let peer_name =
+                peer_name_from_cert(&certs).expect("bootroot peer connect name should parse");
+
+            assert_eq!(peer_name, "001.piglet.node1.example.test");
         }
 
         #[test]
@@ -459,7 +517,10 @@ mod tests {
 
             let identity = subject_from_cert(&certs).expect("bootroot SAN should take precedence");
 
-            assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+            assert_eq!(
+                identity,
+                ("piglet".to_string(), "node1.example.test".to_string())
+            );
         }
 
         #[test]

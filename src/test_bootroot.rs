@@ -70,10 +70,10 @@ pub(crate) struct BootrootClusterFixture {
 }
 
 impl TestNode {
-    pub(crate) fn short_hostname(self) -> &'static str {
+    pub(crate) fn host_identity(self) -> &'static str {
         match self {
-            Self::Node1 => "node1",
-            Self::Node2 => "node2",
+            Self::Node1 => "node1.example.test",
+            Self::Node2 => "node2.example.test",
         }
     }
 }
