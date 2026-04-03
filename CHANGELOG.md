@@ -25,6 +25,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fields, replacing the legacy `rtt`, `named_pipe`, `endpoint`, and
   `operation` fields. Bumped `giganto-client` to 0.26.0. Added database
   migration from v26 to v27 format for `DceRpc` events.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
-        Bootp as BootpFromV26, DceRpc as DceRpcFromV27, Dhcp as DhcpFromV26, Dns as DnsFromV26,
-        Ftp as FtpFromV26, Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Bootp as BootpFromV26, Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26,
+        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
         Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, Tls as TlsFromV26,
@@ -766,26 +766,6 @@ impl MigrationNew<DceRpcBeforeV26> for DceRpcFromV26 {
             named_pipe: old_data.named_pipe,
             endpoint: old_data.endpoint,
             operation: old_data.operation,
-        }
-    }
-}
-
-impl MigrationNew<DceRpcFromV26> for DceRpcFromV27 {
-    fn new(old_data: DceRpcFromV26, _start_time: i64) -> Self {
-        Self {
-            orig_addr: old_data.orig_addr,
-            orig_port: old_data.orig_port,
-            resp_addr: old_data.resp_addr,
-            resp_port: old_data.resp_port,
-            proto: old_data.proto,
-            start_time: old_data.start_time,
-            duration: old_data.duration,
-            orig_pkts: old_data.orig_pkts,
-            resp_pkts: old_data.resp_pkts,
-            orig_l2_bytes: old_data.orig_l2_bytes,
-            resp_l2_bytes: old_data.resp_l2_bytes,
-            context: Vec::new(),
-            request: Vec::new(),
         }
     }
 }
