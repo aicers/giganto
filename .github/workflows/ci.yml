@@ -60,6 +60,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
+      - name: Install libcap on Ubuntu
+        run: |
+          sudo apt-get install libpcap-dev libpcap0.8
       - name: Schema snapshot check
         run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
   test:
