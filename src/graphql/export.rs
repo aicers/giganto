@@ -339,6 +339,19 @@ struct SshJsonOutput {
 }
 
 #[derive(Serialize, Debug)]
+struct DceRpcContextJsonOutput {
+    id: u16,
+    abstract_syntax: String,
+    abstract_major: u16,
+    abstract_minor: u16,
+    transfer_syntax: String,
+    transfer_major: u16,
+    transfer_minor: u16,
+    acceptance: u16,
+    reason: u16,
+}
+
+#[derive(Serialize, Debug)]
 struct DceRpcJsonOutput {
     time: String,
     sensor: String,
@@ -353,10 +366,8 @@ struct DceRpcJsonOutput {
     resp_pkts: u64,
     orig_l2_bytes: u64,
     resp_l2_bytes: u64,
-    rtt: i64,
-    named_pipe: String,
-    endpoint: String,
-    operation: String,
+    context: Vec<DceRpcContextJsonOutput>,
+    request: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1075,14 +1086,43 @@ convert_json_output!(
     server_shka
 );
 
-convert_json_output!(
-    DceRpcJsonOutput,
-    DceRpc,
-    rtt,
-    named_pipe,
-    endpoint,
-    operation
-);
+impl JsonOutput<DceRpcJsonOutput> for DceRpc {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<DceRpcJsonOutput> {
+        let context = self
+            .context
+            .iter()
+            .map(|c| DceRpcContextJsonOutput {
+                id: c.id,
+                abstract_syntax: format!("{:032X}", c.abstract_syntax),
+                abstract_major: c.abstract_major,
+                abstract_minor: c.abstract_minor,
+                transfer_syntax: format!("{:032X}", c.transfer_syntax),
+                transfer_major: c.transfer_major,
+                transfer_minor: c.transfer_minor,
+                acceptance: c.acceptance,
+                reason: c.reason,
+            })
+            .collect();
+
+        Ok(DceRpcJsonOutput {
+            time,
+            sensor,
+            orig_addr: self.orig_addr.to_string(),
+            orig_port: self.orig_port,
+            resp_addr: self.resp_addr.to_string(),
+            resp_port: self.resp_port,
+            proto: self.proto,
+            start_time: self.start_time,
+            duration: self.duration,
+            orig_pkts: self.orig_pkts,
+            resp_pkts: self.resp_pkts,
+            orig_l2_bytes: self.orig_l2_bytes,
+            resp_l2_bytes: self.resp_l2_bytes,
+            context,
+            request: self.request.clone(),
+        })
+    }
+}
 
 convert_json_output!(
     LdapJsonOutput,

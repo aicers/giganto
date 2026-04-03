@@ -16,16 +16,16 @@ use tracing::info;
 
 use super::{Database, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::{
-    BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DhcpBeforeV26, DnsBeforeV26,
-    FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MigrationNew,
-    MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
+    BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
+    DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26,
+    MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
     OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26, SshBeforeV26,
     TlsBeforeV26,
 };
 use crate::{
     graphql::TIMESTAMP_SIZE,
     storage::{
-        Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV26,
+        Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV27,
         Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.26.0,<0.27.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.1,<0.28.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -66,6 +66,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.24.0,<0.26.0").expect("valid version requirement"),
             Version::parse("0.26.0").expect("valid version"),
             migrate_0_24_to_0_26,
+        ),
+        (
+            VersionReq::parse(">=0.26.0,<0.27.0").expect("valid version requirement"),
+            Version::parse("0.27.0").expect("valid version"),
+            migrate_0_26_to_0_27,
         ),
     ];
 
@@ -145,6 +150,35 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     migrate_0_24_to_0_26_conn(&db)?;
     migrate_0_24_to_0_26_http(&db)?;
     migration_0_24_to_0_26_other_protocols(&db)?;
+    Ok(())
+}
+
+fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    info!("Starting migration for DceRpc v26 to v27");
+    let store = db.dce_rpc_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<DceRpcFromV26>(&val)?;
+        let new_data = DceRpcFromV27 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time: old.start_time,
+            duration: old.duration,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+            context: Vec::new(),
+            request: Vec::new(),
+        };
+        let new = bincode::serialize(&new_data)?;
+        store.append(&key, &new)?;
+    }
+    info!("Completed migration for DceRpc v26 to v27");
     Ok(())
 }
 
@@ -294,7 +328,7 @@ fn migration_0_24_to_0_26_other_protocols(db: &Database) -> Result<()> {
     migrate_raw_event_0_24_to_0_26::<NtlmBeforeV26, NtlmFromV26>(&db.ntlm_store()?)?;
     migrate_raw_event_0_24_to_0_26::<KerberosBeforeV26, KerberosFromV26>(&db.kerberos_store()?)?;
     migrate_raw_event_0_24_to_0_26::<SshBeforeV26, SshFromV26>(&db.ssh_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<DceRpcBeforeV26, DceRpcFromV26>(&db.dce_rpc_store()?)?;
+    migrate_dcerpc_0_24_to_0_26(&db.dce_rpc_store()?)?;
     migrate_raw_event_0_24_to_0_26::<FtpBeforeV26, FtpFromV26>(&db.ftp_store()?)?;
     migrate_raw_event_0_24_to_0_26::<MqttBeforeV26, MqttFromV26>(&db.mqtt_store()?)?;
     migrate_raw_event_0_24_to_0_26::<LdapBeforeV26, LdapFromV26>(&db.ldap_store()?)?;
@@ -323,6 +357,20 @@ where
 
         let new_data = NewT::new(old, session_start_time);
 
+        let new = bincode::serialize(&new_data)?;
+        store.append(&key, &new)?;
+    }
+    Ok(())
+}
+
+fn migrate_dcerpc_0_24_to_0_26(
+    store: &crate::storage::RawEventStore<'_, DceRpcFromV27>,
+) -> Result<()> {
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<DceRpcBeforeV26>(&val)?;
+        let session_start_time = get_timestamp_from_key(&key)?;
+        let new_data = DceRpcFromV26::new(old, session_start_time);
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
@@ -440,7 +488,7 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::datetime::DateTime;
     use crate::storage::{
-        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV26,
+        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV27,
         Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
@@ -448,11 +496,11 @@ mod tests {
         Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
         Ssh as SshFromV26, StorageKey, Tls as TlsFromV26, data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
-            BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DhcpBeforeV26, DnsBeforeV26,
-            FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MigrationNew,
-            MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
-            OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26,
-            SshBeforeV26, TlsBeforeV26,
+            BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
+            DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26,
+            MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26,
+            NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26,
+            SmtpBeforeV26, SshBeforeV26, TlsBeforeV26,
         },
         rocksdb_options,
     };
@@ -1214,7 +1262,16 @@ mod tests {
             operation: "operation".to_string(),
         };
         let dcerpc_store = db.dce_rpc_store().unwrap();
-        let new_dcerpc = DceRpcFromV26 {
+        let dcerpc_key = build_storage_key(sensor, timestamp);
+        dcerpc_store
+            .append(&dcerpc_key, &bincode::serialize(&dcerpc_old).unwrap())
+            .unwrap();
+
+        super::migrate_dcerpc_0_24_to_0_26(&dcerpc_store).unwrap();
+
+        let (_, val) = dcerpc_store.iter_forward().next().unwrap().unwrap();
+        let migrated_v26 = bincode::deserialize::<DceRpcFromV26>(&val).unwrap();
+        let expected_v26 = DceRpcFromV26 {
             orig_addr: dcerpc_old.orig_addr,
             orig_port: dcerpc_old.orig_port,
             resp_addr: dcerpc_old.resp_addr,
@@ -1231,13 +1288,7 @@ mod tests {
             endpoint: dcerpc_old.endpoint.clone(),
             operation: dcerpc_old.operation.clone(),
         };
-        migrate_and_assert_raw_event::<DceRpcBeforeV26, DceRpcFromV26>(
-            &dcerpc_store,
-            sensor,
-            timestamp,
-            &dcerpc_old,
-            new_dcerpc,
-        );
+        assert_eq!(expected_v26, migrated_v26);
 
         let ftp_old = FtpBeforeV26 {
             orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -2319,5 +2370,61 @@ mod tests {
             server_shka: ssh_old.server_shka,
         };
         assert_eq!(migrated_ssh, expected_ssh);
+    }
+
+    #[test]
+    fn migrate_0_26_to_0_27_dce_rpc() {
+        let timestamp = FIXED_MIGRATION_TIMESTAMP_NANOS;
+        let sensor = "src1";
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let old = DceRpcFromV26 {
+            orig_addr: "192.168.4.76".parse().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            duration: 500,
+            orig_pkts: 10,
+            resp_pkts: 20,
+            orig_l2_bytes: 100,
+            resp_l2_bytes: 200,
+            rtt: 3,
+            named_pipe: "named_pipe".to_string(),
+            endpoint: "endpoint".to_string(),
+            operation: "operation".to_string(),
+        };
+        let key = build_storage_key(sensor, timestamp);
+        {
+            let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+            let dcerpc_store = db.dce_rpc_store().unwrap();
+            dcerpc_store
+                .append(&key, &bincode::serialize(&old).unwrap())
+                .unwrap();
+        }
+
+        super::migrate_0_26_to_0_27(db_dir.path(), &DbOptions::default()).unwrap();
+
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let dcerpc_store = db.dce_rpc_store().unwrap();
+        let (_, val) = dcerpc_store.iter_forward().next().unwrap().unwrap();
+        let migrated = bincode::deserialize::<DceRpcFromV27>(&val).unwrap();
+        let expected = DceRpcFromV27 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time: old.start_time,
+            duration: old.duration,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+            context: Vec::new(),
+            request: Vec::new(),
+        };
+        assert_eq!(expected, migrated);
     }
 }

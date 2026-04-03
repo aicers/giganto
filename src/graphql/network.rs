@@ -667,6 +667,34 @@ struct SshRawEvent {
     server_shka: String,
 }
 
+/// Represents a DCE-RPC bind context entry.
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dce_rpc_raw_events::DceRpcRawEventsDceRpcRawEventsEdgesNodeContext,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDceRpcRawEventContext
+]))]
+struct DceRpcContextRawEvent {
+    /// Context ID
+    id: u16,
+    /// Abstract Syntax UUID
+    abstract_syntax: String,
+    /// Abstract Syntax Major Version
+    abstract_major: u16,
+    /// Abstract Syntax Minor Version
+    abstract_minor: u16,
+    /// Transfer Syntax UUID
+    transfer_syntax: String,
+    /// Transfer Syntax Major Version
+    transfer_major: u16,
+    /// Transfer Syntax Minor Version
+    transfer_minor: u16,
+    /// Acceptance Result
+    acceptance: u16,
+    /// Rejection Reason
+    reason: u16,
+}
+
 /// Represents an event extracted from the DCE-RPC protocol.
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
@@ -703,14 +731,11 @@ struct DceRpcRawEvent {
     orig_l2_bytes: StringNumberU64,
     /// Layer 2 Bytes Received by Destination
     resp_l2_bytes: StringNumberU64,
-    /// Round-Trip Time
-    rtt: StringNumberI64,
-    /// Named Pipe
-    named_pipe: String,
-    /// Endpoint
-    endpoint: String,
-    /// Operation
-    operation: String,
+    /// Bind Contexts
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    context: Vec<DceRpcContextRawEvent>,
+    /// Requests
+    request: Vec<String>,
 }
 
 /// Represents an individual FTP command with its response and associated data.
@@ -1796,14 +1821,41 @@ from_key_value!(
     server_shka;
 );
 
-from_key_value!(
-    DceRpcRawEvent,
-    DceRpc,
-    named_pipe,
-    endpoint,
-    operation;
-    rtt
-);
+impl FromKeyValue<DceRpc> for DceRpcRawEvent {
+    fn from_key_value(key: &[u8], val: DceRpc) -> Result<Self> {
+        let time = get_time_from_key(key)?;
+        Ok(Self {
+            time,
+            orig_addr: val.orig_addr.to_string(),
+            resp_addr: val.resp_addr.to_string(),
+            orig_port: val.orig_port,
+            resp_port: val.resp_port,
+            proto: val.proto,
+            start_time: DateTime::from_timestamp_nanos(val.start_time),
+            duration: val.duration.into(),
+            orig_pkts: val.orig_pkts.into(),
+            resp_pkts: val.resp_pkts.into(),
+            orig_l2_bytes: val.orig_l2_bytes.into(),
+            resp_l2_bytes: val.resp_l2_bytes.into(),
+            context: val
+                .context
+                .into_iter()
+                .map(|c| DceRpcContextRawEvent {
+                    id: c.id,
+                    abstract_syntax: format!("{:032X}", c.abstract_syntax),
+                    abstract_major: c.abstract_major,
+                    abstract_minor: c.abstract_minor,
+                    transfer_syntax: format!("{:032X}", c.transfer_syntax),
+                    transfer_major: c.transfer_major,
+                    transfer_minor: c.transfer_minor,
+                    acceptance: c.acceptance,
+                    reason: c.reason,
+                })
+                .collect(),
+            request: val.request,
+        })
+    }
+}
 
 from_key_value!(
     MqttRawEvent,
