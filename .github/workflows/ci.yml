@@ -14,6 +14,15 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - feature_set: default
+            cargo_flags: ""
+          - feature_set: standalone
+            cargo_flags: --no-default-features --features benchmark
+          - feature_set: bootroot
+            cargo_flags: --features bootroot
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096
@@ -28,12 +37,10 @@ jobs:
       - uses: ./.github/cache-cargo
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
-      - name: Clippy (Cluster)
-        run: cargo clippy --tests -- -D warnings
-      - name: Clippy (Server-only)
-        run: cargo clippy --no-default-features --features benchmark --tests -- -D warnings
-      - name: Clippy (Bootroot)
-        run: cargo clippy --all-targets --features bootroot -- -D warnings
+      - name: Clippy (${{ matrix.feature_set }})
+        run: cargo clippy ${{ matrix.cargo_flags }} --tests -- -D warnings
+      - name: Check (${{ matrix.feature_set }})
+        run: cargo check ${{ matrix.cargo_flags }} --tests
       - name: Biome check
         run: biome ci
       - name: Detect Cargo.lock changes
@@ -44,11 +51,28 @@ jobs:
         run: python3 -m pip install --upgrade pip mkdocs-material mkdocs-static-i18n
       - name: Build Docs
         run: mkdocs build --strict
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Increase ulimit size
+        run: ulimit -n 8096
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: ./.github/cache-cargo
+      - name: Schema snapshot check
+        run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
   test:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macOS-latest]
+        feature_set: [default, bootroot]
+        include:
+          - feature_set: default
+            cargo_flags: ""
+          - feature_set: bootroot
+            cargo_flags: --features bootroot
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096
@@ -60,17 +84,21 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get install libpcap-dev libpcap0.8
-      - name: Build
-        run: cargo build --verbose
-      - name: Schema snapshot check
-        run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
-      - name: Run tests (Default)
-        run: cargo test --verbose
-      - name: Run tests (Bootroot)
-        run: cargo test --features bootroot --verbose
+      - name: Build (${{ matrix.feature_set }})
+        run: cargo build ${{ matrix.cargo_flags }} --verbose
+      - name: Run tests (${{ matrix.feature_set }})
+        run: cargo test ${{ matrix.cargo_flags }} --verbose
 
   coverage:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature_set: [default, bootroot]
+        include:
+          - feature_set: default
+            cargo_flags: ""
+          - feature_set: bootroot
+            cargo_flags: --features bootroot
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096
@@ -85,12 +113,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - name: Generate code coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Generate code coverage (${{ matrix.feature_set }})
+        run: cargo llvm-cov ${{ matrix.cargo_flags }} --workspace --lcov --output-path lcov-${{ matrix.feature_set }}.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
-          files: lcov.info
+          files: lcov-${{ matrix.feature_set }}.info
           fail_ci_if_error: true
