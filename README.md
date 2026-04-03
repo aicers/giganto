@@ -26,6 +26,18 @@ and real-time analytics.
 - libpcap
 - Clang & LLVM: To build [rocksdb](https://crates.io/crates/rocksdb)
 
+### Build Features
+
+- Default build: keeps the legacy `CN=agent@sensor` peer identity path.
+- `bootroot` feature build: accepts Bootroot SAN / DNS identity and rejects
+  legacy CN-only identities.
+
+To build the Bootroot feature explicitly:
+
+```sh
+cargo build --features bootroot
+```
+
 ## Usage
 
 You can run Giganto by invoking the following command:
@@ -37,6 +49,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 
 ### Arguments
 
+<!-- markdownlint-disable MD013 -->
+
 | Name             | Description                                     | Required |
 | ---------------- | ----------------------------------------------- | -------- |
 | `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
@@ -44,6 +58,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 | `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
 | `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
 | `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
+
+<!-- markdownlint-enable MD013 -->
 
 #### Notes on Arguments
 
@@ -56,7 +72,8 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
     file using the tracing library.
   - If `<LOG_PATH>` is provided but not writable, Giganto will terminate.
   - Any logs generated before the tracing functionality is initialized will be
-    written directly to stdout or stderr using `println`, `eprintln`, or similar.
+    written directly to stdout or stderr using `println`, `eprintln`, or
+    similar.
 
 ### Example
 
@@ -65,6 +82,14 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 ```sh
 giganto -c path/to/config.toml --cert /path/to/cert.pem --key /path/to/key.pem \
 --ca-certs /path/to/ca_cert1.pem,/path/to/ca_cert2.pem
+```
+
+- Run Giganto from source with the `bootroot` feature enabled.
+
+```sh
+cargo run --features bootroot -- -c path/to/config.toml \
+--cert /path/to/cert.pem \
+--key /path/to/key.pem --ca-certs /path/to/ca_cert1.pem,/path/to/ca_cert2.pem
 ```
 
 ## Configuration
@@ -176,6 +201,18 @@ Command notes:
 - `./scripts/build-docs-pdf.sh en|ko`: builds PDF manuals.
 
 ## Test
+
+Run the default-build test suite:
+
+```sh
+cargo test
+```
+
+Run the test suite with the `bootroot` feature enabled:
+
+```sh
+cargo test --features bootroot
+```
 
 Run Giganto with the prepared configuration file. (Settings to use the
 certificate/key from the tests folder.)

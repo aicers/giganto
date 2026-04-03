@@ -1,10 +1,10 @@
 #![allow(clippy::items_after_statements)]
 
+#[cfg(not(feature = "bootroot"))]
+use std::fs;
 use std::{
-    fs,
     future::IntoFuture,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    path::Path,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicI64, Ordering},
@@ -38,7 +38,6 @@ use giganto_client::{
     },
 };
 use quinn::{Connection, Endpoint};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::TempDir;
 
@@ -58,20 +57,22 @@ use tokio::{
 };
 
 use super::Server;
+#[cfg(not(feature = "bootroot"))]
+use crate::comm::to_cert_chain;
+#[cfg(feature = "bootroot")]
+use crate::test_bootroot::{
+    bootroot_chain_node1_client_certs, bootroot_chain_node1_fixture,
+    bootroot_chain_node1_server_certs,
+};
 use crate::{
     comm::{
         IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
-        new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels, to_cert_chain,
-        to_private_key, to_root_cert,
+        new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
     },
-    server::{Certs, subject_from_cert},
+    server::{Certs, config_client, subject_from_cert},
     storage::{Database, DbOptions, RawEventStore, StorageKey},
 };
 
-const CERT_PATH: &str = "tests/certs/node1/cert.pem";
-const KEY_PATH: &str = "tests/certs/node1/key.pem";
-const CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-const HOST: &str = "node1";
 const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const FIXED_CONN_DURATION_NANOS: i64 = 12_345;
 const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
@@ -119,6 +120,16 @@ const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::SecuLog,
 ];
 
+#[cfg(not(feature = "bootroot"))]
+fn test_server_name() -> &'static str {
+    "node1"
+}
+
+#[cfg(feature = "bootroot")]
+fn test_server_name() -> &'static str {
+    &bootroot_chain_node1_fixture().server_name
+}
+
 struct TestClient {
     conn: Connection,
     endpoint: Endpoint,
@@ -128,7 +139,7 @@ impl TestClient {
     async fn new(server_addr: SocketAddr) -> Self {
         let endpoint = init_client();
         let conn = endpoint
-            .connect(server_addr, HOST)
+            .connect(server_addr, test_server_name())
             .expect(
                 "Failed to connect server's endpoint, Please check if the setting value is correct",
             )
@@ -139,23 +150,42 @@ impl TestClient {
     }
 }
 
-fn load_test_certs() -> Arc<Certs> {
-    let cert_pem = fs::read(CERT_PATH).unwrap();
-    let cert = to_cert_chain(&cert_pem).unwrap();
-    let key_pem = fs::read(KEY_PATH).unwrap();
-    let key = to_private_key(&key_pem).unwrap();
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let root = to_root_cert(&ca_cert_path).unwrap();
+fn load_test_client_certs() -> Arc<Certs> {
+    #[cfg(not(feature = "bootroot"))]
+    {
+        let cert_pem = fs::read("tests/certs/node1/cert.pem").unwrap();
+        let cert = to_cert_chain(&cert_pem).unwrap();
+        let key_pem = fs::read("tests/certs/node1/key.pem").unwrap();
+        let key = crate::comm::to_private_key(&key_pem).unwrap();
+        let root = crate::comm::to_root_cert(&["tests/certs/ca_cert.pem".to_string()]).unwrap();
 
-    Arc::new(Certs {
-        certs: cert,
-        key,
-        root,
-    })
+        Arc::new(Certs {
+            certs: cert,
+            key,
+            root,
+        })
+    }
+
+    #[cfg(feature = "bootroot")]
+    {
+        Arc::new(bootroot_chain_node1_client_certs())
+    }
+}
+
+fn load_test_server_certs() -> Arc<Certs> {
+    #[cfg(not(feature = "bootroot"))]
+    {
+        load_test_client_certs()
+    }
+
+    #[cfg(feature = "bootroot")]
+    {
+        Arc::new(bootroot_chain_node1_server_certs())
+    }
 }
 
 fn server(addr: SocketAddr) -> Server {
-    let certs = load_test_certs();
+    let certs = load_test_server_certs();
     Server::new(addr, &certs)
 }
 
@@ -265,46 +295,11 @@ async fn send_events<T: Serialize>(
 }
 
 fn init_client() -> Endpoint {
-    let (cert, key): (Vec<u8>, Vec<u8>) = if let Ok(x) =
-        fs::read(CERT_PATH).map(|x| (x, fs::read(KEY_PATH).expect("Failed to Read key file")))
-    {
-        x
-    } else {
-        panic!(
-            "failed to read (cert, key) file, {CERT_PATH}, {KEY_PATH} read file error. Cert or key doesn't exist in default test folder"
-        );
-    };
-
-    let pv_key = if Path::new(KEY_PATH).extension().is_some_and(|x| x == "der") {
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
-    } else {
-        rustls_pemfile::private_key(&mut &*key)
-            .expect("malformed PKCS #1 private key")
-            .expect("no private keys found")
-    };
-
-    let cert_chain = if Path::new(CERT_PATH).extension().is_some_and(|x| x == "der") {
-        vec![CertificateDer::from(cert)]
-    } else {
-        rustls_pemfile::certs(&mut &*cert)
-            .collect::<Result<_, _>>()
-            .expect("invalid PEM-encoded certificate")
-    };
-    let ca_cert_path = vec![CA_CERT_PATH.to_string()];
-    let server_root = to_root_cert(&ca_cert_path).unwrap();
-
-    let client_crypto = rustls::ClientConfig::builder()
-        .with_root_certificates(server_root)
-        .with_client_auth_cert(cert_chain, pv_key)
-        .expect("the server root, cert chain or private key are not valid");
-
+    let certs = load_test_client_certs();
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
             .expect("Failed to create endpoint");
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
-            .expect("Failed to generate QuicClientConfig"),
-    )));
+    endpoint.set_default_client_config(config_client(&certs).expect("ingest test client config"));
     endpoint
 }
 
@@ -378,7 +373,7 @@ fn test_sensor_name() -> String {
     static TEST_SENSOR: OnceLock<String> = OnceLock::new();
     TEST_SENSOR
         .get_or_init(|| {
-            let certs = load_test_certs();
+            let certs = load_test_client_certs();
             let (_agent, sensor) =
                 subject_from_cert(&certs.certs).expect("failed to parse test certificate");
             sensor
@@ -1775,7 +1770,7 @@ async fn invalid_body_all_kinds() {
 #[tokio::test]
 async fn send_ack_timestamp_sends_be_bytes() {
     init_crypto();
-    let certs = load_test_certs();
+    let certs = load_test_server_certs();
 
     let server_config = crate::server::config_server(&certs).unwrap();
     let endpoint = quinn::Endpoint::server(
@@ -1823,7 +1818,7 @@ async fn send_ack_timestamp_sends_be_bytes() {
 
     let client_endpoint = init_client();
     let conn = client_endpoint
-        .connect(server_addr, HOST)
+        .connect(server_addr, test_server_name())
         .unwrap()
         .await
         .unwrap();
@@ -2260,7 +2255,7 @@ async fn handle_connection_closes_on_handshake_failure() {
 
     let endpoint = init_client();
     let conn = endpoint
-        .connect(server_addr, HOST)
+        .connect(server_addr, test_server_name())
         .expect("Failed to connect")
         .await
         .expect("Failed to finish connection");
