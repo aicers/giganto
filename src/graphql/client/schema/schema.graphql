@@ -277,7 +277,7 @@ type DceRpcContextRawEvent {
 	"""
 	id: Int!
 	"""
-	Abstract Syntax UUID
+	Abstract Syntax identifier encoded as a 32-digit uppercase hexadecimal string
 	"""
 	abstractSyntax: String!
 	"""
@@ -289,7 +289,7 @@ type DceRpcContextRawEvent {
 	"""
 	abstractMinor: Int!
 	"""
-	Transfer Syntax UUID
+	Transfer Syntax identifier encoded as a 32-digit uppercase hexadecimal string
 	"""
 	transferSyntax: String!
 	"""
