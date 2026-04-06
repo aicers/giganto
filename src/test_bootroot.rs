@@ -69,13 +69,12 @@ pub(crate) struct BootrootClusterFixture {
     pub(crate) node2: BootrootNodeFixture,
 }
 
-impl TestNode {
-    pub(crate) fn host_identity(self) -> &'static str {
-        match self {
-            Self::Node1 => "node1.example.test",
-            Self::Node2 => "node2.example.test",
-        }
-    }
+pub(crate) struct BootrootDuplicatePeerFixture {
+    _temp_dir: TempDir,
+    pub(crate) server_name: String,
+    pub(crate) server: BootrootNodeFixture,
+    pub(crate) first_client: BootrootNodeFixture,
+    pub(crate) second_client: BootrootNodeFixture,
 }
 
 impl BootrootNodeFixture {
@@ -437,5 +436,104 @@ pub(crate) fn build_bootroot_cluster_fixture() -> BootrootClusterFixture {
         _temp_dir: temp_dir,
         node1,
         node2,
+    }
+}
+
+pub(crate) fn build_bootroot_duplicate_peer_fixture(
+    server_name: &str,
+    first_client_dns_name: &str,
+    second_client_dns_name: &str,
+) -> BootrootDuplicatePeerFixture {
+    let root_key = KeyPair::generate().expect("generate root key");
+    let root = CertifiedIssuer::self_signed(
+        new_ca_params(
+            "Bootroot Root CA",
+            IsCa::Ca(BasicConstraints::Unconstrained),
+        ),
+        root_key,
+    )
+    .expect("build root CA");
+
+    let intermediate_key = KeyPair::generate().expect("generate intermediate key");
+    let intermediate = CertifiedIssuer::signed_by(
+        new_ca_params(
+            "Bootroot Intermediate CA",
+            IsCa::Ca(BasicConstraints::Constrained(0)),
+        ),
+        intermediate_key,
+        &root,
+    )
+    .expect("build intermediate CA");
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let intermediate_cert_path = temp_dir.path().join("duplicate-intermediate.pem");
+    let root_cert_path = temp_dir.path().join("duplicate-root.pem");
+    let ca_bundle_path = temp_dir.path().join("duplicate-ca-bundle.pem");
+
+    fs::write(&intermediate_cert_path, intermediate.pem()).expect("write intermediate cert");
+    fs::write(&root_cert_path, root.pem()).expect("write root cert");
+    fs::write(
+        &ca_bundle_path,
+        format!("{}{}", intermediate.pem(), root.pem()),
+    )
+    .expect("write ca bundle");
+
+    let server_key = KeyPair::generate().expect("generate server key");
+    let server_cert = new_leaf_params(
+        server_name,
+        server_name,
+        vec![ExtendedKeyUsagePurpose::ServerAuth],
+    )
+    .signed_by(&server_key, &intermediate)
+    .expect("build server cert");
+    let server = write_node_fixture(
+        &temp_dir,
+        "duplicate-server",
+        &server_cert.pem(),
+        &server_key.serialize_pem(),
+        &ca_bundle_path.to_string_lossy(),
+        server_name,
+    );
+
+    let first_client_key = KeyPair::generate().expect("generate first client key");
+    let first_client_cert = new_leaf_params(
+        first_client_dns_name,
+        first_client_dns_name,
+        vec![ExtendedKeyUsagePurpose::ClientAuth],
+    )
+    .signed_by(&first_client_key, &intermediate)
+    .expect("build first client cert");
+    let first_client = write_node_fixture(
+        &temp_dir,
+        "duplicate-client-1",
+        &first_client_cert.pem(),
+        &first_client_key.serialize_pem(),
+        &ca_bundle_path.to_string_lossy(),
+        first_client_dns_name,
+    );
+
+    let second_client_key = KeyPair::generate().expect("generate second client key");
+    let second_client_cert = new_leaf_params(
+        second_client_dns_name,
+        second_client_dns_name,
+        vec![ExtendedKeyUsagePurpose::ClientAuth],
+    )
+    .signed_by(&second_client_key, &intermediate)
+    .expect("build second client cert");
+    let second_client = write_node_fixture(
+        &temp_dir,
+        "duplicate-client-2",
+        &second_client_cert.pem(),
+        &second_client_key.serialize_pem(),
+        &ca_bundle_path.to_string_lossy(),
+        second_client_dns_name,
+    );
+
+    BootrootDuplicatePeerFixture {
+        _temp_dir: temp_dir,
+        server_name: server_name.to_string(),
+        server,
+        first_client,
+        second_client,
     }
 }

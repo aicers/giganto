@@ -49,8 +49,6 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 
 ### Arguments
 
-<!-- markdownlint-disable MD013 -->
-
 | Name             | Description                                     | Required |
 | ---------------- | ----------------------------------------------- | -------- |
 | `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
@@ -58,8 +56,6 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 | `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
 | `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
 | `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
-
-<!-- markdownlint-enable MD013 -->
 
 #### Notes on Arguments
 
@@ -132,7 +128,8 @@ num_of_thread = 8
 max_subcompactions = 2
 ack_transmission = 1024
 peer_srv_addr = "10.10.11.1:38383"
-peers = [ { addr = "10.10.12.1:38383", hostname = "ai" } ]
+peers = [ { addr = "10.10.12.1:38383",
+            hostname = "001.giganto.node1.example.test" } ]
 ```
 
 For the `max_mb_of_level_base`, the last level has 100,000 times capacity, and

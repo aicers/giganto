@@ -66,10 +66,24 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
     Ok(cert_info)
 }
 
+#[cfg(feature = "bootroot")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientIdentity {
-    pub service: String,
-    pub host_identity: String,
+struct BootrootIdentity {
+    instance_id: String,
+    service_name: String,
+    hostname: String,
+    domain: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClientIdentity {
+    #[cfg(not(feature = "bootroot"))]
+    Legacy {
+        service: String,
+        host_identity: String,
+    },
+    #[cfg(feature = "bootroot")]
+    Bootroot(BootrootIdentity),
 }
 
 impl ClientIdentity {
@@ -77,14 +91,68 @@ impl ClientIdentity {
     fn from_legacy_subject(subject: &str) -> Option<Self> {
         let (service, host_identity) = subject.split_once('@')?;
 
-        Some(Self {
+        Some(Self::Legacy {
             service: service.to_string(),
             host_identity: host_identity.to_string(),
         })
     }
 
+    fn service_name(&self) -> &str {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { service, .. } => service,
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => &identity.service_name,
+        }
+    }
+
+    fn tenant_host_identity(&self) -> String {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => identity.tenant_host_identity(),
+        }
+    }
+
+    fn peer_connect_name(&self) -> String {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => identity.peer_connect_name(),
+        }
+    }
+
+    fn peer_dedup_key(&self) -> String {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => identity.peer_dedup_key(),
+        }
+    }
+
     fn into_tuple(self) -> (String, String) {
-        (self.service, self.host_identity)
+        (self.service_name().to_string(), self.tenant_host_identity())
+    }
+}
+
+#[cfg(feature = "bootroot")]
+impl BootrootIdentity {
+    fn tenant_host_identity(&self) -> String {
+        format!("{}.{}", self.hostname, self.domain)
+    }
+
+    fn peer_connect_name(&self) -> String {
+        format!(
+            "{}.{}.{}.{}",
+            self.instance_id, self.service_name, self.hostname, self.domain
+        )
+    }
+
+    fn peer_dedup_key(&self) -> String {
+        self.peer_connect_name()
     }
 }
 
@@ -96,42 +164,18 @@ pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String
     let identity = parse_client_identity(cert_info)?;
     info!(
         "Connected client name : {}@{}",
-        identity.service, identity.host_identity
+        identity.service_name(),
+        identity.tenant_host_identity()
     );
     Ok(identity.into_tuple())
 }
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
-    let Some(cert) = cert_info.first() else {
-        bail!("no certificate in identity");
-    };
-    let mut parser =
-        x509_parser::certificate::X509CertificateParser::new().with_deep_parse_extensions(true);
-    let Ok((_, x509)) = parser.parse(cert.as_ref()) else {
-        bail!("invalid X.509 certificate");
-    };
+    Ok(parse_client_identity(cert_info)?.peer_connect_name())
+}
 
-    #[cfg(feature = "bootroot")]
-    {
-        if let Some(subject_alt_name) = x509
-            .subject_alternative_name()
-            .context("failed to parse subject alternative name")?
-        {
-            for general_name in &subject_alt_name.value.general_names {
-                if let GeneralName::DNSName(dns_name) = general_name
-                    && parse_bootroot_dns_identity(dns_name).is_some()
-                {
-                    return Ok(dns_name.to_string());
-                }
-            }
-        }
-        bail!("the SAN DNS identity of the certificate is not valid");
-    }
-
-    #[cfg(not(feature = "bootroot"))]
-    {
-        Ok(parse_legacy_client_identity(&x509)?.host_identity)
-    }
+pub fn peer_dedup_key_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
+    Ok(parse_client_identity(cert_info)?.peer_dedup_key())
 }
 
 fn parse_client_identity(cert_info: &[CertificateDer]) -> Result<ClientIdentity> {
@@ -167,7 +211,7 @@ fn parse_bootroot_client_identity(
             if let GeneralName::DNSName(dns_name) = general_name
                 && let Some(identity) = parse_bootroot_dns_identity(dns_name)
             {
-                return Ok(identity);
+                return Ok(ClientIdentity::Bootroot(identity));
             }
         }
     }
@@ -194,7 +238,7 @@ fn parse_legacy_client_identity(
 }
 
 #[cfg(feature = "bootroot")]
-fn parse_bootroot_dns_identity(dns_name: &str) -> Option<ClientIdentity> {
+fn parse_bootroot_dns_identity(dns_name: &str) -> Option<BootrootIdentity> {
     let mut labels = dns_name.split('.');
     let instance = labels.next()?;
     let service = labels.next()?;
@@ -209,11 +253,11 @@ fn parse_bootroot_dns_identity(dns_name: &str) -> Option<ClientIdentity> {
         return None;
     }
 
-    let host_identity = format!("{hostname}.{}", domain_labels.join("."));
-
-    Some(ClientIdentity {
-        service: service.to_string(),
-        host_identity,
+    Some(BootrootIdentity {
+        instance_id: instance.to_string(),
+        service_name: service.to_string(),
+        hostname: hostname.to_string(),
+        domain: domain_labels.join("."),
     })
 }
 
@@ -498,6 +542,26 @@ mod tests {
         }
 
         #[test]
+        fn parse_bootroot_identity_preserves_structured_components() {
+            let certs = build_self_signed_cert_chain(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+
+            let identity = parse_client_identity(&certs).expect("bootroot structured identity");
+
+            assert_eq!(
+                identity,
+                ClientIdentity::Bootroot(BootrootIdentity {
+                    instance_id: "001".to_string(),
+                    service_name: "piglet".to_string(),
+                    hostname: "node1".to_string(),
+                    domain: "example.test".to_string(),
+                })
+            );
+        }
+
+        #[test]
         fn peer_name_from_cert_preserves_full_bootroot_dns_name() {
             let certs = build_self_signed_cert_chain(
                 "001.piglet.node1.example.test",
@@ -508,6 +572,19 @@ mod tests {
                 peer_name_from_cert(&certs).expect("bootroot peer connect name should parse");
 
             assert_eq!(peer_name, "001.piglet.node1.example.test");
+        }
+
+        #[test]
+        fn peer_dedup_key_from_cert_preserves_instance_id() {
+            let certs = build_self_signed_cert_chain(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+
+            let peer_dedup_key =
+                peer_dedup_key_from_cert(&certs).expect("bootroot peer dedup key should parse");
+
+            assert_eq!(peer_dedup_key, "001.piglet.node1.example.test");
         }
 
         #[test]
