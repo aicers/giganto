@@ -2598,10 +2598,10 @@ async fn kerberos_with_data() {
                     errorCode,
                     clientRealm,
                     cnameType,
-                    clientName,
+                    cname,
                     realm,
                     snameType,
-                    serviceName,
+                    sname,
                     respAddr,
                     origPort,
                     respPort,
@@ -2621,7 +2621,7 @@ async fn kerberos_with_data() {
         res.data.to_string(),
         "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
         clientTime: \"1\", serverTime: \"1\", errorCode: \"1\", clientRealm: \"client_realm\", cnameType: 1, \
-        clientName: [\"client_name\"], realm: \"realm\", snameType: 1, serviceName: [\"service_name\"], \
+        cname: [\"client_name\"], realm: \"realm\", snameType: 1, sname: [\"service_name\"], \
         respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
@@ -2670,10 +2670,10 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         error_code: 1,
         client_realm: "client_realm".to_string(),
         cname_type: 1,
-        client_name: vec!["client_name".to_string()],
+        cname: vec!["client_name".to_string()],
         realm: "realm".to_string(),
         sname_type: 1,
-        service_name: vec!["service_name".to_string()],
+        sname: vec!["service_name".to_string()],
     };
     let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
@@ -2733,12 +2733,12 @@ async fn kerberos_with_data_giganto_cluster() {
                             "errorCode": "0",
                             "clientRealm": "client_realm",
                             "cnameType": 1,
-                            "clientName": [
+                            "cname": [
                                 "john_doe"
                             ],
                             "realm": "example.com",
                             "snameType": 2,
-                            "serviceName": [
+                            "sname": [
                                 "service_name_1",
                                 "service_name_2"
                             ]
