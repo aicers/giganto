@@ -50,6 +50,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   they are replaced by natural reconnects. If the reload fails, the previous
   peer TLS state is preserved.
 - Added `shutdown` module providing `CancellationToken` and
+- Added `cancellation` module providing `CancellationToken` and
   `TaskTracker` primitives for cooperative, hierarchical cancellation
   and graceful task draining with timeout.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
