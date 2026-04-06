@@ -9,8 +9,8 @@ use giganto_client::{
         log::{Log, OpLog, OpLogLevel, SecuLog},
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap,
-            MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, DceRpcContext, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos,
+            Ldap, MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         statistics::Statistics,
         sysmon::{
@@ -1799,10 +1799,8 @@ pub(super) fn insert_dce_rpc_raw_event(
         resp_pkts: 1,
         orig_l2_bytes: 100,
         resp_l2_bytes: 200,
-        rtt: 3,
-        named_pipe: "named_pipe".to_string(),
-        endpoint: "endpoint".to_string(),
-        operation: "operation".to_string(),
+        context: vec![DceRpcContext::default()],
+        request: vec!["request_op".to_string()],
     };
     let ser_dce_rpc_body = bincode::serialize(&dce_rpc_body).unwrap();
 

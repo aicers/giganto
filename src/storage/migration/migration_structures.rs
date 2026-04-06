@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
-        Bootp as BootpFromV26, DceRpc as DceRpcFromV26, Dhcp as DhcpFromV26, Dns as DnsFromV26,
-        Ftp as FtpFromV26, Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Bootp as BootpFromV26, Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26,
+        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
         Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, Tls as TlsFromV26,
@@ -396,6 +396,25 @@ pub struct DceRpcBeforeV26 {
     pub resp_port: u16,
     pub proto: u8,
     pub end_time: i64,
+    pub rtt: i64,
+    pub named_pipe: String,
+    pub endpoint: String,
+    pub operation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DceRpcFromV26 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub start_time: i64,
+    pub duration: i64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
+    pub orig_l2_bytes: u64,
+    pub resp_l2_bytes: u64,
     pub rtt: i64,
     pub named_pipe: String,
     pub endpoint: String,
