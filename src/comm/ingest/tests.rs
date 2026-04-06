@@ -826,10 +826,10 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 error_code: 1,
                 client_realm: "client_realm".to_string(),
                 cname_type: 1,
-                client_name: vec!["client_name".to_string()],
+                cname: vec!["client_name".to_string()],
                 realm: "realm".to_string(),
                 sname_type: 1,
-                service_name: vec!["service_name".to_string()],
+                sname: vec!["service_name".to_string()],
             },
         ),
         single_event_case(
@@ -895,7 +895,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
             RawEventKind::OpLog,
             OpLog {
                 sensor: String::new(),
-                agent_name: "giganto".to_string(),
+                service_name: "giganto".to_string(),
                 log_level: OpLogLevel::Info,
                 contents: "op_log".to_string(),
             },

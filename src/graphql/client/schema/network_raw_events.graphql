@@ -178,10 +178,10 @@ query NetworkRawEvents(
           errorCode
           clientRealm
           cnameType
-          clientName
+          cname
           realm
           snameType
-          serviceName
+          sname
         }
         ... on SshRawEvent {
           time

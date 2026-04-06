@@ -330,7 +330,7 @@ impl EventFilter for OpLog {
         Some(self.contents.clone())
     }
     fn agent_id(&self) -> Option<String> {
-        Some(self.agent_name.clone())
+        Some(self.service_name.clone())
     }
 
     fn sensor(&self) -> Option<String> {

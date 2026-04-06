@@ -26,7 +26,7 @@ ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.26.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "0572e52893d9767609632c2fe306f96e23b7cf2c" }
 graphql_client = "0.16"
 humantime = "2"
 humantime-serde = "1"

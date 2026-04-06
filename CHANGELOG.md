@@ -19,6 +19,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Renamed `Kerberos` fields `client_name`/`service_name` to
+  `cname`/`sname` and `OpLog` field `agent_name` to
+  `service_name` to match giganto-client changes.
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
 - Updated `DceRpc` event format to use `context[]` and `request[]`

@@ -594,13 +594,13 @@ struct KerberosRawEvent {
     /// Client Name Type
     cname_type: u8,
     /// Client Name
-    client_name: Vec<String>,
+    cname: Vec<String>,
     /// Realm
     realm: String,
     /// Service Name Type
     sname_type: u8,
     /// Service Name
-    service_name: Vec<String>,
+    sname: Vec<String>,
 }
 
 /// Represents an event extracted from the SSH protocol.
@@ -1794,10 +1794,10 @@ from_key_value!(
     Kerberos,
     client_realm,
     cname_type,
-    client_name,
+    cname,
     realm,
     sname_type,
-    service_name;
+    sname;
     client_time,
     server_time,
     error_code

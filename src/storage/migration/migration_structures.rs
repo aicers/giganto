@@ -273,7 +273,7 @@ impl From<OpLogBeforeV24> for OpLogFromV24 {
     fn from(input: OpLogBeforeV24) -> Self {
         Self {
             sensor: String::new(),
-            agent_name: input.agent_name,
+            service_name: input.agent_name,
             log_level: input.log_level,
             contents: input.contents,
         }
@@ -709,10 +709,10 @@ impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
             error_code: old_data.error_code,
             client_realm: old_data.client_realm,
             cname_type: old_data.cname_type,
-            client_name: old_data.client_name,
+            cname: old_data.client_name,
             realm: old_data.realm,
             sname_type: old_data.sname_type,
-            service_name: old_data.service_name,
+            sname: old_data.service_name,
         }
     }
 }
