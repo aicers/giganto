@@ -38,10 +38,10 @@ query KerberosRawEvents(
         errorCode
         clientRealm
         cnameType
-        clientName
+        cname
         realm
         snameType
-        serviceName
+        sname
       }
     }
   }

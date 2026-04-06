@@ -302,10 +302,10 @@ struct KerberosJsonOutput {
     error_code: u32,
     client_realm: String,
     cname_type: u8,
-    client_name: Vec<String>,
+    cname: Vec<String>,
     realm: String,
     sname_type: u8,
-    service_name: Vec<String>,
+    sname: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1062,10 +1062,10 @@ convert_json_output!(
     error_code,
     client_realm,
     cname_type,
-    client_name,
+    cname,
     realm,
     sname_type,
-    service_name
+    sname
 );
 
 convert_json_output!(

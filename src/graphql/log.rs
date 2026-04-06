@@ -188,7 +188,7 @@ impl FromKeyValue<OpLog> for OpLogRawEvent {
             time: get_time_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
-            agent_name: l.agent_name,
+            agent_name: l.service_name,
             sensor: l.sensor,
         })
     }
