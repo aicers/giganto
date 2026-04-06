@@ -677,13 +677,13 @@ struct SshRawEvent {
 struct DceRpcContextRawEvent {
     /// Context ID
     id: u16,
-    /// Abstract Syntax UUID
+    /// Abstract Syntax identifier encoded as a 32-digit uppercase hexadecimal string
     abstract_syntax: String,
     /// Abstract Syntax Major Version
     abstract_major: u16,
     /// Abstract Syntax Minor Version
     abstract_minor: u16,
-    /// Transfer Syntax UUID
+    /// Transfer Syntax identifier encoded as a 32-digit uppercase hexadecimal string
     transfer_syntax: String,
     /// Transfer Syntax Major Version
     transfer_major: u16,

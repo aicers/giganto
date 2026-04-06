@@ -21,6 +21,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
+- Updated DCE/RPC `abstractSyntax` and `transferSyntax` GraphQL
+  field descriptions from "UUID" to "identifier encoded as a
+  32-digit uppercase hexadecimal string" to match the actual
+  emitted format.
 - Updated `DceRpc` event format to use `context[]` and `request[]`
   fields, replacing the legacy `rtt`, `named_pipe`, `endpoint`, and
   `operation` fields. Bumped `giganto-client` to 0.26.0. Added database
