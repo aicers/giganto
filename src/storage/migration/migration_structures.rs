@@ -7,9 +7,9 @@ use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
         Bootp as BootpFromV26, Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26,
-        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Kerberos as KerberosFromV27, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
-        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
+        Ntlm as NtlmFromV26, OpLog as OpLogFromV27, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
         Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, Tls as TlsFromV26,
     },
 };
@@ -269,10 +269,29 @@ pub struct OpLogBeforeV24 {
     pub contents: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OpLogFromV24 {
+    pub sensor: String,
+    pub agent_name: String,
+    pub log_level: OpLogLevel,
+    pub contents: String,
+}
+
 impl From<OpLogBeforeV24> for OpLogFromV24 {
     fn from(input: OpLogBeforeV24) -> Self {
         Self {
             sensor: String::new(),
+            agent_name: input.agent_name,
+            log_level: input.log_level,
+            contents: input.contents,
+        }
+    }
+}
+
+impl From<OpLogFromV24> for OpLogFromV27 {
+    fn from(input: OpLogFromV24) -> Self {
+        Self {
+            sensor: input.sensor,
             service_name: input.agent_name,
             log_level: input.log_level,
             contents: input.contents,
@@ -690,6 +709,30 @@ impl MigrationNew<NtlmBeforeV26> for NtlmFromV26 {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KerberosFromV26 {
+    pub orig_addr: IpAddr,
+    pub orig_port: u16,
+    pub resp_addr: IpAddr,
+    pub resp_port: u16,
+    pub proto: u8,
+    pub start_time: i64,
+    pub duration: i64,
+    pub orig_pkts: u64,
+    pub resp_pkts: u64,
+    pub orig_l2_bytes: u64,
+    pub resp_l2_bytes: u64,
+    pub client_time: i64,
+    pub server_time: i64,
+    pub error_code: u32,
+    pub client_realm: String,
+    pub cname_type: u8,
+    pub client_name: Vec<String>,
+    pub realm: String,
+    pub sname_type: u8,
+    pub service_name: Vec<String>,
+}
+
 impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
     fn new(old_data: KerberosBeforeV26, start_time: i64) -> Self {
         Self {
@@ -709,10 +752,37 @@ impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
             error_code: old_data.error_code,
             client_realm: old_data.client_realm,
             cname_type: old_data.cname_type,
-            cname: old_data.client_name,
+            client_name: old_data.client_name,
             realm: old_data.realm,
             sname_type: old_data.sname_type,
-            sname: old_data.service_name,
+            service_name: old_data.service_name,
+        }
+    }
+}
+
+impl From<KerberosFromV26> for KerberosFromV27 {
+    fn from(old: KerberosFromV26) -> Self {
+        Self {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time: old.start_time,
+            duration: old.duration,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+            client_time: old.client_time,
+            server_time: old.server_time,
+            error_code: old.error_code,
+            client_realm: old.client_realm,
+            cname_type: old.cname_type,
+            cname: old.client_name,
+            realm: old.realm,
+            sname_type: old.sname_type,
+            sname: old.service_name,
         }
     }
 }
