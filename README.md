@@ -172,7 +172,7 @@ guides, refer to the manuals above.
 Build locally:
 
 ```bash
-brew install python
+brew install python gh
 python3 -m venv .venv
 # zsh/bash:
 source .venv/bin/activate
@@ -185,7 +185,8 @@ mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload
 
 Command notes:
 
-- `brew install python`: installs Python (one-time per machine).
+- `brew install python gh`: installs Python and the GitHub CLI (one-time
+  per machine).
 - `python3 -m venv .venv`: creates a local virtualenv for this repo.
 - `source .venv/bin/activate`: activates the virtualenv for the
   current shell.
