@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # Fetch shared docs-theme release assets into docs/.theme/.
 #
 # Reads repo, version, and template from docs/theme.toml.
@@ -7,7 +7,7 @@
 # Override via environment variables:
 #   THEME_REPO=aicers/docs-theme THEME_VERSION=0.1.0 THEME_TEMPLATE=manual \
 #     scripts/fetch-theme.sh
-set -eu
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
