@@ -1096,7 +1096,7 @@ pub(super) fn insert_op_log_export_event(
 
     let event = OpLog {
         sensor: sensor.to_string(),
-        service_name: "oplog-agent".to_string(),
+        service_name: "service-name".to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog-content".to_string(),
     };

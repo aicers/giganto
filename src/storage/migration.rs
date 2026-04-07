@@ -150,22 +150,20 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     migrate_0_24_to_0_26_conn(&db)?;
     migrate_0_24_to_0_26_http(&db)?;
     migration_0_24_to_0_26_other_protocols(&db)?;
-    migrate_kerberos_0_24_to_0_26(&db.kerberos_store()?)?;
     Ok(())
 }
 
 fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
-    migrate_op_log_0_26_to_0_27(&db.op_log_store()?)?;
+    migrate_op_log_0_24_to_0_27(&db.op_log_store()?)?;
     migrate_kerberos_0_26_to_0_27(&db.kerberos_store()?)?;
     migrate_dcerpc_0_26_to_0_27(&db.dce_rpc_store()?)?;
     Ok(())
 }
 
-fn migrate_op_log_0_26_to_0_27(
+fn migrate_op_log_0_24_to_0_27(
     store: &crate::storage::RawEventStore<'_, OpLogFromV27>,
 ) -> Result<()> {
-    info!("Starting migration for OpLog v26 to v27");
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<OpLogFromV24>(&val)?;
@@ -173,14 +171,13 @@ fn migrate_op_log_0_26_to_0_27(
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for OpLog v26 to v27");
+    info!("Completed migration for oplog");
     Ok(())
 }
 
 fn migrate_kerberos_0_26_to_0_27(
     store: &crate::storage::RawEventStore<'_, KerberosFromV27>,
 ) -> Result<()> {
-    info!("Starting migration for Kerberos v26 to v27");
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<KerberosFromV26>(&val)?;
@@ -188,14 +185,13 @@ fn migrate_kerberos_0_26_to_0_27(
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for Kerberos v26 to v27");
+    info!("Completed migration for kerberos");
     Ok(())
 }
 
 fn migrate_dcerpc_0_26_to_0_27(
     store: &crate::storage::RawEventStore<'_, DceRpcFromV27>,
 ) -> Result<()> {
-    info!("Starting migration for DceRpc v26 to v27");
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<DceRpcFromV26>(&val)?;
@@ -217,7 +213,7 @@ fn migrate_dcerpc_0_26_to_0_27(
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for DceRpc v26 to v27");
+    info!("Completed migration for dcerpc");
     Ok(())
 }
 
@@ -375,6 +371,7 @@ fn migration_0_24_to_0_26_other_protocols(db: &Database) -> Result<()> {
     migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(&db.nfs_store()?)?;
     migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(&db.bootp_store()?)?;
     migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(&db.dhcp_store()?)?;
+    migrate_kerberos_0_24_to_0_26(&db.kerberos_store()?)?;
     info!("Completed migration for other raw event");
     Ok(())
 }
