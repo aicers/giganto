@@ -78,10 +78,7 @@ struct BootrootIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ClientIdentity {
     #[cfg(not(feature = "bootroot"))]
-    Legacy {
-        service: String,
-        host_identity: String,
-    },
+    Legacy { service: String, hostname: String },
     #[cfg(feature = "bootroot")]
     Bootroot(BootrootIdentity),
 }
@@ -89,11 +86,11 @@ enum ClientIdentity {
 impl ClientIdentity {
     #[cfg(not(feature = "bootroot"))]
     fn from_legacy_subject(subject: &str) -> Option<Self> {
-        let (service, host_identity) = subject.split_once('@')?;
+        let (service, hostname) = subject.split_once('@')?;
 
         Some(Self::Legacy {
             service: service.to_string(),
-            host_identity: host_identity.to_string(),
+            hostname: hostname.to_string(),
         })
     }
 
@@ -106,19 +103,19 @@ impl ClientIdentity {
         }
     }
 
-    fn tenant_host_identity(&self) -> String {
+    fn hostname(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            Self::Legacy { hostname, .. } => hostname.clone(),
             #[cfg(feature = "bootroot")]
-            Self::Bootroot(identity) => identity.tenant_host_identity(),
+            Self::Bootroot(identity) => identity.hostname.clone(),
         }
     }
 
     fn peer_connect_name(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            Self::Legacy { hostname, .. } => hostname.clone(),
             #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.peer_connect_name(),
         }
@@ -127,23 +124,19 @@ impl ClientIdentity {
     fn peer_dedup_key(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { host_identity, .. } => host_identity.clone(),
+            Self::Legacy { hostname, .. } => hostname.clone(),
             #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.peer_dedup_key(),
         }
     }
 
-    fn into_tuple(self) -> (String, String) {
-        (self.service_name().to_string(), self.tenant_host_identity())
+    fn into_subject_tuple(self) -> (String, String) {
+        (self.service_name().to_string(), self.hostname())
     }
 }
 
 #[cfg(feature = "bootroot")]
 impl BootrootIdentity {
-    fn tenant_host_identity(&self) -> String {
-        format!("{}.{}", self.hostname, self.domain)
-    }
-
     fn peer_connect_name(&self) -> String {
         format!(
             "{}.{}.{}.{}",
@@ -157,7 +150,7 @@ impl BootrootIdentity {
 }
 
 pub fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
-    parse_client_identity(cert_info).map(ClientIdentity::into_tuple)
+    parse_client_identity(cert_info).map(ClientIdentity::into_subject_tuple)
 }
 
 pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String, String)> {
@@ -165,9 +158,9 @@ pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String
     info!(
         "Connected client name : {}@{}",
         identity.service_name(),
-        identity.tenant_host_identity()
+        identity.hostname()
     );
-    Ok(identity.into_tuple())
+    Ok(identity.into_subject_tuple())
 }
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
@@ -456,10 +449,7 @@ mod tests {
                     let identity =
                         subject_from_cert(&extract_cert_from_conn(&connection).expect("peer cert"))
                             .expect("peer identity");
-                    assert_eq!(
-                        identity,
-                        ("piglet".to_string(), "node1.example.test".to_string())
-                    );
+                    assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
                     connection.close(0_u32.into(), b"done");
                 })
             };
@@ -535,10 +525,7 @@ mod tests {
 
             let identity = subject_from_cert(&certs).expect("bootroot SAN identity");
 
-            assert_eq!(
-                identity,
-                ("piglet".to_string(), "node1.example.test".to_string())
-            );
+            assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
         }
 
         #[test]
@@ -594,10 +581,7 @@ mod tests {
 
             let identity = subject_from_cert(&certs).expect("bootroot SAN should take precedence");
 
-            assert_eq!(
-                identity,
-                ("piglet".to_string(), "node1.example.test".to_string())
-            );
+            assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
         }
 
         #[test]
