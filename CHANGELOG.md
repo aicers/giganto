@@ -17,8 +17,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   user guide covering installation, configuration, operations, GraphQL, and
   troubleshooting.
 - Added a `bootroot` feature flag for the data-store mTLS identity path.
-  The default build now keeps the legacy `CN=agent@sensor` policy, while the
-  `bootroot` feature build enforces Bootroot SAN / DNS identity.
+  The default build now keeps the legacy `CN=<service_name>@<hostname>` policy,
+  while the `bootroot` feature build enforces Bootroot SAN identity.
 
 ### Changed
 

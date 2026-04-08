@@ -117,7 +117,7 @@ impl ClientIdentity {
             #[cfg(not(feature = "bootroot"))]
             Self::Legacy { hostname, .. } => hostname.clone(),
             #[cfg(feature = "bootroot")]
-            Self::Bootroot(identity) => identity.peer_connect_name(),
+            Self::Bootroot(identity) => identity.san(),
         }
     }
 
@@ -126,7 +126,7 @@ impl ClientIdentity {
             #[cfg(not(feature = "bootroot"))]
             Self::Legacy { hostname, .. } => hostname.clone(),
             #[cfg(feature = "bootroot")]
-            Self::Bootroot(identity) => identity.peer_dedup_key(),
+            Self::Bootroot(identity) => identity.san(),
         }
     }
 
@@ -137,15 +137,11 @@ impl ClientIdentity {
 
 #[cfg(feature = "bootroot")]
 impl BootrootIdentity {
-    fn peer_connect_name(&self) -> String {
+    fn san(&self) -> String {
         format!(
             "{}.{}.{}.{}",
             self.instance_id, self.service_name, self.hostname, self.domain
         )
-    }
-
-    fn peer_dedup_key(&self) -> String {
-        self.peer_connect_name()
     }
 }
 

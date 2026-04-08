@@ -28,9 +28,10 @@ and real-time analytics.
 
 ### Build Features
 
-- Default build: keeps the legacy `CN=agent@sensor` peer identity path.
-- `bootroot` feature build: accepts Bootroot SAN / DNS identity and rejects
-  legacy CN-only identities.
+- Default build: keeps the legacy `CN=<service_name>@<hostname>` peer identity
+  path.
+- `bootroot` feature build: accepts Bootroot SAN identity and rejects legacy
+  CN-only identities.
 
 To build the Bootroot feature explicitly:
 
