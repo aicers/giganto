@@ -56,6 +56,19 @@ if not os.path.isdir(theme_dir):
     sys.exit(1)
 shutil.copytree(os.path.join(theme_dir, "pdf"), tmp_pdf_dir)
 
+styles_path = os.path.join(tmp_pdf_dir, "styles.scss")
+fonts_dir = os.path.join(theme_dir, "shared", "fonts")
+fonts_base = f'file://{fonts_dir}/'
+
+with open(styles_path, "r", encoding="utf-8") as f:
+    styles = f.read()
+
+for prefix in ('../fonts/', '../shared/fonts/', 'pdf/fonts/', '/pdf/fonts/', 'fonts/', 'shared/fonts/'):
+    styles = styles.replace(f'url("{prefix}', f'url("{fonts_base}')
+
+with open(styles_path, "w", encoding="utf-8") as f:
+    f.write(styles)
+
 data["strict"] = False
 data["site_dir"] = f"site-pdf-{locale}"
 
