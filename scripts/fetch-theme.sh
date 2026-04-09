@@ -87,15 +87,16 @@ if [ -z "$EXTRACTED" ] || [ ! -d "$EXTRACTED" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Install into docs/.theme/ using the template path from theme.toml
+# Stage into a temporary directory and validate before replacing docs/.theme/
 # ---------------------------------------------------------------------------
-rm -rf "$DEST"
-mkdir -p "$DEST"
+STAGE="$(mktemp -d)"
+# Clean up staging dir together with the download dir
+trap 'rm -rf "$TMPDIR_DL" "$STAGE"' EXIT
 
-# Copy template directory
+# Copy template directory into staging area
 TEMPLATE_DIR="$EXTRACTED/templates/$TEMPLATE"
 if [ -d "$TEMPLATE_DIR" ]; then
-  cp -R "$TEMPLATE_DIR/." "$DEST/"
+  cp -R "$TEMPLATE_DIR/." "$STAGE/"
 else
   echo "Error: templates/$TEMPLATE/ not found in archive" >&2
   exit 1
@@ -103,10 +104,39 @@ fi
 
 # Copy shared assets (brand, fonts, etc.)
 if [ -d "$EXTRACTED/shared" ]; then
-  cp -R "$EXTRACTED/shared" "$DEST/shared"
+  cp -R "$EXTRACTED/shared" "$STAGE/shared"
 else
-  echo "Warning: shared/ not found in archive, skipping" >&2
+  echo "Error: shared/ not found in archive" >&2
+  exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Validate that all theme assets required by this repository are present
+# ---------------------------------------------------------------------------
+MISSING=0
+for asset in \
+  "mkdocs-base.yml" \
+  "pdf" \
+  "shared/brand.svg" \
+  "shared/fonts" \
+  "styles/lists.css" \
+  "styles/pdf.css"; do
+  if [ ! -e "$STAGE/$asset" ]; then
+    echo "Error: required theme asset missing: $asset" >&2
+    MISSING=1
+  fi
+done
+
+if [ "$MISSING" -ne 0 ]; then
+  echo "Validation failed — existing docs/.theme/ has been preserved." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Validation passed — replace docs/.theme/ with the staged content
+# ---------------------------------------------------------------------------
+rm -rf "$DEST"
+mv "$STAGE" "$DEST"
 
 # Record installed version so subsequent runs can skip re-download
 echo "$REPO@$TAG/$TEMPLATE" > "$MARKER"
