@@ -3,7 +3,7 @@
 //! This module provides two main primitives:
 //!
 //! - [`CancellationToken`]: A hierarchical cancellation token supporting
-//!   parent-child relationships and cooperative cancellation checkpoints.
+//!   parent-child relationships and cooperative cancellation checks.
 //! - [`TaskTracker`]: A task tracker that spawns named, tracked tasks with
 //!   automatic child token creation, drain-with-timeout, and pending-task
 //!   logging.
@@ -35,7 +35,7 @@
 //!
 //!     tracker.spawn("worker-1", |token| async move {
 //!         loop {
-//!             token.checkpoint().await?;
+//!             token.check_cancelled()?;
 //!             // ... process one unit of work ...
 //!         }
 //!     })?;
@@ -64,19 +64,17 @@
 //! }
 //! ```
 //!
-//! ## `checkpoint()` vs `check_cancelled()`
+//! ## `check_cancelled()`
 //!
-//! Use [`CancellationToken::checkpoint`] in long-running async loops where a
-//! lightweight cooperative shutdown check makes the control flow easier to
-//! read. Use [`CancellationToken::check_cancelled`] in synchronous or hot-path
-//! sections where adding an `.await` would be undesirable.
+//! Use [`CancellationToken::check_cancelled`] in loops or hot-path sections to
+//! cooperatively check for cancellation without introducing an `.await` point.
 //!
 //! ```ignore
 //! async fn consume_batches(
 //!     token: crate::cancellation::CancellationToken,
 //! ) -> Result<(), crate::cancellation::CancelledError> {
 //!     loop {
-//!         token.checkpoint().await?;
+//!         token.check_cancelled()?;
 //!         read_next_batch().await;
 //!         token.check_cancelled()?;
 //!         apply_batch();
@@ -146,8 +144,7 @@ type TaskRegistry = Arc<Mutex<HashMap<u64, TaskMeta>>>;
 /// A hierarchical cancellation token for cooperative cancellation.
 ///
 /// Wraps [`tokio_util::sync::CancellationToken`] with convenience methods
-/// including [`checkpoint`](Self::checkpoint) for cooperative cancellation
-/// inside long-running loops.
+/// for cooperative cancellation inside long-running loops.
 ///
 /// Tokens are cheap to clone (internally `Arc`-based) and are `Send + Sync`.
 #[derive(Clone)]
@@ -210,22 +207,6 @@ impl CancellationToken {
         } else {
             Ok(())
         }
-    }
-
-    /// Cooperative cancellation checkpoint.
-    ///
-    /// Returns `Ok(())` if the token is not yet cancelled, or
-    /// `Err(CancelledError)` if it has been cancelled.
-    ///
-    /// This is a convenient way to make long-running async loops visibly
-    /// cancellation-aware at clear checkpoint boundaries.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CancelledError`] if the token is cancelled.
-    #[allow(clippy::unused_async)]
-    pub async fn checkpoint(&self) -> Result<(), CancelledError> {
-        self.check_cancelled()
     }
 }
 
@@ -294,7 +275,7 @@ impl Drop for RegistryGuard {
 ///
 ///     tracker.spawn("worker", |token| async move {
 ///         loop {
-///             token.checkpoint().await?;
+///             token.check_cancelled()?;
 ///             // ... do one unit of work ...
 ///         }
 ///     })?;
@@ -766,19 +747,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checkpoint_ok_when_not_cancelled() {
-        let token = CancellationToken::new();
-        assert!(token.checkpoint().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn checkpoint_err_when_cancelled() {
-        let token = CancellationToken::new();
-        token.cancel();
-        assert_eq!(token.checkpoint().await, Err(CancelledError));
-    }
-
-    #[tokio::test]
     async fn cancelled_future_resolves_on_cancel() {
         let token = CancellationToken::new();
         let token2 = token.clone();
@@ -860,7 +828,7 @@ mod tests {
         tracker
             .spawn("loop-task", move |token| async move {
                 loop {
-                    token.checkpoint().await?;
+                    token.check_cancelled()?;
                     counter.fetch_add(1, Ordering::Relaxed);
                     tokio::task::yield_now().await;
                 }
