@@ -178,7 +178,7 @@ struct OpLogRawEvent {
     time: DateTime,
     level: String,
     contents: String,
-    agent_name: String,
+    service_name: String,
     sensor: String,
 }
 
@@ -188,7 +188,7 @@ impl FromKeyValue<OpLog> for OpLogRawEvent {
             time: get_time_from_key_prefix(key)?,
             level: format!("{:?}", l.log_level),
             contents: l.contents,
-            agent_name: l.service_name,
+            service_name: l.service_name,
             sensor: l.sensor,
         })
     }

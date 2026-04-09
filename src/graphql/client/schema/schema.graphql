@@ -2422,7 +2422,7 @@ type OpLogRawEvent {
 	time: DateTime!
 	level: String!
 	contents: String!
-	agentName: String!
+	serviceName: String!
 	sensor: String!
 }
 
