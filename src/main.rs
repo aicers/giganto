@@ -4,6 +4,8 @@ mod graphql;
 mod server;
 mod settings;
 mod storage;
+#[cfg(all(test, feature = "bootroot"))]
+mod test_bootroot;
 mod web;
 
 use std::{
