@@ -228,17 +228,13 @@ fn parse_legacy_client_identity(
 
 #[cfg(feature = "bootroot")]
 fn parse_bootroot_dns_identity(dns_name: &str) -> Option<BootrootIdentity> {
-    let mut labels = dns_name.split('.');
+    let mut labels = dns_name.splitn(4, '.');
     let instance = labels.next()?;
     let service = labels.next()?;
     let hostname = labels.next()?;
+    let domain = labels.next()?;
 
-    if !is_bootroot_instance_id(instance) || !is_dns_label(service) || !is_dns_label(hostname) {
-        return None;
-    }
-
-    let domain_labels = labels.collect::<Vec<_>>();
-    if domain_labels.is_empty() || domain_labels.iter().any(|label| !is_dns_label(label)) {
+    if instance.is_empty() || service.is_empty() || hostname.is_empty() || domain.is_empty() {
         return None;
     }
 
@@ -246,29 +242,8 @@ fn parse_bootroot_dns_identity(dns_name: &str) -> Option<BootrootIdentity> {
         instance_id: instance.to_string(),
         service_name: service.to_string(),
         hostname: hostname.to_string(),
-        domain: domain_labels.join("."),
+        domain: domain.to_string(),
     })
-}
-
-#[cfg(feature = "bootroot")]
-fn is_bootroot_instance_id(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
-}
-
-#[cfg(feature = "bootroot")]
-fn is_dns_label(value: &str) -> bool {
-    if value.is_empty() || value.len() > 63 {
-        return false;
-    }
-
-    let bytes = value.as_bytes();
-    if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
-        return false;
-    }
-
-    bytes
-        .iter()
-        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
 }
 
 pub fn config_client(certs: &Certs) -> Result<ClientConfig> {
@@ -525,6 +500,21 @@ mod tests {
         }
 
         #[test]
+        fn subject_from_cert_accepts_non_numeric_bootroot_instance_id() {
+            let certs = build_self_signed_cert_chain(
+                "alpha.piglet.node1.example.test",
+                "alpha.piglet.node1.example.test",
+            );
+
+            let identity = subject_from_cert(&certs).expect("bootroot SAN identity");
+            let peer_dedup_key =
+                peer_dedup_key_from_cert(&certs).expect("bootroot peer dedup key should parse");
+
+            assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+            assert_eq!(peer_dedup_key, "alpha.piglet.node1.example.test");
+        }
+
+        #[test]
         fn parse_bootroot_identity_preserves_structured_components() {
             let certs = build_self_signed_cert_chain(
                 "001.piglet.node1.example.test",
@@ -595,10 +585,8 @@ mod tests {
 
         #[test]
         fn subject_from_cert_rejects_invalid_bootroot_san_without_legacy_cn_fallback() {
-            let certs = build_self_signed_cert_chain(
-                "piglet.node1.example.test",
-                "piglet.node1.example.test",
-            );
+            let certs =
+                build_self_signed_cert_chain("piglet.node1.example", "piglet.node1.example");
 
             let err = subject_from_cert(&certs).expect_err("invalid identity should fail");
 
