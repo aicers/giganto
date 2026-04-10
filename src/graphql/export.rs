@@ -669,7 +669,8 @@ struct TimeSeriesJsonOutput {
 #[derive(Serialize, Debug)]
 struct OpLogJsonOutput {
     time: String,
-    agent_id: String,
+    sensor: String,
+    service_name: String,
     level: String,
     contents: String,
 }
@@ -1293,7 +1294,8 @@ impl JsonOutput<OpLogJsonOutput> for OpLog {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<OpLogJsonOutput> {
         Ok(OpLogJsonOutput {
             time,
-            agent_id: sensor,
+            sensor,
+            service_name: self.service_name.clone(),
             level: self.log_level().unwrap_or_else(|| "-".to_string()),
             contents: self.contents.clone(),
         })
