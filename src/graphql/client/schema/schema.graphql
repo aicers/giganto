@@ -406,6 +406,20 @@ type DceRpcRawEventEdge {
 }
 
 """
+Represents a DHCP option tag-value pair.
+"""
+type DhcpOptionRawEvent {
+	"""
+	DHCP Option Tag Number
+	"""
+	tag: Int!
+	"""
+	DHCP Option Value
+	"""
+	value: [Int!]!
+}
+
+"""
 Represents an event extracted from the DHCP protocol.
 """
 type DhcpRawEvent {
@@ -533,6 +547,10 @@ type DhcpRawEvent {
 	Client ID List
 	"""
 	clientId: [Int!]!
+	"""
+	DHCP Options
+	"""
+	options: [DhcpOptionRawEvent!]!
 }
 
 type DhcpRawEventConnection {

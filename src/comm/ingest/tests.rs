@@ -1127,6 +1127,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 class_id: vec![0, 1, 2],
                 client_id_type: 1,
                 client_id: vec![0, 1, 2],
+                options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
             },
         ),
         single_event_case(

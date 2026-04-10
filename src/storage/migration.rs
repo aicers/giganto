@@ -17,16 +17,16 @@ use tracing::info;
 use super::{Database, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::{
     BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
-    DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26,
-    MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26,
-    OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26, SshBeforeV26,
-    TlsBeforeV26,
+    DhcpFromV26, DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26,
+    LdapBeforeV26, MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26,
+    NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26,
+    SshBeforeV26, TlsBeforeV26,
 };
 use crate::{
     graphql::TIMESTAMP_SIZE,
     storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Dhcp as DhcpFromV28, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.1,<0.28.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.28.0-alpha.1,<0.29.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -71,6 +71,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.26.0,<0.27.0").expect("valid version requirement"),
             Version::parse("0.27.0").expect("valid version"),
             migrate_0_26_to_0_27,
+        ),
+        (
+            VersionReq::parse(">=0.27.0,<0.28.0").expect("valid version requirement"),
+            Version::parse("0.28.0").expect("valid version"),
+            migrate_0_27_to_0_28,
         ),
     ];
 
@@ -179,6 +184,52 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         store.append(&key, &new)?;
     }
     info!("Completed migration for DceRpc v26 to v27");
+    Ok(())
+}
+
+fn migrate_0_27_to_0_28(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    info!("Starting migration for Dhcp v27 to v28");
+    let store = db.dhcp_store()?;
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<DhcpFromV26>(&val)?;
+        let new_data = DhcpFromV28 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time: old.start_time,
+            duration: old.duration,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+            msg_type: old.msg_type,
+            ciaddr: old.ciaddr,
+            yiaddr: old.yiaddr,
+            siaddr: old.siaddr,
+            giaddr: old.giaddr,
+            subnet_mask: old.subnet_mask,
+            router: old.router,
+            domain_name_server: old.domain_name_server,
+            req_ip_addr: old.req_ip_addr,
+            lease_time: old.lease_time,
+            server_id: old.server_id,
+            param_req_list: old.param_req_list,
+            message: old.message,
+            renewal_time: old.renewal_time,
+            rebinding_time: old.rebinding_time,
+            class_id: old.class_id,
+            client_id_type: old.client_id_type,
+            client_id: old.client_id,
+            options: Vec::new(),
+        };
+        let new = bincode::serialize(&new_data)?;
+        store.append(&key, &new)?;
+    }
+    info!("Completed migration for Dhcp v27 to v28");
     Ok(())
 }
 
@@ -336,7 +387,7 @@ fn migration_0_24_to_0_26_other_protocols(db: &Database) -> Result<()> {
     migrate_raw_event_0_24_to_0_26::<SmbBeforeV26, SmbFromV26>(&db.smb_store()?)?;
     migrate_raw_event_0_24_to_0_26::<NfsBeforeV26, NfsFromV26>(&db.nfs_store()?)?;
     migrate_raw_event_0_24_to_0_26::<BootpBeforeV26, BootpFromV26>(&db.bootp_store()?)?;
-    migrate_raw_event_0_24_to_0_26::<DhcpBeforeV26, DhcpFromV26>(&db.dhcp_store()?)?;
+    migrate_dhcp_0_24_to_0_26(&db.dhcp_store()?)?;
     info!("Completed migration for other raw event");
     Ok(())
 }
@@ -371,6 +422,18 @@ fn migrate_dcerpc_0_24_to_0_26(
         let old = bincode::deserialize::<DceRpcBeforeV26>(&val)?;
         let session_start_time = get_timestamp_from_key(&key)?;
         let new_data = DceRpcFromV26::new(old, session_start_time);
+        let new = bincode::serialize(&new_data)?;
+        store.append(&key, &new)?;
+    }
+    Ok(())
+}
+
+fn migrate_dhcp_0_24_to_0_26(store: &crate::storage::RawEventStore<'_, DhcpFromV28>) -> Result<()> {
+    for raw_event in store.iter_forward() {
+        let (key, val) = raw_event.context("Failed to read Database")?;
+        let old = bincode::deserialize::<DhcpBeforeV26>(&val)?;
+        let session_start_time = get_timestamp_from_key(&key)?;
+        let new_data = DhcpFromV26::new(old, session_start_time);
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
@@ -489,7 +552,7 @@ mod tests {
     use crate::datetime::DateTime;
     use crate::storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Dhcp as DhcpFromV28, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
@@ -497,10 +560,10 @@ mod tests {
         Ssh as SshFromV26, StorageKey, Tls as TlsFromV26, data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
             BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
-            DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26,
-            MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26,
-            NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26,
-            SmtpBeforeV26, SshBeforeV26, TlsBeforeV26,
+            DhcpFromV26, DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26,
+            LdapBeforeV26, MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23,
+            NfsBeforeV26, NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23,
+            SmbBeforeV26, SmtpBeforeV26, SshBeforeV26, TlsBeforeV26,
         },
         rocksdb_options,
     };
@@ -1659,7 +1722,16 @@ mod tests {
             client_id: vec![0, 1, 2],
         };
         let dhcp_store = db.dhcp_store().unwrap();
-        let new_dhcp = DhcpFromV26 {
+        let dhcp_key = build_storage_key(sensor, timestamp);
+        dhcp_store
+            .append(&dhcp_key, &bincode::serialize(&dhcp_old).unwrap())
+            .unwrap();
+
+        super::migrate_dhcp_0_24_to_0_26(&dhcp_store).unwrap();
+
+        let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
+        let migrated_dhcp = bincode::deserialize::<DhcpFromV26>(&val).unwrap();
+        let expected_dhcp = DhcpFromV26 {
             orig_addr: dhcp_old.orig_addr,
             orig_port: dhcp_old.orig_port,
             resp_addr: dhcp_old.resp_addr,
@@ -1690,13 +1762,7 @@ mod tests {
             client_id_type: dhcp_old.client_id_type,
             client_id: dhcp_old.client_id.clone(),
         };
-        migrate_and_assert_raw_event::<DhcpBeforeV26, DhcpFromV26>(
-            &dhcp_store,
-            sensor,
-            timestamp,
-            &dhcp_old,
-            new_dhcp,
-        );
+        assert_eq!(expected_dhcp, migrated_dhcp);
     }
 
     #[test]
@@ -2424,6 +2490,93 @@ mod tests {
             resp_l2_bytes: old.resp_l2_bytes,
             context: Vec::new(),
             request: Vec::new(),
+        };
+        assert_eq!(expected, migrated);
+    }
+
+    #[test]
+    fn migrate_0_27_to_0_28_dhcp() {
+        let timestamp = FIXED_MIGRATION_TIMESTAMP_NANOS;
+        let sensor = "src1";
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let old = DhcpFromV26 {
+            orig_addr: "192.168.4.76".parse().unwrap(),
+            orig_port: 46378,
+            resp_addr: "31.3.245.133".parse().unwrap(),
+            resp_port: 80,
+            proto: 17,
+            start_time: timestamp,
+            duration: 500,
+            orig_pkts: 10,
+            resp_pkts: 20,
+            orig_l2_bytes: 100,
+            resp_l2_bytes: 200,
+            msg_type: 1,
+            ciaddr: "192.168.4.1".parse().unwrap(),
+            yiaddr: "192.168.4.2".parse().unwrap(),
+            siaddr: "192.168.4.3".parse().unwrap(),
+            giaddr: "192.168.4.4".parse().unwrap(),
+            subnet_mask: "255.255.255.0".parse().unwrap(),
+            router: vec!["192.168.1.1".parse().unwrap()],
+            domain_name_server: vec!["8.8.8.8".parse().unwrap()],
+            req_ip_addr: "192.168.4.10".parse().unwrap(),
+            lease_time: 3600,
+            server_id: "192.168.4.1".parse().unwrap(),
+            param_req_list: vec![1, 3, 6],
+            message: "test".to_string(),
+            renewal_time: 1800,
+            rebinding_time: 3150,
+            class_id: vec![0x4d, 0x53],
+            client_id_type: 1,
+            client_id: vec![0xaa, 0xbb, 0xcc],
+        };
+        let key = build_storage_key(sensor, timestamp);
+        {
+            let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+            let dhcp_store = db.dhcp_store().unwrap();
+            dhcp_store
+                .append(&key, &bincode::serialize(&old).unwrap())
+                .unwrap();
+        }
+
+        super::migrate_0_27_to_0_28(db_dir.path(), &DbOptions::default()).unwrap();
+
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let dhcp_store = db.dhcp_store().unwrap();
+        let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
+        let migrated = bincode::deserialize::<DhcpFromV28>(&val).unwrap();
+        let expected = DhcpFromV28 {
+            orig_addr: old.orig_addr,
+            orig_port: old.orig_port,
+            resp_addr: old.resp_addr,
+            resp_port: old.resp_port,
+            proto: old.proto,
+            start_time: old.start_time,
+            duration: old.duration,
+            orig_pkts: old.orig_pkts,
+            resp_pkts: old.resp_pkts,
+            orig_l2_bytes: old.orig_l2_bytes,
+            resp_l2_bytes: old.resp_l2_bytes,
+            msg_type: old.msg_type,
+            ciaddr: old.ciaddr,
+            yiaddr: old.yiaddr,
+            siaddr: old.siaddr,
+            giaddr: old.giaddr,
+            subnet_mask: old.subnet_mask,
+            router: old.router,
+            domain_name_server: old.domain_name_server,
+            req_ip_addr: old.req_ip_addr,
+            lease_time: old.lease_time,
+            server_id: old.server_id,
+            param_req_list: old.param_req_list,
+            message: old.message,
+            renewal_time: old.renewal_time,
+            rebinding_time: old.rebinding_time,
+            class_id: old.class_id,
+            client_id_type: old.client_id_type,
+            client_id: old.client_id,
+            options: Vec::new(),
         };
         assert_eq!(expected, migrated);
     }

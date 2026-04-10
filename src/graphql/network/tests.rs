@@ -4757,6 +4757,7 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         class_id: vec![0, 1, 2],
         client_id_type: 1,
         client_id: vec![0, 1, 2],
+        options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
     };
     let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
 
@@ -4828,7 +4829,11 @@ async fn dhcp_with_data_giganto_cluster() {
                             "rebindingTime": "1",
                             "classId": [0, 1, 2],
                             "clientIdType": 1,
-                            "clientId": [0, 1, 2]
+                            "clientId": [0, 1, 2],
+                            "options": [
+                                {"tag": 53, "value": [1]},
+                                {"tag": 12, "value": [116, 101, 115, 116]}
+                            ]
                         }
                     }
                 ]

@@ -458,6 +458,10 @@ query NetworkRawEvents(
           classId
           clientIdType
           clientId
+          options {
+            tag
+            value
+          }
         }
         ... on RadiusRawEvent {
           time
