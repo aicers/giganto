@@ -27,6 +27,10 @@
 //!
 //! ## Subsystem-level usage
 //!
+//! For async worker tasks, use `tokio::select!` with `token.cancelled()` so
+//! that cancellation is observed while awaiting I/O, timers, or channels.
+//! This is the **primary** pattern for async subsystems:
+//!
 //! ```ignore
 //! use std::time::Duration;
 //!
@@ -35,9 +39,17 @@
 //!
 //!     tracker.spawn("worker-1", |token| async move {
 //!         loop {
-//!             token.check_cancelled()?;
-//!             // ... process one unit of work ...
+//!             tokio::select! {
+//!                 result = do_work() => {
+//!                     // process result ...
+//!                 }
+//!                 _ = token.cancelled() => {
+//!                     // shutdown requested; cleanup and exit
+//!                     break;
+//!                 }
+//!             }
 //!         }
+//!         Ok(())
 //!     })?;
 //!
 //!     // ... later, when shutdown starts ...
@@ -49,25 +61,14 @@
 //! ## `cancel()` vs `cancelled()`
 //!
 //! `cancel()` is used by the controller side to signal shutdown.
-//! `cancelled().await` is used by worker tasks to wait for that signal.
-//!
-//! ```ignore
-//! async fn worker(token: crate::cancellation::CancellationToken) {
-//!     tokio::select! {
-//!         _ = do_work() => {
-//!             // completed normally
-//!         }
-//!         _ = token.cancelled() => {
-//!             // shutdown requested; cleanup and exit
-//!         }
-//!     }
-//! }
-//! ```
+//! `cancelled().await` is used by worker tasks to wait for that signal,
+//! typically inside a `tokio::select!` branch alongside the main work future.
 //!
 //! ## `check_cancelled()`
 //!
-//! Use [`CancellationToken::check_cancelled`] in loops or hot-path sections to
-//! cooperatively check for cancellation without introducing an `.await` point.
+//! Use [`CancellationToken::check_cancelled`] as a **secondary** cooperative
+//! check in CPU-bound loops or hot-path sections where you need to test for
+//! cancellation without introducing an `.await` point:
 //!
 //! ```ignore
 //! async fn consume_batches(
