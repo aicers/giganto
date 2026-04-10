@@ -302,10 +302,10 @@ struct KerberosJsonOutput {
     error_code: u32,
     client_realm: String,
     cname_type: u8,
-    client_name: Vec<String>,
+    cname: Vec<String>,
     realm: String,
     sname_type: u8,
-    service_name: Vec<String>,
+    sname: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -669,7 +669,8 @@ struct TimeSeriesJsonOutput {
 #[derive(Serialize, Debug)]
 struct OpLogJsonOutput {
     time: String,
-    agent_id: String,
+    sensor: String,
+    service_name: String,
     level: String,
     contents: String,
 }
@@ -1062,10 +1063,10 @@ convert_json_output!(
     error_code,
     client_realm,
     cname_type,
-    client_name,
+    cname,
     realm,
     sname_type,
-    service_name
+    sname
 );
 
 convert_json_output!(
@@ -1293,7 +1294,8 @@ impl JsonOutput<OpLogJsonOutput> for OpLog {
     fn convert_json_output(&self, time: String, sensor: String) -> Result<OpLogJsonOutput> {
         Ok(OpLogJsonOutput {
             time,
-            agent_id: sensor,
+            sensor,
+            service_name: self.service_name.clone(),
             level: self.log_level().unwrap_or_else(|| "-".to_string()),
             contents: self.contents.clone(),
         })

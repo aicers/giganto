@@ -22,6 +22,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Renamed the `Kerberos` GraphQL fields `clientName`/`serviceName` to
+  `cname`/`sname`, and the export fields `client_name`/`service_name` to
+  `cname`/`sname`. Renamed the `OpLog` GraphQL field `agentName` to
+  `serviceName`. Updated the `OpLog` export output to rename `agent_id` to
+  `sensor` and add `service_name`.
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
 - Updated `DceRpc` event format to use `context[]` and `request[]`

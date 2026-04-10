@@ -1534,7 +1534,7 @@ type KerberosRawEvent {
 	"""
 	Client Name
 	"""
-	clientName: [String!]!
+	cname: [String!]!
 	"""
 	Realm
 	"""
@@ -1546,7 +1546,7 @@ type KerberosRawEvent {
 	"""
 	Service Name
 	"""
-	serviceName: [String!]!
+	sname: [String!]!
 }
 
 type KerberosRawEventConnection {
@@ -2422,7 +2422,7 @@ type OpLogRawEvent {
 	time: DateTime!
 	level: String!
 	contents: String!
-	agentName: String!
+	serviceName: String!
 	sensor: String!
 }
 

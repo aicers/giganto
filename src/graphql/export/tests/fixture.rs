@@ -1096,7 +1096,7 @@ pub(super) fn insert_op_log_export_event(
 
     let event = OpLog {
         sensor: sensor.to_string(),
-        agent_name: "oplog-agent".to_string(),
+        service_name: "service-name".to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog-content".to_string(),
     };
@@ -1730,10 +1730,10 @@ pub(super) fn insert_kerberos_raw_event(
         error_code: 1,
         client_realm: "client_realm".to_string(),
         cname_type: 1,
-        client_name: vec!["client_name".to_string()],
+        cname: vec!["client_name".to_string()],
         realm: "realm".to_string(),
         sname_type: 1,
-        service_name: vec!["service_name".to_string()],
+        sname: vec!["service_name".to_string()],
     };
     let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
@@ -1863,7 +1863,7 @@ pub(super) fn insert_op_log_raw_event(
 
     let op_log_body = OpLog {
         sensor: sensor.to_string(),
-        agent_name: agent_name.to_string(),
+        service_name: agent_name.to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),
     };

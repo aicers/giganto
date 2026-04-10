@@ -888,7 +888,7 @@ mod tests {
             };
 
             assert_eq!(oplog.sensor, "sr1".to_string());
-            assert_eq!(oplog.agent_name, "local".to_string());
+            assert_eq!(oplog.service_name, "local".to_string());
         }
     }
 
@@ -1184,10 +1184,10 @@ mod tests {
             error_code: kerberos_old.error_code,
             client_realm: kerberos_old.client_realm.clone(),
             cname_type: kerberos_old.cname_type,
-            client_name: kerberos_old.client_name.clone(),
+            cname: kerberos_old.client_name.clone(),
             realm: kerberos_old.realm.clone(),
             sname_type: kerberos_old.sname_type,
-            service_name: kerberos_old.service_name.clone(),
+            sname: kerberos_old.service_name.clone(),
         };
         migrate_and_assert_raw_event::<KerberosBeforeV26, KerberosFromV26>(
             &kerberos_store,
@@ -2226,7 +2226,7 @@ mod tests {
         let (_key, op_log_raw) = op_log_store.iter_forward().next().unwrap().unwrap();
         let op_log: OpLogFromV24 = bincode::deserialize(&op_log_raw).unwrap();
         assert_eq!(op_log.sensor, "src_full");
-        assert_eq!(op_log.agent_name, op_log_old.agent_name);
+        assert_eq!(op_log.service_name, op_log_old.agent_name);
         assert_eq!(op_log.contents, op_log_old.contents);
         assert_eq!(op_log.log_level, op_log_old.log_level);
 
