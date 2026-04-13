@@ -34,12 +34,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `operation` fields. Bumped `giganto-client` to 0.26.0. Added database
   migration from v26 to v27 format for `DceRpc` events.
 - Added `options` field (`Vec<(u8, Vec<u8>)>`) to the `Dhcp`
-  event to store all DHCP option tag-value pairs. Added database
-  migration from v27 to v28 format for `Dhcp` events.
-- Updated `INGEST_VERSION_REQ` to ">=0.28.0-alpha.1,<0.29.0".
-- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0-alpha.1,<0.29.0".
-- Updated `COMPATIBLE_VERSION_REQ` to ">=0.28.0-alpha.1,<0.29.0".
-- Updated `PEER_VERSION_REQ` to ">=0.28.0-alpha.1,<0.29.0".
+  event to store all DHCP option tag-value pairs. Added `Dhcp`
+  migration to the existing v26 to v27 migration flow.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.

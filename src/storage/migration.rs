@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.28.0-alpha.1,<0.29.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.1,<0.28.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -71,11 +71,6 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.26.0,<0.27.0").expect("valid version requirement"),
             Version::parse("0.27.0").expect("valid version"),
             migrate_0_26_to_0_27,
-        ),
-        (
-            VersionReq::parse(">=0.27.0,<0.28.0").expect("valid version requirement"),
-            Version::parse("0.28.0").expect("valid version"),
-            migrate_0_27_to_0_28,
         ),
     ];
 
@@ -160,6 +155,12 @@ fn migrate_0_24_to_0_26(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 
 fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
+    migrate_dce_rpc_0_26_to_0_27(&db)?;
+    migrate_dhcp_0_26_to_0_27(&db)?;
+    Ok(())
+}
+
+fn migrate_dce_rpc_0_26_to_0_27(db: &Database) -> Result<()> {
     info!("Starting migration for DceRpc v26 to v27");
     let store = db.dce_rpc_store()?;
     for raw_event in store.iter_forward() {
@@ -187,9 +188,8 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
-fn migrate_0_27_to_0_28(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
-    let db = Database::open(db_path, db_opts)?;
-    info!("Starting migration for Dhcp v27 to v28");
+fn migrate_dhcp_0_26_to_0_27(db: &Database) -> Result<()> {
+    info!("Starting migration for Dhcp v26 to v27");
     let store = db.dhcp_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -229,7 +229,7 @@ fn migrate_0_27_to_0_28(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for Dhcp v27 to v28");
+    info!("Completed migration for Dhcp v26 to v27");
     Ok(())
 }
 
@@ -2495,7 +2495,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_0_27_to_0_28_dhcp() {
+    fn migrate_0_26_to_0_27_dhcp() {
         let timestamp = FIXED_MIGRATION_TIMESTAMP_NANOS;
         let sensor = "src1";
 
@@ -2540,9 +2540,9 @@ mod tests {
                 .unwrap();
         }
 
-        super::migrate_0_27_to_0_28(db_dir.path(), &DbOptions::default()).unwrap();
-
         let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        super::migrate_dhcp_0_26_to_0_27(&db).unwrap();
+
         let dhcp_store = db.dhcp_store().unwrap();
         let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
         let migrated = bincode::deserialize::<DhcpFromV28>(&val).unwrap();
