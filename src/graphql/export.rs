@@ -80,7 +80,7 @@ const ADDRESS_PROTOCOL: [&str; 21] = [
     "icmp",
     "network connect",
 ];
-const AGENT_FIELD_SUPPORTED_PROTOCOLS: [&str; 14] = [
+const SYSMON_EVENT_TYPES: [&str; 14] = [
     "process create",
     "file create time",
     "process terminate",
@@ -96,7 +96,7 @@ const AGENT_FIELD_SUPPORTED_PROTOCOLS: [&str; 14] = [
     "process tamper",
     "file delete detected",
 ];
-const KIND_PROTOCOL: [&str; 2] = ["log", "secu log"];
+const LOG_EVENT_TYPES: [&str; 2] = ["log", "secu log"];
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -2058,16 +2058,16 @@ impl ExportQuery {
                 return Err(anyhow!("Invalid ip/port input").into());
             }
         }
-        if !AGENT_FIELD_SUPPORTED_PROTOCOLS.contains(&filter.protocol.as_str()) {
+        if !SYSMON_EVENT_TYPES.contains(&filter.protocol.as_str()) {
             // check network/log type/time_series/netflow/statistics filter format
             if filter.agent_name.is_some() || filter.agent_id.is_some() {
-                return Err(anyhow!("Invalid kind/agent_name/agent_id/service_name input").into());
+                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
         }
-        if !KIND_PROTOCOL.contains(&filter.protocol.as_str()) {
+        if !LOG_EVENT_TYPES.contains(&filter.protocol.as_str()) {
             // check sysmon/network/time_series/netflow/statistics filter format
             if filter.kind.is_some() {
-                return Err(anyhow!("Invalid kind/agent_name/agent_id/service_name input").into());
+                return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
         }
 

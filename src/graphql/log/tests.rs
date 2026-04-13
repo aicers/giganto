@@ -637,7 +637,7 @@ async fn oplog_empty() {
     let schema = TestSchema::new();
     let query = r#"
         {
-            opLogRawEvents (filter: {serviceName: "giganto@src 1", logLevel: "Info", contents: ""}, first: 1) {
+            opLogRawEvents (filter: {serviceName: "giganto", logLevel: "Info", contents: ""}, first: 1) {
                 edges {
                     node {
                         level,
@@ -659,7 +659,7 @@ async fn oplog_with_data() {
 
     let query = r#"
         {
-            opLogRawEvents (filter: {serviceName: "giganto@src 1", logLevel: "Info"}, first: 1) {
+            opLogRawEvents (filter: {serviceName: "giganto", logLevel: "Info"}, first: 1) {
                 edges {
                     node {
                         level,
@@ -693,7 +693,7 @@ async fn oplog_timestamp_fomat_stability() {
         {
             opLogRawEvents(
                 filter: {
-                    serviceName: "giganto@src 1",
+                    serviceName: "giganto",
                     logLevel: "Info",
                     time: { start: "2024-03-04T05:06:06Z", end: "2024-03-04T05:06:08Z" }
                 },
@@ -899,13 +899,12 @@ fn insert_oplog_raw_event(
     let sequence_number = generator.generate_sequence_number(date_key);
 
     let mut key: Vec<u8> = Vec::new();
-    let agent_id = format!("{agent_name}@src 1");
     key.extend_from_slice(&timestamp.to_be_bytes());
     key.extend_from_slice(&sequence_number.to_be_bytes());
 
     let oplog_body = OpLog {
         sensor: sensor.to_string(),
-        service_name: agent_id.clone(),
+        service_name: agent_name.to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };

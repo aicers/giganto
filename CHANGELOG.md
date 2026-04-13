@@ -60,8 +60,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   are now `serviceName` instead of `agentId`/`agentName`.
 - Added `service_name` field to `RawEventFilter` trait and
   `EventFilter` trait for OpLog service name filtering.
-- Renamed constant `AGENT_PROTOCOL` to
-  `AGENT_FIELD_SUPPORTED_PROTOCOLS` in export for clarity.
+- Renamed constant `AGENT_PROTOCOL` to `SYSMON_EVENT_TYPES` and
+  `KIND_PROTOCOL` to `LOG_EVENT_TYPES` in export for clarity.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.

@@ -156,7 +156,7 @@ async fn export_rejects_kind_with_network_protocol() {
             }
             ,exportType:"json")
     }"#;
-    assert_export_error(query, "Invalid kind/agent_name/agent_id/service_name input").await;
+    assert_export_error(query, "Invalid kind/agent_name/agent_id input").await;
 }
 
 #[tokio::test]
@@ -200,7 +200,7 @@ async fn export_rejects_agent_filter_for_non_sysmon() {
             }
             ,exportType:"json")
     }"#;
-    assert_export_error(query, "Invalid kind/agent_name/agent_id/service_name input").await;
+    assert_export_error(query, "Invalid kind/agent_name/agent_id input").await;
 }
 
 #[tokio::test]
