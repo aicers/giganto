@@ -161,7 +161,6 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 }
 
 fn migrate_dce_rpc_0_26_to_0_27(db: &Database) -> Result<()> {
-    info!("Starting migration for DceRpc v26 to v27");
     let store = db.dce_rpc_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -184,12 +183,11 @@ fn migrate_dce_rpc_0_26_to_0_27(db: &Database) -> Result<()> {
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for DceRpc v26 to v27");
+    info!("Completed migration for DceRpc");
     Ok(())
 }
 
 fn migrate_dhcp_0_26_to_0_27(db: &Database) -> Result<()> {
-    info!("Starting migration for Dhcp v26 to v27");
     let store = db.dhcp_store()?;
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
@@ -229,7 +227,7 @@ fn migrate_dhcp_0_26_to_0_27(db: &Database) -> Result<()> {
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
     }
-    info!("Completed migration for Dhcp v26 to v27");
+    info!("Completed migration for Dhcp");
     Ok(())
 }
 
