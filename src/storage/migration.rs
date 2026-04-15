@@ -26,7 +26,7 @@ use crate::{
     graphql::TIMESTAMP_SIZE,
     storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV28, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.1,<0.28.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.2,<0.28.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -71,6 +71,12 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.26.0,<0.27.0").expect("valid version requirement"),
             Version::parse("0.27.0").expect("valid version"),
             migrate_0_26_to_0_27,
+        ),
+        (
+            VersionReq::parse(">=0.27.0-alpha.1,<0.27.0-alpha.2")
+                .expect("valid version requirement"),
+            Version::parse("0.27.0-alpha.2").expect("valid version"),
+            migrate_0_27_alpha_1_to_0_27_alpha_2,
         ),
     ];
 
@@ -160,6 +166,12 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
+fn migrate_0_27_alpha_1_to_0_27_alpha_2(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    migrate_dhcp_0_26_to_0_27(&db)?;
+    Ok(())
+}
+
 fn migrate_dce_rpc_0_26_to_0_27(db: &Database) -> Result<()> {
     let store = db.dce_rpc_store()?;
     for raw_event in store.iter_forward() {
@@ -192,7 +204,7 @@ fn migrate_dhcp_0_26_to_0_27(db: &Database) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<DhcpFromV26>(&val)?;
-        let new_data = DhcpFromV28 {
+        let new_data = DhcpFromV27 {
             orig_addr: old.orig_addr,
             orig_port: old.orig_port,
             resp_addr: old.resp_addr,
@@ -426,7 +438,7 @@ fn migrate_dcerpc_0_24_to_0_26(
     Ok(())
 }
 
-fn migrate_dhcp_0_24_to_0_26(store: &crate::storage::RawEventStore<'_, DhcpFromV28>) -> Result<()> {
+fn migrate_dhcp_0_24_to_0_26(store: &crate::storage::RawEventStore<'_, DhcpFromV27>) -> Result<()> {
     for raw_event in store.iter_forward() {
         let (key, val) = raw_event.context("Failed to read Database")?;
         let old = bincode::deserialize::<DhcpBeforeV26>(&val)?;
@@ -550,7 +562,7 @@ mod tests {
     use crate::datetime::DateTime;
     use crate::storage::{
         Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV28, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
+        Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
@@ -2543,8 +2555,8 @@ mod tests {
 
         let dhcp_store = db.dhcp_store().unwrap();
         let (_, val) = dhcp_store.iter_forward().next().unwrap().unwrap();
-        let migrated = bincode::deserialize::<DhcpFromV28>(&val).unwrap();
-        let expected = DhcpFromV28 {
+        let migrated = bincode::deserialize::<DhcpFromV27>(&val).unwrap();
+        let expected = DhcpFromV27 {
             orig_addr: old.orig_addr,
             orig_port: old.orig_port,
             resp_addr: old.resp_addr,
