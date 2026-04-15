@@ -841,8 +841,8 @@ async fn export_op_log() {
     let store = schema.db.op_log_store().unwrap();
     let generator: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
-    insert_op_log_raw_event(&store, "agent1", "src1", 1, &generator);
-    insert_op_log_raw_event(&store, "agent2", "src1", 1, &generator);
+    insert_op_log_raw_event(&store, "service1", "src1", 1, &generator);
+    insert_op_log_raw_event(&store, "service2", "src1", 1, &generator);
 
     // export csv file
     let query = r#"

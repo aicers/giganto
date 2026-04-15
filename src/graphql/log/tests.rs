@@ -889,7 +889,7 @@ fn insert_log_raw_event(
 
 fn insert_oplog_raw_event(
     store: &RawEventStore<'_, OpLog>,
-    agent_name: &str,
+    service_name: &str,
     sensor: &str,
     timestamp: i64,
     generator: &OnceLock<Arc<SequenceGenerator>>,
@@ -904,7 +904,7 @@ fn insert_oplog_raw_event(
 
     let oplog_body = OpLog {
         sensor: sensor.to_string(),
-        service_name: agent_name.to_string(),
+        service_name: service_name.to_string(),
         log_level: OpLogLevel::Info,
         contents: "oplog".to_string(),
     };
@@ -933,14 +933,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: Some("sensor-a".to_string()),
-                service_name: Some("agent-1".to_string()),
+                service_name: Some("service-1".to_string()),
                 log_level: Some("Info".to_string()),
                 contents: Some("oplog".to_string()),
             },
             log_level: Some("Info"),
             log_contents: Some("my oplog entry"),
             sensor: Some("sensor-a"),
-            service_name: Some("agent-1"),
+            service_name: Some("service-1"),
             expected: true,
         },
         Case {
@@ -978,14 +978,14 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                service_name: Some("agent-1".to_string()),
+                service_name: Some("service-1".to_string()),
                 log_level: None,
                 contents: None,
             },
             log_level: None,
             log_contents: None,
             sensor: None,
-            service_name: Some("agent-2"),
+            service_name: Some("service-2"),
             expected: false,
         },
         Case {
@@ -1038,7 +1038,7 @@ fn op_log_filter_check_cases() {
             filter: OpLogFilter {
                 time: None,
                 sensor: None,
-                service_name: Some("agent-1".to_string()),
+                service_name: Some("service-1".to_string()),
                 log_level: None,
                 contents: None,
             },

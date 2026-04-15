@@ -1848,7 +1848,7 @@ pub(super) fn insert_time_series(
 
 pub(super) fn insert_op_log_raw_event(
     store: &RawEventStore<'_, OpLog>,
-    agent_name: &str,
+    service_name: &str,
     sensor: &str,
     timestamp: i64,
     generator: &OnceLock<Arc<SequenceGenerator>>,
@@ -1863,7 +1863,7 @@ pub(super) fn insert_op_log_raw_event(
 
     let op_log_body = OpLog {
         sensor: sensor.to_string(),
-        service_name: agent_name.to_string(),
+        service_name: service_name.to_string(),
         log_level: OpLogLevel::Info,
         contents: "op_log".to_string(),
     };

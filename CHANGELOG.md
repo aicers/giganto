@@ -54,6 +54,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
 - Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
 - Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
+- Renamed `OpLogFilter.agent_id` to `OpLogFilter.service_name`
+  and `OpLogRawEvent.agent_name` to `OpLogRawEvent.service_name`
+  for consistent naming in the OpLog domain. The GraphQL fields
+  are now `serviceName` instead of `agentId`/`agentName`.
+- Added `service_name` field to `RawEventFilter` trait and
+  `EventFilter` trait for OpLog service name filtering.
+- Renamed constant `AGENT_PROTOCOL` to `SYSMON_EVENT_TYPES` and
+  `KIND_PROTOCOL` to `LOG_EVENT_TYPES` in export for clarity.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
