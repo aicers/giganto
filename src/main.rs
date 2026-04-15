@@ -6,10 +6,11 @@ mod settings;
 mod storage;
 #[cfg(all(test, feature = "bootroot"))]
 mod test_bootroot;
+mod tls_reload;
 mod web;
 
 use std::{
-    fs::{self, OpenOptions},
+    fs::OpenOptions,
     path::Path,
     process::exit,
     sync::{
@@ -46,12 +47,13 @@ use tracing_subscriber::{
 use crate::{
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
-        new_stream_direct_channels, to_cert_chain, to_private_key, to_root_cert,
+        new_stream_direct_channels,
     },
     graphql::NodeName,
-    server::{Certs, SERVER_REBOOT_DELAY, subject_from_cert},
+    server::{SERVER_REBOOT_DELAY, subject_from_cert},
     settings::Args,
     storage::{migrate_data_dir, validate_compression_metadata},
+    tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material},
 };
 
 const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
@@ -112,31 +114,68 @@ async fn main() -> Result<()> {
         exit(0);
     }
 
-    let cert_pem = fs::read(&args.cert)
-        .with_context(|| format!("failed to read certificate file: {}", args.cert))?;
-    let cert = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
-    let key_pem = fs::read(&args.key)
-        .with_context(|| format!("failed to read private key file: {}", args.key))?;
-    let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root_cert = to_root_cert(&args.ca_certs)?;
-    let certs = Arc::new(Certs {
-        certs: cert.clone(),
-        key: key.clone_key(),
-        root: root_cert.clone(),
+    let cert_paths = CertPaths {
+        cert_path: args.cert.clone(),
+        key_path: args.key.clone(),
+        ca_certs_paths: args.ca_certs.clone(),
+    };
+    let (initial_certs, cert_pem, key_pem) =
+        load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
+    let cert = initial_certs.certs.clone();
+    let initial_material = Arc::new(TlsMaterial {
+        certs: Arc::new(initial_certs),
+        cert_pem,
+        key_pem,
     });
+    let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::clone(&initial_material));
 
     let mut is_reboot = false;
     let mut is_power_off = false;
     let mut is_reload_config = false;
 
     let notify_terminate = Arc::new(Notify::new());
-    let r = notify_terminate.clone();
-    if let Err(ctrlc::Error::System(e)) = ctrlc::set_handler(move || r.notify_one()) {
-        return Err(anyhow!("failed to set signal handler: {e}"));
+
+    let notify_tls_reload = Arc::new(Notify::new());
+
+    #[cfg(unix)]
+    {
+        let mut sigterm_stream =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|e| anyhow!("failed to install SIGTERM handler: {e}"))?;
+        let mut sigint_stream =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .map_err(|e| anyhow!("failed to install SIGINT handler: {e}"))?;
+        let r = notify_terminate.clone();
+        task::spawn(async move {
+            select! {
+                _ = sigterm_stream.recv() => r.notify_one(),
+                _ = sigint_stream.recv() => r.notify_one(),
+            }
+        });
+
+        let mut sighup_stream =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .map_err(|e| anyhow!("failed to install SIGHUP handler: {e}"))?;
+        let tls_reload_notify = notify_tls_reload.clone();
+        task::spawn(async move {
+            loop {
+                sighup_stream.recv().await;
+                tls_reload_notify.notify_one();
+            }
+        });
     }
 
-    let request_client_pool =
-        create_graphql_client(&cert_pem, &key_pem).expect("Failed to build request client pool");
+    #[cfg(not(unix))]
+    {
+        let r = notify_terminate.clone();
+        if let Err(ctrlc::Error::System(e)) = ctrlc::set_handler(move || r.notify_one()) {
+            return Err(anyhow!("failed to set signal handler: {e}"));
+        }
+    }
+
+    let tls = tls_reload::get_current_tls_material(&tls_watch);
+    let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)
+        .expect("Failed to build request client pool");
 
     loop {
         info!("Data store started");
@@ -179,6 +218,9 @@ async fn main() -> Result<()> {
         let ack_transmission_cnt = settings.config.visible.ack_transmission;
         let retain_flag = Arc::new(AtomicBool::new(false));
 
+        let tls = tls_reload::get_current_tls_material(&tls_watch);
+        let certs = Arc::clone(&tls.certs);
+
         let schema = graphql::schema(
             NodeName(subject_from_cert(&cert)?.1),
             database.clone(),
@@ -194,8 +236,8 @@ async fn main() -> Result<()> {
             settings.clone(),
         );
 
-        let web_cert_pem = cert_pem.clone();
-        let web_key_pem = key_pem.clone();
+        let web_cert_pem = tls.cert_pem.clone();
+        let web_key_pem = tls.key_pem.clone();
         let web_addr = settings.config.visible.graphql_srv_addr;
         let web_notify_shutdown = notify_shutdown.clone();
 
@@ -308,6 +350,9 @@ async fn main() -> Result<()> {
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                     is_power_off = true;
                     break;
+                }
+                () = notify_tls_reload.notified() => {
+                    reload_handle.reload();
                 }
             }
         }
