@@ -57,7 +57,7 @@ if not os.path.isdir(theme_dir):
 shutil.copytree(os.path.join(theme_dir, "pdf"), tmp_pdf_dir)
 
 styles_path = os.path.join(tmp_pdf_dir, "styles.scss")
-fonts_dir = os.path.join(theme_dir, "shared", "fonts")
+fonts_dir = os.path.join(theme_dir, "fonts")
 fonts_base = f'file://{fonts_dir}/'
 
 with open(styles_path, "r", encoding="utf-8") as f:
@@ -90,7 +90,7 @@ pdf_plugin = {
         "custom_template_path": tmp_pdf_dir,
         "author": f"{now.strftime('%B %-d, %Y')}",
         "copyright": "© 2026 ClumL Inc.",
-        "cover_logo": "docs/.theme/shared/brand.svg",
+        "cover_logo": "docs/.theme/brand.svg",
     }
 }
 

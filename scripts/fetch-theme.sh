@@ -23,10 +23,10 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# Parse docs/theme.toml (simple key = "value" format)
+# Parse docs/theme.toml (key = "value" format, ignores section headers)
 # ---------------------------------------------------------------------------
 parse_toml_value() {
-  sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\(.*\)\"/\1/p" "$THEME_TOML" | head -1
+  sed -n '/^\[/d; s/^'"$1"'[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$THEME_TOML" | head -1
 }
 
 REPO="${THEME_REPO:-$(parse_toml_value repo)}"
@@ -43,10 +43,17 @@ TAG="$VERSION"
 # ---------------------------------------------------------------------------
 # Skip if already installed with matching repo/version/template
 # ---------------------------------------------------------------------------
-MARKER="$DEST/.installed"
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$REPO@$TAG/$TEMPLATE" ]; then
-  echo "Theme $REPO@$TAG (template=$TEMPLATE) already installed, skipping."
-  exit 0
+MARKER="$DEST/.meta"
+parse_meta_value() {
+  sed -n '/^\[/d; s/^'"$1"'[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MARKER" | head -1
+}
+if [ -f "$MARKER" ]; then
+  if [ "$(parse_meta_value repo)" = "$REPO" ] \
+    && [ "$(parse_meta_value version)" = "$TAG" ] \
+    && [ "$(parse_meta_value template)" = "$TEMPLATE" ]; then
+    echo "Theme $REPO@$TAG (template=$TEMPLATE) already installed, skipping."
+    exit 0
+  fi
 fi
 
 echo "Fetching docs-theme $REPO@$TAG (template=$TEMPLATE) ..."
@@ -102,9 +109,9 @@ else
   exit 1
 fi
 
-# Copy shared assets (brand, fonts, etc.)
+# Copy shared assets (brand, fonts, etc.) flattened into the staging root
 if [ -d "$EXTRACTED/shared" ]; then
-  cp -R "$EXTRACTED/shared" "$STAGE/shared"
+  cp -R "$EXTRACTED/shared/." "$STAGE/"
 else
   echo "Error: shared/ not found in archive" >&2
   exit 1
@@ -117,8 +124,8 @@ MISSING=0
 for asset in \
   "mkdocs-base.yml" \
   "pdf" \
-  "shared/brand.svg" \
-  "shared/fonts" \
+  "brand.svg" \
+  "fonts" \
   "styles/lists.css" \
   "styles/pdf.css"; do
   if [ ! -e "$STAGE/$asset" ]; then
@@ -139,6 +146,11 @@ rm -rf "$DEST"
 mv "$STAGE" "$DEST"
 
 # Record installed version so subsequent runs can skip re-download
-echo "$REPO@$TAG/$TEMPLATE" > "$MARKER"
+cat > "$MARKER" <<EOF
+[theme]
+repo = "$REPO"
+template = "$TEMPLATE"
+version = "$TAG"
+EOF
 
 echo "Theme installed to $DEST"

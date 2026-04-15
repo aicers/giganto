@@ -45,10 +45,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
 - Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
 - Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
-- Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
 - Replaced checked-in MkDocs theme assets (`docs/styles/`,
   `docs/pdf/`) with the shared
   [aicers/docs-theme](https://github.com/aicers/docs-theme)
