@@ -46,7 +46,7 @@ jobs:
       - name: Detect Cargo.lock changes
         run: git diff-index --quiet HEAD --
       - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v18
+        uses: DavidAnson/markdownlint-cli2-action@v23
       - name: Fetch docs theme
         run: scripts/fetch-theme.sh
         env:
@@ -68,13 +68,14 @@ jobs:
         run: |
           sudo apt-get install libpcap-dev libpcap0.8
       - name: Schema snapshot check
-        run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date --no-default-features -- --ignored
+        run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date
+          --no-default-features -- --ignored
   test:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macOS-latest]
-        feature_set: [default, bootroot]
+        os: [ ubuntu-latest, macOS-latest ]
+        feature_set: [ default, bootroot ]
         include:
           - feature_set: default
             cargo_flags: ""
@@ -100,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature_set: [default, bootroot]
+        feature_set: [ default, bootroot ]
         include:
           - feature_set: default
             cargo_flags: ""
@@ -121,9 +122,10 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Generate code coverage (${{ matrix.feature_set }})
-        run: cargo llvm-cov ${{ matrix.cargo_flags }} --workspace --lcov --output-path lcov-${{ matrix.feature_set }}.info
+        run: cargo llvm-cov ${{ matrix.cargo_flags }} --workspace --lcov --output-path
+          lcov-${{ matrix.feature_set }}.info
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
