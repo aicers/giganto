@@ -597,6 +597,7 @@ struct DhcpJsonOutput {
     class_id: Vec<u8>,
     client_id_type: u8,
     client_id: Vec<u8>,
+    options: Vec<(u8, Vec<u8>)>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1453,6 +1454,7 @@ impl JsonOutput<DhcpJsonOutput> for Dhcp {
             class_id: self.class_id.clone(),
             client_id_type: self.client_id_type,
             client_id: self.client_id.clone(),
+            options: self.options.clone(),
         })
     }
 }

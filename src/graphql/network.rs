@@ -1182,6 +1182,20 @@ impl From<usize> for StringNumberUsize {
     }
 }
 
+/// Represents a DHCP option tag-value pair.
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    dhcp_raw_events::DhcpRawEventsDhcpRawEventsEdgesNodeOptions,
+    network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEventOptions
+]))]
+struct DhcpOptionRawEvent {
+    /// DHCP Option Tag Number
+    tag: u8,
+    /// DHCP Option Value
+    value: Vec<u8>,
+}
+
 /// Represents an event extracted from the DHCP protocol.
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
@@ -1254,6 +1268,9 @@ struct DhcpRawEvent {
     client_id_type: u8,
     /// Client ID List
     client_id: Vec<u8>,
+    /// DHCP Options
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    options: Vec<DhcpOptionRawEvent>,
 }
 
 /// Represents an event extracted from the RADIUS protocol.
@@ -1688,6 +1705,11 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             class_id: val.class_id.clone(),
             client_id_type: val.client_id_type,
             client_id: val.client_id.clone(),
+            options: val
+                .options
+                .into_iter()
+                .map(|(tag, value)| DhcpOptionRawEvent { tag, value })
+                .collect(),
         })
     }
 }

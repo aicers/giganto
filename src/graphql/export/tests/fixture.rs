@@ -2155,6 +2155,7 @@ pub(super) fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, t
         class_id: vec![0, 1, 2],
         client_id_type: 1,
         client_id: vec![0, 1, 2],
+        options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
     };
     let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
 

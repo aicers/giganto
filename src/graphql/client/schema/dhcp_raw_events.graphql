@@ -51,6 +51,10 @@ query DhcpRawEvents(
         classId
         clientIdType
         clientId
+        options {
+          tag
+          value
+        }
       }
     }
   }
