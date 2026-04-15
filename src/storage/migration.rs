@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0-alpha.2,<0.28.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0,<0.28.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -77,6 +77,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
                 .expect("valid version requirement"),
             Version::parse("0.27.0-alpha.2").expect("valid version"),
             migrate_0_27_alpha_1_to_0_27_alpha_2,
+        ),
+        (
+            VersionReq::parse(">=0.27.0-alpha.2,<0.27.0").expect("valid version requirement"),
+            Version::parse("0.27.0").expect("valid version"),
+            migrate_0_27_alpha_2_to_0_27,
         ),
     ];
 
@@ -169,6 +174,11 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
 fn migrate_0_27_alpha_1_to_0_27_alpha_2(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_dhcp_0_26_to_0_27(&db)?;
+    Ok(())
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn migrate_0_27_alpha_2_to_0_27(_db_path: &Path, _db_opts: &DbOptions) -> Result<()> {
     Ok(())
 }
 
