@@ -27,6 +27,19 @@ pub fn load_tls_material(paths: &CertPaths) -> Result<(Certs, Vec<u8>, Vec<u8>)>
         .with_context(|| format!("failed to read private key file: {}", paths.key_path))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
     let root = to_root_cert(&paths.ca_certs_paths)?;
+
+    // Validate that the certificate and private key form a valid pair
+    // before accepting the material as a reload candidate.
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("failed to configure TLS protocol versions")?
+        .with_no_client_auth()
+        .with_single_cert(certs.clone(), key.clone_key())
+        .context("certificate and private key do not form a valid pair")?;
+
     Ok((Certs { certs, key, root }, cert_pem, key_pem))
 }
 
@@ -232,6 +245,68 @@ mod tests {
     }
 
     #[test]
+    fn load_tls_material_fails_with_mismatched_cert_key() {
+        let dir = tempdir().expect("tempdir");
+        let (cert_path, _key_path, ca_path) = write_cert_files(dir.path());
+
+        // Generate a second key pair so the key does not match the cert
+        let ck2 = generate_self_signed();
+        let mismatched_key_path = dir.path().join("other_key.pem");
+        fs::write(
+            &mismatched_key_path,
+            ck2.signing_key.serialize_pem().as_bytes(),
+        )
+        .expect("write mismatched key");
+
+        let paths = CertPaths {
+            cert_path,
+            key_path: mismatched_key_path.to_str().expect("path").to_string(),
+            ca_certs_paths: vec![ca_path],
+        };
+        let result = load_tls_material(&paths);
+        assert!(
+            result.is_err(),
+            "mismatched cert/key should be rejected at load time"
+        );
+    }
+
+    #[test]
+    fn reload_preserves_previous_material_on_mismatched_cert_key() {
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_cert_files(dir.path());
+        let paths = CertPaths {
+            cert_path: cert.clone(),
+            key_path: key,
+            ca_certs_paths: vec![ca.clone()],
+        };
+        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem: cert_pem.clone(),
+            key_pem,
+        });
+
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        // Replace the key file with a key from a different cert so the
+        // pair is parseable but mismatched.
+        let ck2 = generate_self_signed();
+        fs::write(
+            &handle.paths.key_path,
+            ck2.signing_key.serialize_pem().as_bytes(),
+        )
+        .expect("write mismatched key");
+
+        handle.reload();
+
+        let current = get_current_tls_material(&watch);
+        assert_eq!(
+            current.cert_pem, cert_pem,
+            "previous material should be preserved when cert/key pair is mismatched"
+        );
+    }
+
+    #[test]
     fn subscribe_receives_updates() {
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
@@ -254,5 +329,59 @@ mod tests {
 
         let current = get_current_tls_material(&subscriber);
         assert!(!current.cert_pem.is_empty());
+    }
+
+    /// Verifies the notify-driven reload path that mirrors the SIGHUP
+    /// wiring in main: a `Notify` fires, reload is called, and the watch
+    /// channel receives updated material.
+    #[tokio::test]
+    async fn notify_triggers_reload_and_updates_watch() {
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_cert_files(dir.path());
+        let paths = CertPaths {
+            cert_path: cert,
+            key_path: key,
+            ca_certs_paths: vec![ca],
+        };
+        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+
+        let (handle, mut watch) = ReloadHandle::new(paths, Arc::clone(&initial));
+        let initial_pem = initial.cert_pem.clone();
+
+        // Write new matching cert/key so reload picks up different material
+        let ck2 = generate_self_signed();
+        fs::write(&handle.paths.cert_path, ck2.cert.pem().as_bytes()).expect("write new cert");
+        fs::write(
+            &handle.paths.key_path,
+            ck2.signing_key.serialize_pem().as_bytes(),
+        )
+        .expect("write new key");
+        fs::write(&handle.paths.ca_certs_paths[0], ck2.cert.pem().as_bytes())
+            .expect("write new ca");
+
+        // Simulate the SIGHUP -> Notify -> reload path
+        let reload_notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = reload_notify.clone();
+
+        let reload_task = tokio::spawn(async move {
+            notify_clone.notified().await;
+            handle.reload();
+        });
+
+        reload_notify.notify_one();
+        reload_task.await.expect("reload task");
+
+        // Watch should have received updated material
+        watch.changed().await.expect("watch changed");
+        let updated = watch.borrow().clone();
+        assert_ne!(
+            initial_pem, updated.cert_pem,
+            "watch should receive new material after notify-triggered reload"
+        );
     }
 }
