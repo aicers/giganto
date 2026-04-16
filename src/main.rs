@@ -56,7 +56,7 @@ use crate::{
     tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material},
 };
 
-const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
+const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.

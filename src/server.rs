@@ -17,7 +17,7 @@ use x509_parser::nom::Parser;
 pub const SERVER_REBOOT_DELAY: u64 = 3000;
 pub const SERVER_ENDPOINT_DELAY: u64 = 300;
 pub const SERVER_CONNNECTION_DELAY: u64 = 200;
-const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(5_000);
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 #[allow(clippy::module_name_repetitions, clippy::struct_field_names)]
 pub struct Certs {
