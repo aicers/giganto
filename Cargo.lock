@@ -1167,8 +1167,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.26.0"
-source = "git+https://github.com/aicers/giganto-client.git?rev=ade0b44#ade0b447b83e8a0bdeca308db5ac16c97f41be56"
+version = "0.27.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.27.0#f809faa005548e6957e30402e3e45600abf6e9c1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1226,7 +1226,7 @@ checksum = "aa0141e66c8d0302f8a586df12ad5d0cf87c0fa8c391f2f5b5dc296312dce569"
 dependencies = [
  "graphql-introspection-query",
  "graphql-parser",
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "serde",
