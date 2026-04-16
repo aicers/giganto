@@ -8,6 +8,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added common TLS reload plumbing triggered by `SIGHUP`. The daemon
+  now re-reads cert/key/CA files on `SIGHUP` and refreshes shared TLS
+  material via a `watch` channel, while `SIGINT`/`SIGTERM` retain
+  terminate semantics. On reload failure the previous material is
+  preserved and the failure is logged.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
