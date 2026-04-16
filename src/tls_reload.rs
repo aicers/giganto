@@ -32,7 +32,7 @@ pub fn load_tls_material(paths: &CertPaths) -> Result<(Certs, Vec<u8>, Vec<u8>)>
     // before accepting the material as a reload candidate.
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
-        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+        .expect("rustls crypto provider should be installed at startup");
     rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .context("failed to configure TLS protocol versions")?
@@ -93,10 +93,6 @@ impl ReloadHandle {
             }
         }
     }
-
-    pub fn subscribe(&self) -> TlsWatch {
-        self.sender.subscribe()
-    }
 }
 
 /// Returns the current TLS material from the watch channel.
@@ -106,11 +102,19 @@ pub fn get_current_tls_material(watch: &TlsWatch) -> Arc<TlsMaterial> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, sync::Once};
 
     use tempfile::tempdir;
 
     use super::*;
+
+    static INSTALL_PROVIDER: Once = Once::new();
+
+    fn install_crypto_provider() {
+        INSTALL_PROVIDER.call_once(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
 
     fn generate_self_signed() -> rcgen::CertifiedKey<rcgen::KeyPair> {
         rcgen::generate_simple_self_signed(vec!["localhost".into()])
@@ -134,6 +138,7 @@ mod tests {
 
     #[test]
     fn load_tls_material_succeeds_with_valid_files() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {
@@ -147,6 +152,7 @@ mod tests {
 
     #[test]
     fn load_tls_material_fails_with_missing_cert() {
+        install_crypto_provider();
         let paths = CertPaths {
             cert_path: "/nonexistent/cert.pem".to_string(),
             key_path: "/nonexistent/key.pem".to_string(),
@@ -158,6 +164,7 @@ mod tests {
 
     #[test]
     fn load_tls_material_fails_with_invalid_cert() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
@@ -177,6 +184,7 @@ mod tests {
 
     #[test]
     fn reload_handle_broadcasts_updated_material() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {
@@ -216,6 +224,7 @@ mod tests {
 
     #[test]
     fn reload_preserves_previous_material_on_failure() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {
@@ -246,6 +255,7 @@ mod tests {
 
     #[test]
     fn load_tls_material_fails_with_mismatched_cert_key() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert_path, _key_path, ca_path) = write_cert_files(dir.path());
 
@@ -272,6 +282,7 @@ mod tests {
 
     #[test]
     fn reload_preserves_previous_material_on_mismatched_cert_key() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {
@@ -308,6 +319,7 @@ mod tests {
 
     #[test]
     fn subscribe_receives_updates() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {
@@ -322,8 +334,8 @@ mod tests {
             key_pem,
         });
 
-        let (handle, _watch) = ReloadHandle::new(paths, initial);
-        let subscriber = handle.subscribe();
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+        let subscriber = watch.clone();
 
         handle.reload();
 
@@ -336,6 +348,7 @@ mod tests {
     /// channel receives updated material.
     #[tokio::test]
     async fn notify_triggers_reload_and_updates_watch() {
+        install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_cert_files(dir.path());
         let paths = CertPaths {

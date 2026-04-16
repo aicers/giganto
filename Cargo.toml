@@ -22,7 +22,6 @@ base64 = "0.22"
 bincode = "1"
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
-ctrlc = { version = "3", features = ["termination"] }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
@@ -80,6 +79,9 @@ benchmark = []
 bootroot = []
 cluster = []
 count_events = []
+
+[target.'cfg(not(unix))'.dependencies]
+ctrlc = { version = "3", features = ["termination"] }
 
 [lints.clippy]
 pedantic = "warn"
