@@ -163,7 +163,7 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let (service_name, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
 
     let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
         tokio::spawn({
@@ -188,7 +188,7 @@ async fn handle_connection(
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                        info!("{agent} has disconnected from publish");
+                        info!("{service_name} has disconnected from publish");
                         return Ok(());
                     }
                     Err(e) => {
