@@ -50,6 +50,7 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 
 ### Arguments
 
+<!-- markdownlint-disable MD013 -->
 | Name             | Description                                     | Required |
 | ---------------- | ----------------------------------------------- | -------- |
 | `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
@@ -57,6 +58,7 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 | `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
 | `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
 | `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
+<!-- markdownlint-enable MD013 -->
 
 #### Notes on Arguments
 
