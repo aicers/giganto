@@ -852,7 +852,7 @@ mod tests {
         tracker
             .spawn("stuck-task", |_token| async {
                 // Intentionally never completes and ignores cancellation.
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                tokio::time::sleep(Duration::from_hours(1)).await;
                 Ok(())
             })
             .expect("spawn should succeed");
@@ -920,7 +920,7 @@ mod tests {
         let tracker = TaskTracker::new();
         tracker
             .spawn("slow", |_token| async {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                tokio::time::sleep(Duration::from_hours(1)).await;
                 Ok(())
             })
             .expect("spawn should succeed");
@@ -1138,7 +1138,7 @@ mod tests {
             let tracker = Arc::new(TaskTracker::new());
             tracker
                 .spawn("slow", |_token| async {
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    tokio::time::sleep(Duration::from_hours(1)).await;
                     Ok(())
                 })
                 .expect("spawn should succeed");
