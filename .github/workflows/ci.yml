@@ -47,6 +47,10 @@ jobs:
         run: git diff-index --quiet HEAD --
       - name: markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v18
+      - name: Fetch docs theme
+        run: scripts/fetch-theme.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up MkDocs
         run: python3 -m pip install --upgrade pip mkdocs-material mkdocs-static-i18n
       - name: Build Docs

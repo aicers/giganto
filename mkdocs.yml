@@ -47,5 +47,5 @@ plugins:
             GraphQL: GraphQL
             Troubleshooting: 문제 해결
 extra_css:
-  - styles/lists.css
-  - styles/pdf.css
+  - .theme/styles/lists.css
+  - .theme/styles/pdf.css

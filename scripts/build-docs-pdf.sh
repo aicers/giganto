@@ -50,15 +50,20 @@ root = os.getcwd()
 tmp_pdf_dir = os.path.join(root, ".pdf-tmp")
 if os.path.exists(tmp_pdf_dir):
     shutil.rmtree(tmp_pdf_dir)
-shutil.copytree(os.path.join(root, "docs", "pdf"), tmp_pdf_dir)
+theme_dir = os.path.join(root, "docs", ".theme")
+if not os.path.isdir(theme_dir):
+    print("docs/.theme/ not found. Run scripts/fetch-theme.sh first.", file=sys.stderr)
+    sys.exit(1)
+shutil.copytree(os.path.join(theme_dir, "pdf"), tmp_pdf_dir)
 
 styles_path = os.path.join(tmp_pdf_dir, "styles.scss")
-fonts_base = f'file://{os.path.join(tmp_pdf_dir, "fonts")}/'
+fonts_dir = os.path.join(theme_dir, "fonts")
+fonts_base = f'file://{fonts_dir}/'
 
 with open(styles_path, "r", encoding="utf-8") as f:
     styles = f.read()
 
-for prefix in ('../fonts/', 'pdf/fonts/', '/pdf/fonts/', 'fonts/'):
+for prefix in ('../fonts/', '../shared/fonts/', 'pdf/fonts/', '/pdf/fonts/', 'fonts/', 'shared/fonts/'):
     styles = styles.replace(f'url("{prefix}', f'url("{fonts_base}')
 
 with open(styles_path, "w", encoding="utf-8") as f:
@@ -85,7 +90,7 @@ pdf_plugin = {
         "custom_template_path": tmp_pdf_dir,
         "author": f"{now.strftime('%B %-d, %Y')}",
         "copyright": "© 2026 ClumL Inc.",
-        "cover_logo": "docs/pdf/brand.svg",
+        "cover_logo": "docs/.theme/brand.svg",
     }
 }
 
