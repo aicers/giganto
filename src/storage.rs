@@ -1129,11 +1129,11 @@ async fn check_db_usage() -> (bool, bool) {
     let total_disk_space = resource_usage
         .disk_used_bytes
         .saturating_add(resource_usage.disk_available_bytes);
-    let usage = if total_disk_space == 0 {
-        0
-    } else {
-        resource_usage.disk_used_bytes.saturating_mul(100) / total_disk_space
-    };
+    let usage = resource_usage
+        .disk_used_bytes
+        .saturating_mul(100)
+        .checked_div(total_disk_space)
+        .unwrap_or(0);
     debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
 }
@@ -2112,7 +2112,7 @@ mod tests {
         let task = tokio::spawn(async move {
             super::retain_periodically(
                 std::time::Duration::from_millis(10),
-                std::time::Duration::from_secs(3600),
+                std::time::Duration::from_hours(1),
                 db,
                 shutdown_clone,
                 running_flag,

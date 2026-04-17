@@ -366,7 +366,7 @@ compression = {}
                 graphql_srv_addr: "[::]:8443".parse().unwrap(),
                 ingest_srv_addr: "[::]:38370".parse().unwrap(),
                 publish_srv_addr: "[::]:38371".parse().unwrap(),
-                retention: Duration::from_secs(100 * 24 * 60 * 60),
+                retention: Duration::from_hours(2400),
                 data_dir: data_dir.path().to_path_buf(),
                 export_dir: export_dir.path().to_path_buf(),
                 max_open_files: 8000,
@@ -392,7 +392,7 @@ compression = {}
             assert_eq!(visible.publish_srv_addr.to_string(), "0.0.0.0:38371");
             assert_eq!(visible.graphql_srv_addr.to_string(), "0.0.0.0:38372");
             assert_eq!(visible.data_dir, PathBuf::from("data"));
-            assert_eq!(visible.retention, Duration::from_secs(100 * 24 * 60 * 60));
+            assert_eq!(visible.retention, Duration::from_hours(2400));
             assert_eq!(visible.max_open_files, 800);
             assert_eq!(visible.max_mb_of_level_base, 512);
             assert_eq!(visible.num_of_thread, 8);
@@ -448,7 +448,7 @@ export_dir = "{}"
         );
         assert_eq!(
             settings.config.visible.retention,
-            Duration::from_secs(100 * 24 * 60 * 60),
+            Duration::from_hours(2400),
             "retention should default to 100 days"
         );
         assert_eq!(
@@ -552,7 +552,7 @@ export_dir = "{}"
             graphql_srv_addr: "[::]:9999".parse().unwrap(),
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
-            retention: Duration::from_secs(200 * 24 * 60 * 60), // 200 days
+            retention: Duration::from_hours(4800), // 200 days
             data_dir: original_config.data_dir.clone(),
             export_dir: original_config.export_dir.clone(),
             max_open_files: 9000,
