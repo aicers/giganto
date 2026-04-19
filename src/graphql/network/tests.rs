@@ -4831,8 +4831,8 @@ async fn dhcp_with_data_giganto_cluster() {
                             "clientIdType": 1,
                             "clientId": [0, 1, 2],
                             "options": [
-                                {"tag": 53, "value": [1]},
-                                {"tag": 12, "value": [116, 101, 115, 116]}
+                                {"code": 53, "value": [1]},
+                                {"code": 12, "value": [116, 101, 115, 116]}
                             ]
                         }
                     }
