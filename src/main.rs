@@ -174,8 +174,7 @@ async fn main() -> Result<()> {
     }
 
     let tls = tls_reload::get_current_tls_material(&tls_watch);
-    let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)
-        .expect("Failed to build request client pool");
+    let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
 
     loop {
         info!("Data store started");
