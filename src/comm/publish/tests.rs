@@ -51,7 +51,7 @@ use rustls::{
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock, mpsc, oneshot};
+use tokio::sync::{Notify, RwLock, mpsc, oneshot, watch};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::Server;
@@ -69,6 +69,7 @@ use crate::{
     },
     server::{Certs, config_client, config_server},
     storage::{Database, DbOptions, RawEventStore},
+    tls_reload::{TlsMaterial, TlsWatch},
 };
 
 static INIT: OnceLock<()> = OnceLock::new();
@@ -582,6 +583,16 @@ mod fixtures {
         NODE1.build_certs()
     }
 
+    pub(super) fn build_test_tls_watch(certs: &Arc<Certs>) -> TlsWatch {
+        let material = Arc::new(TlsMaterial {
+            certs: Arc::clone(certs),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+        });
+        let (_sender, receiver) = watch::channel(material);
+        receiver
+    }
+
     pub(super) async fn setup_test_harness() -> TestHarness {
         init_crypto();
 
@@ -963,6 +974,7 @@ mod fixtures {
         peer_idents: Arc<RwLock<HashSet<PeerIdentity>>>,
     ) {
         let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
         let (mut server_send, _ack_server, _ack_client) = build_ack_stream("ack.local").await;
 
         crate::comm::publish::process_pcap_extract_filters(
@@ -970,7 +982,7 @@ mod fixtures {
             pcap_sensors,
             peers,
             peer_idents,
-            certs,
+            tls_watch,
             &mut server_send,
         )
         .await
@@ -2616,7 +2628,7 @@ mod fixtures {
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
-        certs: Arc<Certs>,
+        tls_watch: TlsWatch,
         notify_shutdown: Arc<Notify>,
         ready: oneshot::Sender<SocketAddr>,
     ) {
@@ -2636,7 +2648,7 @@ mod fixtures {
                     let ingest_sensors = ingest_sensors.clone();
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
-                    let certs = certs.clone();
+                    let tls_watch = tls_watch.clone();
                     conn_hdl = Some(tokio::spawn(async move {
                         if let Err(err) = crate::comm::publish::handle_connection(
                             conn,
@@ -2646,7 +2658,7 @@ mod fixtures {
                             ingest_sensors,
                             peers,
                             peer_idents,
-                            certs,
+                            tls_watch,
                             notify_shutdown,
                         )
                         .await {
@@ -2680,6 +2692,7 @@ mod fixtures {
         let notify_for_run = notify_shutdown.clone();
         let (ready_tx, ready_rx) = oneshot::channel();
         let server = Server::new(addr, &certs);
+        let tls_watch = build_test_tls_watch(&certs);
 
         let handle = tokio::spawn(async move {
             run_server_with_ready(
@@ -2690,7 +2703,7 @@ mod fixtures {
                 ingest_sensors,
                 peers,
                 peer_idents,
-                certs,
+                tls_watch,
                 notify_for_run,
                 ready_tx,
             )
@@ -4427,6 +4440,7 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
 
     let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
     let server = Server::new(server_addr, &certs);
+    let tls_watch = build_test_tls_watch(&certs);
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let server_task = tokio::spawn(run_server_with_ready(
@@ -4437,7 +4451,7 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
         ingest_sensors,
         peers,
         peer_idents,
-        certs,
+        tls_watch,
         notify_shutdown.clone(),
         ready_tx,
     ));
@@ -5128,6 +5142,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("raw.peer.handshake").await;
 
@@ -5143,7 +5158,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
     )
     .await
     .expect_err("process_raw_events should fail when peer handshake fails");
@@ -5166,6 +5181,7 @@ async fn process_raw_events_errors_when_peer_name_missing() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("raw.peer.missing_ident").await;
 
@@ -5181,7 +5197,7 @@ async fn process_raw_events_errors_when_peer_name_missing() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
     )
     .await
     .expect_err("process_raw_events should fail when peer name is missing");
@@ -5315,6 +5331,7 @@ async fn process_range_data_sends_local_results_and_done() {
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, client_conn) = open_range_stream("range.local").await;
     super::process_range_data::<Conn, u8>(
@@ -5324,7 +5341,7 @@ async fn process_range_data_sends_local_results_and_done() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5367,6 +5384,7 @@ async fn process_range_data_prefers_local_over_peer() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5384,7 +5402,7 @@ async fn process_range_data_prefers_local_over_peer() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5432,6 +5450,7 @@ async fn process_range_data_forwards_peer_results() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5449,7 +5468,7 @@ async fn process_range_data_forwards_peer_results() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5486,6 +5505,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5503,7 +5523,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5536,6 +5556,7 @@ async fn process_range_data_returns_error_without_owner() {
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("range.orphan").await;
     let err = super::process_range_data::<Conn, u8>(
@@ -5545,7 +5566,7 @@ async fn process_range_data_returns_error_without_owner() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -6152,7 +6173,8 @@ async fn connect_supports_ipv6() {
         let _ = connection.closed().await;
     });
 
-    let connection = super::connect(server_addr, NODE1.server_name(), &certs)
+    let tls_watch = build_test_tls_watch(&certs);
+    let connection = super::connect(server_addr, NODE1.server_name(), &tls_watch)
         .await
         .expect("ipv6 connect failed");
     let remote_addr = connection.remote_address();

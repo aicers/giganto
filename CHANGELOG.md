@@ -13,6 +13,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   material via a `watch` channel, while `SIGINT`/`SIGTERM` retain
   terminate semantics. On reload failure the previous material is
   preserved and the failure is logged.
+- Publish peer outbound client connections now pick up refreshed
+  TLS material after a `SIGHUP` reload. Each new peer-fetch
+  connection rebuilds its QUIC client config from the latest
+  shared certs; already established connections are not closed.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and

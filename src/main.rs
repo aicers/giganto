@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
             ingest_sensors.clone(),
             peers.clone(),
             peer_idents.clone(),
-            certs.clone(),
+            tls_watch.clone(),
             notify_shutdown.clone(),
         ));
 
