@@ -313,6 +313,7 @@ async fn main() -> Result<()> {
             notify_shutdown.clone(),
             notify_sensor_change,
             ack_transmission_cnt,
+            tls_watch.clone(),
         ));
 
         loop {
