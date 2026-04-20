@@ -54,6 +54,7 @@ use crate::{
     settings::Args,
     storage::{migrate_data_dir, validate_compression_metadata},
     tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material},
+    web::WebController,
 };
 
 const ONE_DAY: Duration = Duration::from_hours(24);
@@ -235,21 +236,22 @@ async fn main() -> Result<()> {
             settings.clone(),
         );
 
-        let web_cert_pem = tls.cert_pem.clone();
-        let web_key_pem = tls.key_pem.clone();
         let web_addr = settings.config.visible.graphql_srv_addr;
-        let web_notify_shutdown = notify_shutdown.clone();
-
-        if let Err(e) = web::serve(
-            schema,
+        let mut web_controller: Option<WebController> = match web::serve(
+            schema.clone(),
             web_addr,
-            web_cert_pem,
-            web_key_pem,
+            tls.cert_pem.clone(),
+            tls.key_pem.clone(),
             &args.ca_certs,
-            web_notify_shutdown,
-        ) {
-            error!("Failed to start GraphQL server: {e}");
-        }
+        )
+        .await
+        {
+            Ok(controller) => Some(controller),
+            Err(e) => {
+                error!("Failed to start GraphQL server: {e}");
+                None
+            }
+        };
 
         let db = database.clone();
         let notify_shutdown_copy = notify_shutdown.clone();
@@ -321,6 +323,7 @@ async fn main() -> Result<()> {
                 Some(new_config) = reload_rx.recv() => {
                     match settings.update_config_file(&new_config) {
                         Ok(()) => {
+                            shutdown_web(web_controller.take()).await;
                             notify_shutdown.notify_waiters();
                             wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                             break;
@@ -332,6 +335,7 @@ async fn main() -> Result<()> {
                 },
                 () = notify_terminate.notified() => {
                     info!("Termination signal: daemon exit");
+                    shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
@@ -339,6 +343,7 @@ async fn main() -> Result<()> {
                 }
                 () = notify_reboot.notified() => {
                     info!("Restarting the system...");
+                    shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                     is_reboot = true;
@@ -346,13 +351,21 @@ async fn main() -> Result<()> {
                 }
                 () = notify_power_off.notified() => {
                     info!("Power off the system...");
+                    shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
                     is_power_off = true;
                     break;
                 }
                 () = notify_tls_reload.notified() => {
-                    reload_handle.reload();
+                    reload_https_server(
+                        &reload_handle,
+                        &tls_watch,
+                        &mut web_controller,
+                        &schema,
+                        web_addr,
+                        &args.ca_certs,
+                    ).await;
                 }
             }
         }
@@ -434,6 +447,70 @@ fn init_tracing(log_path: Option<&Path>) -> Result<WorkerGuard> {
     };
     tracing_subscriber::Registry::default().with(layer).init();
     Ok(guard)
+}
+
+async fn shutdown_web(web_controller: Option<WebController>) {
+    if let Some(controller) = web_controller
+        && let Err(e) = controller.shutdown().await
+    {
+        warn!("web task shutdown error: {e}");
+    }
+}
+
+/// Handles an HTTPS reload trigger: validates the refreshed TLS material,
+/// then — if validation produced new material — shuts down the existing
+/// HTTPS GraphQL server and attempts to start a replacement with the new
+/// TLS state.
+///
+/// If validation fails, the previous material is preserved by the common
+/// TLS reload plumbing and the existing HTTPS server keeps running. If
+/// the post-stop bind/start fails, the error is logged using the same
+/// policy as initial startup failure.
+async fn reload_https_server<S>(
+    reload_handle: &ReloadHandle,
+    tls_watch: &tls_reload::TlsWatch,
+    web_controller: &mut Option<WebController>,
+    schema: &S,
+    web_addr: std::net::SocketAddr,
+    ca_certs: &[String],
+) where
+    S: async_graphql::Executor + Clone,
+{
+    let previous = tls_reload::get_current_tls_material(tls_watch);
+    reload_handle.reload();
+    let current = tls_reload::get_current_tls_material(tls_watch);
+
+    if Arc::ptr_eq(&previous, &current) {
+        // Validation failed, or the watch was not updated; keep the
+        // existing HTTPS server running.
+        return;
+    }
+
+    info!("HTTPS reload: initiating graceful shutdown of existing GraphQL server");
+    if let Some(controller) = web_controller.take()
+        && let Err(e) = controller.shutdown().await
+    {
+        warn!("HTTPS reload: graceful shutdown reported error: {e}");
+    }
+    info!("HTTPS reload: shutdown complete, starting new GraphQL server");
+
+    match web::serve(
+        schema.clone(),
+        web_addr,
+        current.cert_pem.clone(),
+        current.key_pem.clone(),
+        ca_certs,
+    )
+    .await
+    {
+        Ok(controller) => {
+            info!("HTTPS reload: new GraphQL server started");
+            *web_controller = Some(controller);
+        }
+        Err(e) => {
+            error!("HTTPS reload: failed to start new GraphQL server: {e:#}");
+        }
+    }
 }
 
 async fn wait_for_task_shutdown(
@@ -616,5 +693,240 @@ mod tests {
         assert!(publish_done.load(Ordering::SeqCst));
         assert!(peer_done.load(Ordering::SeqCst));
         assert!(retain_done.load(Ordering::SeqCst));
+    }
+
+    mod reload_https_server_tests {
+        use std::{
+            fs,
+            net::{Ipv4Addr, SocketAddr},
+            sync::Once,
+        };
+
+        use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+        use tempfile::tempdir;
+
+        use super::*;
+        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+
+        static INSTALL_PROVIDER: Once = Once::new();
+
+        fn install_crypto_provider() {
+            INSTALL_PROVIDER.call_once(|| {
+                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            });
+        }
+
+        struct Query;
+
+        #[Object]
+        impl Query {
+            async fn hello(&self) -> &'static str {
+                "world"
+            }
+        }
+
+        fn test_schema() -> Schema<Query, EmptyMutation, EmptySubscription> {
+            Schema::build(Query, EmptyMutation, EmptySubscription).finish()
+        }
+
+        fn free_addr() -> SocketAddr {
+            let listener =
+                std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
+            listener.local_addr().expect("local addr")
+        }
+
+        fn write_pki(dir: &std::path::Path) -> (String, String, String) {
+            let ck = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+                .expect("generate self-signed cert");
+            let cert_path = dir.join("cert.pem");
+            let key_path = dir.join("key.pem");
+            let ca_path = dir.join("ca.pem");
+            fs::write(&cert_path, ck.cert.pem().as_bytes()).expect("write cert");
+            fs::write(&key_path, ck.signing_key.serialize_pem().as_bytes()).expect("write key");
+            fs::write(&ca_path, ck.cert.pem().as_bytes()).expect("write ca");
+            (
+                cert_path.to_str().expect("cert path").to_string(),
+                key_path.to_str().expect("key path").to_string(),
+                ca_path.to_str().expect("ca path").to_string(),
+            )
+        }
+
+        fn rewrite_pki(cert_path: &str, key_path: &str, ca_path: &str) {
+            let ck = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+                .expect("generate replacement cert");
+            fs::write(cert_path, ck.cert.pem().as_bytes()).expect("write cert");
+            fs::write(key_path, ck.signing_key.serialize_pem().as_bytes()).expect("write key");
+            fs::write(ca_path, ck.cert.pem().as_bytes()).expect("write ca");
+        }
+
+        fn setup(
+            dir: &std::path::Path,
+        ) -> (ReloadHandle, tls_reload::TlsWatch, String, String, String) {
+            install_crypto_provider();
+            let (cert_path, key_path, ca_path) = write_pki(dir);
+            let paths = CertPaths {
+                cert_path: cert_path.clone(),
+                key_path: key_path.clone(),
+                ca_certs_paths: vec![ca_path.clone()],
+            };
+            let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
+            let initial = Arc::new(TlsMaterial {
+                certs: Arc::new(certs),
+                cert_pem,
+                key_pem,
+            });
+            let (handle, watch) = ReloadHandle::new(paths, initial);
+            (handle, watch, cert_path, key_path, ca_path)
+        }
+
+        #[tokio::test]
+        async fn reload_restarts_server_with_new_material() {
+            let dir = tempdir().expect("tempdir");
+            let (reload_handle, tls_watch, cert_path, key_path, ca_path) = setup(dir.path());
+
+            let initial = tls_reload::get_current_tls_material(&tls_watch);
+            let initial_pem = initial.cert_pem.clone();
+
+            let addr = free_addr();
+            let schema = test_schema();
+            let initial_controller = web::serve(
+                schema.clone(),
+                addr,
+                initial.cert_pem.clone(),
+                initial.key_pem.clone(),
+                std::slice::from_ref(&ca_path),
+            )
+            .await
+            .expect("initial serve");
+            let mut web_controller = Some(initial_controller);
+
+            // Replace on-disk PKI with a new matching cert/key/CA.
+            rewrite_pki(&cert_path, &key_path, &ca_path);
+
+            reload_https_server(
+                &reload_handle,
+                &tls_watch,
+                &mut web_controller,
+                &schema,
+                addr,
+                &[ca_path],
+            )
+            .await;
+
+            let updated = tls_reload::get_current_tls_material(&tls_watch);
+            assert_ne!(
+                initial_pem, updated.cert_pem,
+                "reload should have updated the TLS material"
+            );
+            assert!(
+                web_controller.is_some(),
+                "a new web controller should be installed after reload"
+            );
+
+            shutdown_web(web_controller.take()).await;
+        }
+
+        #[tokio::test]
+        async fn reload_preserves_controller_on_validation_failure() {
+            let dir = tempdir().expect("tempdir");
+            let (reload_handle, tls_watch, cert_path, _key_path, ca_path) = setup(dir.path());
+
+            let addr = free_addr();
+            let schema = test_schema();
+            let initial = tls_reload::get_current_tls_material(&tls_watch);
+            let initial_material_ptr = Arc::as_ptr(&initial);
+            let initial_controller = web::serve(
+                schema.clone(),
+                addr,
+                initial.cert_pem.clone(),
+                initial.key_pem.clone(),
+                std::slice::from_ref(&ca_path),
+            )
+            .await
+            .expect("initial serve");
+            let mut web_controller = Some(initial_controller);
+
+            // Corrupt the cert file so validation fails during reload.
+            fs::write(&cert_path, b"not a cert").expect("corrupt cert");
+
+            reload_https_server(
+                &reload_handle,
+                &tls_watch,
+                &mut web_controller,
+                &schema,
+                addr,
+                &[ca_path],
+            )
+            .await;
+
+            let current = tls_reload::get_current_tls_material(&tls_watch);
+            assert_eq!(
+                initial_material_ptr,
+                Arc::as_ptr(&current),
+                "pre-stop validation failure must preserve previous TLS material"
+            );
+            assert!(
+                web_controller.is_some(),
+                "validation failure must not take the existing web controller"
+            );
+
+            shutdown_web(web_controller.take()).await;
+        }
+
+        #[tokio::test]
+        async fn reload_drops_controller_when_restart_fails() {
+            // Post-stop bind/start failure is handled with the same policy
+            // as initial startup failure: the new controller slot is left
+            // unset rather than resurrecting the old (already-stopped)
+            // instance. Simulate this by shutting the initial controller
+            // ourselves, occupying the port with an unrelated listener,
+            // and invoking reload against the now-busy address.
+            let dir = tempdir().expect("tempdir");
+            let (reload_handle, tls_watch, cert_path, key_path, ca_path) = setup(dir.path());
+
+            let addr = free_addr();
+            let schema = test_schema();
+            let initial = tls_reload::get_current_tls_material(&tls_watch);
+            let initial_controller = web::serve(
+                schema.clone(),
+                addr,
+                initial.cert_pem.clone(),
+                initial.key_pem.clone(),
+                std::slice::from_ref(&ca_path),
+            )
+            .await
+            .expect("initial serve");
+
+            initial_controller
+                .shutdown()
+                .await
+                .expect("initial shutdown");
+
+            // Occupy the port so the post-stop bind fails.
+            let blocker = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("hold port after shutdown");
+
+            // Write new PKI so reload validation succeeds and the restart
+            // attempt is the only thing that fails.
+            rewrite_pki(&cert_path, &key_path, &ca_path);
+
+            let mut web_controller: Option<WebController> = None;
+            reload_https_server(
+                &reload_handle,
+                &tls_watch,
+                &mut web_controller,
+                &schema,
+                addr,
+                &[ca_path],
+            )
+            .await;
+
+            assert!(
+                web_controller.is_none(),
+                "post-stop bind failure should leave web controller unset"
+            );
+            drop(blocker);
+        }
     }
 }
