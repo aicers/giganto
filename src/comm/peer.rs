@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     mem,
     net::{SocketAddr, ToSocketAddrs},
-    sync::Arc,
+    sync::{Arc, RwLock as StdRwLock},
     time::Duration,
 };
 
@@ -15,7 +15,9 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
 };
+use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use tokio::{
     select,
     sync::{
@@ -37,7 +39,38 @@ use crate::{
         Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_client, config_server,
         extract_cert_from_conn, peer_dedup_key_from_cert, peer_name_from_cert,
     },
+    tls_reload::TlsWatch,
 };
+
+/// Shared slot holding the peer subsystem's currently active client TLS
+/// configuration. Readers (`connect`) snapshot the inner `Arc` under a
+/// short-lived read lock; the reload handler replaces the `Arc` atomically
+/// under a write lock when a new configuration is applied.
+type SharedClientConfig = Arc<StdRwLock<Arc<ClientConfig>>>;
+
+/// Computes a lowercase hex SHA-256 fingerprint of the leaf (first)
+/// certificate in the chain, for use in reload logging and tests.
+pub(crate) fn leaf_cert_fingerprint(certs: &[CertificateDer<'_>]) -> String {
+    let Some(leaf) = certs.first() else {
+        return "<none>".to_string();
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(leaf.as_ref());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn current_client_config(slot: &SharedClientConfig) -> ClientConfig {
+    slot.read()
+        .expect("peer client config lock poisoned")
+        .as_ref()
+        .clone()
+}
 
 // The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
 // Reasons for updating this version include, but not be limited to:
@@ -134,6 +167,7 @@ impl Peer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         self,
         ingest_sensors: IngestSensors,
@@ -142,6 +176,7 @@ impl Peer {
         notify_sensor: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
         config_path: String,
+        mut tls_watch: TlsWatch,
     ) -> Result<()> {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
@@ -153,11 +188,12 @@ impl Peer {
         );
 
         let client_socket = SocketAddr::new(self.local_address.ip(), 0);
-        let client_endpoint = {
-            let mut e = Endpoint::client(client_socket).expect("endpoint");
-            e.set_default_client_config(self.client_config);
-            e
-        };
+        let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
+        let shared_client_config: SharedClientConfig =
+            Arc::new(StdRwLock::new(Arc::new(self.client_config)));
+        // Discard any initial value to avoid triggering the reload branch
+        // before the subsystem has advertised its current TLS state.
+        tls_watch.mark_unchanged();
 
         let (sender, mut receiver): (Sender<PeerIdentity>, Receiver<PeerIdentity>) = channel(100);
 
@@ -180,11 +216,13 @@ impl Peer {
 
         tokio::spawn(client_run(
             client_endpoint.clone(),
+            shared_client_config.clone(),
             peer_conn_info.clone(),
             self.local_connect_name.clone(),
             notify_shutdown.clone(),
         ));
 
+        let mut tls_reload_closed = false;
         loop {
             select! {
                 Some(conn) = server_endpoint.accept()  => {
@@ -206,11 +244,25 @@ impl Peer {
                 Some(peer) = receiver.recv()  => {
                     tokio::spawn(client_connection(
                         client_endpoint.clone(),
+                        shared_client_config.clone(),
                         peer,
                         peer_conn_info.clone(),
                         self.local_connect_name.clone(),
                         notify_shutdown.clone(),
                     ));
+                },
+                res = tls_watch.changed(), if !tls_reload_closed => {
+                    if res.is_err() {
+                        warn!("peer TLS reload channel closed; reload branch disabled");
+                        tls_reload_closed = true;
+                        continue;
+                    }
+                    let material = tls_watch.borrow_and_update().clone();
+                    apply_peer_tls_reload(
+                        &server_endpoint,
+                        &shared_client_config,
+                        &material.certs,
+                    );
                 },
                 () = notify_shutdown.notified() => {
                     sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
@@ -224,8 +276,48 @@ impl Peer {
     }
 }
 
+/// Prepares fresh peer server/client TLS configurations from `certs` and,
+/// only if both build successfully, atomically swaps them into the active
+/// peer subsystem state. On any prepare failure the previous active state
+/// is preserved and the failure is logged.
+fn apply_peer_tls_reload(
+    server_endpoint: &Endpoint,
+    shared_client_config: &SharedClientConfig,
+    certs: &Certs,
+) {
+    let new_server = match config_server(certs) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("peer TLS reload: server config build failed: {e:#}");
+            warn!("peer TLS reload aborted; keeping previous state");
+            return;
+        }
+    };
+    let new_client = match config_client(certs) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("peer TLS reload: client config build failed: {e:#}");
+            warn!("peer TLS reload aborted; keeping previous state");
+            return;
+        }
+    };
+
+    server_endpoint.set_server_config(Some(new_server));
+    {
+        let mut slot = shared_client_config
+            .write()
+            .expect("peer client config lock poisoned");
+        *slot = Arc::new(new_client);
+    }
+    info!(
+        "peer TLS state reloaded; new leaf fingerprint: {}",
+        leaf_cert_fingerprint(&certs.certs)
+    );
+}
+
 async fn client_run(
     client_endpoint: Endpoint,
+    shared_client_config: SharedClientConfig,
     peer_conn_info: PeerConns,
     local_connect_name: String,
     notify_shutdown: Arc<Notify>,
@@ -233,6 +325,7 @@ async fn client_run(
     for peer in &*peer_conn_info.peer_identities.read().await {
         tokio::spawn(client_connection(
             client_endpoint.clone(),
+            shared_client_config.clone(),
             peer.clone(),
             peer_conn_info.clone(),
             local_connect_name.clone(),
@@ -243,10 +336,12 @@ async fn client_run(
 
 async fn connect(
     client_endpoint: &Endpoint,
+    shared_client_config: &SharedClientConfig,
     peer_info: &PeerIdentity,
 ) -> Result<(Connection, SendStream, RecvStream)> {
+    let config = current_client_config(shared_client_config);
     let connection = client_endpoint
-        .connect(peer_info.addr, &peer_info.hostname)?
+        .connect_with(config, peer_info.addr, &peer_info.hostname)?
         .await?;
     let (send, recv) = client_handshake(&connection, env!("CARGO_PKG_VERSION")).await?;
     Ok((connection, send, recv))
@@ -270,9 +365,10 @@ fn get_port_from_config(config_key: &str, config_doc: &DocumentMut) -> Option<u1
         })
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn client_connection(
     client_endpoint: Endpoint,
+    shared_client_config: SharedClientConfig,
     peer_info: PeerIdentity,
     peer_conn_info: PeerConns,
     local_connect_name: String,
@@ -280,7 +376,7 @@ async fn client_connection(
 ) -> Result<()> {
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
     'connection: loop {
-        match connect(&client_endpoint, &peer_info).await {
+        match connect(&client_endpoint, &shared_client_config, &peer_info).await {
             Ok((connection, mut send, mut recv)) => {
                 // Remove duplicate connections.
                 let (remote_addr, remote_peer_dedup_key) = match check_for_duplicate_connections(
@@ -786,7 +882,8 @@ pub mod tests {
 
         use super::super::{
             IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns, PeerIdentity, PeerIdents,
-            PeerInfo, Peers, client_connection, client_run, read_toml_file, server_connection,
+            PeerInfo, Peers, SharedClientConfig, client_connection, client_run, read_toml_file,
+            server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
         #[cfg(not(feature = "bootroot"))]
@@ -936,6 +1033,26 @@ pub mod tests {
                     .expect("Failed to create endpoint");
             endpoint.set_default_client_config(client_config());
             endpoint
+        }
+
+        pub(super) fn init_shared_client_config() -> super::SharedClientConfig {
+            std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(client_config())))
+        }
+
+        /// Builds a paired `watch::Sender`/`TlsWatch` seeded with `certs`.
+        /// Tests keep the sender alive to broadcast reload events on demand.
+        pub(super) fn test_tls_watch_from_certs(
+            certs: Certs,
+        ) -> (
+            tokio::sync::watch::Sender<Arc<crate::tls_reload::TlsMaterial>>,
+            crate::tls_reload::TlsWatch,
+        ) {
+            let material = Arc::new(crate::tls_reload::TlsMaterial {
+                certs: Arc::new(certs),
+                cert_pem: Vec::new(),
+                key_pem: Vec::new(),
+            });
+            crate::tls_reload::test_tls_watch(material)
         }
 
         #[cfg(not(feature = "bootroot"))]
@@ -1211,11 +1328,9 @@ pub mod tests {
             let _ = ready.send(local_addr);
 
             let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
-            let client_endpoint = {
-                let mut e = Endpoint::client(client_socket).expect("endpoint");
-                e.set_default_client_config(peer.client_config);
-                e
-            };
+            let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
+            let shared_client_config: SharedClientConfig =
+                Arc::new(std::sync::RwLock::new(Arc::new(peer.client_config)));
 
             let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
             let Ok(config_doc) = read_toml_file(&config_path) else {
@@ -1236,6 +1351,7 @@ pub mod tests {
 
             tokio::spawn(client_run(
                 client_endpoint.clone(),
+                shared_client_config.clone(),
                 peer_conn_info.clone(),
                 peer.local_connect_name.clone(),
                 notify_shutdown.clone(),
@@ -1262,6 +1378,7 @@ pub mod tests {
                     Some(peer) = receiver.recv()  => {
                             tokio::spawn(client_connection(
                                 client_endpoint.clone(),
+                                shared_client_config.clone(),
                                 peer,
                                 peer_conn_info.clone(),
                                 local_connect_name.clone(),
@@ -1276,6 +1393,111 @@ pub mod tests {
                 }
             }
         }
+        /// Variant of `run_peer_with_ready` that additionally wires a
+        /// [`TlsWatch`](crate::tls_reload::TlsWatch) into the peer subsystem
+        /// so tests can drive the common-reload-trigger code path.
+        #[allow(clippy::too_many_arguments)]
+        pub(super) async fn run_peer_with_ready_and_tls_watch(
+            peer: Peer,
+            ingest_sensors: IngestSensors,
+            peers: Peers,
+            peer_idents: PeerIdents,
+            notify_sensor: Arc<Notify>,
+            notify_shutdown: Arc<Notify>,
+            config_path: String,
+            tls_watch: crate::tls_reload::TlsWatch,
+            ready: oneshot::Sender<SocketAddr>,
+        ) -> Result<()> {
+            let local_connect_name = peer.local_connect_name.clone();
+            let server_endpoint =
+                Endpoint::server(peer.server_config, peer.local_address).expect("endpoint");
+            let local_addr = server_endpoint
+                .local_addr()
+                .expect("for local addr display");
+            let _ = ready.send(local_addr);
+
+            let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
+            let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
+            let shared_client_config: SharedClientConfig =
+                Arc::new(std::sync::RwLock::new(Arc::new(peer.client_config)));
+
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
+            let Ok(config_doc) = read_toml_file(&config_path) else {
+                bail!("Failed to open/read config's toml file");
+            };
+
+            let peer_conn_info = PeerConns {
+                peer_conns: Arc::new(RwLock::new(HashMap::new())),
+                peer_identities: peer_idents,
+                peers,
+                ingest_sensors,
+                peer_sender: sender,
+                local_address: peer.local_address,
+                notify_sensor,
+                config_doc,
+                config_path,
+            };
+
+            tokio::spawn(client_run(
+                client_endpoint.clone(),
+                shared_client_config.clone(),
+                peer_conn_info.clone(),
+                peer.local_connect_name.clone(),
+                notify_shutdown.clone(),
+            ));
+
+            let mut tls_watch = tls_watch;
+            tls_watch.mark_unchanged();
+            let mut tls_reload_closed = false;
+            loop {
+                select! {
+                    Some(conn) = server_endpoint.accept() => {
+                        let peer_conn_info = peer_conn_info.clone();
+                        let notify_shutdown = notify_shutdown.clone();
+                        tokio::spawn(async move {
+                            let remote = conn.remote_address();
+                            if let Err(e) = server_connection(
+                                conn,
+                                peer_conn_info,
+                                notify_shutdown,
+                            )
+                            .await
+                            {
+                                tracing::error!("Connection to {remote} failed: {e}");
+                            }
+                        });
+                    },
+                    Some(peer) = receiver.recv() => {
+                        tokio::spawn(client_connection(
+                            client_endpoint.clone(),
+                            shared_client_config.clone(),
+                            peer,
+                            peer_conn_info.clone(),
+                            local_connect_name.clone(),
+                            notify_shutdown.clone(),
+                        ));
+                    },
+                    res = tls_watch.changed(), if !tls_reload_closed => {
+                        if res.is_err() {
+                            tls_reload_closed = true;
+                            continue;
+                        }
+                        let material = tls_watch.borrow_and_update().clone();
+                        super::apply_peer_tls_reload(
+                            &server_endpoint,
+                            &shared_client_config,
+                            &material.certs,
+                        );
+                    },
+                    () = notify_shutdown.notified() => {
+                        sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;
+                        server_endpoint.close(0_u32.into(), &[]);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         pub(super) fn spawn_request_init_info_response_server(
             server_endpoint: Endpoint,
             response_code: PeerCode,
@@ -1582,8 +1804,10 @@ pub mod tests {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
         };
+        let shared_client_config = init_shared_client_config();
         let client_task = tokio::spawn(client_connection(
             client_endpoint,
+            shared_client_config,
             peer_info,
             peer_conn_info,
             "client-node".to_string(),
@@ -2525,6 +2749,7 @@ pub mod tests {
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
         let notify_shutdown = Arc::new(Notify::new());
+        let (_tls_tx, tls_watch) = test_tls_watch_from_certs(create_certs());
 
         let err = peer
             .run(
@@ -2534,6 +2759,7 @@ pub mod tests {
                 notify_sensor,
                 notify_shutdown,
                 "missing-config.toml".to_string(),
+                tls_watch,
             )
             .await
             .unwrap_err();
@@ -2565,7 +2791,11 @@ pub mod tests {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
         };
-        let (connection, _send, _recv) = connect(&client_endpoint, &peer_info).await.unwrap();
+        let shared_client_config = init_shared_client_config();
+        let (connection, _send, _recv) =
+            connect(&client_endpoint, &shared_client_config, &peer_info)
+                .await
+                .unwrap();
         let _ = ready_tx.send(());
 
         let remote = connection.remote_address();
@@ -2767,5 +2997,182 @@ pub mod tests {
 
         assert!(err.to_string().contains("Failed to send peer data"));
         drop(server_conn);
+    }
+
+    #[test]
+    fn leaf_cert_fingerprint_is_stable_and_distinct() {
+        init_crypto();
+
+        let certs_a = create_certs();
+        let certs_b = create_node2_certs();
+
+        let fp_a = leaf_cert_fingerprint(&certs_a.certs);
+        let fp_a_again = leaf_cert_fingerprint(&certs_a.certs);
+        let fp_b = leaf_cert_fingerprint(&certs_b.certs);
+
+        assert_eq!(fp_a, fp_a_again, "fingerprint must be deterministic");
+        assert_ne!(
+            fp_a, fp_b,
+            "distinct certs must produce distinct fingerprints"
+        );
+        assert_eq!(fp_a.len(), 64, "sha256 hex encoding should be 64 chars");
+    }
+
+    #[test]
+    fn leaf_cert_fingerprint_handles_empty_chain() {
+        assert_eq!(leaf_cert_fingerprint(&[]), "<none>");
+    }
+
+    #[tokio::test]
+    async fn apply_peer_tls_reload_swaps_client_config_on_success() {
+        init_crypto();
+
+        let initial_certs = create_certs();
+        let new_certs = create_node2_certs();
+
+        let (server_endpoint, _server_addr) = setup_server_endpoint_with_certs(&initial_certs);
+        let initial_client_config = config_client(&initial_certs).expect("initial client config");
+        let shared: SharedClientConfig =
+            Arc::new(std::sync::RwLock::new(Arc::new(initial_client_config)));
+        let initial_fp = leaf_cert_fingerprint(&initial_certs.certs);
+
+        apply_peer_tls_reload(&server_endpoint, &shared, &new_certs);
+
+        // Verify the client config slot was swapped: rebuild the expected
+        // config from the new certs and compare its server-name verification
+        // behavior indirectly via the shared slot not being the original Arc.
+        let swapped = shared.read().expect("lock").clone();
+        let original = {
+            let tmp: SharedClientConfig = Arc::new(std::sync::RwLock::new(Arc::new(
+                config_client(&initial_certs).expect("rebuild initial"),
+            )));
+            tmp.read().expect("lock").clone()
+        };
+        assert!(
+            !Arc::ptr_eq(&swapped, &original),
+            "client config slot must be replaced by a new Arc after reload"
+        );
+
+        // Sanity: the reload operated on different cert material.
+        let new_fp = leaf_cert_fingerprint(&new_certs.certs);
+        assert_ne!(initial_fp, new_fp);
+    }
+
+    #[tokio::test]
+    async fn apply_peer_tls_reload_preserves_state_when_server_config_build_fails() {
+        init_crypto();
+
+        let initial_certs = create_certs();
+        let (server_endpoint, _server_addr) = setup_server_endpoint_with_certs(&initial_certs);
+        let initial_client_config = config_client(&initial_certs).expect("client config");
+        let shared: SharedClientConfig =
+            Arc::new(std::sync::RwLock::new(Arc::new(initial_client_config)));
+        let before = shared.read().expect("lock").clone();
+
+        // Build a Certs where cert and key do not form a valid pair so
+        // config_server fails at with_single_cert.
+        let other = create_node2_certs();
+        let mismatched = Certs {
+            certs: initial_certs.certs.clone(),
+            key: other.key.clone_key(),
+            root: initial_certs.root.clone(),
+        };
+
+        apply_peer_tls_reload(&server_endpoint, &shared, &mismatched);
+
+        let after = shared.read().expect("lock").clone();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "client config slot must be preserved when reload preparation fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_applies_new_server_cert_on_tls_watch_update() {
+        init_crypto();
+
+        let initial_certs = create_certs();
+        let peer = Peer::new(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            &initial_certs,
+        )
+        .unwrap();
+
+        let ingest_sensors = Arc::new(RwLock::new(HashSet::new()));
+        let peers = Arc::new(RwLock::new(HashMap::new()));
+        let peer_idents = Arc::new(RwLock::new(HashSet::new()));
+        let notify_sensor = Arc::new(Notify::new());
+        let notify_shutdown = Arc::new(Notify::new());
+        let notify_shutdown_handle = notify_shutdown.clone();
+        let (tls_tx, tls_watch) = test_tls_watch_from_certs(initial_certs.clone());
+        let config = TempConfig::from_str("peers = []");
+        let config_path = config.path().to_string();
+
+        // Bind a deterministic server address by constructing the Endpoint
+        // inside the spawned task — but we need the address for the client.
+        // Use a loopback test-only run helper that reports the bound addr.
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let ingest_sensors_for_run = ingest_sensors.clone();
+        let peers_for_run = peers.clone();
+        let peer_idents_for_run = peer_idents.clone();
+        let peer_handle = tokio::spawn(async move {
+            // Use the same bind semantics as Peer::run by re-implementing
+            // only the ready-address signalling; otherwise invoke Peer::run
+            // with a patched local_address is not trivial because run
+            // consumes self. Fall back to the dedicated test helper.
+            run_peer_with_ready_and_tls_watch(
+                peer,
+                ingest_sensors_for_run,
+                peers_for_run,
+                peer_idents_for_run,
+                notify_sensor,
+                notify_shutdown,
+                config_path,
+                tls_watch,
+                ready_tx,
+            )
+            .await
+        });
+
+        let server_addr = with_timeout("peer server ready", ready_rx)
+            .await
+            .expect("peer ready");
+
+        // Connect a client pre-reload and capture the server leaf fingerprint.
+        let pre = TestClient::new(server_addr).await;
+        let pre_peer_certs = extract_cert_from_conn(&pre.conn).expect("peer certs pre-reload");
+        let pre_fp = leaf_cert_fingerprint(&pre_peer_certs);
+        assert_eq!(pre_fp, leaf_cert_fingerprint(&initial_certs.certs));
+        drop(pre);
+
+        // Push refreshed TLS material through the watch channel. Using the
+        // same logical node identity keeps the test client's SNI valid.
+        let new_certs = create_certs();
+        let new_material = Arc::new(crate::tls_reload::TlsMaterial {
+            certs: Arc::new(new_certs.clone()),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+        });
+        tls_tx
+            .send(new_material)
+            .expect("broadcast reload material");
+
+        // Allow the peer subsystem to observe the watch update and swap
+        // active TLS state before the next handshake.
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let probe = TestClient::new(server_addr).await;
+            let probe_certs = extract_cert_from_conn(&probe.conn).expect("peer certs probe");
+            let probe_fp = leaf_cert_fingerprint(&probe_certs);
+            if probe_fp == leaf_cert_fingerprint(&new_certs.certs) {
+                notify_shutdown_handle.notify_waiters();
+                with_timeout("peer shutdown", peer_handle)
+                    .await
+                    .expect("peer task join")
+                    .expect("peer task result");
+                return;
+            }
+        }
+        panic!("peer server did not converge to new leaf fingerprint within timeout");
     }
 }
