@@ -32,6 +32,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cname`/`sname`. Renamed the `OpLog` GraphQL field `agentName` to
   `serviceName`. Updated the `OpLog` export output to rename `agent_id` to
   `sensor` and add `service_name`.
+- Renamed the `OpLog` GraphQL filter field `agentId` to `serviceName`
+  for consistent naming in the OpLog domain.
 - Replaced `chrono` with `jiff` for datetime handling. Public
   API and serialization format remain unchanged.
 - Updated `DceRpc` event format to use `context[]` and `request[]`
@@ -50,10 +52,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [aicers/docs-theme](https://github.com/aicers/docs-theme)
   template. Theme assets are now fetched at build time via
   `scripts/fetch-theme.sh` into `docs/.theme/`.
-- Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
-- Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.1,<0.28.0".
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
