@@ -6193,3 +6193,344 @@ async fn connect_supports_ipv6() {
 
     let _ = server_task.await;
 }
+
+#[cfg(not(feature = "bootroot"))]
+mod tls_reload_connect {
+    use std::{
+        net::{IpAddr, Ipv6Addr, SocketAddr},
+        sync::Arc,
+        time::Duration as StdDuration,
+    };
+
+    use giganto_client::connection::server_handshake;
+    use quinn::Endpoint;
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
+        ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+    };
+    use rustls::pki_types::CertificateDer;
+    use tokio::sync::{Mutex as TokioMutex, mpsc};
+
+    use super::super::{PUBLISH_VERSION_REQ, connect};
+    use super::fixtures::init_crypto;
+    use crate::{
+        comm::{to_cert_chain, to_private_key, to_root_cert},
+        server::{Certs, config_server, extract_cert_from_conn},
+        tls_reload::{CertPaths, ReloadHandle, TlsMaterial, get_current_tls_material},
+    };
+
+    const TEST_SERVER_NAME: &str = "reload-test-server";
+
+    struct ReloadFixture {
+        _temp_dir: tempfile::TempDir,
+        client_cert_path: String,
+        client_key_path: String,
+        ca_cert_path: String,
+        server_certs: Arc<Certs>,
+        ca: CertifiedIssuer<'static, KeyPair>,
+    }
+
+    fn build_ca() -> CertifiedIssuer<'static, KeyPair> {
+        let key = KeyPair::generate().expect("generate CA key");
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Publish Reload Test CA");
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
+        CertifiedIssuer::self_signed(params, key).expect("build CA")
+    }
+
+    fn sign_leaf(
+        ca: &CertifiedIssuer<'_, KeyPair>,
+        common_name: &str,
+        dns_name: &str,
+        eku: Vec<ExtendedKeyUsagePurpose>,
+    ) -> (String, String) {
+        let key = KeyPair::generate().expect("generate leaf key");
+        let mut params =
+            CertificateParams::new(vec![dns_name.to_string()]).expect("build leaf params");
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        params.extended_key_usages = eku;
+        let cert = params.signed_by(&key, ca).expect("sign leaf");
+        (cert.pem(), key.serialize_pem())
+    }
+
+    fn build_reload_fixture() -> ReloadFixture {
+        let ca = build_ca();
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+
+        let ca_cert_path = temp_dir.path().join("ca.pem");
+        std::fs::write(&ca_cert_path, ca.pem()).expect("write ca");
+
+        let (server_cert_pem, server_key_pem) = sign_leaf(
+            &ca,
+            "Publish Reload Test Server",
+            TEST_SERVER_NAME,
+            vec![ExtendedKeyUsagePurpose::ServerAuth],
+        );
+        let (client_cert_pem, client_key_pem) = sign_leaf(
+            &ca,
+            "Publish Reload Test Client A",
+            "client-a",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+
+        let client_cert_path = temp_dir.path().join("client-cert.pem");
+        let client_key_path = temp_dir.path().join("client-key.pem");
+        std::fs::write(&client_cert_path, client_cert_pem.as_bytes()).expect("write client cert");
+        std::fs::write(&client_key_path, client_key_pem.as_bytes()).expect("write client key");
+
+        let server_certs = Arc::new(Certs {
+            certs: to_cert_chain(server_cert_pem.as_bytes()).expect("server cert chain"),
+            key: to_private_key(server_key_pem.as_bytes()).expect("server key"),
+            root: to_root_cert(&[ca_cert_path.to_string_lossy().into_owned()])
+                .expect("server root"),
+        });
+
+        ReloadFixture {
+            _temp_dir: temp_dir,
+            client_cert_path: client_cert_path.to_string_lossy().into_owned(),
+            client_key_path: client_key_path.to_string_lossy().into_owned(),
+            ca_cert_path: ca_cert_path.to_string_lossy().into_owned(),
+            server_certs,
+            ca,
+        }
+    }
+
+    fn build_client_paths(fixture: &ReloadFixture) -> CertPaths {
+        CertPaths {
+            cert_path: fixture.client_cert_path.clone(),
+            key_path: fixture.client_key_path.clone(),
+            ca_certs_paths: vec![fixture.ca_cert_path.clone()],
+        }
+    }
+
+    fn spawn_capturing_server(
+        server_certs: &Arc<Certs>,
+    ) -> (
+        SocketAddr,
+        mpsc::UnboundedReceiver<Vec<CertificateDer<'static>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let server_config = config_server(server_certs).expect("server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("start server endpoint");
+        let server_addr = endpoint.local_addr().expect("server addr");
+        let (cert_tx, cert_rx) = mpsc::unbounded_channel();
+        let connections: Arc<TokioMutex<Vec<quinn::Connection>>> =
+            Arc::new(TokioMutex::new(Vec::new()));
+
+        let task = tokio::spawn(async move {
+            while let Some(connecting) = endpoint.accept().await {
+                let cert_tx = cert_tx.clone();
+                let connections = Arc::clone(&connections);
+                tokio::spawn(async move {
+                    let Ok(connection) = connecting.await else {
+                        return;
+                    };
+                    if server_handshake(&connection, PUBLISH_VERSION_REQ)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if let Ok(chain) = extract_cert_from_conn(&connection) {
+                        let owned: Vec<CertificateDer<'static>> =
+                            chain.into_iter().map(CertificateDer::into_owned).collect();
+                        let _ = cert_tx.send(owned);
+                    }
+                    connections.lock().await.push(connection);
+                });
+            }
+        });
+
+        (server_addr, cert_rx, task)
+    }
+
+    #[tokio::test]
+    async fn connect_presents_new_leaf_certificate_after_reload() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        let conn1 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("first connect");
+        let leaf_chain_1 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("first cert timeout")
+            .expect("first cert missing");
+        conn1.close(0u32.into(), b"done");
+
+        // Rotate the leaf on disk and trigger a reload.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("second connect after reload");
+        let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("second cert timeout")
+            .expect("second cert missing");
+        conn2.close(0u32.into(), b"done");
+
+        assert_ne!(
+            leaf_chain_1[0], leaf_chain_2[0],
+            "post-reload connect must present the new leaf certificate",
+        );
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn reload_does_not_close_established_peer_connection() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, _cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("initial connect");
+
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        // Give the reload notification time to propagate; the implementation
+        // must not act on it for already-established connections.
+        tokio::time::sleep(StdDuration::from_millis(200)).await;
+
+        assert!(
+            conn.close_reason().is_none(),
+            "established peer connection should remain open after TLS reload: {:?}",
+            conn.close_reason()
+        );
+
+        conn.close(0u32.into(), b"done");
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_reload_preserves_material_for_subsequent_connect() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial_cert_pem = cert_pem.clone();
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        // Corrupt the cert file so reload fails and material is preserved.
+        std::fs::write(&fixture.client_cert_path, b"not a cert").expect("corrupt cert");
+        handle.reload();
+
+        let current = get_current_tls_material(&watch);
+        assert_eq!(
+            current.cert_pem, initial_cert_pem,
+            "failed reload must preserve previous TLS material",
+        );
+
+        // A subsequent connect (e.g. a retry after the reload failure) must
+        // still succeed using the preserved material.
+        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("connect after failed reload should succeed");
+        let leaf_chain = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("cert timeout")
+            .expect("cert missing");
+        assert!(
+            !leaf_chain.is_empty(),
+            "preserved material should still present a leaf certificate",
+        );
+        conn.close(0u32.into(), b"done");
+
+        // Repair on-disk material and reload; subsequent connect succeeds with refreshed material.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("connect after successful recovery");
+        let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("recovery cert timeout")
+            .expect("recovery cert missing");
+        assert_ne!(
+            leaf_chain[0], leaf_chain_2[0],
+            "after recovery reload, new leaf certificate should be presented",
+        );
+        conn2.close(0u32.into(), b"done");
+
+        server_task.abort();
+    }
+}

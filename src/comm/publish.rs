@@ -1925,17 +1925,14 @@ async fn connect(
     server_name: &str,
     tls_watch: &TlsWatch,
 ) -> Result<Connection> {
-    let tls = tls_reload::get_current_tls_material(tls_watch);
     let client_addr = if server_addr.is_ipv6() {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     };
 
-    let mut endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
-    endpoint.set_default_client_config(config_client(&tls.certs)?);
-
-    let conn = connect_repeatedly(&endpoint, server_addr, server_name).await;
+    let endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
+    let conn = connect_repeatedly(&endpoint, server_addr, server_name, tls_watch).await?;
 
     client_handshake(&conn, env!("CARGO_PKG_VERSION")).await?;
     Ok(conn)
@@ -1945,16 +1942,23 @@ async fn connect_repeatedly(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
-) -> Connection {
+    tls_watch: &TlsWatch,
+) -> Result<Connection> {
     let max_delay = Duration::from_secs(30);
     let mut delay = Duration::from_millis(500);
 
     loop {
-        match endpoint.connect(server_addr, server_name) {
+        // Re-snapshot the latest TLS material on every attempt so a reload
+        // that completes mid-retry is picked up by the next connect.
+        let tls = tls_reload::get_current_tls_material(tls_watch);
+        let client_config = config_client(&tls.certs)
+            .context("failed to build client TLS config from current material")?;
+
+        match endpoint.connect_with(client_config, server_addr, server_name) {
             Ok(connecting) => match connecting.await {
                 Ok(conn) => {
                     info!("Connected to {}", server_addr);
-                    return conn;
+                    return Ok(conn);
                 }
                 Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
             },
