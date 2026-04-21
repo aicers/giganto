@@ -1182,7 +1182,7 @@ impl From<usize> for StringNumberUsize {
     }
 }
 
-/// Represents a DHCP option tag-value pair.
+/// Represents a DHCP option code-value pair.
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
 #[cfg_attr(feature = "cluster", graphql_client_type(names = [
@@ -1190,8 +1190,8 @@ impl From<usize> for StringNumberUsize {
     network_raw_events::NetworkRawEventsNetworkRawEventsEdgesNodeOnDhcpRawEventOptions
 ]))]
 struct DhcpOptionRawEvent {
-    /// DHCP Option Tag Number
-    tag: u8,
+    /// DHCP Option Code Number
+    code: u8,
     /// DHCP Option Value
     value: Vec<u8>,
 }
@@ -1708,7 +1708,7 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
             options: val
                 .options
                 .into_iter()
-                .map(|(tag, value)| DhcpOptionRawEvent { tag, value })
+                .map(|(code, value)| DhcpOptionRawEvent { code, value })
                 .collect(),
         })
     }

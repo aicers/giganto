@@ -39,7 +39,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `operation` fields. Bumped `giganto-client` to 0.26.0. Added database
   migration from v26 to v27 format for `DceRpc` events.
 - Added `options` field (`Vec<(u8, Vec<u8>)>`) to the `Dhcp`
-  event to store all DHCP option tag-value pairs. Added `Dhcp`
+  event to store all DHCP option code and value pairs. Added `Dhcp`
   migration to the existing v26 to v27 migration flow.
 - Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
 - Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".

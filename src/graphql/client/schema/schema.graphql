@@ -406,13 +406,13 @@ type DceRpcRawEventEdge {
 }
 
 """
-Represents a DHCP option tag-value pair.
+Represents a DHCP option code-value pair.
 """
 type DhcpOptionRawEvent {
 	"""
-	DHCP Option Tag Number
+	DHCP Option Code Number
 	"""
-	tag: Int!
+	code: Int!
 	"""
 	DHCP Option Value
 	"""

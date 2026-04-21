@@ -459,7 +459,7 @@ query NetworkRawEvents(
           clientIdType
           clientId
           options {
-            tag
+            code
             value
           }
         }
