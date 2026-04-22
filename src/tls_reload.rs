@@ -683,4 +683,276 @@ mod listener_reload_contract_tests {
         acceptor.abort();
         let _ = acceptor.await;
     }
+
+    /// End-to-end: spin up the real `ingest::Server::run` with a live
+    /// `TlsWatch`, push refreshed TLS material through the watch sender,
+    /// and verify that the listener's `tls_watch.changed()` select arm
+    /// actually picks it up and rotates the TLS state for new QUIC
+    /// handshakes. This mirrors the production flow
+    /// `notify_tls_reload -> reload_handle.reload() -> watch.send -> listener arm`
+    /// and, unlike the primitive-level tests above, exercises the real
+    /// `Server::run` loop rather than a standalone `Endpoint`.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn ingest_server_run_reloads_tls_via_watch_end_to_end() {
+        use std::{net::UdpSocket, sync::Arc};
+
+        use tempfile::tempdir;
+        use tokio::{
+            sync::{Notify, watch},
+            time::sleep,
+        };
+
+        use crate::comm::{
+            new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
+            new_stream_direct_channels,
+        };
+        use crate::storage::{Database, DbOptions};
+        use crate::tls_reload::TlsMaterial;
+
+        install_crypto_provider();
+        let set_a = build_cert_set();
+        let set_b = build_cert_set();
+
+        // Reserve a loopback port by binding-and-dropping a UDP socket. The
+        // listener rebinds to the same port, which is the standard way to
+        // obtain a free ephemeral port for a server that performs its own
+        // bind inside `run`.
+        let server_addr = {
+            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+                .expect("bind probe");
+            probe.local_addr().expect("probe local addr")
+        };
+
+        let db_dir = tempdir().expect("db tempdir");
+        let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+
+        let server = crate::comm::ingest::Server::new(server_addr, &set_a.server);
+
+        let (tls_sender, tls_watch) = watch::channel(Arc::new(TlsMaterial {
+            certs: Arc::new(set_a.server.clone()),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+        }));
+
+        let notify_shutdown = Arc::new(Notify::new());
+        let pcap_sensors = new_pcap_sensors();
+        let ingest_sensors = new_ingest_sensors(&db);
+        let runtime_ingest_sensors = new_runtime_ingest_sensors();
+        let stream_direct_channels = new_stream_direct_channels();
+
+        let server_task = {
+            let db = db.clone();
+            let shutdown = notify_shutdown.clone();
+            tokio::spawn(async move {
+                server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        ingest_sensors,
+                        runtime_ingest_sensors,
+                        stream_direct_channels,
+                        shutdown,
+                        Some(Arc::new(Notify::new())),
+                        1024,
+                        tls_watch,
+                    )
+                    .await;
+            })
+        };
+
+        // Let the server bind and drain the watch channel's initial value.
+        sleep(Duration::from_millis(200)).await;
+
+        let client_a = client_endpoint(&set_a.client);
+        let pre_reload_conn = try_connect(&client_a, server_addr)
+            .await
+            .expect("pre-reload set A client should handshake against the real ingest listener");
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should be open"
+        );
+
+        // Drive the reload through the same watch channel the listener is
+        // subscribed to. This is the final hop in the production path:
+        // `ReloadHandle::reload` ultimately does `watch.send(...)`.
+        tls_sender
+            .send(Arc::new(TlsMaterial {
+                certs: Arc::new(set_b.server.clone()),
+                cert_pem: Vec::new(),
+                key_pem: Vec::new(),
+            }))
+            .expect("broadcast refreshed material");
+
+        // Poll until the listener's select arm has actually applied the
+        // new config. Proof-by-handshake: once a set-B-trusting client can
+        // handshake, the arm has fired and `set_server_config` ran.
+        let mut applied = false;
+        for _ in 0..40 {
+            sleep(Duration::from_millis(50)).await;
+            let probe = client_endpoint(&set_b.client);
+            if try_connect(&probe, server_addr).await.is_ok() {
+                applied = true;
+                break;
+            }
+        }
+        assert!(
+            applied,
+            "ingest listener did not apply refreshed TLS material via tls_watch.changed()"
+        );
+
+        let client_b = client_endpoint(&set_b.client);
+        let post_reload_conn = try_connect(&client_b, server_addr)
+            .await
+            .expect("set B client should handshake once the listener applied the reload");
+
+        let client_a_stale = client_endpoint(&set_a.client);
+        let err = try_connect(&client_a_stale, server_addr)
+            .await
+            .expect_err("set A client should fail to handshake after listener rotated to set B");
+        assert!(
+            !err.is_empty(),
+            "expected a handshake error after reload with stale trust"
+        );
+
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should survive the reload, close reason: {:?}",
+            pre_reload_conn.close_reason()
+        );
+
+        pre_reload_conn.close(0u32.into(), b"done");
+        post_reload_conn.close(0u32.into(), b"done");
+        notify_shutdown.notify_waiters();
+        let _ = timeout(Duration::from_secs(3), server_task).await;
+    }
+
+    /// End-to-end counterpart of the ingest test for the publish listener.
+    /// Verifies that `publish::Server::run`'s `tls_watch.changed()` arm
+    /// actually fires when new material is sent through the shared watch
+    /// channel, and applies it to new QUIC handshakes while preserving
+    /// existing connections.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn publish_server_run_reloads_tls_via_watch_end_to_end() {
+        use std::{net::UdpSocket, sync::Arc};
+
+        use tempfile::tempdir;
+        use tokio::{
+            sync::{Notify, watch},
+            time::sleep,
+        };
+
+        use crate::comm::{
+            new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
+        };
+        use crate::storage::{Database, DbOptions};
+        use crate::tls_reload::TlsMaterial;
+
+        install_crypto_provider();
+        let set_a = build_cert_set();
+        let set_b = build_cert_set();
+
+        let server_addr = {
+            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+                .expect("bind probe");
+            probe.local_addr().expect("probe local addr")
+        };
+
+        let db_dir = tempdir().expect("db tempdir");
+        let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+
+        let initial_certs = Arc::new(set_a.server.clone());
+        let server = crate::comm::publish::Server::new(server_addr, &set_a.server);
+
+        let (tls_sender, tls_watch) = watch::channel(Arc::new(TlsMaterial {
+            certs: Arc::new(set_a.server.clone()),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+        }));
+
+        let notify_shutdown = Arc::new(Notify::new());
+        let pcap_sensors = new_pcap_sensors();
+        let ingest_sensors = new_ingest_sensors(&db);
+        let stream_direct_channels = new_stream_direct_channels();
+        let (peers, peer_idents) = new_peers_data(None);
+
+        let server_task = {
+            let db = db.clone();
+            let shutdown = notify_shutdown.clone();
+            tokio::spawn(async move {
+                server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        stream_direct_channels,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        initial_certs,
+                        shutdown,
+                        tls_watch,
+                    )
+                    .await;
+            })
+        };
+
+        sleep(Duration::from_millis(200)).await;
+
+        let client_a = client_endpoint(&set_a.client);
+        let pre_reload_conn = try_connect(&client_a, server_addr)
+            .await
+            .expect("pre-reload set A client should handshake against the real publish listener");
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should be open"
+        );
+
+        tls_sender
+            .send(Arc::new(TlsMaterial {
+                certs: Arc::new(set_b.server.clone()),
+                cert_pem: Vec::new(),
+                key_pem: Vec::new(),
+            }))
+            .expect("broadcast refreshed material");
+
+        let mut applied = false;
+        for _ in 0..40 {
+            sleep(Duration::from_millis(50)).await;
+            let probe = client_endpoint(&set_b.client);
+            if try_connect(&probe, server_addr).await.is_ok() {
+                applied = true;
+                break;
+            }
+        }
+        assert!(
+            applied,
+            "publish listener did not apply refreshed TLS material via tls_watch.changed()"
+        );
+
+        let client_b = client_endpoint(&set_b.client);
+        let post_reload_conn = try_connect(&client_b, server_addr)
+            .await
+            .expect("set B client should handshake once the listener applied the reload");
+
+        let client_a_stale = client_endpoint(&set_a.client);
+        let err = try_connect(&client_a_stale, server_addr)
+            .await
+            .expect_err("set A client should fail to handshake after listener rotated to set B");
+        assert!(
+            !err.is_empty(),
+            "expected a handshake error after reload with stale trust"
+        );
+
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should survive the reload, close reason: {:?}",
+            pre_reload_conn.close_reason()
+        );
+
+        pre_reload_conn.close(0u32.into(), b"done");
+        post_reload_conn.close(0u32.into(), b"done");
+        notify_shutdown.notify_waiters();
+        let _ = timeout(Duration::from_secs(3), server_task).await;
+    }
 }
