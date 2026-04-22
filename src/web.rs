@@ -56,19 +56,21 @@ impl WebController {
 /// * `addr` - The socket address to bind to
 /// * `cert` - Server certificate in PEM format
 /// * `key` - Server private key in PEM format
-/// * `ca_certs` - Paths to CA certificate files for client verification
+/// * `ca_pem` - Concatenated CA PEM bytes used for client verification.
+///   Callers must pass the already-validated bytes produced by the
+///   common TLS reload path; this function does not re-read the CA
+///   files from disk so that restart consumes the validated state
+///   without reopening a TOCTOU window.
 ///
 /// # Errors
 ///
-/// This function will return an error if:
-/// * CA certificates cannot be read
-/// * The TLS listener cannot bind to `addr`
+/// Returns an error if the TLS listener cannot bind to `addr`.
 pub async fn serve<S: Executor>(
     schema: S,
     addr: SocketAddr,
     cert: Vec<u8>,
     key: Vec<u8>,
-    ca_certs: &[String],
+    ca_pem: Vec<u8>,
 ) -> Result<WebController> {
     let graphql = GraphQL::new(schema);
 
@@ -85,19 +87,12 @@ pub async fn serve<S: Executor>(
         .at("/graphql/playground", playground)
         .at("/", home);
 
-    let mut ca_cert_data = Vec::new();
-    for ca_path in ca_certs {
-        let ca_pem = std::fs::read(ca_path)
-            .with_context(|| format!("failed to read CA certificate {ca_path}"))?;
-        ca_cert_data.extend_from_slice(&ca_pem);
-    }
-
     let certificate = RustlsCertificate::new().cert(cert).key(key);
 
     let listener = TcpListener::bind(addr).rustls(
         RustlsConfig::new()
             .fallback(certificate)
-            .client_auth_required(ca_cert_data),
+            .client_auth_required(ca_pem),
     );
 
     // Bind eagerly so the caller observes bind failures before the
@@ -165,17 +160,16 @@ mod tests {
         Schema::build(Query, EmptyMutation, EmptySubscription).finish()
     }
 
-    fn write_pki(dir: &std::path::Path) -> (Vec<u8>, Vec<u8>, String) {
+    fn write_pki(_dir: &std::path::Path) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let ck = rcgen::generate_simple_self_signed(vec!["localhost".into()])
             .expect("generate self-signed cert");
         let cert_pem = ck.cert.pem();
         let key_pem = ck.signing_key.serialize_pem();
-        let ca_path = dir.join("ca.pem");
-        std::fs::write(&ca_path, cert_pem.as_bytes()).expect("write ca");
+        let ca_pem = cert_pem.clone();
         (
             cert_pem.into_bytes(),
             key_pem.into_bytes(),
-            ca_path.to_str().expect("path").to_string(),
+            ca_pem.into_bytes(),
         )
     }
 
@@ -197,27 +191,8 @@ mod tests {
             .expect("hold port");
         let addr = blocker.local_addr().expect("addr");
 
-        let result = serve(test_schema(), addr, cert, key, &[ca]).await;
+        let result = serve(test_schema(), addr, cert, key, ca).await;
         assert!(result.is_err(), "bind on occupied port should fail");
-    }
-
-    #[tokio::test]
-    async fn serve_returns_error_when_ca_cert_missing() {
-        install_crypto_provider();
-        let dir = tempdir().expect("tempdir");
-        let (cert, key, _) = write_pki(dir.path());
-        let addr = free_addr();
-
-        let result = serve(
-            test_schema(),
-            addr,
-            cert,
-            key,
-            &["/nonexistent/ca.pem".to_string()],
-        )
-        .await;
-
-        assert!(result.is_err(), "missing CA file should fail");
     }
 
     #[tokio::test]
@@ -227,7 +202,7 @@ mod tests {
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
-        let controller = serve(test_schema(), addr, cert, key, &[ca])
+        let controller = serve(test_schema(), addr, cert, key, ca)
             .await
             .expect("serve should start");
 
@@ -244,20 +219,14 @@ mod tests {
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
-        let controller = serve(
-            test_schema(),
-            addr,
-            cert.clone(),
-            key.clone(),
-            std::slice::from_ref(&ca),
-        )
-        .await
-        .expect("initial serve");
+        let controller = serve(test_schema(), addr, cert.clone(), key.clone(), ca.clone())
+            .await
+            .expect("initial serve");
         sleep(Duration::from_millis(50)).await;
         controller.shutdown().await.expect("shutdown");
 
         // The same address must be re-bindable after shutdown completes.
-        let controller = serve(test_schema(), addr, cert, key, std::slice::from_ref(&ca))
+        let controller = serve(test_schema(), addr, cert, key, ca)
             .await
             .expect("second serve should rebind");
         controller.shutdown().await.expect("second shutdown");

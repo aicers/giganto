@@ -53,6 +53,7 @@ pub(crate) fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
     }
 }
 
+#[allow(dead_code)] // used by test fixtures across the crate
 pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
     if ca_certs_paths.is_empty() {
         bail!("no root certificate paths provided");
