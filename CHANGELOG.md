@@ -64,10 +64,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Replaced `.expect("Failed to build request client pool")` in
-  `create_graphql_client` initialization with `?` propagation, so a
-  client-pool build failure surfaces as a proper error from `main` instead
-  of panicking.
 - Fixed `SequenceGenerator` by using `AtomicU64` + CAS (`fetch_update`) to
   prevent duplicate sequence issuance during concurrent reset races.
   The generator now keeps state in one atomic value with deterministic rules:
