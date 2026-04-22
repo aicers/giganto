@@ -6533,4 +6533,106 @@ mod tls_reload_connect {
 
         server_task.abort();
     }
+
+    /// Regression test for the mid-retry reload path in
+    /// `connect_repeatedly()`: when an attempt fails and the caller keeps
+    /// retrying, a reload that completes mid-loop must be picked up by the
+    /// next retry. Bug: if the first snapshot of `TlsWatch` were captured
+    /// outside the retry loop, retries would keep re-presenting the stale
+    /// material even after a successful reload.
+    ///
+    /// The retry loop is forced via an untrusted CA on the client side so
+    /// the client's own `connecting.await` fails on every attempt (unlike
+    /// client-cert rejection, which quinn surfaces only after connection
+    /// establishment and would prematurely unwind the retry loop).
+    #[tokio::test]
+    async fn retry_loop_picks_up_reloaded_material_mid_flight() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        // Seed the on-disk CA bundle with an unrelated CA that does NOT
+        // trust the server's cert. The client's `connecting.await` will
+        // reject every attempt, keeping `connect_repeatedly()` in its
+        // retry loop.
+        let untrusted_ca = build_ca();
+        let untrusted_dir = tempfile::tempdir().expect("untrusted tempdir");
+        let untrusted_ca_path = untrusted_dir.path().join("untrusted-ca.pem");
+        std::fs::write(&untrusted_ca_path, untrusted_ca.pem()).expect("write untrusted ca");
+
+        let untrusted_paths = CertPaths {
+            cert_path: fixture.client_cert_path.clone(),
+            key_path: fixture.client_key_path.clone(),
+            ca_certs_paths: vec![untrusted_ca_path.to_string_lossy().into_owned()],
+        };
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&untrusted_paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+
+        // The `ReloadHandle` must load from paths that will resolve to
+        // trusted material on reload, so point it at the real CA bundle.
+        // The initial material (above) is the untrusted snapshot.
+        let trusted_paths = build_client_paths(&fixture);
+        let (handle, watch) = ReloadHandle::new(trusted_paths, initial);
+
+        // Drive connect() concurrently; it must stay in the retry loop
+        // because the client rejects the server's cert under the untrusted
+        // CA snapshot.
+        let watch_for_task = watch.clone();
+        let connect_task =
+            tokio::spawn(
+                async move { connect(server_addr, TEST_SERVER_NAME, &watch_for_task).await },
+            );
+
+        // Wait long enough for at least one failed attempt plus the
+        // initial 500ms backoff so the task is provably retrying.
+        tokio::time::sleep(StdDuration::from_millis(1500)).await;
+        if connect_task.is_finished() {
+            let outcome = connect_task.await;
+            panic!("connect returned unexpectedly before reload: {outcome:?}");
+        }
+
+        // Rotate the client leaf so the post-reload attempt presents a
+        // different certificate than the initial (untrusted) snapshot and
+        // we can assert the retry observed the reloaded material.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client Recovery",
+            "client-recovery",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        // The in-progress retry loop must observe the reload on its next
+        // attempt and succeed. Back-off can reach a few seconds by this
+        // point, so allow a generous timeout.
+        let conn = tokio::time::timeout(StdDuration::from_secs(15), connect_task)
+            .await
+            .expect("connect did not complete after mid-retry reload")
+            .expect("connect task panicked")
+            .expect("connect must succeed once refreshed material is published");
+
+        let leaf_chain = tokio::time::timeout(StdDuration::from_secs(5), cert_rx.recv())
+            .await
+            .expect("cert capture timeout")
+            .expect("cert chain missing");
+        let expected_chain =
+            crate::comm::to_cert_chain(new_cert_pem.as_bytes()).expect("parse refreshed leaf");
+        assert_eq!(
+            leaf_chain[0], expected_chain[0],
+            "retry after mid-loop reload must present the refreshed leaf",
+        );
+
+        conn.close(0u32.into(), b"done");
+        server_task.abort();
+    }
 }
