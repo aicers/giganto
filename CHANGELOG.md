@@ -33,13 +33,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   server is started on the same address using the refreshed material
   consumed directly from the validated shared state (the HTTPS restart
   no longer re-reads CA files from disk, eliminating the TOCTOU window
-  between reload validation and rebind). A reload whose bytes are
-  identical to the running material is a no-op and does not restart
-  the server. If validation fails the existing HTTPS server keeps
-  running; if the post-shutdown bind/start fails the error is
-  surfaced with the same policy as initial startup failure. After
-  reload, subsequent handshakes present the new server certificate and
-  client trust is enforced against the new CA bundle.
+  between reload validation and rebind). Reload validation uses the
+  same strict `RootCertStore::add` semantics as the poem/rustls listener
+  so a CA bundle that the new server would reject cannot slip past
+  validation and trigger an unnecessary restart. A reload whose bytes
+  are identical to the running material is a no-op when a live HTTPS
+  server is already serving; if a prior startup or restart left the
+  server down, a subsequent reload retries startup against the current
+  material so a transient bind failure does not permanently suppress
+  HTTPS. If validation fails the existing HTTPS server keeps running;
+  if the post-shutdown bind/start fails the error is surfaced with the
+  same policy as initial startup failure. After reload, subsequent
+  handshakes present the new server certificate and client trust is
+  enforced against the new CA bundle.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and

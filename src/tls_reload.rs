@@ -69,9 +69,13 @@ fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, V
     }
 
     let mut root_cert = rustls::RootCertStore::empty();
-    let mut added_any = false;
     let mut combined_pem: Vec<u8> = Vec::new();
 
+    // Use strict `RootCertStore::add` semantics to match the trust
+    // store the poem/rustls HTTPS listener builds at bind time. A
+    // bundle containing any cert the listener would reject must be
+    // rejected here too, so reload validation cannot succeed on
+    // material the new server will refuse to start on.
     for path in ca_certs_paths {
         let pem = std::fs::read(path)
             .with_context(|| format!("failed to read root certificate file: {path}"))?;
@@ -80,21 +84,20 @@ fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, V
             .collect::<Result<_, _>>()
             .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
 
-        let (valid, invalid) = root_cert.add_parsable_certificates(certs.clone());
-        added_any |= valid > 0;
+        if certs.is_empty() {
+            bail!("no certificates found in root certificate file: {path}");
+        }
 
-        if invalid > 0 {
-            warn!("some root certificate(s) were skipped in {certs:?}");
+        for der in certs {
+            root_cert
+                .add(der)
+                .with_context(|| format!("invalid root certificate in {path}"))?;
         }
 
         combined_pem.extend_from_slice(&pem);
         if !combined_pem.ends_with(b"\n") {
             combined_pem.push(b'\n');
         }
-    }
-
-    if !added_any {
-        bail!("no valid root certificates loaded");
     }
 
     Ok((root_cert, combined_pem))
@@ -326,6 +329,39 @@ mod tests {
         assert_eq!(
             current.cert_pem, initial_cert_pem,
             "previous material should be preserved on reload failure"
+        );
+    }
+
+    /// The shared TLS loader must reject a CA bundle whose PEM parses
+    /// but contains blocks that strict `RootCertStore::add` would
+    /// reject. Otherwise reload validation could pass on material that
+    /// the poem/rustls listener then refuses to bind on, leaving the
+    /// HTTPS server unable to start after the old server was already
+    /// stopped.
+    #[test]
+    fn load_tls_material_rejects_mixed_valid_and_invalid_ca_bundle() {
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert_path, key_path, ca_path) = write_cert_files(dir.path());
+
+        // Append a PEM block that parses as a CERTIFICATE but whose
+        // DER bytes are not a valid X.509 certificate, so the stricter
+        // `RootCertStore::add` path rejects it.
+        let bad_der_pem = b"\n-----BEGIN CERTIFICATE-----\nAAAAAA==\n-----END CERTIFICATE-----\n";
+        let mut mixed = fs::read(&ca_path).expect("read ca");
+        mixed.extend_from_slice(bad_der_pem);
+        fs::write(&ca_path, &mixed).expect("write mixed ca");
+
+        let paths = CertPaths {
+            cert_path,
+            key_path,
+            ca_certs_paths: vec![ca_path],
+        };
+        let result = load_tls_material(&paths);
+        assert!(
+            result.is_err(),
+            "validation must reject mixed valid/invalid CA bundles so the HTTPS \
+             listener cannot be asked to start on material it would reject"
         );
     }
 

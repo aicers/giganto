@@ -465,9 +465,12 @@ async fn shutdown_web(web_controller: Option<WebController>) {
 /// If validation fails, the previous material is preserved by the
 /// common TLS reload plumbing and the existing HTTPS server keeps
 /// running. A successful reread that produces identical bytes is
-/// treated as a no-op and does not disturb the running server. If the
-/// post-stop bind/start fails, the error is logged using the same
-/// policy as initial startup failure.
+/// treated as a no-op *only when a live HTTPS server is already
+/// serving*: if the previous startup or restart failed and no
+/// controller is active, the reload trigger retries `web::serve`
+/// against the current material so a transient bind failure does not
+/// permanently suppress HTTPS. If the post-stop bind/start fails, the
+/// error is logged using the same policy as initial startup failure.
 ///
 /// The new server is built from the already-validated TLS material in
 /// the shared watch channel rather than re-reading cert/key/CA files
@@ -486,25 +489,34 @@ async fn reload_https_server<S>(
     reload_handle.reload();
     let current = tls_reload::get_current_tls_material(tls_watch);
 
-    if previous.cert_pem == current.cert_pem
+    let material_unchanged = previous.cert_pem == current.cert_pem
         && previous.key_pem == current.key_pem
-        && previous.ca_pem == current.ca_pem
-    {
-        // Either validation failed (common plumbing preserves the
-        // previous material) or the refreshed material is byte-for-byte
-        // identical to the running state. In both cases the existing
-        // HTTPS server should keep serving without interruption.
+        && previous.ca_pem == current.ca_pem;
+
+    if material_unchanged && web_controller.is_some() {
+        // A live server is already serving this exact material — either
+        // validation failed (common plumbing preserved the previous
+        // material) or the reread matched byte-for-byte. Leave the
+        // running server untouched.
         info!("HTTPS reload: no TLS material changes detected, keeping current server");
         return;
     }
 
-    info!("HTTPS reload: initiating graceful shutdown of existing GraphQL server");
-    if let Some(controller) = web_controller.take()
-        && let Err(e) = controller.shutdown().await
-    {
-        warn!("HTTPS reload: graceful shutdown reported error: {e}");
+    if web_controller.is_some() {
+        info!("HTTPS reload: initiating graceful shutdown of existing GraphQL server");
+        if let Some(controller) = web_controller.take()
+            && let Err(e) = controller.shutdown().await
+        {
+            warn!("HTTPS reload: graceful shutdown reported error: {e}");
+        }
+        info!("HTTPS reload: shutdown complete, starting new GraphQL server");
+    } else {
+        // No live server to preserve — a prior startup or restart
+        // failed. Retry bind/start against the current material even
+        // when the bytes are unchanged so transient failures are
+        // recoverable on the next reload trigger.
+        info!("HTTPS reload: no live HTTPS server; attempting startup with current TLS material");
     }
-    info!("HTTPS reload: shutdown complete, starting new GraphQL server");
 
     match web::serve(
         schema.clone(),
@@ -917,6 +929,9 @@ mod tests {
             let addr = free_addr();
             let schema = test_schema();
             let initial = tls_reload::get_current_tls_material(&tls_watch);
+            let initial_cert = initial.cert_pem.clone();
+            let initial_key = initial.key_pem.clone();
+            let initial_ca = initial.ca_pem.clone();
             let initial_material_ptr = Arc::as_ptr(&initial);
             let initial_controller = web::serve(
                 schema.clone(),
@@ -928,6 +943,14 @@ mod tests {
             .await
             .expect("initial serve");
             let mut web_controller = Some(initial_controller);
+
+            // Sanity check: the live server serves with the old
+            // material before the failing reload.
+            sleep(Duration::from_millis(50)).await;
+            let client = build_mtls_client(&initial_cert, &initial_key, &initial_ca);
+            hello_query(&client, addr)
+                .await
+                .expect("pre-reload handshake with old material should succeed");
 
             // Corrupt the cert file so validation fails during reload.
             fs::write(&cert_path, b"not a cert").expect("corrupt cert");
@@ -951,6 +974,56 @@ mod tests {
                 web_controller.is_some(),
                 "validation failure must not take the existing web controller"
             );
+
+            // The acceptance guarantee: after a pre-stop validation
+            // failure the existing HTTPS server must still serve the
+            // old TLS material over a real mTLS handshake.
+            hello_query(&client, addr)
+                .await
+                .expect("post-validation-failure handshake should still succeed on old server");
+
+            shutdown_web(web_controller.take()).await;
+        }
+
+        #[tokio::test]
+        async fn reload_retries_startup_when_no_live_controller() {
+            // If a prior startup failed and no live web controller
+            // exists, a follow-up reload trigger must retry `web::serve`
+            // against the current TLS material even when the bytes are
+            // byte-for-byte unchanged. Otherwise a transient bind
+            // failure would be locked in until the cert/key/CA bytes
+            // change again.
+            let dir = tempdir().expect("tempdir");
+            let (reload_handle, tls_watch, _cert_path, _key_path, _ca_path) = setup(dir.path());
+
+            let addr = free_addr();
+            let schema = test_schema();
+
+            // Simulate the prior-startup-failed state: no live
+            // controller, material unchanged on disk.
+            let mut web_controller: Option<WebController> = None;
+
+            reload_https_server(
+                &reload_handle,
+                &tls_watch,
+                &mut web_controller,
+                &schema,
+                addr,
+            )
+            .await;
+
+            assert!(
+                web_controller.is_some(),
+                "reload with no live controller must retry startup even when material is unchanged"
+            );
+
+            // Prove the retried server actually serves.
+            let tls = tls_reload::get_current_tls_material(&tls_watch);
+            sleep(Duration::from_millis(50)).await;
+            let client = build_mtls_client(&tls.cert_pem, &tls.key_pem, &tls.ca_pem);
+            hello_query(&client, addr)
+                .await
+                .expect("post-retry handshake should succeed on the newly started server");
 
             shutdown_web(web_controller.take()).await;
         }
