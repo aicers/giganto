@@ -112,6 +112,15 @@ impl ClientIdentity {
         }
     }
 
+    fn host_fqdn(&self) -> String {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { hostname, .. } => hostname.clone(),
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => identity.host_fqdn(),
+        }
+    }
+
     fn peer_connect_name(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
@@ -143,6 +152,10 @@ impl BootrootIdentity {
             self.instance_id, self.service_name, self.hostname, self.domain
         )
     }
+
+    fn host_fqdn(&self) -> String {
+        format!("{}.{}", self.hostname, self.domain)
+    }
 }
 
 pub fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
@@ -161,6 +174,20 @@ pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     Ok(parse_client_identity(cert_info)?.peer_connect_name())
+}
+
+/// Returns the host FQDN identifier for the certificate.
+///
+/// Under the `bootroot` feature, returns `{hostname}.{domain}` derived from
+/// the SAN DNS labels 3 and 4. Under the default (legacy CN) build, returns
+/// the bare hostname component of the legacy `{service}@{hostname}` CN.
+///
+/// # Errors
+///
+/// Returns an error if the certificate cannot be parsed or does not carry a
+/// valid identity for the active build (see [`subject_from_cert`]).
+pub fn host_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
+    Ok(parse_client_identity(cert_info)?.host_fqdn())
 }
 
 pub fn peer_dedup_key_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
@@ -343,6 +370,16 @@ mod tests {
                 peer_name_from_cert(&certs.certs).expect("legacy peer connect name should parse");
 
             assert_eq!(peer_name, "node1");
+        }
+
+        #[test]
+        fn host_fqdn_from_cert_returns_legacy_hostname_in_default_build() {
+            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+
+            let host_fqdn =
+                host_fqdn_from_cert(&certs.certs).expect("legacy host_fqdn should parse");
+
+            assert_eq!(host_fqdn, "node1");
         }
 
         #[test]
@@ -532,6 +569,18 @@ mod tests {
                     domain: "example.test".to_string(),
                 })
             );
+        }
+
+        #[test]
+        fn host_fqdn_from_cert_joins_hostname_and_domain_in_bootroot_build() {
+            let certs = build_self_signed_cert_chain(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+
+            let host_fqdn = host_fqdn_from_cert(&certs).expect("bootroot host_fqdn should parse");
+
+            assert_eq!(host_fqdn, "node1.example.test");
         }
 
         #[test]

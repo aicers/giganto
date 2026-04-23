@@ -70,9 +70,19 @@ pub(super) async fn assert_export_response(
     protocol: &str,
     ext: &str,
 ) {
+    assert_export_response_with_node_name(schema, res, protocol, ext, "giganto1").await;
+}
+
+pub(super) async fn assert_export_response_with_node_name(
+    schema: &TestSchema,
+    res: &async_graphql::Response,
+    protocol: &str,
+    ext: &str,
+    node_name: &str,
+) {
     let export = res.data.to_string();
     let path = wait_for_export_file(schema.export_dir.path(), protocol, ext).await;
-    let expected = format!("{{export: \"{}@giganto1\"}}", path.display());
+    let expected = format!("{{export: \"{}@{node_name}\"}}", path.display());
     assert_eq!(export, expected);
 }
 

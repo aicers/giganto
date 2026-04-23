@@ -13,6 +13,8 @@ use super::{
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::datetime::DateTime;
 use crate::graphql::TimeRange;
+#[cfg(feature = "bootroot")]
+use crate::graphql::export::tests::fixture::assert_export_response_with_node_name;
 use crate::graphql::export::tests::fixture::{
     assert_export_error, assert_export_response, export_cases, export_filter_base,
     insert_bootp_raw_event, insert_conn_raw_event, insert_dce_rpc_raw_event, insert_dhcp_raw_event,
@@ -1229,6 +1231,32 @@ async fn export_dhcp() {
     }"#;
     let res = schema.execute(query).await;
     assert_export_response(&schema, &res, "dhcp", "json").await;
+}
+
+#[cfg(feature = "bootroot")]
+#[tokio::test]
+async fn export_download_path_uses_host_fqdn_under_bootroot() {
+    let schema = TestSchema::new_with_node_name("node1.example.test");
+    let store = schema.db.conn_store().unwrap();
+
+    insert_conn_raw_event(&store, "src1", test_event_timestamp_nanos(), 12345);
+
+    let query = r#"
+    {
+        export(
+            filter:{
+                protocol: "conn",
+                sensorId: "src1",
+                time: { start: "2026-01-01T00:00:00Z", end: "2026-01-02T00:00:00Z" }
+                origAddr: { start: "192.168.4.72", end: "192.168.4.79" }
+                respAddr: { start: "192.168.4.75", end: "192.168.4.79" }
+                origPort: { start: 46378, end: 46379 }
+                respPort: { start: 50, end: 200 }
+            }
+            ,exportType:"csv")
+    }"#;
+    let res = schema.execute(query).await;
+    assert_export_response_with_node_name(&schema, &res, "conn", "csv", "node1.example.test").await;
 }
 
 #[tokio::test]
