@@ -112,6 +112,15 @@ impl ClientIdentity {
         }
     }
 
+    fn service_fqdn(&self) -> String {
+        match self {
+            #[cfg(not(feature = "bootroot"))]
+            Self::Legacy { hostname, .. } => hostname.clone(),
+            #[cfg(feature = "bootroot")]
+            Self::Bootroot(identity) => identity.service_fqdn(),
+        }
+    }
+
     fn peer_connect_name(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
@@ -143,20 +152,53 @@ impl BootrootIdentity {
             self.instance_id, self.service_name, self.hostname, self.domain
         )
     }
+
+    fn service_fqdn(&self) -> String {
+        format!("{}.{}.{}", self.service_name, self.hostname, self.domain)
+    }
 }
 
 pub fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
     parse_client_identity(cert_info).map(ClientIdentity::into_subject_tuple)
 }
 
-pub fn subject_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String, String)> {
+/// Parses a peer certificate and returns `(service_name, service_fqdn)`.
+///
+/// Under the `bootroot` feature, `service_fqdn` is the join of SAN DNS labels
+/// 2, 3, 4 (`{service_name}.{hostname}.{domain}`). Under legacy builds it
+/// equals the bare hostname, so callers see no behavioral change.
+///
+/// # Errors
+///
+/// Returns an error if no certificate is present in the chain, the leaf
+/// certificate cannot be parsed, or its identity does not match the configured
+/// certificate format.
+#[cfg(test)]
+pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
+    let identity = parse_client_identity(cert_info)?;
+    Ok((identity.service_name().to_string(), identity.service_fqdn()))
+}
+
+/// Parses a peer certificate, logs the connected client identity, and returns
+/// `(service_name, service_fqdn)`.
+///
+/// Under the `bootroot` feature, `service_fqdn` is the join of SAN DNS labels
+/// 2, 3, 4 (`{service_name}.{hostname}.{domain}`). Under legacy builds it
+/// equals the bare hostname.
+///
+/// # Errors
+///
+/// Returns an error if no certificate is present in the chain, the leaf
+/// certificate cannot be parsed, or its identity does not match the configured
+/// certificate format.
+pub fn service_fqdn_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String, String)> {
     let identity = parse_client_identity(cert_info)?;
     info!(
         "Connected client name : {}@{}",
         identity.service_name(),
         identity.hostname()
     );
-    Ok(identity.into_subject_tuple())
+    Ok((identity.service_name().to_string(), identity.service_fqdn()))
 }
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
@@ -336,6 +378,16 @@ mod tests {
         }
 
         #[test]
+        fn service_fqdn_from_cert_matches_hostname_in_default_build() {
+            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+
+            let identity =
+                service_fqdn_from_cert(&certs.certs).expect("legacy service fqdn identity");
+
+            assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
+        }
+
+        #[test]
         fn peer_name_from_cert_uses_legacy_hostname_in_default_build() {
             let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
 
@@ -497,6 +549,42 @@ mod tests {
             let identity = subject_from_cert(&certs).expect("bootroot SAN identity");
 
             assert_eq!(identity, ("piglet".to_string(), "node1".to_string()));
+        }
+
+        #[test]
+        fn service_fqdn_from_cert_joins_labels_2_3_4_under_bootroot() {
+            let certs = build_self_signed_cert_chain(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+
+            let identity = service_fqdn_from_cert(&certs).expect("bootroot service fqdn identity");
+
+            assert_eq!(
+                identity,
+                (
+                    "piglet".to_string(),
+                    "piglet.node1.example.test".to_string()
+                )
+            );
+        }
+
+        #[test]
+        fn service_fqdn_omits_instance_id_label_under_bootroot() {
+            let certs = build_self_signed_cert_chain(
+                "alpha.data-store.node2.example.test",
+                "alpha.data-store.node2.example.test",
+            );
+
+            let identity = service_fqdn_from_cert(&certs).expect("bootroot service fqdn identity");
+
+            assert_eq!(
+                identity,
+                (
+                    "data-store".to_string(),
+                    "data-store.node2.example.test".to_string()
+                )
+            );
         }
 
         #[test]
