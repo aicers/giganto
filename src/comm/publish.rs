@@ -1951,20 +1951,22 @@ async fn connect_repeatedly(
         // Re-snapshot the latest TLS material on every attempt so a reload
         // that completes mid-retry is picked up by the next connect.
         let tls = tls_reload::get_current_tls_material(tls_watch);
-        let client_config = config_client(&tls.certs)
-            .context("failed to build client TLS config from current material")?;
-
-        match endpoint.connect_with(client_config, server_addr, server_name) {
-            Ok(connecting) => match connecting.await {
-                Ok(conn) => {
-                    info!("Connected to {}", server_addr);
-                    return Ok(conn);
+        match config_client(&tls.certs) {
+            Ok(client_config) => {
+                match endpoint.connect_with(client_config, server_addr, server_name) {
+                    Ok(connecting) => match connecting.await {
+                        Ok(conn) => {
+                            info!("Connected to {}", server_addr);
+                            return Ok(conn);
+                        }
+                        Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
+                    },
+                    Err(e) => {
+                        warn!("Cannot connect: {:#}, retrying", e);
+                    }
                 }
-                Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
-            },
-            Err(e) => {
-                warn!("Cannot connect: {:#}, retrying", e);
             }
+            Err(e) => warn!("Cannot build client TLS config: {:#}, retrying", e),
         }
         delay = std::cmp::min(max_delay, delay * 2);
         tokio::time::sleep(delay).await;
