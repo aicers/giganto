@@ -17,6 +17,10 @@ use giganto_client::ingest::{
     timeseries::PeriodicTimeSeries,
 };
 
+/// Common event metadata used by GraphQL filters.
+///
+/// `agent_id` is used by Sysmon event filters.
+/// `service_name` is used by `OpLogFilter`.
 pub trait EventFilter {
     fn data_type(&self) -> String;
     fn orig_addr(&self) -> Option<IpAddr>;
@@ -32,6 +36,9 @@ pub trait EventFilter {
         None
     }
     fn agent_id(&self) -> Option<String> {
+        None
+    }
+    fn service_name(&self) -> Option<String> {
         None
     }
 }
@@ -329,7 +336,7 @@ impl EventFilter for OpLog {
     fn log_contents(&self) -> Option<String> {
         Some(self.contents.clone())
     }
-    fn agent_id(&self) -> Option<String> {
+    fn service_name(&self) -> Option<String> {
         Some(self.service_name.clone())
     }
 

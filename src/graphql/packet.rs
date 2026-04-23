@@ -70,6 +70,7 @@ impl RawEventFilter for PacketFilter {
         _text: Option<String>,
         _sensor: Option<String>,
         _agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         Ok(true)
     }

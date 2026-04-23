@@ -928,6 +928,7 @@ where
                 elem.1.text(),
                 elem.1.sensor(),
                 elem.1.agent_id(),
+                elem.1.service_name(),
             ) {
                 return Some(elem);
             }

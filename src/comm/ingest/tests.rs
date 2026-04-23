@@ -374,7 +374,7 @@ fn test_sensor_name() -> String {
     TEST_SENSOR
         .get_or_init(|| {
             let certs = load_test_client_certs();
-            let (_agent, sensor) =
+            let (_service, sensor) =
                 subject_from_cert(&certs.certs).expect("failed to parse test certificate");
             sensor
         })

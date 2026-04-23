@@ -168,8 +168,8 @@ async fn handle_connection(
         }
     }
 
-    let (agent, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
-    let is_pcap_sensor = agent.contains("piglet");
+    let (service_name, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let is_pcap_sensor = service_name.contains("piglet");
 
     if is_pcap_sensor {
         pcap_sensors
@@ -205,7 +205,7 @@ async fn handle_connection(
                         }
                         match conn_err {
                             quinn::ConnectionError::ApplicationClosed(_) => {
-                                info!("{agent} has disconnected from ingest");
+                                info!("{service_name} has disconnected from ingest");
                                 return Ok(());
                             }
                             _ => return Err(conn_err.into()),

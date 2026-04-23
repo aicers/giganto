@@ -80,7 +80,7 @@ const ADDRESS_PROTOCOL: [&str; 21] = [
     "icmp",
     "network connect",
 ];
-const AGENT_PROTOCOL: [&str; 14] = [
+const SYSMON_EVENT_TYPES: [&str; 14] = [
     "process create",
     "file create time",
     "process terminate",
@@ -96,7 +96,7 @@ const AGENT_PROTOCOL: [&str; 14] = [
     "process tamper",
     "file delete detected",
 ];
-const KIND_PROTOCOL: [&str; 2] = ["log", "secu log"];
+const LOG_EVENT_TYPES: [&str; 2] = ["log", "secu log"];
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -1970,6 +1970,7 @@ impl RawEventFilter for ExportFilter {
         _text: Option<String>,
         _sensor: Option<String>,
         agent_id: Option<String>,
+        _service_name: Option<String>,
     ) -> Result<bool> {
         if check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
@@ -2057,13 +2058,13 @@ impl ExportQuery {
                 return Err(anyhow!("Invalid ip/port input").into());
             }
         }
-        if !AGENT_PROTOCOL.contains(&filter.protocol.as_str()) {
+        if !SYSMON_EVENT_TYPES.contains(&filter.protocol.as_str()) {
             // check network/log type/time_series/netflow/statistics filter format
             if filter.agent_name.is_some() || filter.agent_id.is_some() {
                 return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
             }
         }
-        if !KIND_PROTOCOL.contains(&filter.protocol.as_str()) {
+        if !LOG_EVENT_TYPES.contains(&filter.protocol.as_str()) {
             // check sysmon/network/time_series/netflow/statistics filter format
             if filter.kind.is_some() {
                 return Err(anyhow!("Invalid kind/agent_name/agent_id input").into());
@@ -2432,6 +2433,7 @@ where
         value.text(),
         value.sensor(),
         value.agent_id(),
+        value.service_name(),
     ) {
         let (sensor, timestamp) = parse_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp).format_unix_seconds_with_nanos();
@@ -2468,6 +2470,7 @@ fn write_oplog_data_to_file(
         value.text(),
         value.sensor(),
         value.agent_id(),
+        value.service_name(),
     ) {
         let timestamp = parse_oplog_key(key)?;
         let time = DateTime::from_timestamp_nanos(timestamp).format_unix_seconds_with_nanos();
