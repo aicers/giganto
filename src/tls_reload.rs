@@ -447,11 +447,25 @@ mod listener_reload_contract_tests {
         client: Certs,
     }
 
+    struct CertSetWithPems {
+        set: CertSet,
+        server_cert_pem: String,
+        server_key_pem: String,
+        ca_pem: String,
+    }
+
     /// Builds an independent CA + server leaf + client leaf suitable for
     /// mTLS. Each call returns a fresh trust root, so set A and set B are
     /// mutually untrusting — useful for proving which TLS material a
     /// listener is actually presenting after a reload.
     fn build_cert_set() -> CertSet {
+        build_cert_set_with_pems().set
+    }
+
+    /// Same as `build_cert_set`, but also returns the PEM-encoded server
+    /// cert, server key, and CA so the material can be written to disk and
+    /// driven through `ReloadHandle::reload()` which reloads from files.
+    fn build_cert_set_with_pems() -> CertSetWithPems {
         let mut ca_params = CertificateParams::default();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         ca_params.distinguished_name = rcgen::DistinguishedName::new();
@@ -496,17 +510,27 @@ mod listener_reload_contract_tests {
         let (added, _) = root.add_parsable_certificates(ca_ders);
         assert_eq!(added, 1, "test CA should be added to root store");
 
+        let server_cert_pem = server_cert.pem();
+        let server_key_pem = server_key.serialize_pem();
+        let client_cert_pem = client_cert.pem();
+        let client_key_pem = client_key.serialize_pem();
+
         let server = Certs {
-            certs: to_cert_chain(server_cert.pem().as_bytes()).expect("parse server cert"),
-            key: to_private_key(server_key.serialize_pem().as_bytes()).expect("parse server key"),
+            certs: to_cert_chain(server_cert_pem.as_bytes()).expect("parse server cert"),
+            key: to_private_key(server_key_pem.as_bytes()).expect("parse server key"),
             root: root.clone(),
         };
         let client = Certs {
-            certs: to_cert_chain(client_cert.pem().as_bytes()).expect("parse client cert"),
-            key: to_private_key(client_key.serialize_pem().as_bytes()).expect("parse client key"),
+            certs: to_cert_chain(client_cert_pem.as_bytes()).expect("parse client cert"),
+            key: to_private_key(client_key_pem.as_bytes()).expect("parse client key"),
             root,
         };
-        CertSet { server, client }
+        CertSetWithPems {
+            set: CertSet { server, client },
+            server_cert_pem,
+            server_key_pem,
+            ca_pem,
+        }
     }
 
     fn client_endpoint(certs: &Certs) -> Endpoint {
@@ -862,7 +886,6 @@ mod listener_reload_contract_tests {
         let db_dir = tempdir().expect("db tempdir");
         let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
 
-        let initial_certs = Arc::new(set_a.server.clone());
         let server = crate::comm::publish::Server::new(server_addr, &set_a.server);
 
         let (tls_sender, tls_watch) = watch::channel(Arc::new(TlsMaterial {
@@ -889,9 +912,8 @@ mod listener_reload_contract_tests {
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        initial_certs,
-                        shutdown,
                         tls_watch,
+                        shutdown,
                     )
                     .await;
             })
@@ -952,6 +974,173 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
+        notify_shutdown.notify_waiters();
+        let _ = timeout(Duration::from_secs(3), server_task).await;
+    }
+
+    /// Full-chain verification of the #1596 contract: a trigger at the
+    /// top of `main` (modelled here by a `Notify`) drives
+    /// `ReloadHandle::reload()`, which reloads cert/key/CA from disk and
+    /// broadcasts on the shared `TlsWatch`; the live `ingest::Server::run`
+    /// task, subscribed to that same watch, then picks up the refreshed
+    /// material and applies it with `endpoint.set_server_config`. This is
+    /// the single test that ties the trigger -> watch and
+    /// watch -> listener halves together and proves the end-to-end path.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_handle_reload_propagates_through_watch_to_ingest_listener_end_to_end() {
+        use std::{fs, net::UdpSocket, sync::Arc};
+
+        use tempfile::tempdir;
+        use tokio::{sync::Notify, time::sleep};
+
+        use crate::comm::{
+            new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
+            new_stream_direct_channels,
+        };
+        use crate::storage::{Database, DbOptions};
+        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+
+        install_crypto_provider();
+
+        let bundle_a = build_cert_set_with_pems();
+        let bundle_b = build_cert_set_with_pems();
+        let set_a = &bundle_a.set;
+        let set_b = &bundle_b.set;
+
+        // Write set A's cert/key/CA to real files so `load_tls_material`
+        // and therefore `ReloadHandle::reload()` can read them back.
+        let dir = tempdir().expect("tempdir");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        let ca_path = dir.path().join("ca.pem");
+        fs::write(&cert_path, bundle_a.server_cert_pem.as_bytes()).expect("write cert");
+        fs::write(&key_path, bundle_a.server_key_pem.as_bytes()).expect("write key");
+        fs::write(&ca_path, bundle_a.ca_pem.as_bytes()).expect("write ca");
+
+        let cert_paths = CertPaths {
+            cert_path: cert_path.to_str().expect("cert path").to_string(),
+            key_path: key_path.to_str().expect("key path").to_string(),
+            ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
+        };
+
+        let (initial_certs, initial_cert_pem, initial_key_pem) =
+            load_tls_material(&cert_paths).expect("initial load");
+        let initial_material = Arc::new(TlsMaterial {
+            certs: Arc::new(initial_certs),
+            cert_pem: initial_cert_pem,
+            key_pem: initial_key_pem,
+        });
+        let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
+
+        // Reserve a loopback port via probe-and-drop, same pattern as the
+        // other end-to-end tests in this module.
+        let server_addr = {
+            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+                .expect("bind probe");
+            probe.local_addr().expect("probe local addr")
+        };
+
+        let db_dir = tempdir().expect("db tempdir");
+        let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+
+        let server = crate::comm::ingest::Server::new(server_addr, &set_a.server);
+
+        let notify_shutdown = Arc::new(Notify::new());
+        let pcap_sensors = new_pcap_sensors();
+        let ingest_sensors = new_ingest_sensors(&db);
+        let runtime_ingest_sensors = new_runtime_ingest_sensors();
+        let stream_direct_channels = new_stream_direct_channels();
+
+        let server_task = {
+            let db = db.clone();
+            let shutdown = notify_shutdown.clone();
+            tokio::spawn(async move {
+                server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        ingest_sensors,
+                        runtime_ingest_sensors,
+                        stream_direct_channels,
+                        shutdown,
+                        Some(Arc::new(Notify::new())),
+                        1024,
+                        tls_watch,
+                    )
+                    .await;
+            })
+        };
+
+        sleep(Duration::from_millis(200)).await;
+
+        let client_a = client_endpoint(&set_a.client);
+        let pre_reload_conn = try_connect(&client_a, server_addr)
+            .await
+            .expect("pre-reload set A client should handshake against the real ingest listener");
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should be open"
+        );
+
+        // Overwrite the on-disk material with set B so the next
+        // `ReloadHandle::reload()` reads refreshed cert/key/CA from disk.
+        fs::write(&cert_path, bundle_b.server_cert_pem.as_bytes()).expect("overwrite cert");
+        fs::write(&key_path, bundle_b.server_key_pem.as_bytes()).expect("overwrite key");
+        fs::write(&ca_path, bundle_b.ca_pem.as_bytes()).expect("overwrite ca");
+
+        // Drive the trigger exactly the way `main.rs` does: a `Notify`
+        // fires, a task awaits `notified()`, then calls
+        // `reload_handle.reload()`. That method does its own file I/O and
+        // then broadcasts on the shared watch.
+        let reload_trigger = Arc::new(Notify::new());
+        let trigger_clone = reload_trigger.clone();
+        let reload_task = tokio::spawn(async move {
+            trigger_clone.notified().await;
+            reload_handle.reload();
+        });
+
+        reload_trigger.notify_one();
+        reload_task.await.expect("reload task");
+
+        // The listener's `tls_watch.changed()` arm should now fire and
+        // apply the refreshed `ServerConfig`. Prove it by polling until a
+        // set-B-trusting client can handshake.
+        let mut applied = false;
+        for _ in 0..40 {
+            sleep(Duration::from_millis(50)).await;
+            let probe = client_endpoint(&set_b.client);
+            if try_connect(&probe, server_addr).await.is_ok() {
+                applied = true;
+                break;
+            }
+        }
+        assert!(
+            applied,
+            "full chain (Notify -> ReloadHandle::reload -> watch -> listener) did not \
+             rotate ingest listener TLS state"
+        );
+
+        // Stale trust must fail now that set B is in effect — rules out
+        // any possibility that the old config lingered.
+        let client_a_stale = client_endpoint(&set_a.client);
+        let err = try_connect(&client_a_stale, server_addr)
+            .await
+            .expect_err("set A client should fail after full-chain reload to set B");
+        assert!(
+            !err.is_empty(),
+            "expected a handshake error after reload with stale trust"
+        );
+
+        // The pre-reload connection (handshaken with set A) must remain
+        // alive — in-place `set_server_config` must not disturb it.
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should survive the full-chain reload, close reason: {:?}",
+            pre_reload_conn.close_reason()
+        );
+
+        pre_reload_conn.close(0u32.into(), b"done");
         notify_shutdown.notify_waiters();
         let _ = timeout(Duration::from_secs(3), server_task).await;
     }
