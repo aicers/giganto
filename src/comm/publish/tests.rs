@@ -6636,3 +6636,123 @@ mod tls_reload_connect {
         server_task.abort();
     }
 }
+
+#[cfg(feature = "bootroot")]
+mod bootroot_service_fqdn_contract {
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
+
+    use tokio::sync::{RwLock, mpsc};
+
+    use super::fixtures::decode_semi_supervised_frame;
+    use super::{NODE1, NODE2};
+    use crate::comm::{
+        StreamDirectChannels,
+        ingest::NetworkKey,
+        new_stream_direct_channels,
+        peer::{PeerInfo, Peers},
+        publish::{is_current_giganto_in_charge, peer_in_charge_publish_addr, send_direct_stream},
+    };
+    use crate::server::service_fqdn_from_cert;
+    use crate::test_bootroot::bootroot_cluster_certs;
+
+    fn cert_derived_fqdn(node: crate::test_bootroot::TestNode) -> String {
+        let (_, fqdn) = service_fqdn_from_cert(&bootroot_cluster_certs(node).certs)
+            .expect("parse bootroot cert");
+        fqdn
+    }
+
+    #[tokio::test]
+    async fn cert_derived_sensor_is_service_fqdn() {
+        assert_eq!(
+            cert_derived_fqdn(NODE1.test_node),
+            "giganto.node1.example.test"
+        );
+        assert_eq!(
+            cert_derived_fqdn(NODE2.test_node),
+            "giganto.node2.example.test"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_current_giganto_in_charge_accepts_cert_derived_fqdn() {
+        let local_fqdn = cert_derived_fqdn(NODE1.test_node);
+
+        let ingest_sensors = Arc::new(RwLock::new(HashSet::from([local_fqdn.clone()])));
+
+        assert!(is_current_giganto_in_charge(ingest_sensors.clone(), &local_fqdn).await);
+        assert!(!is_current_giganto_in_charge(ingest_sensors, "node1").await);
+    }
+
+    #[tokio::test]
+    async fn peer_in_charge_publish_addr_matches_peer_cert_fqdn() {
+        let peer_fqdn = cert_derived_fqdn(NODE2.test_node);
+
+        let peer_ip = "127.0.0.2".to_string();
+        let peer_port = 38383;
+        let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
+            peer_ip.clone(),
+            PeerInfo {
+                ingest_sensors: HashSet::from([peer_fqdn.clone()]),
+                graphql_port: None,
+                publish_port: Some(peer_port),
+            },
+        )])));
+
+        let resolved = peer_in_charge_publish_addr(peers.clone(), &peer_fqdn).await;
+        assert_eq!(
+            resolved.map(|addr| addr.to_string()),
+            Some(format!("{peer_ip}:{peer_port}"))
+        );
+
+        let missing = peer_in_charge_publish_addr(peers, "node2").await;
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_direct_stream_embeds_cert_derived_fqdn_in_semi_supervised_payload() {
+        let local_fqdn = cert_derived_fqdn(NODE1.test_node);
+        let kind = "conn";
+        let key = NetworkKey::new(&local_fqdn, kind);
+
+        let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let req_key = format!("{local_fqdn}\0{kind}\0SemiSupervised");
+        stream_direct_channels.write().await.insert(req_key, tx);
+
+        let timestamp: i64 = 42;
+        let payload = b"raw-event-bytes".to_vec();
+        send_direct_stream(
+            &key,
+            &payload,
+            timestamp,
+            &local_fqdn,
+            stream_direct_channels,
+        )
+        .await
+        .expect("send_direct_stream");
+
+        let frame = rx.recv().await.expect("frame received");
+        // Match the wire layout used by the publish server's stream task,
+        // which consumes the length-prefixed sensor before the raw payload.
+        let (ts_bytes, rest) = frame.split_at(8);
+        assert_eq!(i64::from_le_bytes(ts_bytes.try_into().unwrap()), timestamp);
+        let (sensor_len_bytes, rest) = rest.split_at(4);
+        let sensor_len = u32::from_le_bytes(sensor_len_bytes.try_into().unwrap()) as usize;
+        let (sensor_bytes, rest) = rest.split_at(sensor_len);
+        let (_raw_len, raw_payload) = rest.split_at(4);
+
+        let (recv_ts, recv_sensor, recv_payload) = {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(ts_bytes);
+            buf.extend_from_slice(sensor_bytes);
+            buf.extend_from_slice(raw_payload);
+            decode_semi_supervised_frame(&buf)
+        };
+        assert_eq!(recv_ts, timestamp);
+        assert_eq!(recv_sensor, local_fqdn);
+        assert_eq!(recv_payload, payload);
+    }
+}

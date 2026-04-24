@@ -112,6 +112,12 @@ impl ClientIdentity {
         }
     }
 
+    /// Returns the service FQDN used as the cert-derived sensor.
+    ///
+    /// Under `bootroot`, this is the join of SAN DNS labels 2, 3, 4
+    /// (`{service_name}.{hostname}.{domain}`). Non-bootroot builds
+    /// intentionally return the bare hostname to preserve legacy CN
+    /// behavior for existing deployments.
     fn service_fqdn(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
