@@ -588,6 +588,7 @@ mod fixtures {
             certs: Arc::clone(certs),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         });
         let (_sender, receiver) = watch::channel(material);
         receiver
@@ -6367,12 +6368,12 @@ mod tls_reload_connect {
         let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
 
         let paths = build_client_paths(&fixture);
-        let (certs, cert_pem, key_pem) =
-            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
         let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
+            certs: Arc::new(loaded.certs),
+            cert_pem: loaded.cert_pem,
+            key_pem: loaded.key_pem,
+            ca_pem: loaded.ca_pem,
         });
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
@@ -6423,12 +6424,12 @@ mod tls_reload_connect {
         let (server_addr, _cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
 
         let paths = build_client_paths(&fixture);
-        let (certs, cert_pem, key_pem) =
-            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
         let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
+            certs: Arc::new(loaded.certs),
+            cert_pem: loaded.cert_pem,
+            key_pem: loaded.key_pem,
+            ca_pem: loaded.ca_pem,
         });
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
@@ -6470,13 +6471,13 @@ mod tls_reload_connect {
         let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
 
         let paths = build_client_paths(&fixture);
-        let (certs, cert_pem, key_pem) =
-            crate::tls_reload::load_tls_material(&paths).expect("initial material");
-        let initial_cert_pem = cert_pem.clone();
+        let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial_cert_pem = loaded.cert_pem.clone();
         let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
+            certs: Arc::new(loaded.certs),
+            cert_pem: loaded.cert_pem,
+            key_pem: loaded.key_pem,
+            ca_pem: loaded.ca_pem,
         });
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
@@ -6566,12 +6567,13 @@ mod tls_reload_connect {
             key_path: fixture.client_key_path.clone(),
             ca_certs_paths: vec![untrusted_ca_path.to_string_lossy().into_owned()],
         };
-        let (certs, cert_pem, key_pem) =
+        let loaded =
             crate::tls_reload::load_tls_material(&untrusted_paths).expect("initial material");
         let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
+            certs: Arc::new(loaded.certs),
+            cert_pem: loaded.cert_pem,
+            key_pem: loaded.key_pem,
+            ca_pem: loaded.ca_pem,
         });
 
         // The `ReloadHandle` must load from paths that will resolve to
