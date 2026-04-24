@@ -46,7 +46,7 @@ use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirect
 use crate::datetime::DateTime;
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
-    subject_from_cert_verbose,
+    service_fqdn_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 
@@ -168,7 +168,8 @@ async fn handle_connection(
         }
     }
 
-    let (service_name, sensor) = subject_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let (service_name, sensor) =
+        service_fqdn_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
     let is_pcap_sensor = service_name.contains("piglet");
 
     if is_pcap_sensor {
