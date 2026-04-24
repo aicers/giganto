@@ -4,7 +4,6 @@ pub(crate) mod publish;
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self},
     sync::Arc,
 };
 
@@ -12,6 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use quinn::Connection;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
+#[cfg(test)]
 use tracing::warn;
 
 use crate::{
@@ -53,7 +53,7 @@ pub(crate) fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
     }
 }
 
-#[allow(dead_code)] // used by test fixtures across the crate
+#[cfg(test)]
 pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
     if ca_certs_paths.is_empty() {
         bail!("no root certificate paths provided");
@@ -63,7 +63,7 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
     let mut added_any = false;
 
     for path in ca_certs_paths {
-        let pem = fs::read(path)
+        let pem = std::fs::read(path)
             .with_context(|| format!("failed to read root certificate file: {path}"))?;
 
         let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
@@ -137,7 +137,7 @@ mod tests {
 
     fn write_pem_file(dir: &Path, filename: &str, contents: &str) -> std::path::PathBuf {
         let path = dir.join(filename);
-        fs::write(&path, contents.as_bytes()).expect("failed to write PEM file");
+        std::fs::write(&path, contents.as_bytes()).expect("failed to write PEM file");
         path
     }
 

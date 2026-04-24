@@ -6369,12 +6369,7 @@ mod tls_reload_connect {
 
         let paths = build_client_paths(&fixture);
         let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(loaded.certs),
-            cert_pem: loaded.cert_pem,
-            key_pem: loaded.key_pem,
-            ca_pem: loaded.ca_pem,
-        });
+        let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
         let conn1 = connect(server_addr, TEST_SERVER_NAME, &watch)
@@ -6425,12 +6420,7 @@ mod tls_reload_connect {
 
         let paths = build_client_paths(&fixture);
         let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(loaded.certs),
-            cert_pem: loaded.cert_pem,
-            key_pem: loaded.key_pem,
-            ca_pem: loaded.ca_pem,
-        });
+        let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
         let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
@@ -6473,12 +6463,7 @@ mod tls_reload_connect {
         let paths = build_client_paths(&fixture);
         let loaded = crate::tls_reload::load_tls_material(&paths).expect("initial material");
         let initial_cert_pem = loaded.cert_pem.clone();
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(loaded.certs),
-            cert_pem: loaded.cert_pem,
-            key_pem: loaded.key_pem,
-            ca_pem: loaded.ca_pem,
-        });
+        let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
         // Corrupt the cert file so reload fails and material is preserved.
@@ -6569,12 +6554,7 @@ mod tls_reload_connect {
         };
         let loaded =
             crate::tls_reload::load_tls_material(&untrusted_paths).expect("initial material");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(loaded.certs),
-            cert_pem: loaded.cert_pem,
-            key_pem: loaded.key_pem,
-            ca_pem: loaded.ca_pem,
-        });
+        let initial = Arc::new(loaded);
 
         // The `ReloadHandle` must load from paths that will resolve to
         // trusted material on reload, so point it at the real CA bundle.

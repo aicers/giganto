@@ -53,7 +53,7 @@ use crate::{
     server::{SERVER_REBOOT_DELAY, host_fqdn_from_cert},
     settings::Args,
     storage::{migrate_data_dir, validate_compression_metadata},
-    tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material},
+    tls_reload::{CertPaths, ReloadHandle, load_tls_material},
     web::WebController,
 };
 
@@ -122,12 +122,7 @@ async fn main() -> Result<()> {
     };
     let loaded = load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
     let cert = loaded.certs.certs.clone();
-    let initial_material = Arc::new(TlsMaterial {
-        certs: Arc::new(loaded.certs),
-        cert_pem: loaded.cert_pem,
-        key_pem: loaded.key_pem,
-        ca_pem: loaded.ca_pem,
-    });
+    let initial_material = Arc::new(loaded);
     let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::clone(&initial_material));
 
     let mut is_reboot = false;
@@ -485,15 +480,10 @@ async fn reload_https_server<S>(
 ) where
     S: async_graphql::Executor + Clone,
 {
-    let previous = tls_reload::get_current_tls_material(tls_watch);
-    reload_handle.reload();
+    let outcome = reload_handle.reload();
     let current = tls_reload::get_current_tls_material(tls_watch);
 
-    let material_unchanged = previous.cert_pem == current.cert_pem
-        && previous.key_pem == current.key_pem
-        && previous.ca_pem == current.ca_pem;
-
-    if material_unchanged && web_controller.is_some() {
+    if outcome != tls_reload::ReloadOutcome::Updated && web_controller.is_some() {
         // A live server is already serving this exact material — either
         // validation failed (common plumbing preserved the previous
         // material) or the reread matched byte-for-byte. Leave the
@@ -732,7 +722,7 @@ mod tests {
         use tokio::time::sleep;
 
         use super::*;
-        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+        use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
         static INSTALL_PROVIDER: Once = Once::new();
 
@@ -796,12 +786,7 @@ mod tests {
                 ca_certs_paths: vec![ca_path.clone()],
             };
             let loaded = load_tls_material(&paths).expect("initial load");
-            let initial = Arc::new(TlsMaterial {
-                certs: Arc::new(loaded.certs),
-                cert_pem: loaded.cert_pem,
-                key_pem: loaded.key_pem,
-                ca_pem: loaded.ca_pem,
-            });
+            let initial = Arc::new(loaded);
             let (handle, watch) = ReloadHandle::new(paths, initial);
             (handle, watch, cert_path, key_path, ca_path)
         }
