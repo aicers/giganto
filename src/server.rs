@@ -158,7 +158,8 @@ impl BootrootIdentity {
     }
 }
 
-pub fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
+#[cfg(test)]
+pub(crate) fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
     parse_client_identity(cert_info).map(ClientIdentity::into_subject_tuple)
 }
 
@@ -185,7 +186,7 @@ pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
 /// # Errors
 ///
 /// Returns an error if the certificate cannot be parsed or does not carry a
-/// valid identity for the active build (see [`subject_from_cert`]).
+/// valid identity for the active build.
 pub fn host_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     Ok(parse_client_identity(cert_info)?.host_fqdn())
 }
