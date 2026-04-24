@@ -1144,4 +1144,150 @@ mod listener_reload_contract_tests {
         notify_shutdown.notify_waiters();
         let _ = timeout(Duration::from_secs(3), server_task).await;
     }
+
+    /// Publish counterpart of
+    /// `reload_handle_reload_propagates_through_watch_to_ingest_listener_end_to_end`.
+    /// Drives the complete
+    /// `Notify -> ReloadHandle::reload() -> TlsWatch -> publish listener`
+    /// path rather than sending refreshed material directly through the
+    /// watch, so the full chain is exercised for publish as well as ingest.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_handle_reload_propagates_through_watch_to_publish_listener_end_to_end() {
+        use std::{fs, net::UdpSocket, sync::Arc};
+
+        use tempfile::tempdir;
+        use tokio::{sync::Notify, time::sleep};
+
+        use crate::comm::{
+            new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
+        };
+        use crate::storage::{Database, DbOptions};
+        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+
+        install_crypto_provider();
+
+        let bundle_a = build_cert_set_with_pems();
+        let bundle_b = build_cert_set_with_pems();
+        let set_a = &bundle_a.set;
+        let set_b = &bundle_b.set;
+
+        let dir = tempdir().expect("tempdir");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        let ca_path = dir.path().join("ca.pem");
+        fs::write(&cert_path, bundle_a.server_cert_pem.as_bytes()).expect("write cert");
+        fs::write(&key_path, bundle_a.server_key_pem.as_bytes()).expect("write key");
+        fs::write(&ca_path, bundle_a.ca_pem.as_bytes()).expect("write ca");
+
+        let cert_paths = CertPaths {
+            cert_path: cert_path.to_str().expect("cert path").to_string(),
+            key_path: key_path.to_str().expect("key path").to_string(),
+            ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
+        };
+
+        let (initial_certs, initial_cert_pem, initial_key_pem) =
+            load_tls_material(&cert_paths).expect("initial load");
+        let initial_material = Arc::new(TlsMaterial {
+            certs: Arc::new(initial_certs),
+            cert_pem: initial_cert_pem,
+            key_pem: initial_key_pem,
+        });
+        let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
+
+        let server_addr = {
+            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+                .expect("bind probe");
+            probe.local_addr().expect("probe local addr")
+        };
+
+        let db_dir = tempdir().expect("db tempdir");
+        let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+
+        let server = crate::comm::publish::Server::new(server_addr, &set_a.server);
+
+        let notify_shutdown = Arc::new(Notify::new());
+        let pcap_sensors = new_pcap_sensors();
+        let ingest_sensors = new_ingest_sensors(&db);
+        let stream_direct_channels = new_stream_direct_channels();
+        let (peers, peer_idents) = new_peers_data(None);
+
+        let server_task = {
+            let db = db.clone();
+            let shutdown = notify_shutdown.clone();
+            tokio::spawn(async move {
+                server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        stream_direct_channels,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        tls_watch,
+                        shutdown,
+                    )
+                    .await;
+            })
+        };
+
+        sleep(Duration::from_millis(200)).await;
+
+        let client_a = client_endpoint(&set_a.client);
+        let pre_reload_conn = try_connect(&client_a, server_addr)
+            .await
+            .expect("pre-reload set A client should handshake against the real publish listener");
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should be open"
+        );
+
+        fs::write(&cert_path, bundle_b.server_cert_pem.as_bytes()).expect("overwrite cert");
+        fs::write(&key_path, bundle_b.server_key_pem.as_bytes()).expect("overwrite key");
+        fs::write(&ca_path, bundle_b.ca_pem.as_bytes()).expect("overwrite ca");
+
+        let reload_trigger = Arc::new(Notify::new());
+        let trigger_clone = reload_trigger.clone();
+        let reload_task = tokio::spawn(async move {
+            trigger_clone.notified().await;
+            reload_handle.reload();
+        });
+
+        reload_trigger.notify_one();
+        reload_task.await.expect("reload task");
+
+        let mut applied = false;
+        for _ in 0..40 {
+            sleep(Duration::from_millis(50)).await;
+            let probe = client_endpoint(&set_b.client);
+            if try_connect(&probe, server_addr).await.is_ok() {
+                applied = true;
+                break;
+            }
+        }
+        assert!(
+            applied,
+            "full chain (Notify -> ReloadHandle::reload -> watch -> listener) did not \
+             rotate publish listener TLS state"
+        );
+
+        let client_a_stale = client_endpoint(&set_a.client);
+        let err = try_connect(&client_a_stale, server_addr)
+            .await
+            .expect_err("set A client should fail after full-chain reload to set B");
+        assert!(
+            !err.is_empty(),
+            "expected a handshake error after reload with stale trust"
+        );
+
+        assert!(
+            pre_reload_conn.close_reason().is_none(),
+            "pre-reload connection should survive the full-chain reload, close reason: {:?}",
+            pre_reload_conn.close_reason()
+        );
+
+        pre_reload_conn.close(0u32.into(), b"done");
+        notify_shutdown.notify_waiters();
+        let _ = timeout(Duration::from_secs(3), server_task).await;
+    }
 }
