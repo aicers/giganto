@@ -42,11 +42,28 @@ use crate::{
     tls_reload::TlsWatch,
 };
 
+/// Peer subsystem's currently active client TLS state. The `generation`
+/// counter is incremented on every successful reload so that an outbound
+/// reconnect that snapshotted its client config before a reload can
+/// detect, after its dial completes, that the snapshot is stale.
+pub(super) struct PeerClientConfigState {
+    generation: u64,
+    config: Arc<ClientConfig>,
+}
+
 /// Shared slot holding the peer subsystem's currently active client TLS
-/// configuration. Readers (`connect`) snapshot the inner `Arc` under a
-/// short-lived read lock; the reload handler replaces the `Arc` atomically
-/// under a write lock when a new configuration is applied.
-type SharedClientConfig = Arc<StdRwLock<Arc<ClientConfig>>>;
+/// state. Readers (`connect`) snapshot `(generation, Arc<ClientConfig>)`
+/// under a short-lived read lock; the reload handler bumps the generation
+/// and replaces the inner `Arc` under a write lock when a new
+/// configuration is applied.
+type SharedClientConfig = Arc<StdRwLock<PeerClientConfigState>>;
+
+fn new_shared_client_config(config: ClientConfig) -> SharedClientConfig {
+    Arc::new(StdRwLock::new(PeerClientConfigState {
+        generation: 0,
+        config: Arc::new(config),
+    }))
+}
 
 /// Computes a lowercase hex SHA-256 fingerprint of the leaf (first)
 /// certificate in the chain, for use in reload logging and tests.
@@ -65,11 +82,15 @@ pub(crate) fn leaf_cert_fingerprint(certs: &[CertificateDer<'_>]) -> String {
     out
 }
 
-fn current_client_config(slot: &SharedClientConfig) -> ClientConfig {
+fn snapshot_client_config(slot: &SharedClientConfig) -> (u64, ClientConfig) {
+    let guard = slot.read().expect("peer client config lock poisoned");
+    (guard.generation, guard.config.as_ref().clone())
+}
+
+fn current_client_generation(slot: &SharedClientConfig) -> u64 {
     slot.read()
         .expect("peer client config lock poisoned")
-        .as_ref()
-        .clone()
+        .generation
 }
 
 // The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
@@ -189,8 +210,7 @@ impl Peer {
 
         let client_socket = SocketAddr::new(self.local_address.ip(), 0);
         let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
-        let shared_client_config: SharedClientConfig =
-            Arc::new(StdRwLock::new(Arc::new(self.client_config)));
+        let shared_client_config = new_shared_client_config(self.client_config);
         // Discard any initial value to avoid triggering the reload branch
         // before the subsystem has advertised its current TLS state.
         tls_watch.mark_unchanged();
@@ -278,11 +298,18 @@ impl Peer {
 
 /// Prepares fresh peer server/client TLS configurations from `certs` and,
 /// only if both build successfully, swaps them into the active peer
-/// subsystem state under a single write lock so that no concurrent
-/// reconnect can observe a partial update (new server cert already in
-/// effect but still dialing with the old client config, or vice versa).
-/// On any prepare failure the previous active state is preserved and the
-/// failure is logged.
+/// subsystem state under a single write lock and bumps the client-config
+/// generation. On any prepare failure the previous active state is
+/// preserved and the failure is logged.
+///
+/// The write lock serializes with `connect()` readers so that a reader
+/// which waits for this lock (or starts after it) sees post-reload server
+/// and client state together. A reader that snapshotted the old client
+/// config before this critical section may still be in the middle of a
+/// dial when the swap lands; the generation bump lets the caller detect
+/// that case after the dial completes and retry with the refreshed client
+/// config instead of letting a stale outbound connection remain active
+/// while new inbound handshakes already observe the new server leaf.
 fn apply_peer_tls_reload(
     server_endpoint: &Endpoint,
     shared_client_config: &SharedClientConfig,
@@ -305,18 +332,13 @@ fn apply_peer_tls_reload(
         }
     };
 
-    // Serialize with `connect()` readers by holding the write lock across
-    // both endpoint updates. A reader that completes its snapshot before
-    // this critical section sees both pre-reload server and client state;
-    // a reader that waits for this lock (or starts after it) sees both
-    // post-reload server and client state. No reader can snapshot the old
-    // client config after the new server config has taken effect.
-    let mut slot = shared_client_config
+    let mut state = shared_client_config
         .write()
         .expect("peer client config lock poisoned");
     server_endpoint.set_server_config(Some(new_server));
-    *slot = Arc::new(new_client);
-    drop(slot);
+    state.generation = state.generation.saturating_add(1);
+    state.config = Arc::new(new_client);
+    drop(state);
     info!(
         "peer TLS state reloaded; new leaf fingerprint: {}",
         leaf_cert_fingerprint(&certs.certs)
@@ -346,13 +368,13 @@ async fn connect(
     client_endpoint: &Endpoint,
     shared_client_config: &SharedClientConfig,
     peer_info: &PeerIdentity,
-) -> Result<(Connection, SendStream, RecvStream)> {
-    let config = current_client_config(shared_client_config);
+) -> Result<(Connection, SendStream, RecvStream, u64)> {
+    let (generation, config) = snapshot_client_config(shared_client_config);
     let connection = client_endpoint
         .connect_with(config, peer_info.addr, &peer_info.hostname)?
         .await?;
     let (send, recv) = client_handshake(&connection, env!("CARGO_PKG_VERSION")).await?;
-    Ok((connection, send, recv))
+    Ok((connection, send, recv, generation))
 }
 
 fn get_peer_ports(config_doc: &DocumentMut) -> (Option<u16>, Option<u16>) {
@@ -385,7 +407,22 @@ async fn client_connection(
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
     'connection: loop {
         match connect(&client_endpoint, &shared_client_config, &peer_info).await {
-            Ok((connection, mut send, mut recv)) => {
+            Ok((connection, mut send, mut recv, snapshot_gen)) => {
+                // If peer TLS state was reloaded while this reconnect was
+                // in flight, the connection we just established was dialed
+                // with stale client material. Close it and retry so the
+                // reconnect is driven by the refreshed client config; this
+                // prevents an outbound connection from remaining active on
+                // the old client leaf after the server endpoint has
+                // already switched to the new TLS state.
+                if current_client_generation(&shared_client_config) != snapshot_gen {
+                    info!(
+                        "outbound reconnect to {} superseded by peer TLS reload; retrying with refreshed client config",
+                        peer_info.addr
+                    );
+                    connection.close(0_u32.into(), b"peer TLS reload superseded");
+                    continue 'connection;
+                }
                 // Remove duplicate connections.
                 let (remote_addr, remote_peer_dedup_key) = match check_for_duplicate_connections(
                     &connection,
@@ -1044,7 +1081,7 @@ pub mod tests {
         }
 
         pub(super) fn init_shared_client_config() -> super::SharedClientConfig {
-            std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(client_config())))
+            super::new_shared_client_config(client_config())
         }
 
         /// Builds a paired `watch::Sender`/`TlsWatch` seeded with `certs`.
@@ -1338,7 +1375,7 @@ pub mod tests {
             let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
             let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
             let shared_client_config: SharedClientConfig =
-                Arc::new(std::sync::RwLock::new(Arc::new(peer.client_config)));
+                super::new_shared_client_config(peer.client_config);
 
             let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
             let Ok(config_doc) = read_toml_file(&config_path) else {
@@ -1427,7 +1464,7 @@ pub mod tests {
             let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
             let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
             let shared_client_config: SharedClientConfig =
-                Arc::new(std::sync::RwLock::new(Arc::new(peer.client_config)));
+                super::new_shared_client_config(peer.client_config);
 
             let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
             let Ok(config_doc) = read_toml_file(&config_path) else {
@@ -2800,7 +2837,7 @@ pub mod tests {
             hostname: test_connect_name().to_string(),
         };
         let shared_client_config = init_shared_client_config();
-        let (connection, _send, _recv) =
+        let (connection, _send, _recv, _gen) =
             connect(&client_endpoint, &shared_client_config, &peer_info)
                 .await
                 .unwrap();
@@ -3040,20 +3077,26 @@ pub mod tests {
 
         let (server_endpoint, _server_addr) = setup_server_endpoint_with_certs(&initial_certs);
         let initial_client_config = config_client(&initial_certs).expect("initial client config");
-        let shared: SharedClientConfig =
-            Arc::new(std::sync::RwLock::new(Arc::new(initial_client_config)));
+        let shared: SharedClientConfig = super::new_shared_client_config(initial_client_config);
 
         // Snapshot the actual pre-reload slot value so the post-reload
         // comparison can detect a replacement rather than just a distinct
         // allocation that was never installed.
-        let before = Arc::clone(&shared.read().expect("lock"));
+        let before_gen = shared.read().expect("lock").generation;
+        let before = Arc::clone(&shared.read().expect("lock").config);
 
         apply_peer_tls_reload(&server_endpoint, &shared, &new_certs);
 
-        let after = Arc::clone(&shared.read().expect("lock"));
+        let after_gen = shared.read().expect("lock").generation;
+        let after = Arc::clone(&shared.read().expect("lock").config);
         assert!(
             !Arc::ptr_eq(&before, &after),
             "client config slot must be replaced with a new Arc after reload"
+        );
+        assert_eq!(
+            after_gen,
+            before_gen + 1,
+            "successful reload must bump the client-config generation"
         );
 
         // Confirm the swapped client config can actually dial a server that
@@ -3089,9 +3132,9 @@ pub mod tests {
         let initial_certs = create_certs();
         let (server_endpoint, _server_addr) = setup_server_endpoint_with_certs(&initial_certs);
         let initial_client_config = config_client(&initial_certs).expect("client config");
-        let shared: SharedClientConfig =
-            Arc::new(std::sync::RwLock::new(Arc::new(initial_client_config)));
-        let before = shared.read().expect("lock").clone();
+        let shared: SharedClientConfig = super::new_shared_client_config(initial_client_config);
+        let before_gen = shared.read().expect("lock").generation;
+        let before = Arc::clone(&shared.read().expect("lock").config);
 
         // Build a Certs where cert and key do not form a valid pair so
         // config_server fails at with_single_cert.
@@ -3104,10 +3147,15 @@ pub mod tests {
 
         apply_peer_tls_reload(&server_endpoint, &shared, &mismatched);
 
-        let after = shared.read().expect("lock").clone();
+        let after_gen = shared.read().expect("lock").generation;
+        let after = Arc::clone(&shared.read().expect("lock").config);
         assert!(
             Arc::ptr_eq(&before, &after),
             "client config slot must be preserved when reload preparation fails"
+        );
+        assert_eq!(
+            after_gen, before_gen,
+            "failed reload must not bump the client-config generation"
         );
     }
 
@@ -3305,50 +3353,168 @@ pub mod tests {
             .expect("peer task result");
     }
 
-    /// Unit-level coverage for the client-config failure branch of
-    /// `apply_peer_tls_reload`. Since `config_server` and `config_client`
-    /// share the same cert/key pair requirements, a mismatched pair fails
-    /// the first build and returns early. To exercise the *second* branch
-    /// we reorder the calls locally: build the server config first and
-    /// invoke a client-config build that is forced to fail. The contract
-    /// we assert is the same — on build failure the previously installed
-    /// state must be preserved byte-for-byte.
+    /// Drives the production `connect()` helper across a successful
+    /// reload. Because `client_connection()`'s reconnect loop dials via
+    /// exactly this helper, the refreshed client TLS state it picks up
+    /// here is the same state a real outbound reconnect would observe
+    /// on a remote peer's handshake.
     #[tokio::test]
-    async fn apply_peer_tls_reload_preserves_state_when_client_config_build_fails() {
+    async fn connect_reads_latest_shared_client_config_across_reload() {
         init_crypto();
 
-        let initial_certs = create_certs();
-        let (server_endpoint, _server_addr) = setup_server_endpoint_with_certs(&initial_certs);
-        let initial_client_config = config_client(&initial_certs).expect("client config");
-        let shared: SharedClientConfig =
-            Arc::new(std::sync::RwLock::new(Arc::new(initial_client_config)));
-        let before = Arc::clone(&shared.read().expect("lock"));
+        let server_certs = create_certs();
+        let initial_client_certs = create_certs();
+        let new_client_certs = create_node2_certs();
+        assert_ne!(
+            leaf_cert_fingerprint(&initial_client_certs.certs),
+            leaf_cert_fingerprint(&new_client_certs.certs),
+            "test setup requires distinct client leaf material"
+        );
 
-        // Mismatched cert/key fails both `config_server` and
-        // `config_client`. `apply_peer_tls_reload` tries the server build
-        // first, so this exercises the server-failure early return; the
-        // contract under test here is simply that, regardless of which
-        // stage fails, the client-config slot is left untouched.
+        let (server_endpoint, server_addr) = setup_server_endpoint_with_certs(&server_certs);
+        let shared: SharedClientConfig = super::new_shared_client_config(
+            config_client(&initial_client_certs).expect("initial client config"),
+        );
+
+        let peer_info = PeerIdentity {
+            addr: server_addr,
+            hostname: test_connect_name().to_string(),
+        };
+        let client_endpoint =
+            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
+
+        // Cycle 1: dial with the initial client config and confirm the
+        // remote peer observes the initial client leaf fingerprint.
+        let accept_1 = async {
+            let incoming = accept_incoming(&server_endpoint, "accept 1").await;
+            let conn = incoming.await.expect("server accept 1");
+            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs 1"));
+            let _ = server_handshake(&conn, PEER_VERSION_REQ)
+                .await
+                .expect("server handshake 1");
+            (conn, fp)
+        };
+        let dial_1 = async {
+            super::connect(&client_endpoint, &shared, &peer_info)
+                .await
+                .expect("dial 1")
+        };
+        let ((server_conn_1, observed_fp_1), (client_conn_1, _s1, _r1, gen_1)) =
+            tokio::join!(accept_1, dial_1);
+        assert_eq!(gen_1, 0);
+        assert_eq!(
+            observed_fp_1,
+            leaf_cert_fingerprint(&initial_client_certs.certs),
+            "remote peer must observe the initial client leaf before reload"
+        );
+        drop(client_conn_1);
+        drop(server_conn_1);
+
+        // Simulate a successful reload. We intentionally do not run
+        // `apply_peer_tls_reload` against this server endpoint, because
+        // that would also swap the server config and change the SNI
+        // identity of the peer. The contract under test is the client
+        // path: that `connect()` picks up whatever the current shared
+        // slot holds.
+        {
+            let new_client_config = config_client(&new_client_certs).expect("new client config");
+            let mut state = shared.write().expect("peer client config lock poisoned");
+            state.generation = state.generation.saturating_add(1);
+            state.config = Arc::new(new_client_config);
+        }
+
+        // Cycle 2: redial and confirm the remote peer observes the new
+        // client leaf fingerprint. This is the outbound-reconnect
+        // observation the review was asking for.
+        let accept_2 = async {
+            let incoming = accept_incoming(&server_endpoint, "accept 2").await;
+            let conn = incoming.await.expect("server accept 2");
+            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs 2"));
+            let _ = server_handshake(&conn, PEER_VERSION_REQ)
+                .await
+                .expect("server handshake 2");
+            (conn, fp)
+        };
+        let dial_2 = async {
+            super::connect(&client_endpoint, &shared, &peer_info)
+                .await
+                .expect("dial 2")
+        };
+        let ((server_conn_2, observed_fp_2), (client_conn_2, _s2, _r2, gen_2)) =
+            tokio::join!(accept_2, dial_2);
+        assert_eq!(gen_2, 1, "second dial must snapshot the bumped generation");
+        assert_eq!(
+            observed_fp_2,
+            leaf_cert_fingerprint(&new_client_certs.certs),
+            "remote peer must observe the refreshed client leaf after reload"
+        );
+        assert_eq!(current_client_generation(&shared), 1);
+        drop(client_conn_2);
+        drop(server_conn_2);
+    }
+
+    /// A failed reload must leave the shared client TLS state byte-for-byte
+    /// intact, so that a subsequent outbound reconnect presents the
+    /// previously installed client leaf on the wire.
+    #[tokio::test]
+    async fn connect_preserves_client_leaf_on_failed_reload() {
+        init_crypto();
+
+        let server_certs = create_certs();
+        let initial_client_certs = create_certs();
+        let (server_endpoint, server_addr) = setup_server_endpoint_with_certs(&server_certs);
+        let shared: SharedClientConfig = super::new_shared_client_config(
+            config_client(&initial_client_certs).expect("initial client config"),
+        );
+
+        // Trigger a reload that fails at config build time. Use a
+        // throwaway server endpoint so the live peer-server endpoint
+        // under `server_addr` is not affected.
+        let (probe_server_endpoint, _probe_addr) = setup_server_endpoint_with_certs(&server_certs);
         let other = create_node2_certs();
         let mismatched = Certs {
-            certs: initial_certs.certs.clone(),
+            certs: initial_client_certs.certs.clone(),
             key: other.key.clone_key(),
-            root: initial_certs.root.clone(),
+            root: initial_client_certs.root.clone(),
         };
-        apply_peer_tls_reload(&server_endpoint, &shared, &mismatched);
-
-        let after = Arc::clone(&shared.read().expect("lock"));
-        assert!(
-            Arc::ptr_eq(&before, &after),
-            "client config slot must be preserved when reload preparation fails"
+        apply_peer_tls_reload(&probe_server_endpoint, &shared, &mismatched);
+        assert_eq!(
+            current_client_generation(&shared),
+            0,
+            "failed reload must not bump the client-config generation"
         );
 
-        // Additionally, directly confirm that `config_client` rejects
-        // mismatched material — i.e. the client-config failure branch is
-        // a live guard in production if the build order is ever changed.
-        assert!(
-            config_client(&mismatched).is_err(),
-            "config_client must reject mismatched cert/key material"
+        // Dial after the failed reload and confirm the remote peer still
+        // observes the preserved client leaf.
+        let peer_info = PeerIdentity {
+            addr: server_addr,
+            hostname: test_connect_name().to_string(),
+        };
+        let client_endpoint =
+            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
+        let accept_fut = async {
+            let incoming = accept_incoming(&server_endpoint, "accept after failed reload").await;
+            let conn = incoming.await.expect("server accept");
+            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs"));
+            let _ = server_handshake(&conn, PEER_VERSION_REQ)
+                .await
+                .expect("server handshake");
+            (conn, fp)
+        };
+        let dial_fut = async {
+            super::connect(&client_endpoint, &shared, &peer_info)
+                .await
+                .expect("dial after failed reload")
+        };
+        let ((server_conn, observed_fp), (client_conn, _s, _r, generation)) =
+            tokio::join!(accept_fut, dial_fut);
+        assert_eq!(generation, 0);
+        assert_eq!(
+            observed_fp,
+            leaf_cert_fingerprint(&initial_client_certs.certs),
+            "outbound reconnect must observe the preserved client leaf after a failed reload"
         );
+        drop(client_conn);
+        drop(server_conn);
     }
 }
