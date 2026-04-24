@@ -8,6 +8,7 @@ mod settings;
 mod storage;
 #[cfg(all(test, feature = "bootroot"))]
 mod test_bootroot;
+mod tls_reload;
 mod web;
 
 use std::fs;

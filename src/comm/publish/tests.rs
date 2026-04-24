@@ -51,7 +51,7 @@ use rustls::{
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock, mpsc, oneshot};
+use tokio::sync::{Notify, RwLock, mpsc, oneshot, watch};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::Server;
@@ -69,6 +69,7 @@ use crate::{
     },
     server::{Certs, config_client, config_server},
     storage::{Database, DbOptions, RawEventStore},
+    tls_reload::{TlsMaterial, TlsWatch},
 };
 
 static INIT: OnceLock<()> = OnceLock::new();
@@ -582,6 +583,16 @@ mod fixtures {
         NODE1.build_certs()
     }
 
+    pub(super) fn build_test_tls_watch(certs: &Arc<Certs>) -> TlsWatch {
+        let material = Arc::new(TlsMaterial {
+            certs: Arc::clone(certs),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+        });
+        let (_sender, receiver) = watch::channel(material);
+        receiver
+    }
+
     pub(super) async fn setup_test_harness() -> TestHarness {
         init_crypto();
 
@@ -963,6 +974,7 @@ mod fixtures {
         peer_idents: Arc<RwLock<HashSet<PeerIdentity>>>,
     ) {
         let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
         let (mut server_send, _ack_server, _ack_client) = build_ack_stream("ack.local").await;
 
         crate::comm::publish::process_pcap_extract_filters(
@@ -970,7 +982,7 @@ mod fixtures {
             pcap_sensors,
             peers,
             peer_idents,
-            certs,
+            tls_watch,
             &mut server_send,
         )
         .await
@@ -2616,7 +2628,7 @@ mod fixtures {
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
-        certs: Arc<Certs>,
+        tls_watch: TlsWatch,
         notify_shutdown: Arc<Notify>,
         ready: oneshot::Sender<SocketAddr>,
     ) {
@@ -2636,7 +2648,7 @@ mod fixtures {
                     let ingest_sensors = ingest_sensors.clone();
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
-                    let certs = certs.clone();
+                    let tls_watch = tls_watch.clone();
                     conn_hdl = Some(tokio::spawn(async move {
                         if let Err(err) = crate::comm::publish::handle_connection(
                             conn,
@@ -2646,7 +2658,7 @@ mod fixtures {
                             ingest_sensors,
                             peers,
                             peer_idents,
-                            certs,
+                            tls_watch,
                             notify_shutdown,
                         )
                         .await {
@@ -2680,6 +2692,7 @@ mod fixtures {
         let notify_for_run = notify_shutdown.clone();
         let (ready_tx, ready_rx) = oneshot::channel();
         let server = Server::new(addr, &certs);
+        let tls_watch = build_test_tls_watch(&certs);
 
         let handle = tokio::spawn(async move {
             run_server_with_ready(
@@ -2690,7 +2703,7 @@ mod fixtures {
                 ingest_sensors,
                 peers,
                 peer_idents,
-                certs,
+                tls_watch,
                 notify_for_run,
                 ready_tx,
             )
@@ -4427,6 +4440,7 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
 
     let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
     let server = Server::new(server_addr, &certs);
+    let tls_watch = build_test_tls_watch(&certs);
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let server_task = tokio::spawn(run_server_with_ready(
@@ -4437,7 +4451,7 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
         ingest_sensors,
         peers,
         peer_idents,
-        certs,
+        tls_watch,
         notify_shutdown.clone(),
         ready_tx,
     ));
@@ -5128,6 +5142,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("raw.peer.handshake").await;
 
@@ -5143,7 +5158,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
     )
     .await
     .expect_err("process_raw_events should fail when peer handshake fails");
@@ -5166,6 +5181,7 @@ async fn process_raw_events_errors_when_peer_name_missing() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("raw.peer.missing_ident").await;
 
@@ -5181,7 +5197,7 @@ async fn process_raw_events_errors_when_peer_name_missing() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
     )
     .await
     .expect_err("process_raw_events should fail when peer name is missing");
@@ -5315,6 +5331,7 @@ async fn process_range_data_sends_local_results_and_done() {
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, client_conn) = open_range_stream("range.local").await;
     super::process_range_data::<Conn, u8>(
@@ -5324,7 +5341,7 @@ async fn process_range_data_sends_local_results_and_done() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5367,6 +5384,7 @@ async fn process_range_data_prefers_local_over_peer() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5384,7 +5402,7 @@ async fn process_range_data_prefers_local_over_peer() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5432,6 +5450,7 @@ async fn process_range_data_forwards_peer_results() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5449,7 +5468,7 @@ async fn process_range_data_forwards_peer_results() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5486,6 +5505,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
     let peer_idents = build_peer_idents(peer_server.addr, NODE2.server_name());
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let request = RequestRange {
         sensor: SENSOR.to_string(),
@@ -5503,7 +5523,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -5536,6 +5556,7 @@ async fn process_range_data_returns_error_without_owner() {
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let peer_idents = Arc::new(RwLock::new(HashSet::new()));
     let certs = build_test_certs();
+    let tls_watch = build_test_tls_watch(&certs);
 
     let (mut send, _client_conn) = open_range_stream("range.orphan").await;
     let err = super::process_range_data::<Conn, u8>(
@@ -5545,7 +5566,7 @@ async fn process_range_data_returns_error_without_owner() {
         ingest_sensors,
         peers,
         peer_idents,
-        &certs,
+        &tls_watch,
         false,
     )
     .await
@@ -6152,7 +6173,8 @@ async fn connect_supports_ipv6() {
         let _ = connection.closed().await;
     });
 
-    let connection = super::connect(server_addr, NODE1.server_name(), &certs)
+    let tls_watch = build_test_tls_watch(&certs);
+    let connection = super::connect(server_addr, NODE1.server_name(), &tls_watch)
         .await
         .expect("ipv6 connect failed");
     let remote_addr = connection.remote_address();
@@ -6170,4 +6192,447 @@ async fn connect_supports_ipv6() {
     connection.close(0u32.into(), b"done");
 
     let _ = server_task.await;
+}
+
+#[cfg(not(feature = "bootroot"))]
+mod tls_reload_connect {
+    use std::{
+        net::{IpAddr, Ipv6Addr, SocketAddr},
+        sync::Arc,
+        time::Duration as StdDuration,
+    };
+
+    use giganto_client::connection::server_handshake;
+    use quinn::Endpoint;
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
+        ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+    };
+    use rustls::pki_types::CertificateDer;
+    use tokio::sync::{Mutex as TokioMutex, mpsc};
+
+    use super::super::{PUBLISH_VERSION_REQ, connect};
+    use super::fixtures::init_crypto;
+    use crate::{
+        comm::{to_cert_chain, to_private_key, to_root_cert},
+        server::{Certs, config_server, extract_cert_from_conn},
+        tls_reload::{CertPaths, ReloadHandle, TlsMaterial, get_current_tls_material},
+    };
+
+    const TEST_SERVER_NAME: &str = "reload-test-server";
+
+    struct ReloadFixture {
+        _temp_dir: tempfile::TempDir,
+        client_cert_path: String,
+        client_key_path: String,
+        ca_cert_path: String,
+        server_certs: Arc<Certs>,
+        ca: CertifiedIssuer<'static, KeyPair>,
+    }
+
+    fn build_ca() -> CertifiedIssuer<'static, KeyPair> {
+        let key = KeyPair::generate().expect("generate CA key");
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Publish Reload Test CA");
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
+        CertifiedIssuer::self_signed(params, key).expect("build CA")
+    }
+
+    fn sign_leaf(
+        ca: &CertifiedIssuer<'_, KeyPair>,
+        common_name: &str,
+        dns_name: &str,
+        eku: Vec<ExtendedKeyUsagePurpose>,
+    ) -> (String, String) {
+        let key = KeyPair::generate().expect("generate leaf key");
+        let mut params =
+            CertificateParams::new(vec![dns_name.to_string()]).expect("build leaf params");
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        params.extended_key_usages = eku;
+        let cert = params.signed_by(&key, ca).expect("sign leaf");
+        (cert.pem(), key.serialize_pem())
+    }
+
+    fn build_reload_fixture() -> ReloadFixture {
+        let ca = build_ca();
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+
+        let ca_cert_path = temp_dir.path().join("ca.pem");
+        std::fs::write(&ca_cert_path, ca.pem()).expect("write ca");
+
+        let (server_cert_pem, server_key_pem) = sign_leaf(
+            &ca,
+            "Publish Reload Test Server",
+            TEST_SERVER_NAME,
+            vec![ExtendedKeyUsagePurpose::ServerAuth],
+        );
+        let (client_cert_pem, client_key_pem) = sign_leaf(
+            &ca,
+            "Publish Reload Test Client A",
+            "client-a",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+
+        let client_cert_path = temp_dir.path().join("client-cert.pem");
+        let client_key_path = temp_dir.path().join("client-key.pem");
+        std::fs::write(&client_cert_path, client_cert_pem.as_bytes()).expect("write client cert");
+        std::fs::write(&client_key_path, client_key_pem.as_bytes()).expect("write client key");
+
+        let server_certs = Arc::new(Certs {
+            certs: to_cert_chain(server_cert_pem.as_bytes()).expect("server cert chain"),
+            key: to_private_key(server_key_pem.as_bytes()).expect("server key"),
+            root: to_root_cert(&[ca_cert_path.to_string_lossy().into_owned()])
+                .expect("server root"),
+        });
+
+        ReloadFixture {
+            _temp_dir: temp_dir,
+            client_cert_path: client_cert_path.to_string_lossy().into_owned(),
+            client_key_path: client_key_path.to_string_lossy().into_owned(),
+            ca_cert_path: ca_cert_path.to_string_lossy().into_owned(),
+            server_certs,
+            ca,
+        }
+    }
+
+    fn build_client_paths(fixture: &ReloadFixture) -> CertPaths {
+        CertPaths {
+            cert_path: fixture.client_cert_path.clone(),
+            key_path: fixture.client_key_path.clone(),
+            ca_certs_paths: vec![fixture.ca_cert_path.clone()],
+        }
+    }
+
+    fn spawn_capturing_server(
+        server_certs: &Arc<Certs>,
+    ) -> (
+        SocketAddr,
+        mpsc::UnboundedReceiver<Vec<CertificateDer<'static>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let server_config = config_server(server_certs).expect("server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("start server endpoint");
+        let server_addr = endpoint.local_addr().expect("server addr");
+        let (cert_tx, cert_rx) = mpsc::unbounded_channel();
+        let connections: Arc<TokioMutex<Vec<quinn::Connection>>> =
+            Arc::new(TokioMutex::new(Vec::new()));
+
+        let task = tokio::spawn(async move {
+            while let Some(connecting) = endpoint.accept().await {
+                let cert_tx = cert_tx.clone();
+                let connections = Arc::clone(&connections);
+                tokio::spawn(async move {
+                    let Ok(connection) = connecting.await else {
+                        return;
+                    };
+                    if server_handshake(&connection, PUBLISH_VERSION_REQ)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if let Ok(chain) = extract_cert_from_conn(&connection) {
+                        let owned: Vec<CertificateDer<'static>> =
+                            chain.into_iter().map(CertificateDer::into_owned).collect();
+                        let _ = cert_tx.send(owned);
+                    }
+                    connections.lock().await.push(connection);
+                });
+            }
+        });
+
+        (server_addr, cert_rx, task)
+    }
+
+    #[tokio::test]
+    async fn connect_presents_new_leaf_certificate_after_reload() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        let conn1 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("first connect");
+        let leaf_chain_1 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("first cert timeout")
+            .expect("first cert missing");
+        conn1.close(0u32.into(), b"done");
+
+        // Rotate the leaf on disk and trigger a reload.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("second connect after reload");
+        let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("second cert timeout")
+            .expect("second cert missing");
+        conn2.close(0u32.into(), b"done");
+
+        assert_ne!(
+            leaf_chain_1[0], leaf_chain_2[0],
+            "post-reload connect must present the new leaf certificate",
+        );
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn reload_does_not_close_established_peer_connection() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, _cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("initial connect");
+
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        // Give the reload notification time to propagate; the implementation
+        // must not act on it for already-established connections.
+        tokio::time::sleep(StdDuration::from_millis(200)).await;
+
+        assert!(
+            conn.close_reason().is_none(),
+            "established peer connection should remain open after TLS reload: {:?}",
+            conn.close_reason()
+        );
+
+        conn.close(0u32.into(), b"done");
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_reload_preserves_material_for_subsequent_connect() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        let paths = build_client_paths(&fixture);
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&paths).expect("initial material");
+        let initial_cert_pem = cert_pem.clone();
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+        let (handle, watch) = ReloadHandle::new(paths, initial);
+
+        // Corrupt the cert file so reload fails and material is preserved.
+        std::fs::write(&fixture.client_cert_path, b"not a cert").expect("corrupt cert");
+        handle.reload();
+
+        let current = get_current_tls_material(&watch);
+        assert_eq!(
+            current.cert_pem, initial_cert_pem,
+            "failed reload must preserve previous TLS material",
+        );
+
+        // A subsequent connect (e.g. a retry after the reload failure) must
+        // still succeed using the preserved material.
+        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("connect after failed reload should succeed");
+        let leaf_chain = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("cert timeout")
+            .expect("cert missing");
+        assert!(
+            !leaf_chain.is_empty(),
+            "preserved material should still present a leaf certificate",
+        );
+        conn.close(0u32.into(), b"done");
+
+        // Repair on-disk material and reload; subsequent connect succeeds with refreshed material.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client B",
+            "client-b",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+            .await
+            .expect("connect after successful recovery");
+        let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
+            .await
+            .expect("recovery cert timeout")
+            .expect("recovery cert missing");
+        assert_ne!(
+            leaf_chain[0], leaf_chain_2[0],
+            "after recovery reload, new leaf certificate should be presented",
+        );
+        conn2.close(0u32.into(), b"done");
+
+        server_task.abort();
+    }
+
+    /// Regression test for the mid-retry reload path in
+    /// `connect_repeatedly()`: when an attempt fails and the caller keeps
+    /// retrying, a reload that completes mid-loop must be picked up by the
+    /// next retry. Bug: if the first snapshot of `TlsWatch` were captured
+    /// outside the retry loop, retries would keep re-presenting the stale
+    /// material even after a successful reload.
+    ///
+    /// The retry loop is forced via an untrusted CA on the client side so
+    /// the client's own `connecting.await` fails on every attempt (unlike
+    /// client-cert rejection, which quinn surfaces only after connection
+    /// establishment and would prematurely unwind the retry loop).
+    #[tokio::test]
+    async fn retry_loop_picks_up_reloaded_material_mid_flight() {
+        init_crypto();
+
+        let fixture = build_reload_fixture();
+        let (server_addr, mut cert_rx, server_task) = spawn_capturing_server(&fixture.server_certs);
+
+        // Seed the on-disk CA bundle with an unrelated CA that does NOT
+        // trust the server's cert. The client's `connecting.await` will
+        // reject every attempt, keeping `connect_repeatedly()` in its
+        // retry loop.
+        let untrusted_ca = build_ca();
+        let untrusted_dir = tempfile::tempdir().expect("untrusted tempdir");
+        let untrusted_ca_path = untrusted_dir.path().join("untrusted-ca.pem");
+        std::fs::write(&untrusted_ca_path, untrusted_ca.pem()).expect("write untrusted ca");
+
+        let untrusted_paths = CertPaths {
+            cert_path: fixture.client_cert_path.clone(),
+            key_path: fixture.client_key_path.clone(),
+            ca_certs_paths: vec![untrusted_ca_path.to_string_lossy().into_owned()],
+        };
+        let (certs, cert_pem, key_pem) =
+            crate::tls_reload::load_tls_material(&untrusted_paths).expect("initial material");
+        let initial = Arc::new(TlsMaterial {
+            certs: Arc::new(certs),
+            cert_pem,
+            key_pem,
+        });
+
+        // The `ReloadHandle` must load from paths that will resolve to
+        // trusted material on reload, so point it at the real CA bundle.
+        // The initial material (above) is the untrusted snapshot.
+        let trusted_paths = build_client_paths(&fixture);
+        let (handle, watch) = ReloadHandle::new(trusted_paths, initial);
+
+        // Drive connect() concurrently; it must stay in the retry loop
+        // because the client rejects the server's cert under the untrusted
+        // CA snapshot.
+        let watch_for_task = watch.clone();
+        let connect_task =
+            tokio::spawn(
+                async move { connect(server_addr, TEST_SERVER_NAME, &watch_for_task).await },
+            );
+
+        // Wait long enough for at least one failed attempt plus the
+        // initial 500ms backoff so the task is provably retrying.
+        tokio::time::sleep(StdDuration::from_millis(1500)).await;
+        if connect_task.is_finished() {
+            let outcome = connect_task.await;
+            panic!("connect returned unexpectedly before reload: {outcome:?}");
+        }
+
+        // Rotate the client leaf so the post-reload attempt presents a
+        // different certificate than the initial (untrusted) snapshot and
+        // we can assert the retry observed the reloaded material.
+        let (new_cert_pem, new_key_pem) = sign_leaf(
+            &fixture.ca,
+            "Publish Reload Test Client Recovery",
+            "client-recovery",
+            vec![ExtendedKeyUsagePurpose::ClientAuth],
+        );
+        std::fs::write(&fixture.client_cert_path, new_cert_pem.as_bytes())
+            .expect("rewrite client cert");
+        std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
+            .expect("rewrite client key");
+        handle.reload();
+
+        // The in-progress retry loop must observe the reload on its next
+        // attempt and succeed. Back-off can reach a few seconds by this
+        // point, so allow a generous timeout.
+        let conn = tokio::time::timeout(StdDuration::from_secs(15), connect_task)
+            .await
+            .expect("connect did not complete after mid-retry reload")
+            .expect("connect task panicked")
+            .expect("connect must succeed once refreshed material is published");
+
+        let leaf_chain = tokio::time::timeout(StdDuration::from_secs(5), cert_rx.recv())
+            .await
+            .expect("cert capture timeout")
+            .expect("cert chain missing");
+        let expected_chain =
+            crate::comm::to_cert_chain(new_cert_pem.as_bytes()).expect("parse refreshed leaf");
+        assert_eq!(
+            leaf_chain[0], expected_chain[0],
+            "retry after mid-loop reload must present the refreshed leaf",
+        );
+
+        conn.close(0u32.into(), b"done");
+        server_task.abort();
+    }
 }

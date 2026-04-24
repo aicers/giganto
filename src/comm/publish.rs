@@ -57,6 +57,7 @@ use crate::server::{
     Certs, config_client, config_server, extract_cert_from_conn, subject_from_cert_verbose,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
+use crate::tls_reload::{self, TlsWatch};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.27.0-alpha.2,<0.28.0";
 
@@ -84,7 +85,7 @@ impl Server {
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
-        certs: Arc<Certs>,
+        tls_watch: TlsWatch,
         notify_shutdown: Arc<Notify>,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
@@ -104,7 +105,7 @@ impl Server {
                     let ingest_sensors = ingest_sensors.clone();
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
-                    let certs = certs.clone();
+                    let tls_watch = tls_watch.clone();
                     conn_hdl = Some(tokio::spawn(async move {
                         let remote = conn.remote_address();
                         if let Err(e) = handle_connection(
@@ -115,7 +116,7 @@ impl Server {
                             ingest_sensors,
                             peers,
                             peer_idents,
-                            certs,
+                            tls_watch,
                             notify_shutdown
                         )
                         .await
@@ -147,7 +148,7 @@ async fn handle_connection(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    tls_watch: TlsWatch,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let connection = conn.await?;
@@ -167,7 +168,7 @@ async fn handle_connection(
 
     let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
         tokio::spawn({
-            let certs = certs.clone();
+            let tls_watch = tls_watch.clone();
             request_stream(
                 connection.clone(),
                 db.clone(),
@@ -178,7 +179,7 @@ async fn handle_connection(
                 stream_direct_channels.clone(),
                 peers.clone(),
                 peer_idents.clone(),
-                certs,
+                tls_watch,
                 notify_shutdown.clone(),
             )
         });
@@ -202,9 +203,9 @@ async fn handle_connection(
                 let ingest_sensors = ingest_sensors.clone();
                 let peers = peers.clone();
                 let peer_idents = peer_idents.clone();
-                let certs = certs.clone();
+                let tls_watch = tls_watch.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, db, pcap_sensors, ingest_sensors, peers, peer_idents, certs).await {
+                    if let Err(e) = handle_request(stream, db, pcap_sensors, ingest_sensors, peers, peer_idents, tls_watch).await {
                         error!("Failed: {}", e);
                     }
                 });
@@ -229,7 +230,7 @@ async fn request_stream(
     stream_direct_channels: StreamDirectChannels,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    tls_watch: TlsWatch,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
     loop {
@@ -247,7 +248,7 @@ async fn request_stream(
                             pcap_sensors.clone(),
                             peers.clone(),
                             peer_idents.clone(),
-                            certs.clone(),
+                            tls_watch.clone(),
                             &mut send,
                         )
                         .await?;
@@ -313,7 +314,7 @@ async fn process_pcap_extract_filters(
     pcap_sensors: PcapSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    tls_watch: TlsWatch,
     resp_send: &mut SendStream,
 ) -> Result<()> {
     let mut buf = Vec::new();
@@ -321,7 +322,7 @@ async fn process_pcap_extract_filters(
         .await
         .context("Failed to send ok")?;
 
-    let certs = certs.clone();
+    let tls_watch = tls_watch.clone();
     tokio::spawn(async move {
         for filter in filters {
             if let Some(sensor_conn) =
@@ -355,7 +356,7 @@ async fn process_pcap_extract_filters(
                 if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
                     peer_addr,
                     peer_name.as_str(),
-                    &certs,
+                    &tls_watch,
                     MessageCode::Pcap,
                     filter,
                 )
@@ -632,7 +633,7 @@ async fn handle_request(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: Arc<Certs>,
+    tls_watch: TlsWatch,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
@@ -649,7 +650,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -662,7 +663,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -676,7 +677,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -689,7 +690,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -702,7 +703,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -715,7 +716,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -728,7 +729,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         true,
                     )
                     .await?;
@@ -741,7 +742,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -755,7 +756,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -768,7 +769,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -781,7 +782,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -794,7 +795,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -807,7 +808,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -821,7 +822,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -834,7 +835,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -847,7 +848,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -860,7 +861,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -873,7 +874,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -886,7 +887,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -899,7 +900,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -912,7 +913,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -925,7 +926,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -939,7 +940,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -953,7 +954,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -967,7 +968,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -981,7 +982,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -995,7 +996,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1009,7 +1010,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1023,7 +1024,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1037,7 +1038,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1051,7 +1052,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1065,7 +1066,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1079,7 +1080,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1093,7 +1094,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1107,7 +1108,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1121,7 +1122,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1135,7 +1136,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1149,7 +1150,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                         false,
                     )
                     .await?;
@@ -1177,7 +1178,7 @@ async fn handle_request(
                 pcap_sensors.clone(),
                 peers,
                 peer_idents.clone(),
-                certs.clone(),
+                tls_watch.clone(),
                 &mut send,
             )
             .await?;
@@ -1194,7 +1195,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1206,7 +1207,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1218,7 +1219,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1230,7 +1231,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1242,7 +1243,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1254,7 +1255,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1266,7 +1267,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1278,7 +1279,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1290,7 +1291,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1302,7 +1303,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1314,7 +1315,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1326,7 +1327,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1338,7 +1339,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1350,7 +1351,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1362,7 +1363,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1374,7 +1375,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1386,7 +1387,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1398,7 +1399,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1410,7 +1411,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1422,7 +1423,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1435,7 +1436,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1447,7 +1448,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1459,7 +1460,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1471,7 +1472,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1483,7 +1484,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1495,7 +1496,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1507,7 +1508,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1519,7 +1520,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1531,7 +1532,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1543,7 +1544,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1555,7 +1556,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1567,7 +1568,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1579,7 +1580,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1591,7 +1592,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1603,7 +1604,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1615,7 +1616,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1627,7 +1628,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1639,7 +1640,7 @@ async fn handle_request(
                         ingest_sensors,
                         peers,
                         peer_idents,
-                        &certs,
+                        &tls_watch,
                     )
                     .await?;
                 }
@@ -1660,7 +1661,7 @@ async fn process_range_data<T, I>(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: &Certs,
+    tls_watch: &TlsWatch,
     availed_kind: bool,
 ) -> Result<()>
 where
@@ -1671,8 +1672,14 @@ where
         process_range_data_in_current_giganto(send, store, request_range, availed_kind).await?;
     } else if let Some(peer_addr) = peer_in_charge_publish_addr(peers, &request_range.sensor).await
     {
-        process_range_data_in_peer_giganto::<I>(send, peer_idents, peer_addr, certs, request_range)
-            .await?;
+        process_range_data_in_peer_giganto::<I>(
+            send,
+            peer_idents,
+            peer_addr,
+            tls_watch,
+            request_range,
+        )
+        .await?;
     } else {
         bail!(
             "Neither current nor peer gigantos are in charge of requested sensor {}",
@@ -1741,7 +1748,7 @@ async fn process_range_data_in_peer_giganto<I>(
     send: &mut SendStream,
     peer_idents: PeerIdents,
     peer_addr: SocketAddr,
-    certs: &Certs,
+    tls_watch: &TlsWatch,
     request_range: RequestRange,
 ) -> Result<()>
 where
@@ -1751,7 +1758,7 @@ where
     let (_peer_send, mut peer_recv) = request_range_data_to_peer(
         peer_addr,
         peer_name.as_str(),
-        certs,
+        tls_watch,
         MessageCode::ReqRange,
         request_range,
     )
@@ -1773,14 +1780,14 @@ where
 async fn request_range_data_to_peer<T>(
     peer_addr: SocketAddr,
     peer_name: &str,
-    certs: &Certs,
+    tls_watch: &TlsWatch,
     message_code: MessageCode,
     request_data: T,
 ) -> Result<(SendStream, RecvStream)>
 where
     T: Serialize,
 {
-    let connection = connect(peer_addr, peer_name, certs).await?;
+    let connection = connect(peer_addr, peer_name, tls_watch).await?;
 
     let (mut send, recv) = connection.open_bi().await?;
     send_range_data_request(&mut send, message_code, request_data).await?;
@@ -1795,7 +1802,7 @@ async fn process_raw_events<T, I>(
     ingest_sensors: IngestSensors,
     peers: Peers,
     peer_idents: PeerIdents,
-    certs: &Certs,
+    tls_watch: &TlsWatch,
 ) -> Result<()>
 where
     T: DeserializeOwned + ResponseRangeData,
@@ -1812,7 +1819,7 @@ where
         process_raw_event_in_peer_gigantos::<I>(
             send,
             req.kind,
-            certs,
+            tls_watch,
             peers,
             peer_idents,
             handle_by_peer_gigantos,
@@ -1866,7 +1873,7 @@ where
 async fn process_raw_event_in_peer_gigantos<I>(
     send: &mut SendStream,
     kind: String,
-    certs: &Certs,
+    tls_watch: &TlsWatch,
     peers: Peers,
     peer_idents: PeerIdents,
     handle_by_peer_gigantos: Vec<(String, Vec<i64>)>,
@@ -1887,7 +1894,7 @@ where
         if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &sensor).await {
             let peer_name = peer_name(peer_idents.clone(), &peer_addr).await?;
 
-            let connection = connect(peer_addr, peer_name.as_str(), certs).await?;
+            let connection = connect(peer_addr, peer_name.as_str(), tls_watch).await?;
             let (mut peer_send, mut peer_recv) = connection.open_bi().await?;
 
             send_range_data_request(
@@ -1913,17 +1920,19 @@ where
     Ok(())
 }
 
-async fn connect(server_addr: SocketAddr, server_name: &str, certs: &Certs) -> Result<Connection> {
+async fn connect(
+    server_addr: SocketAddr,
+    server_name: &str,
+    tls_watch: &TlsWatch,
+) -> Result<Connection> {
     let client_addr = if server_addr.is_ipv6() {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     };
 
-    let mut endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
-    endpoint.set_default_client_config(config_client(certs)?);
-
-    let conn = connect_repeatedly(&endpoint, server_addr, server_name).await;
+    let endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
+    let conn = connect_repeatedly(&endpoint, server_addr, server_name, tls_watch).await?;
 
     client_handshake(&conn, env!("CARGO_PKG_VERSION")).await?;
     Ok(conn)
@@ -1933,22 +1942,31 @@ async fn connect_repeatedly(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
-) -> Connection {
+    tls_watch: &TlsWatch,
+) -> Result<Connection> {
     let max_delay = Duration::from_secs(30);
     let mut delay = Duration::from_millis(500);
 
     loop {
-        match endpoint.connect(server_addr, server_name) {
-            Ok(connecting) => match connecting.await {
-                Ok(conn) => {
-                    info!("Connected to {}", server_addr);
-                    return conn;
+        // Re-snapshot the latest TLS material on every attempt so a reload
+        // that completes mid-retry is picked up by the next connect.
+        let tls = tls_reload::get_current_tls_material(tls_watch);
+        match config_client(&tls.certs) {
+            Ok(client_config) => {
+                match endpoint.connect_with(client_config, server_addr, server_name) {
+                    Ok(connecting) => match connecting.await {
+                        Ok(conn) => {
+                            info!("Connected to {}", server_addr);
+                            return Ok(conn);
+                        }
+                        Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
+                    },
+                    Err(e) => {
+                        warn!("Cannot connect: {:#}, retrying", e);
+                    }
                 }
-                Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
-            },
-            Err(e) => {
-                warn!("Cannot connect: {:#}, retrying", e);
             }
+            Err(e) => warn!("Cannot build client TLS config: {:#}, retrying", e),
         }
         delay = std::cmp::min(max_delay, delay * 2);
         tokio::time::sleep(delay).await;
