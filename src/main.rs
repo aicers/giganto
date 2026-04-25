@@ -50,7 +50,7 @@ use crate::{
         new_stream_direct_channels,
     },
     graphql::NodeName,
-    server::{SERVER_REBOOT_DELAY, subject_from_cert},
+    server::{SERVER_REBOOT_DELAY, host_fqdn_from_cert},
     settings::Args,
     storage::{migrate_data_dir, validate_compression_metadata},
     tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material},
@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
         let certs = Arc::clone(&tls.certs);
 
         let schema = graphql::schema(
-            NodeName(subject_from_cert(&cert)?.1),
+            NodeName(host_fqdn_from_cert(&cert)?),
             database.clone(),
             pcap_sensors.clone(),
             ingest_sensors.clone(),

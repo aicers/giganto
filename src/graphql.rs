@@ -990,6 +990,14 @@ mod tests {
 
     impl TestSchema {
         fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
+            Self::setup_with_node_name(ingest_sensors, peers, "giganto1")
+        }
+
+        fn setup_with_node_name(
+            ingest_sensors: IngestSensors,
+            peers: Peers,
+            node_name: &str,
+        ) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();
@@ -1001,7 +1009,7 @@ mod tests {
             let notify_terminate = Arc::new(Notify::new());
             let settings = Settings::load("tests/config.toml").unwrap();
             let schema = schema(
-                NodeName("giganto1".to_string()),
+                NodeName(node_name.to_string()),
                 db.clone(),
                 pcap_sensors,
                 ingest_sensors,
@@ -1033,6 +1041,19 @@ mod tests {
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
             Self::setup(ingest_sensors, peers)
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub fn new_with_node_name(node_name: &str) -> Self {
+            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+                CURRENT_GIGANTO_INGEST_SENSORS
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<HashSet<String>>(),
+            ));
+
+            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+            Self::setup_with_node_name(ingest_sensors, peers, node_name)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {

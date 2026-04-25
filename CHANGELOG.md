@@ -61,6 +61,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `scripts/fetch-theme.sh` into `docs/.theme/`.
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
+- Under the `bootroot` feature, the GraphQL `export` response suffix in
+  `{export_path}@{giganto_node_name}` is now `{hostname}.{domain}`
+  (derived from SAN DNS labels 3 and 4 of the server's own certificate)
+  instead of the bare hostname. Non-`bootroot` (legacy CN) builds are
+  unchanged.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
 - Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel
   (`254.254.254.254:38383`) and replaced it with proper `Option`
