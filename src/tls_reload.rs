@@ -854,6 +854,7 @@ mod listener_reload_contract_tests {
             certs: Arc::new(set_a.server.clone()),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -902,6 +903,7 @@ mod listener_reload_contract_tests {
                 certs: Arc::new(set_b.server.clone()),
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
+                ca_pem: Vec::new(),
             }))
             .expect("broadcast refreshed material");
 
@@ -989,6 +991,7 @@ mod listener_reload_contract_tests {
             certs: Arc::new(set_a.server.clone()),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -1032,6 +1035,7 @@ mod listener_reload_contract_tests {
                 certs: Arc::new(set_b.server.clone()),
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
+                ca_pem: Vec::new(),
             }))
             .expect("broadcast refreshed material");
 
@@ -1096,7 +1100,7 @@ mod listener_reload_contract_tests {
             new_stream_direct_channels,
         };
         use crate::storage::{Database, DbOptions};
-        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+        use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
         install_crypto_provider();
 
@@ -1121,13 +1125,7 @@ mod listener_reload_contract_tests {
             ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
         };
 
-        let (initial_certs, initial_cert_pem, initial_key_pem) =
-            load_tls_material(&cert_paths).expect("initial load");
-        let initial_material = Arc::new(TlsMaterial {
-            certs: Arc::new(initial_certs),
-            cert_pem: initial_cert_pem,
-            key_pem: initial_key_pem,
-        });
+        let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
         // Reserve a loopback port via probe-and-drop, same pattern as the
@@ -1260,7 +1258,7 @@ mod listener_reload_contract_tests {
             new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         };
         use crate::storage::{Database, DbOptions};
-        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+        use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
         install_crypto_provider();
 
@@ -1283,13 +1281,7 @@ mod listener_reload_contract_tests {
             ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
         };
 
-        let (initial_certs, initial_cert_pem, initial_key_pem) =
-            load_tls_material(&cert_paths).expect("initial load");
-        let initial_material = Arc::new(TlsMaterial {
-            certs: Arc::new(initial_certs),
-            cert_pem: initial_cert_pem,
-            key_pem: initial_key_pem,
-        });
+        let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
         let server_addr = {
