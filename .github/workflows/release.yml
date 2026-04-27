@@ -14,6 +14,7 @@ on:
 env:
   TITLE: Giganto
   BINARY: giganto
+  BOOTROOT_BINARY: giganto-bootroot
   TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
 
 jobs:
@@ -29,12 +30,21 @@ jobs:
       - name: Install the Tools
         run: |
           sudo apt install libpcap-dev
-      - name: Build Binary
+      - name: Build Binaries
         run: |
+          RELEASE_TMP_DIR="$RUNNER_TEMP/giganto-release"
+          mkdir -p "$RELEASE_TMP_DIR"
+
           cargo build --release
+          cp "target/release/${{ env.BINARY }}" "$RELEASE_TMP_DIR/${{ env.BINARY }}"
+
+          cargo build --release --features bootroot
+          cp "target/release/${{ env.BINARY }}" "$RELEASE_TMP_DIR/${{ env.BOOTROOT_BINARY }}"
       - name: Extract release notes from CHANGELOG.md
         id: release_notes
         run: |
+          RELEASE_NOTES_FILE="$RUNNER_TEMP/release_notes_temp.txt"
+
           # Find the section for this version in CHANGELOG.md
           VERSION="${{ env.TAG }}"
           # Look for the version heading (## [x.y.z] or ## x.y.z)
@@ -50,23 +60,25 @@ jobs:
             if [ -z "$NEXT_SECTION" ]; then
               # No next section, read to end of file, but skip the first line (version header)
               # Write directly to temp file to avoid shell interpretation of backticks
-              tail -n +$((SECTION_START + 1)) CHANGELOG.md > /tmp/release_notes_temp.txt
+              tail -n +$((SECTION_START + 1)) CHANGELOG.md > "$RELEASE_NOTES_FILE"
             else
               # Read until next section, but skip the first line (version header)
               # Write directly to temp file to avoid shell interpretation of backticks
-              tail -n +$((SECTION_START + 1)) CHANGELOG.md | head -n $((NEXT_SECTION - 2)) > /tmp/release_notes_temp.txt
+              tail -n +$((SECTION_START + 1)) CHANGELOG.md | head -n $((NEXT_SECTION - 2)) > "$RELEASE_NOTES_FILE"
             fi
 
             # Clean up the notes (remove empty lines at start/end) directly in the file
-            sed -i '/^$/d' /tmp/release_notes_temp.txt
-            sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /tmp/release_notes_temp.txt
+            sed -i '/^$/d' "$RELEASE_NOTES_FILE"
+            sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$RELEASE_NOTES_FILE"
 
             # Use base64 encoding to safely pass the content through GitHub Actions
-            RELEASE_NOTES_B64=$(base64 -w 0 < /tmp/release_notes_temp.txt)
+            RELEASE_NOTES_B64=$(base64 -w 0 < "$RELEASE_NOTES_FILE")
             echo "release_notes_b64=$RELEASE_NOTES_B64" >> $GITHUB_OUTPUT
           fi
       - name: Create a Release and Upload Assets
         run: |
+          RELEASE_TMP_DIR="$RUNNER_TEMP/giganto-release"
+
           # Decode the base64-encoded release notes
           echo "${{ steps.release_notes.outputs.release_notes_b64 }}" | base64 -d > release_notes.txt
           # Read the decoded release notes
@@ -86,10 +98,13 @@ jobs:
             exit 1
           fi
           RELEASE_ID=$(jq -r .id release.json)
-          FILE="target/release/${{ env.BINARY }}"
-          UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=${{ env.BINARY }}"
-          curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @"$FILE" \
-            "${UPLOAD_URL}"
+
+          for ASSET_NAME in "${{ env.BINARY }}" "${{ env.BOOTROOT_BINARY }}"; do
+            FILE="$RELEASE_TMP_DIR/$ASSET_NAME"
+            UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=$ASSET_NAME"
+            curl -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$FILE" \
+              "${UPLOAD_URL}"
+          done
