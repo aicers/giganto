@@ -8,6 +8,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added QUIC listener certificate reload for ingest and publish
+  inbound listeners. After a `SIGHUP`-triggered TLS material
+  refresh, each listener rebuilds its `ServerConfig` and applies
+  it in place via `endpoint.set_server_config()`. Existing
+  connections remain alive; only new QUIC handshakes use the
+  refreshed certificate. On reload failure the current server
+  config is preserved.
 - Added common TLS reload plumbing triggered by `SIGHUP`. The daemon
   now re-reads cert/key/CA files on `SIGHUP` and refreshes shared TLS
   material via a `watch` channel, while `SIGINT`/`SIGTERM` retain

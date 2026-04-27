@@ -49,6 +49,7 @@ use crate::server::{
     subject_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
+use crate::tls_reload::TlsWatch;
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -92,6 +93,7 @@ impl Server {
         notify_shutdown: Arc<Notify>,
         notify_sensor: Option<Arc<Notify>>,
         ack_transmission_cnt: u16,
+        mut tls_watch: TlsWatch,
     ) {
         let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
         info!(
@@ -130,6 +132,24 @@ impl Server {
                             error!("Connection to {remote} failed: {e}");
                         }
                     });
+                },
+                // Reload TLS server config when new material is available.
+                // Existing connections remain alive; only new handshakes
+                // use the refreshed certificate.
+                Ok(()) = tls_watch.changed() => {
+                    let tls = tls_watch.borrow_and_update().clone();
+                    match config_server(&tls.certs) {
+                        Ok(new_config) => {
+                            endpoint.set_server_config(Some(new_config));
+                            info!("Ingest listener: server config reloaded");
+                        }
+                        Err(e) => {
+                            error!(
+                                "Ingest listener: failed to build server config \
+                                 from reloaded TLS material, keeping current config: {e:#}"
+                            );
+                        }
+                    }
                 },
                 () = notify_shutdown.notified() => {
                     shutdown_signal.store(true,Ordering::SeqCst); // Setting signal to handle termination on each channel.
