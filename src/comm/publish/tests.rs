@@ -6217,7 +6217,7 @@ mod tls_reload_connect {
     use crate::{
         comm::{to_cert_chain, to_private_key, to_root_cert},
         server::{Certs, config_server, extract_cert_from_conn},
-        tls_reload::{CertPaths, ReloadHandle, TlsMaterial, get_current_tls_material},
+        tls_reload::{CertPaths, ReloadHandle, get_current_tls_material},
     };
 
     const TEST_SERVER_NAME: &str = "reload-test-server";
