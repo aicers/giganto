@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use rustls::pki_types::CertificateDer;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
-use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
+use crate::comm::{to_cert_chain, to_private_key};
 use crate::server::Certs;
 
 pub struct CertPaths {
@@ -16,17 +17,22 @@ pub struct CertPaths {
 /// Loads TLS material (cert chain, private key, root CA store) from
 /// the file paths specified in `paths`.
 ///
+/// The CA bytes are read once here so downstream consumers can build
+/// listeners from the validated byte stream instead of re-reading the
+/// CA files, which would reopen the TOCTOU window between reload
+/// validation and server restart.
+///
 /// # Errors
 ///
 /// Returns an error if any file cannot be read or parsed.
-pub fn load_tls_material(paths: &CertPaths) -> Result<(Certs, Vec<u8>, Vec<u8>)> {
+pub fn load_tls_material(paths: &CertPaths) -> Result<TlsMaterial> {
     let cert_pem = std::fs::read(&paths.cert_path)
         .with_context(|| format!("failed to read certificate file: {}", paths.cert_path))?;
     let certs = to_cert_chain(&cert_pem).context("cannot read certificate chain")?;
     let key_pem = std::fs::read(&paths.key_path)
         .with_context(|| format!("failed to read private key file: {}", paths.key_path))?;
     let key = to_private_key(&key_pem).context("cannot read private key")?;
-    let root = to_root_cert(&paths.ca_certs_paths)?;
+    let (root, ca_pem) = load_root_cert(&paths.ca_certs_paths)?;
 
     // Validate that the certificate and private key form a valid pair
     // before accepting the material as a reload candidate.
@@ -40,13 +46,59 @@ pub fn load_tls_material(paths: &CertPaths) -> Result<(Certs, Vec<u8>, Vec<u8>)>
         .with_single_cert(certs.clone(), key.clone_key())
         .context("certificate and private key do not form a valid pair")?;
 
-    Ok((Certs { certs, key, root }, cert_pem, key_pem))
+    Ok(TlsMaterial {
+        certs: Arc::new(Certs { certs, key, root }),
+        cert_pem,
+        key_pem,
+        ca_pem,
+    })
+}
+
+fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, Vec<u8>)> {
+    if ca_certs_paths.is_empty() {
+        bail!("no root certificate paths provided");
+    }
+
+    let mut root_cert = rustls::RootCertStore::empty();
+    let mut combined_pem: Vec<u8> = Vec::new();
+
+    // Use strict `RootCertStore::add` semantics to match the trust
+    // store the poem/rustls HTTPS listener builds at bind time. A
+    // bundle containing any cert the listener would reject must be
+    // rejected here too, so reload validation cannot succeed on
+    // material the new server will refuse to start on.
+    for path in ca_certs_paths {
+        let pem = std::fs::read(path)
+            .with_context(|| format!("failed to read root certificate file: {path}"))?;
+
+        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+            .collect::<Result<_, _>>()
+            .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
+
+        if certs.is_empty() {
+            bail!("no certificates found in root certificate file: {path}");
+        }
+
+        for der in certs {
+            root_cert
+                .add(der)
+                .with_context(|| format!("invalid root certificate in {path}"))?;
+        }
+
+        combined_pem.extend_from_slice(&pem);
+        if !combined_pem.ends_with(b"\n") {
+            combined_pem.push(b'\n');
+        }
+    }
+
+    Ok((root_cert, combined_pem))
 }
 
 pub struct TlsMaterial {
     pub certs: Arc<Certs>,
     pub cert_pem: Vec<u8>,
     pub key_pem: Vec<u8>,
+    pub ca_pem: Vec<u8>,
 }
 
 impl Clone for TlsMaterial {
@@ -55,11 +107,26 @@ impl Clone for TlsMaterial {
             certs: Arc::clone(&self.certs),
             cert_pem: self.cert_pem.clone(),
             key_pem: self.key_pem.clone(),
+            ca_pem: self.ca_pem.clone(),
         }
     }
 }
 
 pub type TlsWatch = watch::Receiver<Arc<TlsMaterial>>;
+
+/// Outcome of a [`ReloadHandle::reload`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadOutcome {
+    /// Newly validated material replaced the previous material and has
+    /// been published to the watch channel.
+    Updated,
+    /// The reread bytes matched the current material; no update was
+    /// published.
+    Unchanged,
+    /// The reread or validation failed; the previous material was
+    /// preserved.
+    Failed,
+}
 
 pub struct ReloadHandle {
     sender: watch::Sender<Arc<TlsMaterial>>,
@@ -72,24 +139,39 @@ impl ReloadHandle {
         (Self { sender, paths }, receiver)
     }
 
-    /// Re-reads cert/key/CA from disk and broadcasts the new material.
-    /// On failure, preserves the previous material and logs the error.
-    pub fn reload(&self) {
+    /// Re-reads cert/key/CA from disk and broadcasts the new material
+    /// when it differs from the previously validated material. On
+    /// failure, preserves the previous material and logs the error. A
+    /// successful reread whose bytes match the current material is
+    /// treated as a no-op so consumers do not observe a spurious
+    /// update.
+    ///
+    /// Returns a [`ReloadOutcome`] describing whether the material was
+    /// updated, unchanged, or failed to reload, so callers do not need
+    /// to re-derive that state from the watch channel.
+    pub fn reload(&self) -> ReloadOutcome {
         info!("TLS reload requested");
         match load_tls_material(&self.paths) {
-            Ok((certs, cert_pem, key_pem)) => {
-                let material = Arc::new(TlsMaterial {
-                    certs: Arc::new(certs),
-                    cert_pem,
-                    key_pem,
-                });
-                if self.sender.send(material).is_err() {
+            Ok(loaded) => {
+                let unchanged = {
+                    let current = self.sender.borrow();
+                    current.cert_pem == loaded.cert_pem
+                        && current.key_pem == loaded.key_pem
+                        && current.ca_pem == loaded.ca_pem
+                };
+                if unchanged {
+                    info!("TLS reload: material unchanged, skipping publish");
+                    return ReloadOutcome::Unchanged;
+                }
+                if self.sender.send(Arc::new(loaded)).is_err() {
                     warn!("TLS reload: no active receivers");
                 }
                 info!("TLS material reloaded successfully");
+                ReloadOutcome::Updated
             }
             Err(e) => {
                 error!("TLS reload failed, keeping previous material: {e:#}");
+                ReloadOutcome::Failed
             }
         }
     }
@@ -192,12 +274,8 @@ mod tests {
             key_path: key,
             ca_certs_paths: vec![ca],
         };
-        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
-        });
+        let loaded = load_tls_material(&paths).expect("initial load");
+        let initial = Arc::new(loaded);
 
         let (handle, watch) = ReloadHandle::new(paths, initial);
         let initial_version = Arc::clone(&watch.borrow());
@@ -232,12 +310,9 @@ mod tests {
             key_path: key,
             ca_certs_paths: vec![ca],
         };
-        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem: cert_pem.clone(),
-            key_pem,
-        });
+        let loaded = load_tls_material(&paths).expect("initial load");
+        let initial_cert_pem = loaded.cert_pem.clone();
+        let initial = Arc::new(loaded);
 
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
@@ -248,8 +323,41 @@ mod tests {
 
         let current = get_current_tls_material(&watch);
         assert_eq!(
-            current.cert_pem, cert_pem,
+            current.cert_pem, initial_cert_pem,
             "previous material should be preserved on reload failure"
+        );
+    }
+
+    /// The shared TLS loader must reject a CA bundle whose PEM parses
+    /// but contains blocks that strict `RootCertStore::add` would
+    /// reject. Otherwise reload validation could pass on material that
+    /// the poem/rustls listener then refuses to bind on, leaving the
+    /// HTTPS server unable to start after the old server was already
+    /// stopped.
+    #[test]
+    fn load_tls_material_rejects_mixed_valid_and_invalid_ca_bundle() {
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert_path, key_path, ca_path) = write_cert_files(dir.path());
+
+        // Append a PEM block that parses as a CERTIFICATE but whose
+        // DER bytes are not a valid X.509 certificate, so the stricter
+        // `RootCertStore::add` path rejects it.
+        let bad_der_pem = b"\n-----BEGIN CERTIFICATE-----\nAAAAAA==\n-----END CERTIFICATE-----\n";
+        let mut mixed = fs::read(&ca_path).expect("read ca");
+        mixed.extend_from_slice(bad_der_pem);
+        fs::write(&ca_path, &mixed).expect("write mixed ca");
+
+        let paths = CertPaths {
+            cert_path,
+            key_path,
+            ca_certs_paths: vec![ca_path],
+        };
+        let result = load_tls_material(&paths);
+        assert!(
+            result.is_err(),
+            "validation must reject mixed valid/invalid CA bundles so the HTTPS \
+             listener cannot be asked to start on material it would reject"
         );
     }
 
@@ -290,12 +398,9 @@ mod tests {
             key_path: key,
             ca_certs_paths: vec![ca.clone()],
         };
-        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem: cert_pem.clone(),
-            key_pem,
-        });
+        let loaded = load_tls_material(&paths).expect("initial load");
+        let initial_cert_pem = loaded.cert_pem.clone();
+        let initial = Arc::new(loaded);
 
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
@@ -312,7 +417,7 @@ mod tests {
 
         let current = get_current_tls_material(&watch);
         assert_eq!(
-            current.cert_pem, cert_pem,
+            current.cert_pem, initial_cert_pem,
             "previous material should be preserved when cert/key pair is mismatched"
         );
     }
@@ -327,12 +432,8 @@ mod tests {
             key_path: key,
             ca_certs_paths: vec![ca],
         };
-        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
-        });
+        let loaded = load_tls_material(&paths).expect("initial load");
+        let initial = Arc::new(loaded);
 
         let (handle, watch) = ReloadHandle::new(paths, initial);
         let subscriber = watch.clone();
@@ -356,12 +457,8 @@ mod tests {
             key_path: key,
             ca_certs_paths: vec![ca],
         };
-        let (certs, cert_pem, key_pem) = load_tls_material(&paths).expect("initial load");
-        let initial = Arc::new(TlsMaterial {
-            certs: Arc::new(certs),
-            cert_pem,
-            key_pem,
-        });
+        let loaded = load_tls_material(&paths).expect("initial load");
+        let initial = Arc::new(loaded);
 
         let (handle, mut watch) = ReloadHandle::new(paths, Arc::clone(&initial));
         let initial_pem = initial.cert_pem.clone();
@@ -757,6 +854,7 @@ mod listener_reload_contract_tests {
             certs: Arc::new(set_a.server.clone()),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -805,6 +903,7 @@ mod listener_reload_contract_tests {
                 certs: Arc::new(set_b.server.clone()),
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
+                ca_pem: Vec::new(),
             }))
             .expect("broadcast refreshed material");
 
@@ -892,6 +991,7 @@ mod listener_reload_contract_tests {
             certs: Arc::new(set_a.server.clone()),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -935,6 +1035,7 @@ mod listener_reload_contract_tests {
                 certs: Arc::new(set_b.server.clone()),
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
+                ca_pem: Vec::new(),
             }))
             .expect("broadcast refreshed material");
 
@@ -999,7 +1100,7 @@ mod listener_reload_contract_tests {
             new_stream_direct_channels,
         };
         use crate::storage::{Database, DbOptions};
-        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+        use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
         install_crypto_provider();
 
@@ -1024,13 +1125,7 @@ mod listener_reload_contract_tests {
             ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
         };
 
-        let (initial_certs, initial_cert_pem, initial_key_pem) =
-            load_tls_material(&cert_paths).expect("initial load");
-        let initial_material = Arc::new(TlsMaterial {
-            certs: Arc::new(initial_certs),
-            cert_pem: initial_cert_pem,
-            key_pem: initial_key_pem,
-        });
+        let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
         // Reserve a loopback port via probe-and-drop, same pattern as the
@@ -1163,7 +1258,7 @@ mod listener_reload_contract_tests {
             new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         };
         use crate::storage::{Database, DbOptions};
-        use crate::tls_reload::{CertPaths, ReloadHandle, TlsMaterial, load_tls_material};
+        use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
         install_crypto_provider();
 
@@ -1186,13 +1281,7 @@ mod listener_reload_contract_tests {
             ca_certs_paths: vec![ca_path.to_str().expect("ca path").to_string()],
         };
 
-        let (initial_certs, initial_cert_pem, initial_key_pem) =
-            load_tls_material(&cert_paths).expect("initial load");
-        let initial_material = Arc::new(TlsMaterial {
-            certs: Arc::new(initial_certs),
-            cert_pem: initial_cert_pem,
-            key_pem: initial_key_pem,
-        });
+        let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
         let server_addr = {

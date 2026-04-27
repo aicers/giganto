@@ -27,6 +27,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shared certs, so a reload that completes mid-retry is picked up
   by the next attempt; already established connections are not
   closed.
+- Added HTTPS GraphQL server certificate reload on `SIGHUP`, including graceful
+  restart with validated cert/key/CA material, preservation of the running
+  server on validation failure, no-op handling for unchanged material, and
+  startup retry when HTTPS is down.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
