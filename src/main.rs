@@ -283,6 +283,7 @@ async fn main() -> Result<()> {
                 notify_sensor.clone(),
                 notify_shutdown.clone(),
                 cfg_path.clone(),
+                tls_watch.clone(),
             )));
             notify_sensor_change = Some(notify_sensor);
         } else {

@@ -62,3 +62,27 @@ giganto -c /path/to/giganto/config.toml \
 
 - Verify that the process does not exit immediately.
 - Verify that the GraphQL server startup message appears in the logs.
+
+## Peer Subsystem TLS Reload
+
+On `SIGHUP`, Giganto re-reads the certificate, private key, and CA
+files from disk and delivers the refreshed material to the peer
+subsystem, which applies it with the following observable behavior:
+
+- After a successful reload, new inbound peer handshakes and later
+  outbound reconnect attempts observe the refreshed peer TLS material.
+- If the refreshed material cannot be applied — for example, because
+  the certificate and private key do not form a valid pair — the
+  previous peer TLS state is kept. The failure is logged and the peer
+  subsystem keeps running on the previously installed material.
+
+Long-lived connection policy:
+
+- **Accepted peer-server connections** that were established before
+  the reload keep running on their original TLS state until they are
+  naturally closed or replaced. New inbound peer handshakes after the
+  reload observe the refreshed server leaf certificate.
+- **Outbound peer-client connections** that were already established
+  keep running on their original TLS state as well. Subsequent
+  reconnect attempts dial using the refreshed peer client
+  configuration and observe the refreshed leaf certificate.

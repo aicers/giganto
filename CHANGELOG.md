@@ -27,6 +27,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shared certs, so a reload that completes mid-retry is picked up
   by the next attempt; already established connections are not
   closed.
+- Added peer subsystem TLS reload. On the common `SIGHUP` reload
+  trigger, the peer server endpoint and the shared peer client TLS
+  state are rebuilt from the refreshed material and swapped together
+  under a single write lock. The shared client state is
+  generation-versioned; an outbound reconnect that started its dial
+  before the reload re-checks the generation after the TLS/peer
+  handshake completes and, on mismatch, closes the stale connection
+  and redials with the refreshed client config. New incoming peer
+  handshakes observe the new server leaf certificate, and subsequent
+  outbound reconnects dial with the new client TLS state. Existing
+  long-lived peer connections keep running on their established TLS
+  state until they are replaced by natural reconnects. If either
+  configuration build fails, the swap is aborted and the previous peer
+  TLS state is preserved.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and

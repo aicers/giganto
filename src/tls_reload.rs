@@ -100,6 +100,14 @@ pub fn get_current_tls_material(watch: &TlsWatch) -> Arc<TlsMaterial> {
     Arc::clone(&watch.borrow())
 }
 
+/// Test-only helper that constructs a paired [`watch::Sender`] and [`TlsWatch`]
+/// pre-seeded with `material`. Callers keep the sender to broadcast updates
+/// from tests; dropping it closes the channel.
+#[cfg(test)]
+pub fn test_tls_watch(material: Arc<TlsMaterial>) -> (watch::Sender<Arc<TlsMaterial>>, TlsWatch) {
+    watch::channel(material)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, sync::Once};
