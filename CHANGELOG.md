@@ -129,6 +129,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed a peer subsystem TLS reload race where a `SIGHUP` reload that
+  arrived between the daemon snapshotting TLS material and `Peer::run`
+  marking the watch as seen was silently discarded, leaving the peer
+  subsystem on the pre-reload server/client config. `Peer::run` now
+  reads the most recent watched material via `borrow_and_update` and
+  applies it on startup if its leaf fingerprint differs from the
+  snapshot used to construct `Peer`.
+- Replaced `expect()` panics on `RwLock` poisoning in the shared peer
+  client config (snapshot, generation read, and reload write paths)
+  with poison-recovery helpers, since the underlying
+  `(generation, Arc<ClientConfig>)` is consistent at every panic point.
 - Fixed `SequenceGenerator` by using `AtomicU64` + CAS (`fetch_update`) to
   prevent duplicate sequence issuance during concurrent reset races.
   The generator now keeps state in one atomic value with deterministic rules:
