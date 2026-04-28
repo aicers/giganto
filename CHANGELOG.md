@@ -73,46 +73,44 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed line numbers from stdout log output to avoid exposing
   implementation details and to be consistent with file log formatting.
 - Under the `bootroot` feature, the GraphQL `export` response suffix in
-  `{export_path}@{giganto_node_name}` is now `{hostname}.{domain}`
-  (derived from SAN DNS labels 3 and 4 of the server's own certificate)
-  instead of the bare hostname. Non-`bootroot` (legacy CN) builds are
-  unchanged.
+  `{export_path}@{giganto_node_name}` is now `{hostname}.{domain}` (derived from
+  Bootroot SAN labels 3 and 4 of the server's own certificate) instead of the
+  bare hostname. Non-`bootroot` (legacy CN) builds are unchanged.
 - Renamed configuration field `addr_to_peers` to `peer_srv_addr`.
-- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel
-  (`254.254.254.254:38383`) and replaced it with proper `Option`
-  semantics for `peer_srv_addr`. A missing key in the configuration
-  file now correctly deserializes to `None`.
+- Removed the `DEFAULT_INVALID_ADDR_TO_PEERS` sentinel (`254.254.254.254:38383`)
+  and replaced it with proper `Option` semantics for `peer_srv_addr`. A missing
+  key in the configuration file now correctly deserializes to `None`.
 - Peer init handshake now validates response/request PeerCode.
 - Aligned `to_cert_chain` semantics: empty or invalid PEM input now returns an
   explicit error instead of an empty certificate chain. This improves mTLS
   security by treating zero-certificate chains as a failure condition.
 - **Breaking (bootroot feature only).** The cert-derived sensor identity now
-  uses the service FQDN `{service_name}.{hostname}.{domain}` instead of the
-  bare hostname.
-  - Derivation: take SAN DNS labels 2, 3, 4 (skipping the 1st `instance_id`
+  uses the service FQDN `{service_name}.{hostname}.{domain}` instead of the bare
+  hostname.
+  - Derivation: take Bootroot SAN labels 2, 3, 4 (skipping the 1st `instance_id`
     label) and join them with `.`. For example, a SAN of
     `001.sensor.node1.example.test` yields a service FQDN of
-    `sensor.node1.example.test`, and a subscriber asking for that sensor's
-    data now references it by `sensor.node1.example.test` rather than by the
-    bare hostname `node1`.
-  - `giganto-client` surfaces: every request-side field that carries the
+    `sensor.node1.example.test`, and a subscriber asking for that sensor's data
+    now references it by `sensor.node1.example.test` rather than by the bare
+    hostname `node1`.
+  - clients using `giganto-client`: every request-side field that carries the
     ingest-sensor identity now expects the service FQDN, including
     `RequestRange::sensor`, `RequestSemiSupervisedStream::sensor`,
     `RequestTimeSeriesGeneratorStream::sensor`, `PcapFilter::sensor`, and
     `OpLog::sensor`; response-side the `{sensors}` GraphQL query, the
-    SemiSupervised direct-stream frame emitted by `send_direct_stream`, and
-    any GraphQL filter argument that matches against `IngestSensors` also
-    use the service FQDN.
-  - Direct protocol consumers: clients that do not use `giganto-client` and
-    integrate with Giganto directly must update any sensor identifier that
-    previously used the legacy hostname form to the new bootroot service-FQDN
-    form on both the request side and when decoding response payloads.
-  - Migration: no automated migration is provided, and none is possible —
-    persisted hostname-only keys do not carry enough information to
-    reconstruct `{service}.{host}.{domain}`. Operators upgrading a bootroot
-    deployment must treat the upgrade as a one-time data reset on the
-    affected Giganto node(s): archive or drop the existing storage and start
-    fresh under the new key format.
+    SemiSupervised direct-stream frame emitted by `send_direct_stream`, and any
+    GraphQL filter argument that matches against `IngestSensors` also use the
+    service FQDN.
+  - Direct consumers: clients that do not use `giganto-client` and integrate
+    with Giganto directly should update any sensor identifier that previously
+    used the legacy hostname form to the new bootroot service-FQDN form on both
+    the request side and when decoding response payloads.
+  - Data Migration: no automated migration is provided, and none is possible —
+    persisted hostname-only keys do not carry enough information to reconstruct
+    `{service}.{host}.{domain}`. Operators upgrading a bootroot deployment must
+    treat the upgrade as a one-time data reset on the affected Giganto node(s):
+    archive or drop the existing storage and start fresh under the new key
+    format.
   - Non-bootroot (legacy CN) builds are unaffected.
 
 ### Fixed
