@@ -1133,6 +1133,81 @@ mod tests {
     }
 
     #[test]
+    fn log_pending_with_no_tasks_emits_info() {
+        let tracker = TaskTracker::new();
+
+        let logs = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        tracker.log_pending();
+
+        let output = logs.contents();
+        assert!(output.contains("no pending tasks"));
+    }
+
+    #[test]
+    fn cancellation_token_default_creates_uncancelled_token() {
+        let token = CancellationToken::default();
+        assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn task_tracker_default_creates_usable_tracker() {
+        let tracker = TaskTracker::default();
+        assert!(!tracker.is_closed());
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[test]
+    fn cancellation_token_debug_format() {
+        let token = CancellationToken::new();
+        let s = format!("{token:?}");
+        assert!(s.contains("CancellationToken"));
+        assert!(s.contains("is_cancelled"));
+    }
+
+    #[test]
+    fn task_tracker_debug_format() {
+        let tracker = TaskTracker::new();
+        let s = format!("{tracker:?}");
+        assert!(s.contains("TaskTracker"));
+        assert!(s.contains("is_closed"));
+    }
+
+    #[test]
+    fn cancelled_error_display() {
+        let e = CancelledError;
+        assert_eq!(e.to_string(), "operation cancelled");
+    }
+
+    #[test]
+    fn drain_error_display() {
+        let e = DrainError { pending_count: 3 };
+        assert_eq!(e.to_string(), "drain timed out with 3 pending task(s)");
+    }
+
+    #[test]
+    fn spawn_error_display() {
+        let e = SpawnError;
+        assert_eq!(e.to_string(), "tracker is closed; cannot spawn new tasks");
+    }
+
+    #[test]
+    fn task_tracker_token_returns_root() {
+        let tracker = TaskTracker::new();
+        let token = tracker.token();
+        assert!(!token.is_cancelled());
+        tracker.cancel_children();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
     fn log_pending_with_reentrant_writer_does_not_deadlock() {
         let write_calls = run_on_current_thread_runtime(async move {
             let tracker = Arc::new(TaskTracker::new());
