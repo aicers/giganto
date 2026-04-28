@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
 
         let peer_task_handle: Option<JoinHandle<Result<()>>>;
         if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
-            let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone())?;
+            let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
             let notify_sensor = Arc::new(Notify::new());
             peer_task_handle = Some(task::spawn(peer_server.run(
                 ingest_sensors.clone(),

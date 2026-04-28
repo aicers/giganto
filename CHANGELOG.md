@@ -31,20 +31,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   restart with validated cert/key/CA material, preservation of the running
   server on validation failure, no-op handling for unchanged material, and
   startup retry when HTTPS is down.
-- Added peer subsystem TLS reload. On the common `SIGHUP` reload
-  trigger, the peer server endpoint and the shared peer client TLS
-  state are rebuilt from the refreshed material and swapped together
-  under a single write lock. The shared client state is
-  generation-versioned; an outbound reconnect that started its dial
-  before the reload re-checks the generation after the TLS/peer
-  handshake completes and, on mismatch, closes the stale connection
-  and redials with the refreshed client config. New incoming peer
-  handshakes observe the new server leaf certificate, and subsequent
-  outbound reconnects dial with the new client TLS state. Existing
-  long-lived peer connections keep running on their established TLS
-  state until they are replaced by natural reconnects. If either
-  configuration build fails, the swap is aborted and the previous peer
-  TLS state is preserved.
+- Added peer subsystem TLS reload on `SIGHUP`. New inbound peer
+  handshakes and subsequent outbound reconnects use the refreshed
+  cert/key/CA material; existing long-lived peer connections keep
+  their established TLS state until they are replaced by natural
+  reconnects. If the reload fails, the previous peer TLS state is
+  preserved.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
@@ -129,17 +121,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Fixed a peer subsystem TLS reload race where a `SIGHUP` reload that
-  arrived between the daemon snapshotting TLS material and `Peer::run`
-  marking the watch as seen was silently discarded, leaving the peer
-  subsystem on the pre-reload server/client config. `Peer::run` now
-  reads the most recent watched material via `borrow_and_update` and
-  applies it on startup if its leaf fingerprint differs from the
-  snapshot used to construct `Peer`.
-- Replaced `expect()` panics on `RwLock` poisoning in the shared peer
-  client config (snapshot, generation read, and reload write paths)
-  with poison-recovery helpers, since the underlying
-  `(generation, Arc<ClientConfig>)` is consistent at every panic point.
+- Fixed a peer subsystem startup race where a TLS reload published
+  between daemon startup and the peer subsystem's first watch read
+  could be silently dropped, leaving the subsystem on stale TLS
+  state.
 - Fixed `SequenceGenerator` by using `AtomicU64` + CAS (`fetch_update`) to
   prevent duplicate sequence issuance during concurrent reset races.
   The generator now keeps state in one atomic value with deterministic rules:
