@@ -1096,6 +1096,7 @@ pub mod tests {
                 certs: Arc::new(certs),
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
+                ca_pem: Vec::new(),
             });
             crate::tls_reload::test_tls_watch(material)
         }
@@ -3229,6 +3230,7 @@ pub mod tests {
             certs: Arc::new(new_certs.clone()),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         });
         tls_tx
             .send(new_material)
@@ -3324,6 +3326,7 @@ pub mod tests {
             certs: broken_certs,
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
+            ca_pem: Vec::new(),
         });
         tls_tx
             .send(broken_material)
