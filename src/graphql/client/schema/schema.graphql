@@ -2185,9 +2185,6 @@ input NetworkFilter {
 	respAddr: IpRange
 	origPort: PortRange
 	respPort: PortRange
-	logLevel: String
-	logContents: String
-	agentId: String
 }
 
 union NetworkRawEvents = ConnRawEvent | DnsRawEvent | MalformedDnsRawEvent | HttpRawEvent | RdpRawEvent | NtlmRawEvent | KerberosRawEvent | SshRawEvent | DceRpcRawEvent | FtpRawEvent | MqttRawEvent | LdapRawEvent | TlsRawEvent | SmbRawEvent | NfsRawEvent | SmtpRawEvent | BootpRawEvent | DhcpRawEvent | RadiusRawEvent | IcmpRawEvent
@@ -2844,20 +2841,20 @@ type Query {
 	Invalid values are rejected at runtime.
 	"""
 	statistics(sensors: [String!]!, time: TimeRange, protocols: [String!], requestFromPeer: Boolean): [StatisticsRawEvent!]!
-	processCreateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessCreateEventConnection!
-	fileCreateTimeEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreationTimeChangedEventConnection!
-	networkConnectEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): NetworkConnectionEventConnection!
-	processTerminateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessTerminatedEventConnection!
-	imageLoadEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ImageLoadedEventConnection!
-	fileCreateEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreateEventConnection!
-	registryValueSetEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RegistryValueSetEventConnection!
-	registryKeyRenameEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): RegistryKeyValueRenameEventConnection!
-	fileCreateStreamHashEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileCreateStreamHashEventConnection!
-	pipeEventEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): PipeEventEventConnection!
-	dnsQueryEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): DnsEventEventConnection!
-	fileDeleteEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteEventConnection!
-	processTamperEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): ProcessTamperingEventConnection!
-	fileDeleteDetectedEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): FileDeleteDetectedEventConnection!
+	processCreateEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): ProcessCreateEventConnection!
+	fileCreateTimeEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): FileCreationTimeChangedEventConnection!
+	networkConnectEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): NetworkConnectionEventConnection!
+	processTerminateEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): ProcessTerminatedEventConnection!
+	imageLoadEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): ImageLoadedEventConnection!
+	fileCreateEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): FileCreateEventConnection!
+	registryValueSetEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): RegistryValueSetEventConnection!
+	registryKeyRenameEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): RegistryKeyValueRenameEventConnection!
+	fileCreateStreamHashEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): FileCreateStreamHashEventConnection!
+	pipeEventEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): PipeEventEventConnection!
+	dnsQueryEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): DnsEventEventConnection!
+	fileDeleteEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): FileDeleteEventConnection!
+	processTamperEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): ProcessTamperingEventConnection!
+	fileDeleteDetectedEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): FileDeleteDetectedEventConnection!
 	searchProcessCreateEvents(filter: SearchFilter!): [DateTime!]!
 	searchFileCreateTimeEvents(filter: SearchFilter!): [DateTime!]!
 	searchNetworkConnectEvents(filter: SearchFilter!): [DateTime!]!
@@ -2872,7 +2869,7 @@ type Query {
 	searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
 	searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
 	searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
-	sysmonEvents(filter: NetworkFilter!, after: String, before: String, first: Int, last: Int): SysmonEventsConnection!
+	sysmonEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): SysmonEventsConnection!
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
 	netflow9RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow9RawEventConnection!
@@ -3206,8 +3203,6 @@ input SearchFilter {
 	respAddr: IpRange
 	origPort: PortRange
 	respPort: PortRange
-	logLevel: String
-	logContents: String
 	times: [DateTime!]!
 	"""
 	Matches values that contain this keyword, case-insensitively.
@@ -3688,6 +3683,15 @@ scalar StringNumberU32
 scalar StringNumberU64
 
 scalar StringNumberUsize
+
+"""
+Filter options for Sysmon event queries.
+"""
+input SysmonEventFilter {
+	time: TimeRange
+	sensor: String!
+	agentId: String
+}
 
 union SysmonEvents = ProcessCreateEvent | FileCreationTimeChangedEvent | NetworkConnectionEvent | ProcessTerminatedEvent | ImageLoadedEvent | FileCreateEvent | RegistryValueSetEvent | RegistryKeyValueRenameEvent | FileCreateStreamHashEvent | PipeEventEvent | DnsEventEvent | FileDeleteEvent | ProcessTamperingEvent | FileDeleteDetectedEvent
 

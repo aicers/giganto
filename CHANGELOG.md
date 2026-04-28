@@ -50,6 +50,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
+  event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
+  related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
+  `agentId`). Sysmon queries previously used `NetworkFilter`, which mixed
+  unrelated network and Sysmon fields.
+- Removed the unused `logLevel` and `logContents` fields from
+  `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
+  `NetworkFilter`. These fields were never applied to network events.
 - Renamed the `Kerberos` GraphQL fields `clientName`/`serviceName` to
   `cname`/`sname`, and the export fields `client_name`/`service_name` to
   `cname`/`sname`. Renamed the `OpLog` GraphQL field `agentName` to

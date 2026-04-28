@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, iter::Peekable};
+use std::{collections::BTreeSet, iter::Peekable, net::IpAddr};
 
 use async_graphql::{
     Context, Object, Result, SimpleObject, Union,
@@ -15,18 +15,19 @@ use giganto_proc_macro::ConvertGraphQLEdgesNode;
 use graphql_client::GraphQLQuery;
 
 use super::{
-    Engine, FromKeyValue, NetworkFilter, SearchFilter, base64_engine, collect_exist_times,
-    events_vec_in_cluster, get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
-    paged_events_in_cluster,
+    Engine, FromKeyValue, RawEventFilter, SearchFilter, SysmonEventFilter, base64_engine,
+    check_agent_id, collect_exist_times, events_vec_in_cluster, get_peekable_iter,
+    get_time_from_key, handle_paged_events, min_max_time, paged_events_in_cluster,
 };
 use crate::datetime::DateTime;
 use crate::graphql::StringNumberU32;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::{
-        impl_from_giganto_network_filter_for_graphql_client,
         impl_from_giganto_range_structs_for_graphql_client,
         impl_from_giganto_search_filter_for_graphql_client,
+        impl_from_giganto_sysmon_event_filter_for_graphql_client,
+        impl_from_giganto_time_range_struct_for_graphql_client,
     },
     derives::{
         DnsQueryEvents, FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents,
@@ -50,10 +51,49 @@ use crate::graphql::client::{
         search_registry_value_set_events, sysmon_events as sysmon_events_module,
     },
 };
-use crate::storage::{Database, FilteredIter};
+use crate::storage::{Database, FilteredIter, KeyExtractor};
 
 #[derive(Default)]
 pub(super) struct SysmonQuery;
+
+impl KeyExtractor for SysmonEventFilter {
+    fn get_start_key(&self) -> &str {
+        &self.sensor
+    }
+
+    fn get_mid_key(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn get_range_end_key(&self) -> (Option<DateTime>, Option<DateTime>) {
+        if let Some(time) = &self.time {
+            (time.start, time.end)
+        } else {
+            (None, None)
+        }
+    }
+}
+
+impl RawEventFilter for SysmonEventFilter {
+    fn check(
+        &self,
+        _orig_addr: Option<IpAddr>,
+        _resp_addr: Option<IpAddr>,
+        _orig_port: Option<u16>,
+        _resp_port: Option<u16>,
+        _log_level: Option<String>,
+        _log_contents: Option<String>,
+        _text: Option<String>,
+        _sensor: Option<String>,
+        agent_id: Option<String>,
+        _service_name: Option<String>,
+    ) -> Result<bool> {
+        Ok(check_agent_id(
+            self.agent_id.as_deref(),
+            agent_id.as_deref(),
+        ))
+    }
+}
 
 #[derive(SimpleObject, Debug)]
 #[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
@@ -610,7 +650,7 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
 
 async fn handle_process_create_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -624,7 +664,7 @@ async fn handle_process_create_events(
 
 async fn handle_file_create_time_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -638,7 +678,7 @@ async fn handle_file_create_time_events(
 
 async fn handle_network_connect_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -652,7 +692,7 @@ async fn handle_network_connect_events(
 
 async fn handle_process_terminate_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -666,7 +706,7 @@ async fn handle_process_terminate_events(
 
 async fn handle_image_load_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -680,7 +720,7 @@ async fn handle_image_load_events(
 
 async fn handle_file_create_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -694,7 +734,7 @@ async fn handle_file_create_events(
 
 async fn handle_registry_value_set_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -708,7 +748,7 @@ async fn handle_registry_value_set_events(
 
 async fn handle_registry_key_rename_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -722,7 +762,7 @@ async fn handle_registry_key_rename_events(
 
 async fn handle_file_create_stream_hash_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -736,7 +776,7 @@ async fn handle_file_create_stream_hash_events(
 
 async fn handle_pipe_event_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -750,7 +790,7 @@ async fn handle_pipe_event_events(
 
 async fn handle_dns_query_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -764,7 +804,7 @@ async fn handle_dns_query_events(
 
 async fn handle_file_delete_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -778,7 +818,7 @@ async fn handle_file_delete_events(
 
 async fn handle_process_tamper_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -792,7 +832,7 @@ async fn handle_process_tamper_events(
 
 async fn handle_file_delete_detected_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -810,7 +850,7 @@ impl SysmonQuery {
     async fn process_create_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -837,7 +877,7 @@ impl SysmonQuery {
     async fn file_create_time_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -864,7 +904,7 @@ impl SysmonQuery {
     async fn network_connect_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -891,7 +931,7 @@ impl SysmonQuery {
     async fn process_terminate_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -918,7 +958,7 @@ impl SysmonQuery {
     async fn image_load_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -945,7 +985,7 @@ impl SysmonQuery {
     async fn file_create_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -972,7 +1012,7 @@ impl SysmonQuery {
     async fn registry_value_set_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -999,7 +1039,7 @@ impl SysmonQuery {
     async fn registry_key_rename_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1026,7 +1066,7 @@ impl SysmonQuery {
     async fn file_create_stream_hash_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1053,7 +1093,7 @@ impl SysmonQuery {
     async fn pipe_event_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1080,7 +1120,7 @@ impl SysmonQuery {
     async fn dns_query_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1106,7 +1146,7 @@ impl SysmonQuery {
     async fn file_delete_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1132,7 +1172,7 @@ impl SysmonQuery {
     async fn process_tamper_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1158,7 +1198,7 @@ impl SysmonQuery {
     async fn file_delete_detected_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1570,7 +1610,7 @@ impl SysmonQuery {
     async fn sysmon_events(
         &self,
         ctx: &Context<'_>,
-        filter: NetworkFilter,
+        filter: SysmonEventFilter,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
@@ -1598,7 +1638,7 @@ impl SysmonQuery {
 #[allow(clippy::too_many_lines)]
 async fn handle_sysmon_events(
     ctx: &Context<'_>,
-    filter: NetworkFilter,
+    filter: SysmonEventFilter,
     after: Option<String>,
     before: Option<String>,
     first: Option<i32>,
@@ -1769,20 +1809,22 @@ async fn handle_sysmon_events(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn sysmon_connection(
-    mut process_create_iter: Peekable<FilteredIter<ProcessCreate>>,
-    mut file_create_time_iter: Peekable<FilteredIter<FileCreationTimeChanged>>,
-    mut network_connect_iter: Peekable<FilteredIter<NetworkConnection>>,
-    mut process_terminate_iter: Peekable<FilteredIter<ProcessTerminated>>,
-    mut image_load_iter: Peekable<FilteredIter<ImageLoaded>>,
-    mut file_create_iter: Peekable<FilteredIter<FileCreate>>,
-    mut registry_value_set_iter: Peekable<FilteredIter<RegistryValueSet>>,
-    mut registry_key_rename_iter: Peekable<FilteredIter<RegistryKeyValueRename>>,
-    mut file_create_stream_hash_iter: Peekable<FilteredIter<FileCreateStreamHash>>,
-    mut pipe_event_iter: Peekable<FilteredIter<PipeEvent>>,
-    mut dns_query_iter: Peekable<FilteredIter<DnsEvent>>,
-    mut file_delete_iter: Peekable<FilteredIter<FileDelete>>,
-    mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering>>,
-    mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected>>,
+    mut process_create_iter: Peekable<FilteredIter<ProcessCreate, SysmonEventFilter>>,
+    mut file_create_time_iter: Peekable<FilteredIter<FileCreationTimeChanged, SysmonEventFilter>>,
+    mut network_connect_iter: Peekable<FilteredIter<NetworkConnection, SysmonEventFilter>>,
+    mut process_terminate_iter: Peekable<FilteredIter<ProcessTerminated, SysmonEventFilter>>,
+    mut image_load_iter: Peekable<FilteredIter<ImageLoaded, SysmonEventFilter>>,
+    mut file_create_iter: Peekable<FilteredIter<FileCreate, SysmonEventFilter>>,
+    mut registry_value_set_iter: Peekable<FilteredIter<RegistryValueSet, SysmonEventFilter>>,
+    mut registry_key_rename_iter: Peekable<FilteredIter<RegistryKeyValueRename, SysmonEventFilter>>,
+    mut file_create_stream_hash_iter: Peekable<
+        FilteredIter<FileCreateStreamHash, SysmonEventFilter>,
+    >,
+    mut pipe_event_iter: Peekable<FilteredIter<PipeEvent, SysmonEventFilter>>,
+    mut dns_query_iter: Peekable<FilteredIter<DnsEvent, SysmonEventFilter>>,
+    mut file_delete_iter: Peekable<FilteredIter<FileDelete, SysmonEventFilter>>,
+    mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering, SysmonEventFilter>>,
+    mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected, SysmonEventFilter>>,
     size: usize,
     is_forward: bool,
     has_after: bool,
@@ -2135,7 +2177,7 @@ fn sysmon_connection(
 }
 
 #[cfg(feature = "cluster")]
-impl_from_giganto_range_structs_for_graphql_client!(
+impl_from_giganto_time_range_struct_for_graphql_client!(
     sysmon_events_module,
     dns_query_events,
     file_create_events,
@@ -2150,7 +2192,11 @@ impl_from_giganto_range_structs_for_graphql_client!(
     process_tamper_events,
     process_terminate_events,
     registry_key_rename_events,
-    registry_value_set_events,
+    registry_value_set_events
+);
+
+#[cfg(feature = "cluster")]
+impl_from_giganto_range_structs_for_graphql_client!(
     search_dns_query_events,
     search_file_create_events,
     search_file_create_stream_hash_events,
@@ -2168,7 +2214,7 @@ impl_from_giganto_range_structs_for_graphql_client!(
 );
 
 #[cfg(feature = "cluster")]
-impl_from_giganto_network_filter_for_graphql_client!(
+impl_from_giganto_sysmon_event_filter_for_graphql_client!(
     sysmon_events_module,
     dns_query_events,
     file_create_events,

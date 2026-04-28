@@ -123,8 +123,15 @@ pub struct NetworkFilter {
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
     resp_port: Option<PortRange>,
-    log_level: Option<String>,
-    log_contents: Option<String>,
+}
+
+/// Filter options for Sysmon event queries.
+#[allow(clippy::module_name_repetitions)]
+#[derive(InputObject, Serialize)]
+pub struct SysmonEventFilter {
+    pub time: Option<TimeRange>,
+    #[serde(skip)]
+    pub sensor: String,
     agent_id: Option<String>,
 }
 
@@ -138,8 +145,6 @@ pub struct SearchFilter {
     resp_addr: Option<IpRange>,
     orig_port: Option<PortRange>,
     resp_port: Option<PortRange>,
-    log_level: Option<String>,
-    log_contents: Option<String>,
     pub times: Vec<DateTime>,
     /// Matches values that contain this keyword, case-insensitively.
     keyword: Option<String>,
@@ -651,16 +656,17 @@ pub fn get_time_from_key(key: &[u8]) -> Result<DateTime, anyhow::Error> {
     Err(anyhow!("invalid database key length"))
 }
 
-fn get_peekable_iter<'c, T>(
+fn get_peekable_iter<'c, T, F>(
     store: &RawEventStore<'c, T>,
-    filter: &'c NetworkFilter,
+    filter: &'c F,
     after: Option<&str>,
     before: Option<&str>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<(std::iter::Peekable<FilteredIter<'c, T>>, usize)>
+) -> Result<(std::iter::Peekable<FilteredIter<'c, T, F>>, usize)>
 where
     T: DeserializeOwned + EventFilter,
+    F: RawEventFilter + KeyExtractor,
 {
     let (filtered_iter, cursor, size) =
         get_filtered_iter(store, filter, after, before, first, last)?;
@@ -674,16 +680,18 @@ where
     Ok((filtered_iter, size))
 }
 
-fn get_filtered_iter<'c, T>(
+#[allow(clippy::type_complexity)]
+fn get_filtered_iter<'c, T, F>(
     store: &RawEventStore<'c, T>,
-    filter: &'c NetworkFilter,
+    filter: &'c F,
     after: Option<&str>,
     before: Option<&str>,
     first: Option<usize>,
     last: Option<usize>,
-) -> Result<(FilteredIter<'c, T>, Option<Vec<u8>>, usize)>
+) -> Result<(FilteredIter<'c, T, F>, Option<Vec<u8>>, usize)>
 where
     T: DeserializeOwned + EventFilter,
+    F: RawEventFilter + KeyExtractor,
 {
     validate_pagination_args(
         after.as_ref(),
@@ -1606,8 +1614,6 @@ mod tests {
             resp_addr: None,
             orig_port: None,
             resp_port: None,
-            log_level: None,
-            log_contents: None,
             times: Vec::new(),
             keyword: Some("needle".to_string()),
             agent_id: Some("agent-1".to_string()),
