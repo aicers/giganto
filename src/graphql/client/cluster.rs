@@ -1571,4 +1571,102 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[cfg(feature = "bootroot")]
+    mod bootroot_cluster_routing {
+        use super::*;
+        use crate::server::service_fqdn_from_cert;
+        use crate::test_bootroot::{TestNode, bootroot_cluster_certs};
+
+        fn cert_derived_fqdn(node: TestNode) -> String {
+            let (_, fqdn) = service_fqdn_from_cert(&bootroot_cluster_certs(node).certs)
+                .expect("parse bootroot cert");
+            fqdn
+        }
+
+        #[tokio::test]
+        async fn is_current_giganto_in_charge_matches_service_fqdn_under_bootroot() {
+            let local_fqdn = cert_derived_fqdn(TestNode::Node1);
+            assert_eq!(local_fqdn, "giganto.node1.example.test");
+
+            let ingest_sensors: IngestSensors =
+                Arc::new(RwLock::new(HashSet::from([local_fqdn.clone()])));
+            let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription)
+                .data(ingest_sensors)
+                .finish();
+
+            let matching = schema
+                .execute(Request::new(format!(
+                    r#"{{ inCharge(sensor: "{local_fqdn}") }}"#
+                )))
+                .await;
+            assert_eq!(matching.data.to_string(), "{inCharge: true}");
+
+            let legacy_bare_host = schema
+                .execute(Request::new(r#"{ inCharge(sensor: "node1") }"#))
+                .await;
+            assert_eq!(legacy_bare_host.data.to_string(), "{inCharge: false}");
+        }
+
+        #[tokio::test]
+        async fn peer_in_charge_graphql_addr_matches_service_fqdn_under_bootroot() {
+            let peer_fqdn = cert_derived_fqdn(TestNode::Node2);
+            assert_eq!(peer_fqdn, "giganto.node2.example.test");
+
+            let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
+                "127.0.0.1".to_string(),
+                PeerInfo {
+                    ingest_sensors: HashSet::from([peer_fqdn.clone()]),
+                    graphql_port: Some(9000),
+                    publish_port: None,
+                },
+            )])));
+            let schema = Schema::build(PeerQuery, EmptyMutation, EmptySubscription)
+                .data(peers)
+                .finish();
+
+            let res = schema
+                .execute(Request::new(format!(
+                    r#"{{ peerAddr(sensor: "{peer_fqdn}") }}"#
+                )))
+                .await;
+            assert_eq!(res.data.to_string(), "{peerAddr: \"127.0.0.1:9000\"}");
+
+            let legacy_bare_host = schema
+                .execute(Request::new(r#"{ peerAddr(sensor: "node2") }"#))
+                .await;
+            assert_eq!(legacy_bare_host.data.to_string(), "{peerAddr: null}");
+        }
+
+        #[tokio::test]
+        async fn find_who_are_in_charge_partitions_by_service_fqdn_under_bootroot() {
+            let local_fqdn = cert_derived_fqdn(TestNode::Node1);
+            let peer_fqdn = cert_derived_fqdn(TestNode::Node2);
+
+            let ingest_sensors: IngestSensors =
+                Arc::new(RwLock::new(HashSet::from([local_fqdn.clone()])));
+            let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
+                "192.168.1.10".to_string(),
+                PeerInfo {
+                    ingest_sensors: HashSet::from([peer_fqdn.clone()]),
+                    graphql_port: Some(8080),
+                    publish_port: None,
+                },
+            )])));
+            let schema = Schema::build(TestQuery, EmptyMutation, EmptySubscription)
+                .data(ingest_sensors)
+                .data(peers)
+                .finish();
+
+            let res = schema
+                .execute(Request::new(format!(
+                    r#"{{ findInCharge(sensors: [{local_fqdn:?}, {peer_fqdn:?}, "unknown.node9.example.test"]) }}"#
+                )))
+                .await;
+            assert_eq!(
+                res.data.to_string(),
+                format!("{{findInCharge: [\"local:{local_fqdn}\", \"peer:192.168.1.10:8080\"]}}")
+            );
+        }
+    }
 }

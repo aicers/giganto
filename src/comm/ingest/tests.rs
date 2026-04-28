@@ -69,7 +69,7 @@ use crate::{
         IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
         new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
     },
-    server::{Certs, config_client, subject_from_cert},
+    server::{Certs, config_client, service_fqdn_from_cert},
     storage::{Database, DbOptions, RawEventStore, StorageKey},
 };
 
@@ -375,7 +375,7 @@ fn test_sensor_name() -> String {
         .get_or_init(|| {
             let certs = load_test_client_certs();
             let (_service, sensor) =
-                subject_from_cert(&certs.certs).expect("failed to parse test certificate");
+                service_fqdn_from_cert(&certs.certs).expect("failed to parse test certificate");
             sensor
         })
         .clone()
