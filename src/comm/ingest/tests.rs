@@ -69,7 +69,7 @@ use crate::{
         IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
         new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
     },
-    server::{Certs, config_client, service_fqdn_from_cert},
+    server::{Certs, config_client, host_fqdn_from_cert, service_fqdn_from_cert},
     storage::{Database, DbOptions, RawEventStore, StorageKey},
 };
 
@@ -381,12 +381,22 @@ fn test_sensor_name() -> String {
         .clone()
 }
 
+fn test_host_fqdn() -> String {
+    static TEST_HOST_FQDN: OnceLock<String> = OnceLock::new();
+    TEST_HOST_FQDN
+        .get_or_init(|| {
+            let certs = load_test_client_certs();
+            host_fqdn_from_cert(&certs.certs).expect("failed to parse test certificate")
+        })
+        .clone()
+}
+
 fn expected_raw_event_bytes(kind: RawEventKind, body_bytes: Vec<u8>) -> Vec<u8> {
     match kind {
         RawEventKind::OpLog => {
             let mut op_log: OpLog =
                 bincode::deserialize(&body_bytes).expect("failed to deserialize OpLog");
-            op_log.sensor = test_sensor_name();
+            op_log.sensor = test_host_fqdn();
             bincode::serialize(&op_log).expect("failed to serialize OpLog")
         }
         _ => body_bytes,
@@ -1634,6 +1644,38 @@ async fn secu_log_key_includes_kind() {
         .build()
         .key();
     assert_eq!(expected_key, key);
+
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn op_log_sensor_uses_host_fqdn() {
+    const RAW_EVENT_KIND_OP_LOG: RawEventKind = RawEventKind::OpLog;
+    let harness = TestHarness::new().await;
+    let (mut send, _) = harness.open_bi().await;
+
+    let timestamp = next_timestamp();
+    let body = OpLog {
+        sensor: String::new(),
+        service_name: "data-broker".to_string(),
+        log_level: OpLogLevel::Info,
+        contents: "op_log content".to_string(),
+    };
+
+    send_record(&mut send, RAW_EVENT_KIND_OP_LOG, timestamp, &body)
+        .await
+        .unwrap();
+    send.finish().expect("failed to shutdown stream");
+
+    let stored = wait_for_raw_event(&harness.db, RAW_EVENT_KIND_OP_LOG).await;
+    let stored_op_log: OpLog =
+        bincode::deserialize(&stored).expect("failed to deserialize stored OpLog");
+
+    assert_eq!(stored_op_log.sensor, test_host_fqdn());
+    #[cfg(feature = "bootroot")]
+    assert_eq!(stored_op_log.sensor, "node1.example.test");
+    #[cfg(not(feature = "bootroot"))]
+    assert_eq!(stored_op_log.sensor, "node1");
 
     harness.shutdown(b"done").await;
 }

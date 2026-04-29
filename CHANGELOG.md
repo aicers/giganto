@@ -96,8 +96,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - clients using `giganto-client`: every request-side field that carries the
     ingest-sensor identity now expects the service FQDN, including
     `RequestRange::sensor`, `RequestSemiSupervisedStream::sensor`,
-    `RequestTimeSeriesGeneratorStream::sensor`, `PcapFilter::sensor`, and
-    `OpLog::sensor`; response-side the `{sensors}` GraphQL query, the
+    `RequestTimeSeriesGeneratorStream::sensor`, and `PcapFilter::sensor`;
+    response-side the `{sensors}` GraphQL query, the
     SemiSupervised direct-stream frame emitted by `send_direct_stream`, and any
     GraphQL filter argument that matches against `IngestSensors` also use the
     service FQDN.
@@ -112,6 +112,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     archive or drop the existing storage and start fresh under the new key
     format.
   - Non-bootroot (legacy CN) builds are unaffected.
+- Under the `bootroot` feature, the stored `OpLog::sensor` format changes to
+  `{hostname}.{domain}` (host FQDN). Non-bootroot builds are unaffected.
+  Consequently, the canonical `OpLogFilter::sensor` input under bootroot
+  becomes `{hostname}.{domain}`. `OpLogFilter` uses substring matching, so
+  bare-hostname inputs still match but are ambiguous across domains; service
+  FQDN inputs do not match the stored host FQDN. Rationale: OpLog is a
+  single-feeder stream (`data-broker`), so the `service_name` label is a known
+  constant and carries no discriminating information.
 
 ### Fixed
 

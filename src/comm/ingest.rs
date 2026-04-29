@@ -46,7 +46,7 @@ use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirect
 use crate::datetime::DateTime;
 use crate::server::{
     Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
-    service_fqdn_from_cert_verbose,
+    host_fqdn_from_cert, service_fqdn_from_cert_verbose,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 use crate::tls_reload::TlsWatch;
@@ -188,8 +188,9 @@ async fn handle_connection(
         }
     }
 
-    let (service_name, sensor) =
-        service_fqdn_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let cert_chain = extract_cert_from_conn(&connection)?;
+    let (service_name, sensor) = service_fqdn_from_cert_verbose(&cert_chain)?;
+    let host_fqdn = host_fqdn_from_cert(&cert_chain)?;
     let is_pcap_sensor = service_name.contains("piglet");
 
     if is_pcap_sensor {
@@ -235,11 +236,12 @@ async fn handle_connection(
                     Ok(s) => s,
                 };
                 let sensor = sensor.clone();
+                let host_fqdn = host_fqdn.clone();
                 let db = db.clone();
                 let stream_direct_channels = stream_direct_channels.clone();
                 let shutdown_signal = shutdown_signal.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_request(sensor, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
+                    if let Err(e) = handle_request(sensor, host_fqdn, stream, db, stream_direct_channels,shutdown_signal,ack_trans_cnt).await {
                         error!("Failed: {e}");
                     }
                 });
@@ -257,6 +259,7 @@ async fn handle_connection(
 #[allow(clippy::too_many_lines)]
 async fn handle_request(
     sensor: String,
+    host_fqdn: String,
     (send, mut recv): (SendStream, RecvStream),
     db: Database,
     stream_direct_channels: StreamDirectChannels,
@@ -456,7 +459,7 @@ async fn handle_request(
                 recv,
                 RawEventKind::OpLog,
                 None,
-                sensor,
+                host_fqdn,
                 db.op_log_store()?,
                 stream_direct_channels,
                 shutdown_signal,
