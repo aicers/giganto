@@ -15,14 +15,13 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
 };
-use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
 use tokio::{
     select,
     sync::{
         Notify, RwLock,
         mpsc::{Receiver, Sender, channel},
+        oneshot,
     },
     time::sleep,
 };
@@ -66,23 +65,6 @@ fn new_shared_client_config(config: ClientConfig, applied_generation: u64) -> Sh
         applied_generation,
         config: Arc::new(config),
     }))
-}
-
-/// Computes a lowercase hex SHA-256 fingerprint of the leaf (first)
-/// certificate in the chain, for use in reload logging and tests.
-pub(crate) fn leaf_cert_fingerprint(certs: &[CertificateDer<'_>]) -> String {
-    let Some(leaf) = certs.first() else {
-        return "<none>".to_string();
-    };
-    let mut hasher = Sha256::new();
-    hasher.update(leaf.as_ref());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
 }
 
 // Recover from poison rather than panic. The shared state is updated
@@ -222,21 +204,51 @@ impl Peer {
         notify_sensor: Arc<Notify>,
         notify_shutdown: Arc<Notify>,
         config_path: String,
+        tls_watch: TlsWatch,
+    ) -> Result<()> {
+        self.run_with_ready(
+            ingest_sensors,
+            peers,
+            peer_idents,
+            notify_sensor,
+            notify_shutdown,
+            config_path,
+            tls_watch,
+            None,
+        )
+        .await
+    }
+
+    /// Internal entry point shared by [`Peer::run`] and tests. The optional
+    /// `ready` channel lets tests observe the bound server address and the
+    /// shared client TLS slot once both are constructed, without forcing
+    /// production callers to plumb a sender they do not need.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn run_with_ready(
+        self,
+        ingest_sensors: IngestSensors,
+        peers: Peers,
+        peer_idents: PeerIdents,
+        notify_sensor: Arc<Notify>,
+        notify_shutdown: Arc<Notify>,
+        config_path: String,
         mut tls_watch: TlsWatch,
+        ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig)>>,
     ) -> Result<()> {
         let server_endpoint =
             Endpoint::server(self.server_config, self.local_address).expect("endpoint");
-        info!(
-            "listening on {}",
-            server_endpoint
-                .local_addr()
-                .expect("for local addr display")
-        );
+        let local_addr = server_endpoint
+            .local_addr()
+            .expect("for local addr display");
+        info!("listening on {local_addr}");
 
         let client_socket = SocketAddr::new(self.local_address.ip(), 0);
         let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
         let shared_client_config =
             new_shared_client_config(self.client_config, self.initial_generation);
+        if let Some(tx) = ready {
+            let _ = tx.send((local_addr, shared_client_config.clone()));
+        }
         // Atomically read the most recent watched material AND mark it as
         // seen. If a reload landed between when the watch receiver was
         // cloned (in `main`) and now, that update would otherwise be
@@ -377,9 +389,8 @@ fn apply_peer_tls_reload(
     state.config = Arc::new(new_client);
     drop(state);
     info!(
-        "peer TLS state reloaded; generation {}, leaf fingerprint {}",
-        material.generation,
-        leaf_cert_fingerprint(&certs.certs),
+        "peer TLS state reloaded; generation {}",
+        material.generation
     );
 }
 
@@ -931,10 +942,19 @@ pub mod tests {
 
     use fixtures::*;
     use giganto_client::frame::{send_bytes, send_handshake, send_raw};
+    use rustls::pki_types::CertificateDer;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::{Notify, RwLock, oneshot};
 
     use super::*;
+
+    /// Returns an owned copy of the leaf (first) certificate's DER bytes for
+    /// direct equality comparison between certificate chains observed during
+    /// a reload test. Returning owned bytes lets callers drop the source
+    /// connection or temporary chain immediately after the comparison.
+    fn leaf(certs: &[CertificateDer<'_>]) -> Option<Vec<u8>> {
+        certs.first().map(|c| c.as_ref().to_vec())
+    }
     use crate::graphql::status::{CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR};
     #[cfg(feature = "bootroot")]
     use crate::server::peer_dedup_key_from_cert;
@@ -1497,127 +1517,6 @@ pub mod tests {
                 }
             }
         }
-        /// Variant of `run_peer_with_ready` that additionally wires a
-        /// [`TlsWatch`](crate::tls_reload::TlsWatch) into the peer subsystem
-        /// so tests can drive the common-reload-trigger code path. The
-        /// `ready` channel surfaces both the bound socket address and a
-        /// clone of the shared client config slot, so tests can observe
-        /// `applied_generation` after the subsystem reacts to watch
-        /// updates.
-        #[allow(clippy::too_many_arguments)]
-        pub(super) async fn run_peer_with_ready_and_tls_watch(
-            peer: Peer,
-            ingest_sensors: IngestSensors,
-            peers: Peers,
-            peer_idents: PeerIdents,
-            notify_sensor: Arc<Notify>,
-            notify_shutdown: Arc<Notify>,
-            config_path: String,
-            tls_watch: crate::tls_reload::TlsWatch,
-            ready: oneshot::Sender<(SocketAddr, SharedClientConfig)>,
-        ) -> Result<()> {
-            let local_connect_name = peer.local_connect_name.clone();
-            let server_endpoint =
-                Endpoint::server(peer.server_config, peer.local_address).expect("endpoint");
-            let local_addr = server_endpoint
-                .local_addr()
-                .expect("for local addr display");
-
-            let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
-            let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
-            let shared_client_config: SharedClientConfig =
-                super::new_shared_client_config(peer.client_config, peer.initial_generation);
-            let _ = ready.send((local_addr, shared_client_config.clone()));
-
-            let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
-            let Ok(config_doc) = read_toml_file(&config_path) else {
-                bail!("Failed to open/read config's toml file");
-            };
-
-            let peer_conn_info = PeerConns {
-                peer_conns: Arc::new(RwLock::new(HashMap::new())),
-                peer_identities: peer_idents,
-                peers,
-                ingest_sensors,
-                peer_sender: sender,
-                local_address: peer.local_address,
-                notify_sensor,
-                config_doc,
-                config_path,
-            };
-
-            tokio::spawn(client_run(
-                client_endpoint.clone(),
-                shared_client_config.clone(),
-                peer_conn_info.clone(),
-                peer.local_connect_name.clone(),
-                notify_shutdown.clone(),
-            ));
-
-            let mut tls_watch = tls_watch;
-            // Mirror `Peer::run`: pick up any TLS reload that landed between
-            // the receiver clone in `main` and this point. Comparing
-            // material generations covers cert, key, and CA changes alike.
-            {
-                let material = tls_watch.borrow_and_update().clone();
-                if material.generation != peer.initial_generation {
-                    super::apply_peer_tls_reload(
-                        &server_endpoint,
-                        &shared_client_config,
-                        &material,
-                    );
-                }
-            }
-            let mut tls_reload_closed = false;
-            loop {
-                select! {
-                    Some(conn) = server_endpoint.accept() => {
-                        let peer_conn_info = peer_conn_info.clone();
-                        let notify_shutdown = notify_shutdown.clone();
-                        tokio::spawn(async move {
-                            let remote = conn.remote_address();
-                            if let Err(e) = server_connection(
-                                conn,
-                                peer_conn_info,
-                                notify_shutdown,
-                            )
-                            .await
-                            {
-                                tracing::error!("Connection to {remote} failed: {e}");
-                            }
-                        });
-                    },
-                    Some(peer) = receiver.recv() => {
-                        tokio::spawn(client_connection(
-                            client_endpoint.clone(),
-                            shared_client_config.clone(),
-                            peer,
-                            peer_conn_info.clone(),
-                            local_connect_name.clone(),
-                            notify_shutdown.clone(),
-                        ));
-                    },
-                    res = tls_watch.changed(), if !tls_reload_closed => {
-                        if res.is_err() {
-                            tls_reload_closed = true;
-                            continue;
-                        }
-                        let material = tls_watch.borrow_and_update().clone();
-                        super::apply_peer_tls_reload(
-                            &server_endpoint,
-                            &shared_client_config,
-                            &material,
-                        );
-                    },
-                    () = notify_shutdown.notified() => {
-                        sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;
-                        server_endpoint.close(0_u32.into(), &[]);
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
         pub(super) fn spawn_request_init_info_response_server(
             server_endpoint: Endpoint,
             response_code: PeerCode,
@@ -3129,30 +3028,6 @@ pub mod tests {
         drop(server_conn);
     }
 
-    #[test]
-    fn leaf_cert_fingerprint_is_stable_and_distinct() {
-        init_crypto();
-
-        let certs_a = create_certs();
-        let certs_b = create_node2_certs();
-
-        let fp_a = leaf_cert_fingerprint(&certs_a.certs);
-        let fp_a_again = leaf_cert_fingerprint(&certs_a.certs);
-        let fp_b = leaf_cert_fingerprint(&certs_b.certs);
-
-        assert_eq!(fp_a, fp_a_again, "fingerprint must be deterministic");
-        assert_ne!(
-            fp_a, fp_b,
-            "distinct certs must produce distinct fingerprints"
-        );
-        assert_eq!(fp_a.len(), 64, "sha256 hex encoding should be 64 chars");
-    }
-
-    #[test]
-    fn leaf_cert_fingerprint_handles_empty_chain() {
-        assert_eq!(leaf_cert_fingerprint(&[]), "<none>");
-    }
-
     #[tokio::test]
     async fn apply_peer_tls_reload_swaps_client_config_on_success() {
         init_crypto();
@@ -3208,8 +3083,8 @@ pub mod tests {
         let client_conn = client_conn.expect("new client config must dial new server");
         let presented = extract_cert_from_conn(&client_conn).expect("probe server certs");
         assert_eq!(
-            leaf_cert_fingerprint(&presented),
-            leaf_cert_fingerprint(&new_certs.certs),
+            leaf(&presented),
+            leaf(&new_certs.certs),
             "swapped client config must observe the new server leaf fingerprint"
         );
         drop(server_conn);
@@ -3267,8 +3142,8 @@ pub mod tests {
         let initial_certs = create_certs();
         let new_certs = create_node2_certs();
         assert_ne!(
-            leaf_cert_fingerprint(&initial_certs.certs),
-            leaf_cert_fingerprint(&new_certs.certs),
+            leaf(&initial_certs.certs),
+            leaf(&new_certs.certs),
             "test setup requires distinct cert material pre- and post-reload"
         );
 
@@ -3294,8 +3169,7 @@ pub mod tests {
         let peers_for_run = peers.clone();
         let peer_idents_for_run = peer_idents.clone();
         let peer_handle = tokio::spawn(async move {
-            run_peer_with_ready_and_tls_watch(
-                peer,
+            peer.run_with_ready(
                 ingest_sensors_for_run,
                 peers_for_run,
                 peer_idents_for_run,
@@ -3303,7 +3177,7 @@ pub mod tests {
                 notify_shutdown,
                 config_path,
                 tls_watch,
-                ready_tx,
+                Some(ready_tx),
             )
             .await
         });
@@ -3316,10 +3190,7 @@ pub mod tests {
         // leaf fingerprint.
         let pre = TestClient::new(server_addr).await;
         let pre_peer_certs = extract_cert_from_conn(&pre.conn).expect("peer certs pre-reload");
-        assert_eq!(
-            leaf_cert_fingerprint(&pre_peer_certs),
-            leaf_cert_fingerprint(&initial_certs.certs),
-        );
+        assert_eq!(leaf(&pre_peer_certs), leaf(&initial_certs.certs),);
         drop(pre);
 
         // Push genuinely different TLS material through the watch channel.
@@ -3348,7 +3219,7 @@ pub mod tests {
                 continue;
             };
             let probe_certs = extract_cert_from_conn(&conn).expect("peer certs probe");
-            if leaf_cert_fingerprint(&probe_certs) == leaf_cert_fingerprint(&new_certs.certs) {
+            if leaf(&probe_certs) == leaf(&new_certs.certs) {
                 drop(conn);
                 notify_shutdown_handle.notify_waiters();
                 with_timeout("peer shutdown", peer_handle)
@@ -3388,8 +3259,7 @@ pub mod tests {
         let config_path = config.path().to_string();
 
         let (ready_tx, ready_rx) = oneshot::channel();
-        let peer_handle = tokio::spawn(run_peer_with_ready_and_tls_watch(
-            peer,
+        let peer_handle = tokio::spawn(peer.run_with_ready(
             ingest_sensors,
             peers,
             peer_idents,
@@ -3397,7 +3267,7 @@ pub mod tests {
             notify_shutdown,
             config_path,
             tls_watch,
-            ready_tx,
+            Some(ready_tx),
         ));
 
         let (server_addr, _shared_client_config) = with_timeout("peer server ready", ready_rx)
@@ -3406,10 +3276,8 @@ pub mod tests {
 
         // Baseline inbound handshake observes initial server leaf cert.
         let pre = TestClient::new(server_addr).await;
-        let pre_fp = leaf_cert_fingerprint(
-            &extract_cert_from_conn(&pre.conn).expect("peer certs pre-reload"),
-        );
-        assert_eq!(pre_fp, leaf_cert_fingerprint(&initial_certs.certs));
+        let pre_fp = leaf(&extract_cert_from_conn(&pre.conn).expect("peer certs pre-reload"));
+        assert_eq!(pre_fp, leaf(&initial_certs.certs));
         drop(pre);
 
         // Push material whose cert/key pair is mismatched, forcing the
@@ -3438,12 +3306,10 @@ pub mod tests {
         for _ in 0..8 {
             tokio::time::sleep(Duration::from_millis(25)).await;
             let probe = TestClient::new(server_addr).await;
-            let fp = leaf_cert_fingerprint(
-                &extract_cert_from_conn(&probe.conn).expect("probe peer certs"),
-            );
+            let fp = leaf(&extract_cert_from_conn(&probe.conn).expect("probe peer certs"));
             assert_eq!(
                 fp,
-                leaf_cert_fingerprint(&initial_certs.certs),
+                leaf(&initial_certs.certs),
                 "failed reload must preserve the previous server leaf cert"
             );
             drop(probe);
@@ -3469,8 +3335,8 @@ pub mod tests {
         let initial_client_certs = create_certs();
         let new_client_certs = create_node2_certs();
         assert_ne!(
-            leaf_cert_fingerprint(&initial_client_certs.certs),
-            leaf_cert_fingerprint(&new_client_certs.certs),
+            leaf(&initial_client_certs.certs),
+            leaf(&new_client_certs.certs),
             "test setup requires distinct client leaf material"
         );
 
@@ -3492,7 +3358,7 @@ pub mod tests {
         let accept_1 = async {
             let incoming = accept_incoming(&server_endpoint, "accept 1").await;
             let conn = incoming.await.expect("server accept 1");
-            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs 1"));
+            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs 1"));
             let _ = server_handshake(&conn, PEER_VERSION_REQ)
                 .await
                 .expect("server handshake 1");
@@ -3508,7 +3374,7 @@ pub mod tests {
         assert_eq!(gen_1, 0);
         assert_eq!(
             observed_fp_1,
-            leaf_cert_fingerprint(&initial_client_certs.certs),
+            leaf(&initial_client_certs.certs),
             "remote peer must observe the initial client leaf before reload"
         );
         drop(client_conn_1);
@@ -3533,7 +3399,7 @@ pub mod tests {
         let accept_2 = async {
             let incoming = accept_incoming(&server_endpoint, "accept 2").await;
             let conn = incoming.await.expect("server accept 2");
-            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs 2"));
+            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs 2"));
             let _ = server_handshake(&conn, PEER_VERSION_REQ)
                 .await
                 .expect("server handshake 2");
@@ -3549,7 +3415,7 @@ pub mod tests {
         assert_eq!(gen_2, 1, "second dial must snapshot the bumped generation");
         assert_eq!(
             observed_fp_2,
-            leaf_cert_fingerprint(&new_client_certs.certs),
+            leaf(&new_client_certs.certs),
             "remote peer must observe the refreshed client leaf after reload"
         );
         assert_eq!(current_applied_generation(&shared), 1);
@@ -3607,7 +3473,7 @@ pub mod tests {
         let accept_fut = async {
             let incoming = accept_incoming(&server_endpoint, "accept after failed reload").await;
             let conn = incoming.await.expect("server accept");
-            let fp = leaf_cert_fingerprint(&extract_cert_from_conn(&conn).expect("client certs"));
+            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs"));
             let _ = server_handshake(&conn, PEER_VERSION_REQ)
                 .await
                 .expect("server handshake");
@@ -3623,7 +3489,7 @@ pub mod tests {
         assert_eq!(generation, 0);
         assert_eq!(
             observed_fp,
-            leaf_cert_fingerprint(&initial_client_certs.certs),
+            leaf(&initial_client_certs.certs),
             "outbound reconnect must observe the preserved client leaf after a failed reload"
         );
         drop(client_conn);
@@ -3650,8 +3516,8 @@ pub mod tests {
         let initial_client_certs = create_certs();
         let new_client_certs = create_node2_certs();
         assert_ne!(
-            leaf_cert_fingerprint(&initial_client_certs.certs),
-            leaf_cert_fingerprint(&new_client_certs.certs),
+            leaf(&initial_client_certs.certs),
+            leaf(&new_client_certs.certs),
             "test setup requires distinct client leaf material",
         );
 
@@ -3676,7 +3542,8 @@ pub mod tests {
 
         let (first_quic_done_tx, first_quic_done_rx) = oneshot::channel::<()>();
         let (release_first_handshake_tx, release_first_handshake_rx) = oneshot::channel::<()>();
-        let (second_dial_observed_tx, second_dial_observed_rx) = oneshot::channel::<String>();
+        let (second_dial_observed_tx, second_dial_observed_rx) =
+            oneshot::channel::<Option<Vec<u8>>>();
 
         let server_task = tokio::spawn(async move {
             // First dial: complete the QUIC handshake, then pause until the
@@ -3702,9 +3569,8 @@ pub mod tests {
                 .await
                 .expect("second accept");
             let conn2 = incoming2.await.expect("second quic handshake");
-            let observed_fp = leaf_cert_fingerprint(
-                &extract_cert_from_conn(&conn2).expect("extract second client cert"),
-            );
+            let observed_fp =
+                leaf(&extract_cert_from_conn(&conn2).expect("extract second client cert"));
             second_dial_observed_tx
                 .send(observed_fp)
                 .expect("send observed fingerprint");
@@ -3751,7 +3617,7 @@ pub mod tests {
             .expect("client_connection should retry after detecting stale snapshot");
         assert_eq!(
             observed_fp,
-            leaf_cert_fingerprint(&new_client_certs.certs),
+            leaf(&new_client_certs.certs),
             "retry must present the refreshed client leaf fingerprint",
         );
 
@@ -3781,8 +3647,8 @@ pub mod tests {
         let initial_certs = create_certs();
         let new_certs = create_node2_certs();
         assert_ne!(
-            leaf_cert_fingerprint(&initial_certs.certs),
-            leaf_cert_fingerprint(&new_certs.certs),
+            leaf(&initial_certs.certs),
+            leaf(&new_certs.certs),
             "test setup requires distinct cert material",
         );
 
@@ -3808,8 +3674,7 @@ pub mod tests {
         let config_path = config.path().to_string();
 
         let (ready_tx, ready_rx) = oneshot::channel();
-        let peer_handle = tokio::spawn(run_peer_with_ready_and_tls_watch(
-            peer,
+        let peer_handle = tokio::spawn(peer.run_with_ready(
             ingest_sensors,
             peers,
             peer_idents,
@@ -3817,7 +3682,7 @@ pub mod tests {
             notify_shutdown,
             config_path,
             tls_watch,
-            ready_tx,
+            Some(ready_tx),
         ));
 
         let (server_addr, _shared_client_config) = with_timeout("peer server ready", ready_rx)
@@ -3840,7 +3705,7 @@ pub mod tests {
                 continue;
             };
             let probe_certs = extract_cert_from_conn(&conn).expect("peer certs probe");
-            if leaf_cert_fingerprint(&probe_certs) == leaf_cert_fingerprint(&new_certs.certs) {
+            if leaf(&probe_certs) == leaf(&new_certs.certs) {
                 converged = true;
                 drop(conn);
                 break;
@@ -3903,8 +3768,7 @@ pub mod tests {
         let config_path = config.path().to_string();
 
         let (ready_tx, ready_rx) = oneshot::channel();
-        let peer_handle = tokio::spawn(run_peer_with_ready_and_tls_watch(
-            peer,
+        let peer_handle = tokio::spawn(peer.run_with_ready(
             ingest_sensors,
             peers,
             peer_idents,
@@ -3912,7 +3776,7 @@ pub mod tests {
             notify_shutdown,
             config_path,
             tls_watch,
-            ready_tx,
+            Some(ready_tx),
         ));
 
         let (_server_addr, shared_client_config) = with_timeout("peer server ready", ready_rx)
