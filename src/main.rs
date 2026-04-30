@@ -273,15 +273,32 @@ async fn main() -> Result<()> {
         if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
             let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
             let notify_sensor = Arc::new(Notify::new());
-            peer_task_handle = Some(task::spawn(peer_server.run(
-                ingest_sensors.clone(),
-                peers.clone(),
-                peer_idents.clone(),
-                notify_sensor.clone(),
-                notify_shutdown.clone(),
-                cfg_path.clone(),
-                tls_watch.clone(),
-            )));
+            peer_task_handle = Some(task::spawn({
+                let ingest_sensors = ingest_sensors.clone();
+                let peers = peers.clone();
+                let peer_idents = peer_idents.clone();
+                let notify_sensor = notify_sensor.clone();
+                let notify_shutdown = notify_shutdown.clone();
+                let cfg_path = cfg_path.clone();
+                let tls_watch = tls_watch.clone();
+                async move {
+                    let result = peer_server
+                        .run(
+                            ingest_sensors,
+                            peers,
+                            peer_idents,
+                            notify_sensor,
+                            notify_shutdown,
+                            cfg_path,
+                            tls_watch,
+                        )
+                        .await;
+                    if let Err(e) = &result {
+                        error!("Peer subsystem terminated unexpectedly: {e:#}");
+                    }
+                    result
+                }
+            }));
             notify_sensor_change = Some(notify_sensor);
         } else {
             peer_task_handle = None;
