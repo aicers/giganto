@@ -51,6 +51,7 @@ pub fn load_tls_material(paths: &CertPaths) -> Result<TlsMaterial> {
         cert_pem,
         key_pem,
         ca_pem,
+        generation: 0,
     })
 }
 
@@ -99,6 +100,11 @@ pub struct TlsMaterial {
     pub cert_pem: Vec<u8>,
     pub key_pem: Vec<u8>,
     pub ca_pem: Vec<u8>,
+    /// Monotonically advancing version of the published TLS material.
+    /// Bumped by [`ReloadHandle::reload`] only when the cert/key/CA bytes
+    /// actually changed, so consumers can detect a reload independently
+    /// of which fields differ.
+    pub generation: u64,
 }
 
 impl Clone for TlsMaterial {
@@ -108,6 +114,7 @@ impl Clone for TlsMaterial {
             cert_pem: self.cert_pem.clone(),
             key_pem: self.key_pem.clone(),
             ca_pem: self.ca_pem.clone(),
+            generation: self.generation,
         }
     }
 }
@@ -152,21 +159,27 @@ impl ReloadHandle {
     pub fn reload(&self) -> ReloadOutcome {
         info!("TLS reload requested");
         match load_tls_material(&self.paths) {
-            Ok(loaded) => {
-                let unchanged = {
+            Ok(mut loaded) => {
+                let next_generation = {
                     let current = self.sender.borrow();
-                    current.cert_pem == loaded.cert_pem
+                    if current.cert_pem == loaded.cert_pem
                         && current.key_pem == loaded.key_pem
                         && current.ca_pem == loaded.ca_pem
+                    {
+                        None
+                    } else {
+                        Some(current.generation.saturating_add(1))
+                    }
                 };
-                if unchanged {
+                let Some(next_generation) = next_generation else {
                     info!("TLS reload: material unchanged, skipping publish");
                     return ReloadOutcome::Unchanged;
-                }
+                };
+                loaded.generation = next_generation;
                 if self.sender.send(Arc::new(loaded)).is_err() {
                     warn!("TLS reload: no active receivers");
                 }
-                info!("TLS material reloaded successfully");
+                info!("TLS material reloaded successfully (generation {next_generation})");
                 ReloadOutcome::Updated
             }
             Err(e) => {
@@ -180,6 +193,14 @@ impl ReloadHandle {
 /// Returns the current TLS material from the watch channel.
 pub fn get_current_tls_material(watch: &TlsWatch) -> Arc<TlsMaterial> {
     Arc::clone(&watch.borrow())
+}
+
+/// Test-only helper that constructs a paired [`watch::Sender`] and [`TlsWatch`]
+/// pre-seeded with `material`. Callers keep the sender to broadcast updates
+/// from tests; dropping it closes the channel.
+#[cfg(test)]
+pub fn test_tls_watch(material: Arc<TlsMaterial>) -> (watch::Sender<Arc<TlsMaterial>>, TlsWatch) {
+    watch::channel(material)
 }
 
 #[cfg(test)]
@@ -855,6 +876,7 @@ mod listener_reload_contract_tests {
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
             ca_pem: Vec::new(),
+            generation: 0,
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -904,6 +926,7 @@ mod listener_reload_contract_tests {
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
                 ca_pem: Vec::new(),
+                generation: 1,
             }))
             .expect("broadcast refreshed material");
 
@@ -992,6 +1015,7 @@ mod listener_reload_contract_tests {
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
             ca_pem: Vec::new(),
+            generation: 0,
         }));
 
         let notify_shutdown = Arc::new(Notify::new());
@@ -1036,6 +1060,7 @@ mod listener_reload_contract_tests {
                 cert_pem: Vec::new(),
                 key_pem: Vec::new(),
                 ca_pem: Vec::new(),
+                generation: 1,
             }))
             .expect("broadcast refreshed material");
 

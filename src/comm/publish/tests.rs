@@ -589,6 +589,7 @@ mod fixtures {
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
             ca_pem: Vec::new(),
+            generation: 0,
         });
         let (_sender, receiver) = watch::channel(material);
         receiver

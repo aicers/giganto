@@ -31,6 +31,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   restart with validated cert/key/CA material, preservation of the running
   server on validation failure, no-op handling for unchanged material, and
   startup retry when HTTPS is down.
+- Added peer subsystem TLS reload on `SIGHUP`. New inbound peer handshakes and
+  subsequent outbound reconnects use the refreshed cert/key/CA material;
+  existing long-lived peer connections keep their established TLS state until
+  they are replaced by natural reconnects. If the reload fails, the previous
+  peer TLS state is preserved.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and
