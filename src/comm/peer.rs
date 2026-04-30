@@ -235,15 +235,16 @@ impl Peer {
         mut tls_watch: TlsWatch,
         ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig)>>,
     ) -> Result<()> {
-        let server_endpoint =
-            Endpoint::server(self.server_config, self.local_address).expect("endpoint");
+        let server_endpoint = Endpoint::server(self.server_config, self.local_address)
+            .context("failed to create peer server endpoint")?;
         let local_addr = server_endpoint
             .local_addr()
-            .expect("for local addr display");
+            .context("failed to get peer server local address")?;
         info!("listening on {local_addr}");
 
         let client_socket = SocketAddr::new(self.local_address.ip(), 0);
-        let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
+        let client_endpoint =
+            Endpoint::client(client_socket).context("failed to create peer client endpoint")?;
         let shared_client_config =
             new_shared_client_config(self.client_config, self.initial_generation);
         if let Some(tx) = ready {
@@ -383,11 +384,12 @@ fn apply_peer_tls_reload(
         }
     };
 
-    let mut state = write_state(shared_client_config);
-    server_endpoint.set_server_config(Some(new_server));
-    state.applied_generation = material.generation;
-    state.config = Arc::new(new_client);
-    drop(state);
+    {
+        let mut state = write_state(shared_client_config);
+        server_endpoint.set_server_config(Some(new_server));
+        state.applied_generation = material.generation;
+        state.config = Arc::new(new_client);
+    }
     info!(
         "peer TLS state reloaded; generation {}",
         material.generation
