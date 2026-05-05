@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "giganto"
-version = "0.27.0-alpha.2"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-graphql",
