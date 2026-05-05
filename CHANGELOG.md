@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.27.0] - 2026-05-05
 
 ### Added
 
@@ -66,10 +66,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added `options` field (`Vec<(u8, Vec<u8>)>`) to the `Dhcp`
   event to store all DHCP option code and value pairs. Added `Dhcp`
   migration to the existing v26 to v27 migration flow.
-- Updated `INGEST_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
-- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
-- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
-- Updated `PEER_VERSION_REQ` to ">=0.27.0-alpha.2,<0.28.0".
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.28.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.27.0,<0.28.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.28.0".
+- Updated `PEER_VERSION_REQ` to ">=0.27.0,<0.28.0".
 - Replaced checked-in MkDocs theme assets (`docs/styles/`,
   `docs/pdf/`) with the shared
   [aicers/docs-theme](https://github.com/aicers/docs-theme)
@@ -1062,7 +1062,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.26.2...main
+[0.27.0]: https://github.com/aicers/giganto/compare/0.26.2...0.27.0
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
 [0.26.1]: https://github.com/aicers/giganto/compare/0.26.0...0.26.1
 [0.26.0]: https://github.com/aicers/giganto/compare/0.25.1...0.26.0

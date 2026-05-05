@@ -59,7 +59,7 @@ use crate::server::{
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.27.0-alpha.2,<0.28.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.27.0,<0.28.0";
 
 pub struct Server {
     server_config: ServerConfig,
