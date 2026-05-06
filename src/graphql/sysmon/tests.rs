@@ -10,7 +10,8 @@ use fixtures::{
     insert_dns_event, insert_file_create_event, insert_file_create_stream_hash_event,
     insert_file_create_time_event, insert_file_delete_detected_event, insert_file_delete_event,
     insert_image_loaded_event, insert_network_connect_event, insert_pipe_event_raw_event,
-    insert_process_create_event, insert_process_tampering_event, insert_process_terminated_event,
+    insert_process_create_event, insert_process_create_event_with_agent_id,
+    insert_process_tampering_event, insert_process_terminated_event,
     insert_registry_key_rename_event, insert_registry_value_set_event, make_after_last_query,
     make_before_first_query, make_out_of_range_after_query, make_out_of_range_before_query,
     make_same_cursor_query, run_cluster_event_query, run_local_error_query, run_local_event_query,
@@ -2800,4 +2801,144 @@ async fn sysmon_connection_pagination_before_last_sets_has_next_page() {
         page_info["hasNextPage"].as_bool().unwrap(),
         "hasNextPage should be true when using before cursor with last"
     );
+}
+
+#[test]
+fn sysmon_event_filter_agent_id_check() {
+    use crate::graphql::{RawEventFilter, SysmonEventFilter};
+
+    let filter = SysmonEventFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        agent_id: Some("agent-1".to_string()),
+    };
+
+    let matches = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("agent-1".to_string()),
+            None,
+        )
+        .unwrap();
+    assert!(matches);
+
+    let mismatch = filter
+        .check(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("agent-2".to_string()),
+            None,
+        )
+        .unwrap();
+    assert!(!mismatch);
+
+    let missing = filter
+        .check(None, None, None, None, None, None, None, None, None, None)
+        .unwrap();
+    assert!(!missing);
+
+    let unfiltered = SysmonEventFilter {
+        time: None,
+        sensor: "src 1".to_string(),
+        agent_id: None,
+    };
+    assert!(
+        unfiltered
+            .check(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("agent-1".to_string()),
+                None,
+            )
+            .unwrap()
+    );
+    assert!(
+        unfiltered
+            .check(None, None, None, None, None, None, None, None, None, None)
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn process_create_events_filtered_by_agent_id() {
+    let schema = TestSchema::new();
+    let store = schema.db.process_create_store().unwrap();
+    let sensor = "src1";
+    let base_ts = FIXED_SYSMON_BASE_TIMESTAMP_NANOS;
+
+    insert_process_create_event_with_agent_id(&store, sensor, base_ts, "agent-A");
+    insert_process_create_event_with_agent_id(&store, sensor, base_ts + 1_000_000, "agent-B");
+
+    let query_match = r#"
+    {
+        processCreateEvents(
+            filter: {
+                sensor: "src1",
+                agentId: "agent-A"
+            },
+            first: 10
+        ) {
+            edges { node { agentId } }
+        }
+    }"#;
+    let res = schema.execute(query_match).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["processCreateEvents"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0]["node"]["agentId"].as_str().unwrap(), "agent-A");
+
+    let query_no_match = r#"
+    {
+        processCreateEvents(
+            filter: {
+                sensor: "src1",
+                agentId: "agent-X"
+            },
+            first: 10
+        ) {
+            edges { node { agentId } }
+        }
+    }"#;
+    let res = schema.execute(query_no_match).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["processCreateEvents"]["edges"].as_array().unwrap();
+    assert!(edges.is_empty());
+
+    let query_no_filter = r#"
+    {
+        processCreateEvents(
+            filter: {
+                sensor: "src1"
+            },
+            first: 10
+        ) {
+            edges { node { agentId } }
+        }
+    }"#;
+    let res = schema.execute(query_no_filter).await;
+    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let edges = data["processCreateEvents"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 2);
 }
