@@ -286,10 +286,19 @@ pub(super) fn insert_process_create_event(
     sensor: &str,
     timestamp: i64,
 ) {
+    insert_process_create_event_with_agent_id(store, sensor, timestamp, "pc-agent_id");
+}
+
+pub(super) fn insert_process_create_event_with_agent_id(
+    store: &RawEventStore<ProcessCreate>,
+    sensor: &str,
+    timestamp: i64,
+    agent_id: &str,
+) {
     let key = sensor_timestamp_key(sensor, timestamp);
     let event = ProcessCreate {
         agent_name: "pc-agent".to_string(),
-        agent_id: "pc-agent_id".to_string(),
+        agent_id: agent_id.to_string(),
         process_guid: "guid".to_string(),
         process_id: 1234,
         image: "proc.exe".to_string(),

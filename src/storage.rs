@@ -46,7 +46,7 @@ use tracing::{debug, error, info, warn};
 use crate::datetime::DateTime;
 use crate::{
     comm::ingest::implement::EventFilter,
-    graphql::{NetworkFilter, RawEventFilter, TIMESTAMP_SIZE},
+    graphql::{RawEventFilter, TIMESTAMP_SIZE},
 };
 
 const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
@@ -899,18 +899,18 @@ where
     }
 }
 
-pub struct FilteredIter<'d, T> {
+pub struct FilteredIter<'d, T, F: RawEventFilter = crate::graphql::NetworkFilter> {
     inner: BoundaryIter<'d, T>,
-    filter: &'d NetworkFilter,
+    filter: &'d F,
 }
 
-impl<'d, T> FilteredIter<'d, T> {
-    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d NetworkFilter) -> Self {
+impl<'d, T, F: RawEventFilter> FilteredIter<'d, T, F> {
+    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d F) -> Self {
         Self { inner, filter }
     }
 }
 
-impl<T> Iterator for FilteredIter<'_, T>
+impl<T, F: RawEventFilter> Iterator for FilteredIter<'_, T, F>
 where
     T: DeserializeOwned + EventFilter,
 {

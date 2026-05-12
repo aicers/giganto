@@ -5784,8 +5784,6 @@ fn search_filter_keyword_checks_text() {
         resp_addr: None,
         orig_port: None,
         resp_port: None,
-        log_level: None,
-        log_contents: None,
         times: Vec::new(),
         keyword: Some("needle".to_string()),
         agent_id: None,
@@ -5813,8 +5811,6 @@ fn search_filter_keyword_checks_text() {
         resp_addr: None,
         orig_port: None,
         resp_port: None,
-        log_level: None,
-        log_contents: None,
         times: Vec::new(),
         keyword: Some("needle".to_string()),
         agent_id: None,
@@ -5831,8 +5827,6 @@ fn search_filter_keyword_checks_text() {
         resp_addr: None,
         orig_port: None,
         resp_port: None,
-        log_level: None,
-        log_contents: None,
         times: Vec::new(),
         keyword: Some("needle".to_string()),
         agent_id: None,
@@ -5875,9 +5869,6 @@ fn network_filter_matches_all_fields() {
             start: Some(1500),
             end: Some(2500),
         }),
-        log_level: None,
-        log_contents: None,
-        agent_id: Some("agent-1".to_string()),
     };
 
     let ok = filter
@@ -5890,7 +5881,7 @@ fn network_filter_matches_all_fields() {
             None,
             None,
             None,
-            Some("agent-1".to_string()),
+            None,
             None,
         )
         .unwrap();

@@ -4,6 +4,19 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
+  event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
+  related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
+  `agentId`). Sysmon queries previously used `NetworkFilter`, which mixed
+  unrelated network and Sysmon fields.
+- Removed the unused `logLevel` and `logContents` fields from
+  `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
+  `NetworkFilter`. These fields were never applied to network events.
+
 ## [0.27.0] - 2026-05-05
 
 ### Added
@@ -1062,6 +1075,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.27.0...main
 [0.27.0]: https://github.com/aicers/giganto/compare/0.26.2...0.27.0
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
 [0.26.1]: https://github.com/aicers/giganto/compare/0.26.0...0.26.1

@@ -853,9 +853,6 @@ macro_rules! impl_from_giganto_network_filter_for_graphql_client {
                         resp_addr: filter.resp_addr.map(Into::into),
                         orig_port: filter.orig_port.map(Into::into),
                         resp_port: filter.resp_port.map(Into::into),
-                        log_level: filter.log_level,
-                        log_contents: filter.log_contents,
-                        agent_id: filter.agent_id,
                     }
                 }
             }
@@ -863,6 +860,23 @@ macro_rules! impl_from_giganto_network_filter_for_graphql_client {
     };
 }
 pub(crate) use impl_from_giganto_network_filter_for_graphql_client;
+
+macro_rules! impl_from_giganto_sysmon_event_filter_for_graphql_client {
+    ($($autogen_mod:ident),*) => {
+        $(
+            impl From<SysmonEventFilter> for $autogen_mod::SysmonEventFilter {
+                fn from(filter: SysmonEventFilter) -> Self {
+                    Self {
+                        time: filter.time.map(Into::into),
+                        sensor: filter.sensor,
+                        agent_id: filter.agent_id,
+                    }
+                }
+            }
+        )*
+    };
+}
+pub(crate) use impl_from_giganto_sysmon_event_filter_for_graphql_client;
 
 macro_rules! impl_from_giganto_search_filter_for_graphql_client {
     ($($autogen_mod:ident),*) => {
@@ -876,8 +890,6 @@ macro_rules! impl_from_giganto_search_filter_for_graphql_client {
                         resp_addr: filter.resp_addr.map(Into::into),
                         orig_port: filter.orig_port.map(Into::into),
                         resp_port: filter.resp_port.map(Into::into),
-                        log_level: filter.log_level,
-                        log_contents: filter.log_contents,
                         times: filter.times,
                         keyword: filter.keyword,
                         agent_id: filter.agent_id,

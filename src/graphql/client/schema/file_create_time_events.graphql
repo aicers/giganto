@@ -1,5 +1,5 @@
 query FileCreateTimeEvents(
-  $filter: NetworkFilter!
+  $filter: SysmonEventFilter!
   $after: String
   $before: String
   $first: Int
