@@ -16,6 +16,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed the unused `logLevel` and `logContents` fields from
   `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
   `NetworkFilter`. These fields were never applied to network events.
+- Expanded the `cancellation` task tracker with staged shutdown support,
+  richer drain diagnostics, and panic accounting/logging for tracked tasks.
 
 ## [0.27.0] - 2026-05-05
 
