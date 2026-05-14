@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Added `cancellation` module providing `CancellationToken` and
+  `TaskTracker` primitives for cooperative, hierarchical cancellation
+  and graceful task draining with timeout.
+
 ### Changed
 
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
@@ -16,8 +22,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed the unused `logLevel` and `logContents` fields from
   `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
   `NetworkFilter`. These fields were never applied to network events.
-- Expanded the `cancellation` task tracker with staged shutdown support,
-  richer drain diagnostics, and panic accounting/logging for tracked tasks.
 
 ## [0.27.0] - 2026-05-05
 
@@ -51,10 +55,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   existing long-lived peer connections keep their established TLS state until
   they are replaced by natural reconnects. If the reload fails, the previous
   peer TLS state is preserved.
-- Added `shutdown` module providing `CancellationToken` and
-- Added `cancellation` module providing `CancellationToken` and
-  `TaskTracker` primitives for cooperative, hierarchical cancellation
-  and graceful task draining with timeout.
 - Added ICMP protocol support with the `IcmpRawEvent` struct and the GraphQL
   APIs (`icmpRawEvents`, `searchIcmpRawEvents`). ICMP events capture basic
   connection information including source/destination addresses, ICMP type and

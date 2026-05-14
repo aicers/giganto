@@ -898,8 +898,12 @@ mod tests {
             })
             .expect("spawn should succeed");
 
-        tracker.drain(Duration::from_secs(1)).await.ok();
+        tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
         assert!(token_was_valid.load(Ordering::Acquire));
+        assert_eq!(tracker.pending_count(), 0);
     }
 
     #[tokio::test]
@@ -919,8 +923,12 @@ mod tests {
         // Let the task start waiting.
         tokio::task::yield_now().await;
         tracker.cancel_children();
-        tracker.drain(Duration::from_secs(1)).await.ok();
+        tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
         assert!(saw_cancel.load(Ordering::Acquire));
+        assert_eq!(tracker.pending_count(), 0);
     }
 
     #[tokio::test]
@@ -968,6 +976,9 @@ mod tests {
         assert_eq!(error.pending_count, 1);
         assert_eq!(error.pending.len(), 1);
         assert_eq!(error.pending[0].name, "stuck-task");
+        // The lock-free fast path must stay consistent with the registry
+        // snapshot after a timed-out drain.
+        assert_eq!(tracker.pending_count(), 1);
     }
 
     #[tokio::test]
@@ -988,8 +999,12 @@ mod tests {
         tokio::task::yield_now().await;
         // Cancel via the external root token.
         root.cancel();
-        tracker.drain(Duration::from_secs(1)).await.ok();
+        tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
         assert!(saw_cancel.load(Ordering::Acquire));
+        assert_eq!(tracker.pending_count(), 0);
     }
 
     #[tokio::test]
@@ -1016,7 +1031,10 @@ mod tests {
                 .expect("spawn should succeed");
         }
 
-        tracker.drain(Duration::from_secs(1)).await.ok();
+        tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
         assert_eq!(count.load(Ordering::Relaxed), 5);
         assert_eq!(tracker.pending_count(), 0);
     }
@@ -1134,8 +1152,8 @@ mod tests {
         assert_eq!(tracker.panic_count(), 1);
     }
 
-    #[tokio::test]
-    async fn panicked_task_is_logged() {
+    #[test]
+    fn panicked_task_is_logged() {
         let logs = SharedLogBuffer::default();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -1145,17 +1163,28 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let tracker = TaskTracker::new();
-        tracker
-            .spawn("visible-panicker", |_token| async {
-                panic!("visible panic in test");
-            })
-            .expect("spawn should succeed");
+        // `set_default` installs a thread-local subscriber, so the tracked
+        // task must run on this same thread for its panic log to be captured.
+        // A current-thread runtime driven via `block_on` keeps the spawned
+        // task on the test thread, making the capture deterministic.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        tracker
-            .drain(Duration::from_secs(1))
-            .await
-            .expect("drain should succeed");
+        let tracker = TaskTracker::new();
+        runtime.block_on(async {
+            tracker
+                .spawn("visible-panicker", |_token| async {
+                    panic!("visible panic in test");
+                })
+                .expect("spawn should succeed");
+
+            tracker
+                .drain(Duration::from_secs(1))
+                .await
+                .expect("drain should succeed");
+        });
 
         let output = logs.contents();
         assert!(output.contains("tracked task panicked"));
@@ -1186,6 +1215,8 @@ mod tests {
             .expect("panic payload should be a string");
         assert_eq!(panic_message, "intentional panic while building future");
         assert_eq!(tracker.pending_count(), 0);
+        // A future-factory panic is not a tracked task panic.
+        assert_eq!(tracker.panic_count(), 0);
     }
 
     #[test]
