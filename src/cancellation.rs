@@ -308,9 +308,10 @@ impl Drop for RegistryGuard {
 /// so it can log stragglers during drain.
 ///
 /// Once [`close`](Self::close) or [`cancel_and_drain`](Self::cancel_and_drain)
-/// is called, the tracker enters a shutdown boundary: new spawn attempts that
-/// observe the closed flag will fail, while tasks that were already admitted
-/// continue to be tracked until they exit.
+/// is called, the tracker enters a shutdown boundary. Spawn admission is
+/// serialized against `close`, so any spawn that begins to admit after `close`
+/// returns will fail with [`SpawnError`]; any task that completed admission
+/// before `close` is fully tracked and waited on by `drain`.
 ///
 /// If the tracker is created with [`with_token`](Self::with_token), remember
 /// that any other tracker sharing the same root token observes the same
@@ -344,6 +345,12 @@ pub struct TaskTracker {
     live_count: Arc<AtomicUsize>,
     panic_count: Arc<AtomicU64>,
     closed: std::sync::atomic::AtomicBool,
+    /// Serializes the final admission step in [`TaskTracker::spawn`] against
+    /// [`TaskTracker::close`] so that a task cannot be submitted to the inner
+    /// tracker after the close flag has been observed by `drain`. The lock is
+    /// only held across the re-check, registry insertion, and `tasks.spawn()`
+    /// call — never across user code.
+    admission: Mutex<()>,
 }
 
 impl TaskTracker {
@@ -368,6 +375,7 @@ impl TaskTracker {
             live_count: Arc::new(AtomicUsize::new(0)),
             panic_count: Arc::new(AtomicU64::new(0)),
             closed: std::sync::atomic::AtomicBool::new(false),
+            admission: Mutex::new(()),
         }
     }
 
@@ -394,10 +402,21 @@ impl TaskTracker {
     /// Does **not** cancel existing tasks. Call
     /// [`cancel_children`](Self::cancel_children) separately if needed.
     ///
-    /// Spawn attempts that have already passed the closed check may still
-    /// complete after this method is called. However, any spawn attempt that
-    /// begins after the closed flag is observed will return [`SpawnError`].
+    /// Spawn attempts that are already inside their admission critical
+    /// section will complete and remain tracked; any spawn attempt that
+    /// reaches the critical section after the closed flag is observed will
+    /// return [`SpawnError`]. The admission lock guarantees that no task is
+    /// submitted to the inner tracker after `close` observes the closed
+    /// flag, so `drain` will never miss a tracked task.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the admission lock is poisoned.
     pub fn close(&self) {
+        let _admission = self
+            .admission
+            .lock()
+            .expect("task admission lock should not be poisoned");
         self.closed.store(true, Ordering::Release);
         self.tasks.close();
     }
@@ -470,6 +489,8 @@ impl TaskTracker {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<(), CancelledError>> + Send + 'static,
     {
+        // Fast path: cheap closed check before doing any allocation or
+        // running the user factory.
         if self.is_closed() {
             return Err(SpawnError);
         }
@@ -488,14 +509,30 @@ impl TaskTracker {
             name,
             started_at: std::time::Instant::now(),
         };
-        register_task(&registry, &live_count, id, meta);
 
+        // Run the user factory *outside* the admission lock: it may panic
+        // (which would poison the lock) or recursively call spawn/close
+        // (which would deadlock or self-block on a non-reentrant mutex).
+        let fut = f(child_token);
+
+        // Admission critical section: re-check the closed flag, register
+        // the task, and submit it to the inner tracker atomically with
+        // respect to `close()`. This closes the window in which a concurrent
+        // close+drain could observe an empty tracker just before `tasks.spawn`
+        // submits a fresh task and lets it escape the drain.
+        let _admission = self
+            .admission
+            .lock()
+            .expect("task admission lock should not be poisoned");
+        if self.is_closed() {
+            return Err(SpawnError);
+        }
+        register_task(&registry, &live_count, id, meta);
         let guard = RegistryGuard {
             id,
             registry: Arc::clone(&registry),
             live_count: Arc::clone(&live_count),
         };
-        let fut = f(child_token);
         let task = async move {
             // Move the guard into the future state at construction time so it
             // still runs if the task is dropped before its first poll.
@@ -513,7 +550,6 @@ impl TaskTracker {
                 );
             }
         };
-
         self.tasks.spawn(task);
         Ok(())
     }
@@ -1284,11 +1320,15 @@ mod tests {
     }
 
     #[test]
-    fn close_in_future_factory_does_not_deadlock() {
+    fn close_in_future_factory_returns_spawn_error_without_deadlock() {
         let (spawn_result, drain_result) = run_on_current_thread_runtime(async move {
             let tracker = Arc::new(TaskTracker::new());
             let tracker_for_factory = Arc::clone(&tracker);
 
+            // The factory closes the tracker before returning. With
+            // serialized admission, the surrounding spawn observes the close
+            // when it reaches the admission critical section and refuses to
+            // admit the task.
             let result = tracker.spawn("close-from-factory", move |_token| {
                 tracker_for_factory.close();
                 async { Ok(()) }
@@ -1297,8 +1337,85 @@ mod tests {
             let drained = tracker.drain(Duration::from_secs(1)).await;
             (result, drained)
         });
-        assert!(spawn_result.is_ok(), "spawn should succeed");
+        assert_eq!(
+            spawn_result,
+            Err(SpawnError),
+            "spawn must observe the close that happened inside the factory"
+        );
         assert!(drain_result.is_ok(), "tracker drain should succeed");
+    }
+
+    // Stress regression for the admission race: many concurrent spawns
+    // racing against a single close+drain must never leave an admitted task
+    // unobserved by drain. Either spawn returns SpawnError, or the task is
+    // tracked and drain waits for it.
+    #[test]
+    fn concurrent_spawn_and_close_never_escapes_drain() {
+        for _ in 0..32 {
+            let tracker = Arc::new(TaskTracker::new());
+            let observed = Arc::new(AtomicUsize::new(0));
+            let admitted_count = Arc::new(AtomicUsize::new(0));
+
+            // Use a multi-threaded runtime so spawners and the closer can
+            // race inside `block_on` from independent threads.
+            let runtime = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("runtime should build"),
+            );
+
+            let mut spawn_threads = Vec::new();
+            for _ in 0..8 {
+                let tracker_for_thread = Arc::clone(&tracker);
+                let observed_for_thread = Arc::clone(&observed);
+                let admitted_count_for_thread = Arc::clone(&admitted_count);
+                let runtime_for_thread = Arc::clone(&runtime);
+                spawn_threads.push(std::thread::spawn(move || {
+                    let _guard = runtime_for_thread.enter();
+                    for _ in 0..16 {
+                        let observed_for_task = Arc::clone(&observed_for_thread);
+                        let result = tracker_for_thread.spawn("racer", move |_token| async move {
+                            observed_for_task.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        });
+                        if result.is_ok() {
+                            admitted_count_for_thread.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }));
+            }
+
+            // Race the closer against the spawners.
+            let tracker_for_close = Arc::clone(&tracker);
+            let runtime_for_close = Arc::clone(&runtime);
+            let closer = std::thread::spawn(move || {
+                runtime_for_close.block_on(async move {
+                    tracker_for_close
+                        .cancel_and_drain(Duration::from_secs(5))
+                        .await
+                        .expect("drain should finish within timeout");
+                });
+            });
+
+            for handle in spawn_threads {
+                handle.join().expect("spawner thread should not panic");
+            }
+            closer.join().expect("closer thread should not panic");
+
+            let admitted = admitted_count.load(Ordering::Relaxed);
+            let observed_count = observed.load(Ordering::Relaxed);
+            assert_eq!(
+                admitted, observed_count,
+                "every admitted task must have been observed by drain (admitted={admitted}, observed={observed_count})"
+            );
+            assert_eq!(
+                tracker.pending_count(),
+                0,
+                "drain must leave no pending tasks"
+            );
+        }
     }
 
     #[test]
