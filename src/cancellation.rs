@@ -27,6 +27,10 @@
 //! For subsystems with separate ingress shutdown, use the staged
 //! [`TaskTracker::close`] -> [`TaskTracker::cancel_children`] ->
 //! [`TaskTracker::drain`] sequence instead.
+//! Drain only waits for tracked tasks to exit; it does not report their
+//! returned results or panics. Subsystem owners should retain the
+//! [`tokio::task::JoinHandle`] returned by [`TaskTracker::spawn`] for critical
+//! tasks and await or select on it so task failures are observed.
 //!
 //! # Granularity
 //!
@@ -50,7 +54,7 @@
 //! async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
 //!     let tracker = crate::cancellation::TaskTracker::new();
 //!
-//!     tracker.spawn("worker-1", |token| async move {
+//!     let worker = tracker.spawn("worker-1", |token| async move {
 //!         loop {
 //!             tokio::select! {
 //!                 result = do_work() => {
@@ -67,6 +71,13 @@
 //!
 //!     // ... later, when shutdown starts ...
 //!     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
+//!
+//!     match worker.await {
+//!         Ok(Ok(())) => {}
+//!         Ok(Err(err)) => tracing::info!(?err, "worker observed cancellation"),
+//!         Err(err) => tracing::error!(?err, "worker task panicked or was aborted"),
+//!     }
+//!
 //!     Ok(())
 //! }
 //! ```
@@ -316,6 +327,11 @@ impl Drop for RegistryGuard {
 /// that any other tracker sharing the same root token observes the same
 /// cancellation tree: cancelling one shared root cancels tasks under both.
 ///
+/// `drain` and [`cancel_and_drain`](Self::cancel_and_drain) wait for task
+/// exit, but they do not surface task return values or
+/// [`tokio::task::JoinError`]. Keep the returned [`JoinHandle`] for critical
+/// tasks and await or select on it at the subsystem boundary.
+///
 /// Typical subsystem usage:
 ///
 /// ```ignore
@@ -324,7 +340,7 @@ impl Drop for RegistryGuard {
 /// async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
 ///     let tracker = crate::cancellation::TaskTracker::new();
 ///
-///     tracker.spawn("worker", |token| async move {
+///     let worker = tracker.spawn("worker", |token| async move {
 ///         loop {
 ///             token.check_cancelled()?;
 ///             // ... do one unit of work ...
@@ -333,6 +349,13 @@ impl Drop for RegistryGuard {
 ///
 ///     // ... later, when shutdown starts ...
 ///     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
+///
+///     match worker.await {
+///         Ok(Ok(())) => {}
+///         Ok(Err(err)) => tracing::info!(?err, "worker observed cancellation"),
+///         Err(err) => tracing::error!(?err, "worker task panicked or was aborted"),
+///     }
+///
 ///     Ok(())
 /// }
 /// ```
@@ -426,9 +449,10 @@ impl TaskTracker {
     /// when the task future is dropped after normal completion, cancellation,
     /// abort, or panic.
     ///
-    /// Returns the spawned task's [`JoinHandle`]. Callers that own the
-    /// subsystem should keep or await this handle when they need to observe
-    /// task outcomes, including [`tokio::task::JoinError`] for panics.
+    /// Returns the spawned task's [`JoinHandle`]. `drain` only waits for task
+    /// exit; it does not report task outcomes. Callers that own critical
+    /// tasks should keep this handle and await or select on it to observe both
+    /// the task's `Result` and [`tokio::task::JoinError`] for panics or aborts.
     ///
     /// The spawned future returns `Result<(), CancelledError>`. Ordinary
     /// work errors should therefore be handled inside the task body, or
@@ -462,7 +486,12 @@ impl TaskTracker {
     ///     }
     ///     Ok(())
     /// })?;
-    /// let _task_result = handle.await;
+    ///
+    /// match handle.await {
+    ///     Ok(Ok(())) => {}
+    ///     Ok(Err(err)) => tracing::info!(?err, "stream reader stopped after cancellation"),
+    ///     Err(err) => tracing::error!(?err, "stream reader panicked or was aborted"),
+    /// }
     /// # Ok::<(), crate::cancellation::SpawnError>(())
     /// ```
     ///
@@ -470,12 +499,18 @@ impl TaskTracker {
     /// should absorb domain errors inside the tracked task:
     ///
     /// ```ignore
-    /// let _handle = tracker.spawn("handle_connection", |token| async move {
+    /// let handle = tracker.spawn("handle_connection", |token| async move {
     ///     if let Err(err) = handle_connection(conn, token).await {
     ///         tracing::error!(?err, "handle_connection failed");
     ///     }
     ///     Ok(())
     /// })?;
+    ///
+    /// match handle.await {
+    ///     Ok(Ok(())) => {}
+    ///     Ok(Err(err)) => tracing::info!(?err, "connection task observed cancellation"),
+    ///     Err(err) => tracing::error!(?err, "connection task panicked or was aborted"),
+    /// }
     /// ```
     ///
     /// # Errors
