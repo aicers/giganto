@@ -121,7 +121,6 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fmt,
-    panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -129,9 +128,9 @@ use std::{
     time::Duration,
 };
 
-use futures_util::FutureExt;
+use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker as TokioTaskTracker;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Error returned when a cancellation token has been cancelled.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -343,7 +342,6 @@ pub struct TaskTracker {
     registry: TaskRegistry,
     next_id: AtomicU64,
     live_count: Arc<AtomicUsize>,
-    panic_count: Arc<AtomicU64>,
     closed: std::sync::atomic::AtomicBool,
     /// Serializes the final admission step in [`TaskTracker::spawn`] against
     /// [`TaskTracker::close`] so that a task cannot be submitted to the inner
@@ -373,7 +371,6 @@ impl TaskTracker {
             registry: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(0),
             live_count: Arc::new(AtomicUsize::new(0)),
-            panic_count: Arc::new(AtomicU64::new(0)),
             closed: std::sync::atomic::AtomicBool::new(false),
             admission: Mutex::new(()),
         }
@@ -425,9 +422,13 @@ impl TaskTracker {
     ///
     /// The closure receives a child [`CancellationToken`] that will be
     /// cancelled when the tracker's root token is cancelled. The task is
-    /// automatically registered and deregistered in the pending-task
-    /// registry on all termination paths (normal completion, cancellation,
-    /// or panic).
+    /// automatically registered and deregistered in the pending-task registry
+    /// when the task future is dropped after normal completion, cancellation,
+    /// abort, or panic.
+    ///
+    /// Returns the spawned task's [`JoinHandle`]. Callers that own the
+    /// subsystem should keep or await this handle when they need to observe
+    /// task outcomes, including [`tokio::task::JoinError`] for panics.
     ///
     /// The spawned future returns `Result<(), CancelledError>`. Ordinary
     /// work errors should therefore be handled inside the task body, or
@@ -439,7 +440,7 @@ impl TaskTracker {
     /// ```ignore
     /// let tracker = crate::cancellation::TaskTracker::new();
     ///
-    /// tracker.spawn("stream-reader", |token| async move {
+    /// let handle = tracker.spawn("stream-reader", |token| async move {
     ///     loop {
     ///         tokio::select! {
     ///             _ = token.cancelled() => break,
@@ -461,6 +462,7 @@ impl TaskTracker {
     ///     }
     ///     Ok(())
     /// })?;
+    /// let _task_result = handle.await;
     /// # Ok::<(), crate::cancellation::SpawnError>(())
     /// ```
     ///
@@ -468,7 +470,7 @@ impl TaskTracker {
     /// should absorb domain errors inside the tracked task:
     ///
     /// ```ignore
-    /// tracker.spawn("handle_connection", |token| async move {
+    /// let _handle = tracker.spawn("handle_connection", |token| async move {
     ///     if let Err(err) = handle_connection(conn, token).await {
     ///         tracing::error!(?err, "handle_connection failed");
     ///     }
@@ -484,7 +486,11 @@ impl TaskTracker {
     /// # Panics
     ///
     /// Panics if an internal mutex is poisoned.
-    pub fn spawn<F, Fut>(&self, name: impl Into<Cow<'static, str>>, f: F) -> Result<(), SpawnError>
+    pub fn spawn<F, Fut>(
+        &self,
+        name: impl Into<Cow<'static, str>>,
+        f: F,
+    ) -> Result<JoinHandle<Result<(), CancelledError>>, SpawnError>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<(), CancelledError>> + Send + 'static,
@@ -496,11 +502,9 @@ impl TaskTracker {
         }
 
         let name = name.into();
-        let task_name = name.clone();
         let child_token = self.root_token.child_token();
         let registry = Arc::clone(&self.registry);
         let live_count = Arc::clone(&self.live_count);
-        let panic_count = Arc::clone(&self.panic_count);
 
         // Relaxed is sufficient: task IDs only need uniqueness and do not
         // synchronize with any other memory.
@@ -537,21 +541,9 @@ impl TaskTracker {
             // Move the guard into the future state at construction time so it
             // still runs if the task is dropped before its first poll.
             let _guard = guard;
-            // Run the user future; ignore CancelledError since that's
-            // the expected shutdown path. Panics are logged because the
-            // tracked task handle is otherwise intentionally not exposed.
-            if let Err(payload) = AssertUnwindSafe(fut).catch_unwind().await {
-                panic_count.fetch_add(1, Ordering::Relaxed);
-                error!(
-                    task_id = id,
-                    task_name = %task_name,
-                    panic = %panic_payload_to_string(payload.as_ref()),
-                    "tracked task panicked"
-                );
-            }
+            fut.await
         };
-        self.tasks.spawn(task);
-        Ok(())
+        Ok(self.tasks.spawn(task))
     }
 
     /// Cancels all child tokens by cancelling the root token.
@@ -563,12 +555,6 @@ impl TaskTracker {
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.live_count.load(Ordering::Relaxed)
-    }
-
-    /// Returns the number of tracked tasks that panicked.
-    #[must_use]
-    pub fn panic_count(&self) -> u64 {
-        self.panic_count.load(Ordering::Relaxed)
     }
 
     /// Logs information about tasks that are still pending.
@@ -695,16 +681,6 @@ fn register_task(registry: &TaskRegistry, live_count: &AtomicUsize, id: u64, met
         .expect("task registry lock should not be poisoned");
     reg.insert(id, meta);
     live_count.fetch_add(1, Ordering::Relaxed);
-}
-
-fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> Cow<'_, str> {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        Cow::Borrowed(message)
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        Cow::Borrowed(message.as_str())
-    } else {
-        Cow::Borrowed("<non-string panic payload>")
-    }
 }
 
 #[cfg(test)]
@@ -908,7 +884,7 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let completed2 = Arc::clone(&completed);
 
-        tracker
+        let _handle = tracker
             .spawn("test-task", move |_token| async move {
                 completed2.store(true, Ordering::Release);
                 Ok(())
@@ -927,7 +903,7 @@ mod tests {
         let token_was_valid = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&token_was_valid);
 
-        tracker
+        let _handle = tracker
             .spawn("token-check", move |token| async move {
                 flag.store(!token.is_cancelled(), Ordering::Release);
                 Ok(())
@@ -948,7 +924,7 @@ mod tests {
         let saw_cancel = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&saw_cancel);
 
-        tracker
+        let _handle = tracker
             .spawn("cancel-watch", move |token| async move {
                 token.cancelled().await;
                 flag.store(true, Ordering::Release);
@@ -973,7 +949,7 @@ mod tests {
         let iterations = Arc::new(AtomicU32::new(0));
         let counter = Arc::clone(&iterations);
 
-        tracker
+        let _handle = tracker
             .spawn("loop-task", move |token| async move {
                 loop {
                     token.check_cancelled()?;
@@ -996,7 +972,7 @@ mod tests {
     async fn drain_timeout_returns_error() {
         let tracker = TaskTracker::new();
 
-        tracker
+        let _handle = tracker
             .spawn("stuck-task", |_token| async {
                 // Intentionally never completes and ignores cancellation.
                 tokio::time::sleep(Duration::from_hours(1)).await;
@@ -1024,7 +1000,7 @@ mod tests {
         let saw_cancel = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&saw_cancel);
 
-        tracker
+        let _handle = tracker
             .spawn("ext-token", move |token| async move {
                 token.cancelled().await;
                 flag.store(true, Ordering::Release);
@@ -1059,7 +1035,7 @@ mod tests {
 
         for i in 0..5 {
             let c = Arc::clone(&count);
-            tracker
+            let _handle = tracker
                 .spawn(format!("task-{i}"), move |_token| async move {
                     c.fetch_add(1, Ordering::Relaxed);
                     Ok(())
@@ -1078,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn log_pending_reports_task_shape() {
         let tracker = TaskTracker::new();
-        tracker
+        let _handle = tracker
             .spawn("slow", |_token| async {
                 tokio::time::sleep(Duration::from_hours(1)).await;
                 Ok(())
@@ -1112,13 +1088,13 @@ mod tests {
         let tracker = TaskTracker::new();
         tracker.close();
         let result = tracker.spawn("late-task", |_token| async { Ok(()) });
-        assert_eq!(result, Err(SpawnError));
+        assert!(matches!(result, Err(SpawnError)));
     }
 
     #[tokio::test]
     async fn spawn_after_cancel_and_drain_returns_error() {
         let tracker = TaskTracker::new();
-        tracker
+        let _handle = tracker
             .spawn("normal-task", |_token| async { Ok(()) })
             .expect("spawn should succeed");
 
@@ -1129,7 +1105,7 @@ mod tests {
 
         // Tracker is now closed; spawn must fail.
         let result = tracker.spawn("late-task", |_token| async { Ok(()) });
-        assert_eq!(result, Err(SpawnError));
+        assert!(matches!(result, Err(SpawnError)));
     }
 
     #[tokio::test]
@@ -1138,7 +1114,7 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&completed);
 
-        tracker
+        let _handle = tracker
             .spawn("before-close", move |_token| async move {
                 flag.store(true, Ordering::Release);
                 Ok(())
@@ -1158,25 +1134,22 @@ mod tests {
     #[tokio::test]
     async fn panicked_task_cleans_up_registry() {
         let tracker = TaskTracker::new();
-        tracker
+        let handle = tracker
             .spawn("panicker", |_token| async {
                 panic!("intentional panic in test");
             })
             .expect("spawn should succeed");
 
-        // Give the task time to run and panic.
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        let join_error = handle.await.expect_err("task should panic");
 
+        assert!(join_error.is_panic());
         assert_eq!(tracker.pending_count(), 0);
-        assert_eq!(tracker.panic_count(), 1);
     }
 
     #[tokio::test]
     async fn drain_does_not_timeout_after_panic() {
         let tracker = TaskTracker::new();
-        tracker
+        let handle = tracker
             .spawn("panicker", |_token| async {
                 panic!("intentional panic in test");
             })
@@ -1184,49 +1157,26 @@ mod tests {
 
         let result = tracker.drain(Duration::from_millis(100)).await;
         assert!(result.is_ok(), "drain should succeed, not timeout");
+        let join_error = handle.await.expect_err("task should panic");
+        assert!(join_error.is_panic());
         assert_eq!(tracker.pending_count(), 0);
-        assert_eq!(tracker.panic_count(), 1);
     }
 
-    #[test]
-    fn panicked_task_is_logged() {
-        let logs = SharedLogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_target(false)
-            .with_writer(logs.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-
-        // `set_default` installs a thread-local subscriber, so the tracked
-        // task must run on this same thread for its panic log to be captured.
-        // A current-thread runtime driven via `block_on` keeps the spawned
-        // task on the test thread, making the capture deterministic.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
-
+    #[tokio::test]
+    async fn spawn_returns_join_handle_for_task_outcome() {
         let tracker = TaskTracker::new();
-        runtime.block_on(async {
-            tracker
-                .spawn("visible-panicker", |_token| async {
-                    panic!("visible panic in test");
-                })
-                .expect("spawn should succeed");
+        let handle = tracker
+            .spawn("outcome", |_token| async { Err(CancelledError) })
+            .expect("spawn should succeed");
 
-            tracker
-                .drain(Duration::from_secs(1))
-                .await
-                .expect("drain should succeed");
-        });
-
-        let output = logs.contents();
-        assert!(output.contains("tracked task panicked"));
-        assert!(output.contains("visible-panicker"));
-        assert!(output.contains("visible panic in test"));
-        assert_eq!(tracker.panic_count(), 1);
+        assert_eq!(
+            handle.await.expect("task should not panic"),
+            Err(CancelledError)
+        );
+        tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
     }
 
     #[test]
@@ -1251,8 +1201,6 @@ mod tests {
             .expect("panic payload should be a string");
         assert_eq!(panic_message, "intentional panic while building future");
         assert_eq!(tracker.pending_count(), 0);
-        // A future-factory panic is not a tracked task panic.
-        assert_eq!(tracker.panic_count(), 0);
     }
 
     #[test]
@@ -1267,7 +1215,7 @@ mod tests {
             let tracker = Arc::clone(&tracker);
             let polled = Arc::clone(&polled);
             runtime.block_on(async move {
-                tracker
+                let _handle = tracker
                     .spawn("never-polled", move |_token| {
                         let polled = Arc::clone(&polled);
                         async move {
@@ -1302,7 +1250,7 @@ mod tests {
             let result = tracker.spawn("outer", move |_token| {
                 let inner_tracker = Arc::clone(&outer_tracker);
                 let inner_flag = Arc::clone(&nested_flag);
-                inner_tracker
+                let _handle = inner_tracker
                     .spawn("inner", move |_token| async move {
                         inner_flag.store(true, Ordering::Release);
                         Ok(())
@@ -1337,9 +1285,8 @@ mod tests {
             let drained = tracker.drain(Duration::from_secs(1)).await;
             (result, drained)
         });
-        assert_eq!(
-            spawn_result,
-            Err(SpawnError),
+        assert!(
+            matches!(spawn_result, Err(SpawnError)),
             "spawn must observe the close that happened inside the factory"
         );
         assert!(drain_result.is_ok(), "tracker drain should succeed");
@@ -1500,7 +1447,7 @@ mod tests {
     fn log_pending_with_reentrant_writer_does_not_deadlock() {
         let write_calls = run_on_current_thread_runtime(async move {
             let tracker = Arc::new(TaskTracker::new());
-            tracker
+            let _handle = tracker
                 .spawn("slow", |_token| async {
                     tokio::time::sleep(Duration::from_hours(1)).await;
                     Ok(())
