@@ -6,6 +6,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Added `cancellation` module providing `CancellationToken` and
+  `TaskTracker` primitives for cooperative, hierarchical cancellation
+  and graceful task draining with timeout. Task admission is serialized
+  against close so concurrent `TaskTracker::spawn` and
+  `TaskTracker::close`/`drain` calls cannot race: any task admitted
+  before close is fully tracked and waited on by drain, and any spawn
+  that reaches admission after close fails with `SpawnError`. `spawn`
+  returns the spawned task's `JoinHandle`, allowing subsystem owners to
+  observe task results and `JoinError` panics directly. This replaces
+  the previous internal panic-count/logging path.
+
 ### Changed
 
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
