@@ -8,16 +8,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Added `cancellation` module providing `CancellationToken` and
-  `TaskTracker` primitives for cooperative, hierarchical cancellation
-  and graceful task draining with timeout. Task admission is serialized
-  against close so concurrent `TaskTracker::spawn` and
-  `TaskTracker::close`/`drain` calls cannot race: any task admitted
-  before close is fully tracked and waited on by drain, and any spawn
-  that reaches admission after close fails with `SpawnError`. `spawn`
-  returns the spawned task's `JoinHandle`, allowing subsystem owners to
-  observe task results and `JoinError` panics directly. This replaces
-  the previous internal panic-count/logging path.
+- Added `cancellation` module with `CancellationToken` and `TaskTracker`
+  for cooperative subsystem shutdown: hierarchical cancellation tokens,
+  tracked task spawning, staged `close` / `cancel_children` / `drain` with
+  timeout, and pending-task logging when drain times out. `TaskTracker::spawn`
+  returns a `JoinHandle` so callers can observe task results and panics;
+  `drain` only waits for task exit. Spawn admission is serialized against
+  `close`, so tasks admitted before close are always drained and late spawns
+  fail with `SpawnError::Closed`. Poisoned internal locks return
+  `LockPoisonedError`, `SpawnError::LockPoisoned`, or `DrainError::LockPoisoned`
+  instead of aborting the process.
 
 ### Changed
 

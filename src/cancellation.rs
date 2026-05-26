@@ -94,7 +94,7 @@
 //!     tracker: &crate::cancellation::TaskTracker,
 //!     endpoint: quinn::Endpoint,
 //! ) -> Result<(), crate::cancellation::DrainError> {
-//!     tracker.close();                               // 1) refuse new spawns
+//!     tracker.close()?;                              // 1) refuse new spawns
 //!     endpoint.close(0_u32.into(), &[]);             // 2) close ingress
 //!     tracker.cancel_children();                     // 3) signal live tasks
 //!     tracker.drain(Duration::from_secs(30)).await?; // 4) graceful drain
@@ -166,36 +166,62 @@ pub struct PendingTaskSnapshot {
     pub age: Duration,
 }
 
+/// Error returned when an internal [`TaskTracker`] mutex is poisoned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LockPoisonedError;
+
+impl fmt::Display for LockPoisonedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "task tracker lock was poisoned")
+    }
+}
+
+impl std::error::Error for LockPoisonedError {}
+
 /// Error returned when [`TaskTracker::cancel_and_drain`] or
-/// [`TaskTracker::drain`] times out.
+/// [`TaskTracker::drain`] fails.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainError {
-    /// Number of tasks that were still pending when the timeout elapsed.
-    pub pending_count: usize,
-    /// Snapshot of tasks that were still pending when the timeout elapsed.
-    pub pending: Vec<PendingTaskSnapshot>,
+pub enum DrainError {
+    /// The timeout elapsed before all tracked tasks completed.
+    Timeout {
+        /// Number of tasks that were still pending when the timeout elapsed.
+        pending_count: usize,
+        /// Snapshot of tasks that were still pending when the timeout elapsed.
+        pending: Vec<PendingTaskSnapshot>,
+    },
+    /// An internal mutex was poisoned while collecting pending tasks.
+    LockPoisoned,
 }
 
 impl fmt::Display for DrainError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "drain timed out with {} pending task(s)",
-            self.pending_count
-        )
+        match self {
+            Self::Timeout { pending_count, .. } => {
+                write!(f, "drain timed out with {pending_count} pending task(s)")
+            }
+            Self::LockPoisoned => write!(f, "task tracker lock was poisoned"),
+        }
     }
 }
 
 impl std::error::Error for DrainError {}
 
-/// Error returned when [`TaskTracker::spawn`] is called after the tracker
-/// has been closed.
+/// Error returned when [`TaskTracker::spawn`] cannot admit a new task.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpawnError;
+pub enum SpawnError {
+    /// The tracker has been closed (via [`TaskTracker::close`] or
+    /// [`TaskTracker::cancel_and_drain`]).
+    Closed,
+    /// An internal mutex was poisoned during spawn admission.
+    LockPoisoned,
+}
 
 impl fmt::Display for SpawnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "tracker is closed; cannot spawn new tasks")
+        match self {
+            Self::Closed => write!(f, "tracker is closed; cannot spawn new tasks"),
+            Self::LockPoisoned => write!(f, "task tracker lock was poisoned"),
+        }
     }
 }
 
@@ -425,20 +451,18 @@ impl TaskTracker {
     /// Spawn attempts that are already inside their admission critical
     /// section will complete and remain tracked; any spawn attempt that
     /// reaches the critical section after the closed flag is observed will
-    /// return [`SpawnError`]. The admission lock guarantees that no task is
-    /// submitted to the inner tracker after `close` observes the closed
-    /// flag, so `drain` will never miss a tracked task.
+    /// return [`SpawnError::Closed`]. The admission lock guarantees that no
+    /// task is submitted to the inner tracker after `close` observes the
+    /// closed flag, so `drain` will never miss a tracked task.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the admission lock is poisoned.
-    pub fn close(&self) {
-        let _admission = self
-            .admission
-            .lock()
-            .expect("task admission lock should not be poisoned");
+    /// Returns [`LockPoisonedError`] if the admission lock is poisoned.
+    pub fn close(&self) -> Result<(), LockPoisonedError> {
+        let _admission = self.admission.lock().map_err(|_| LockPoisonedError)?;
         self.closed.store(true, Ordering::Release);
         self.tasks.close();
+        Ok(())
     }
 
     /// Spawns a named task on the tracker.
@@ -515,12 +539,10 @@ impl TaskTracker {
     ///
     /// # Errors
     ///
-    /// Returns [`SpawnError`] if the tracker has been closed (via
+    /// Returns [`SpawnError::Closed`] if the tracker has been closed (via
     /// [`close`](Self::close) or [`cancel_and_drain`](Self::cancel_and_drain)).
     ///
-    /// # Panics
-    ///
-    /// Panics if an internal mutex is poisoned.
+    /// Returns [`SpawnError::LockPoisoned`] if an internal mutex is poisoned.
     pub fn spawn<F, Fut>(
         &self,
         name: impl Into<Cow<'static, str>>,
@@ -533,7 +555,7 @@ impl TaskTracker {
         // Fast path: cheap closed check before doing any allocation or
         // running the user factory.
         if self.is_closed() {
-            return Err(SpawnError);
+            return Err(SpawnError::Closed);
         }
 
         let name = name.into();
@@ -562,11 +584,11 @@ impl TaskTracker {
         let _admission = self
             .admission
             .lock()
-            .expect("task admission lock should not be poisoned");
+            .map_err(|_| SpawnError::LockPoisoned)?;
         if self.is_closed() {
-            return Err(SpawnError);
+            return Err(SpawnError::Closed);
         }
-        register_task(&registry, &live_count, id, meta);
+        register_task(&registry, &live_count, id, meta)?;
         let guard = RegistryGuard {
             id,
             registry: Arc::clone(&registry),
@@ -594,12 +616,13 @@ impl TaskTracker {
 
     /// Logs information about tasks that are still pending.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if an internal mutex is poisoned.
-    pub fn log_pending(&self) {
-        let pending = self.pending_tasks();
+    /// Returns [`LockPoisonedError`] if the task registry lock is poisoned.
+    pub fn log_pending(&self) -> Result<(), LockPoisonedError> {
+        let pending = self.pending_tasks()?;
         Self::log_pending_tasks(&pending);
+        Ok(())
     }
 
     /// Closes the tracker, cancels all children, and waits for tasks to
@@ -624,10 +647,12 @@ impl TaskTracker {
     ///
     /// # Errors
     ///
-    /// Returns [`DrainError`] if the timeout elapses before all tasks
+    /// Returns [`DrainError::Timeout`] if the timeout elapses before all tasks
     /// have completed.
+    ///
+    /// Returns [`DrainError::LockPoisoned`] if an internal mutex is poisoned.
     pub async fn cancel_and_drain(&self, timeout: Duration) -> Result<(), DrainError> {
-        self.close();
+        self.close().map_err(|_| DrainError::LockPoisoned)?;
         self.cancel_children();
         self.drain_after_close(timeout).await
     }
@@ -640,14 +665,12 @@ impl TaskTracker {
     ///
     /// # Errors
     ///
-    /// Returns [`DrainError`] if the timeout elapses before all tasks
+    /// Returns [`DrainError::Timeout`] if the timeout elapses before all tasks
     /// have completed.
     ///
-    /// # Panics
-    ///
-    /// Panics if an internal mutex is poisoned.
+    /// Returns [`DrainError::LockPoisoned`] if an internal mutex is poisoned.
     pub async fn drain(&self, timeout: Duration) -> Result<(), DrainError> {
-        self.close();
+        self.close().map_err(|_| DrainError::LockPoisoned)?;
         self.drain_after_close(timeout).await
     }
 
@@ -655,26 +678,25 @@ impl TaskTracker {
         if let Ok(()) = tokio::time::timeout(timeout, self.tasks.wait()).await {
             Ok(())
         } else {
-            let pending = self.pending_tasks();
+            let pending = self.pending_tasks().map_err(|_| DrainError::LockPoisoned)?;
             Self::log_pending_tasks(&pending);
-            Err(DrainError {
+            Err(DrainError::Timeout {
                 pending_count: pending.len(),
                 pending,
             })
         }
     }
 
-    fn pending_tasks(&self) -> Vec<PendingTaskSnapshot> {
-        self.registry
-            .lock()
-            .expect("task registry lock should not be poisoned")
+    fn pending_tasks(&self) -> Result<Vec<PendingTaskSnapshot>, LockPoisonedError> {
+        let reg = self.registry.lock().map_err(|_| LockPoisonedError)?;
+        Ok(reg
             .iter()
             .map(|(id, meta)| PendingTaskSnapshot {
                 id: *id,
                 name: meta.name.to_string(),
                 age: meta.started_at.elapsed(),
             })
-            .collect()
+            .collect())
     }
 
     fn log_pending_tasks(pending: &[PendingTaskSnapshot]) {
@@ -710,12 +732,16 @@ impl fmt::Debug for TaskTracker {
     }
 }
 
-fn register_task(registry: &TaskRegistry, live_count: &AtomicUsize, id: u64, meta: TaskMeta) {
-    let mut reg = registry
-        .lock()
-        .expect("task registry lock should not be poisoned");
+fn register_task(
+    registry: &TaskRegistry,
+    live_count: &AtomicUsize,
+    id: u64,
+    meta: TaskMeta,
+) -> Result<(), SpawnError> {
+    let mut reg = registry.lock().map_err(|_| SpawnError::LockPoisoned)?;
     reg.insert(id, meta);
     live_count.fetch_add(1, Ordering::Relaxed);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1019,10 +1045,17 @@ mod tests {
         tokio::task::yield_now().await;
 
         let result = tracker.cancel_and_drain(Duration::from_millis(50)).await;
-        let error = result.expect_err("drain should time out");
-        assert_eq!(error.pending_count, 1);
-        assert_eq!(error.pending.len(), 1);
-        assert_eq!(error.pending[0].name, "stuck-task");
+        match result.expect_err("drain should time out") {
+            DrainError::Timeout {
+                pending_count,
+                pending,
+            } => {
+                assert_eq!(pending_count, 1);
+                assert_eq!(pending.len(), 1);
+                assert_eq!(pending[0].name, "stuck-task");
+            }
+            DrainError::LockPoisoned => panic!("unexpected lock poison during drain timeout test"),
+        }
         // The lock-free fast path must stay consistent with the registry
         // snapshot after a timed-out drain.
         assert_eq!(tracker.pending_count(), 1);
@@ -1107,7 +1140,7 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        tracker.log_pending();
+        tracker.log_pending().expect("log_pending should succeed");
 
         let output = logs.contents();
         assert!(output.contains("1 task(s) still pending:"));
@@ -1121,9 +1154,9 @@ mod tests {
     #[tokio::test]
     async fn spawn_after_close_returns_error() {
         let tracker = TaskTracker::new();
-        tracker.close();
+        tracker.close().expect("close should succeed");
         let result = tracker.spawn("late-task", |_token| async { Ok(()) });
-        assert!(matches!(result, Err(SpawnError)));
+        assert!(matches!(result, Err(SpawnError::Closed)));
     }
 
     #[tokio::test]
@@ -1140,7 +1173,7 @@ mod tests {
 
         // Tracker is now closed; spawn must fail.
         let result = tracker.spawn("late-task", |_token| async { Ok(()) });
-        assert!(matches!(result, Err(SpawnError)));
+        assert!(matches!(result, Err(SpawnError::Closed)));
     }
 
     #[tokio::test]
@@ -1156,7 +1189,7 @@ mod tests {
             })
             .expect("spawn should succeed");
 
-        tracker.close();
+        tracker.close().expect("close should succeed");
         tracker
             .drain(Duration::from_secs(1))
             .await
@@ -1313,7 +1346,7 @@ mod tests {
             // when it reaches the admission critical section and refuses to
             // admit the task.
             let result = tracker.spawn("close-from-factory", move |_token| {
-                tracker_for_factory.close();
+                let _ = tracker_for_factory.close();
                 async { Ok(()) }
             });
 
@@ -1321,7 +1354,7 @@ mod tests {
             (result, drained)
         });
         assert!(
-            matches!(spawn_result, Err(SpawnError)),
+            matches!(spawn_result, Err(SpawnError::Closed)),
             "spawn must observe the close that happened inside the factory"
         );
         assert!(drain_result.is_ok(), "tracker drain should succeed");
@@ -1413,7 +1446,7 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        tracker.log_pending();
+        tracker.log_pending().expect("log_pending should succeed");
 
         let output = logs.contents();
         assert!(output.contains("no pending tasks"));
@@ -1456,17 +1489,35 @@ mod tests {
 
     #[test]
     fn drain_error_display() {
-        let e = DrainError {
+        let e = DrainError::Timeout {
             pending_count: 3,
             pending: Vec::new(),
         };
         assert_eq!(e.to_string(), "drain timed out with 3 pending task(s)");
+        assert_eq!(
+            DrainError::LockPoisoned.to_string(),
+            "task tracker lock was poisoned"
+        );
     }
 
     #[test]
     fn spawn_error_display() {
-        let e = SpawnError;
-        assert_eq!(e.to_string(), "tracker is closed; cannot spawn new tasks");
+        assert_eq!(
+            SpawnError::Closed.to_string(),
+            "tracker is closed; cannot spawn new tasks"
+        );
+        assert_eq!(
+            SpawnError::LockPoisoned.to_string(),
+            "task tracker lock was poisoned"
+        );
+    }
+
+    #[test]
+    fn lock_poisoned_error_display() {
+        assert_eq!(
+            LockPoisonedError.to_string(),
+            "task tracker lock was poisoned"
+        );
     }
 
     #[test]
@@ -1499,7 +1550,7 @@ mod tests {
                 .finish();
             let _guard = tracing::subscriber::set_default(subscriber);
 
-            tracker.log_pending();
+            tracker.log_pending().expect("log_pending should succeed");
             calls.load(Ordering::Relaxed)
         });
         assert!(write_calls > 0, "log writer should be invoked");
