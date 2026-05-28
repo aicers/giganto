@@ -94,7 +94,9 @@
 //!     tracker: &crate::cancellation::TaskTracker,
 //!     endpoint: quinn::Endpoint,
 //! ) -> Result<(), crate::cancellation::DrainError> {
-//!     tracker.close()?;                              // 1) refuse new spawns
+//!     tracker
+//!         .close()
+//!         .map_err(|_| crate::cancellation::DrainError::LockPoisoned)?; // 1) refuse new spawns
 //!     endpoint.close(0_u32.into(), &[]);             // 2) close ingress
 //!     tracker.cancel_children();                     // 3) signal live tasks
 //!     tracker.drain(Duration::from_secs(30)).await?; // 4) graceful drain
