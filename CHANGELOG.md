@@ -6,6 +6,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Added `cancellation` module with `CancellationToken` and `TaskTracker`
+  for cooperative subsystem shutdown: hierarchical cancellation tokens,
+  tracked task spawning, staged `close` / `cancel_children` / `drain` with
+  timeout, and pending-task logging when drain times out. `TaskTracker::spawn`
+  returns a `JoinHandle` so callers can observe task results and panics;
+  `drain` only waits for task exit. Spawn admission is serialized against
+  `close`, so tasks admitted before close are always drained and late spawns
+  fail with `SpawnError::Closed`. Poisoned internal locks return
+  `LockPoisonedError`, `SpawnError::LockPoisoned`, or `DrainError::LockPoisoned`
+  instead of aborting the process.
+
 ### Changed
 
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
