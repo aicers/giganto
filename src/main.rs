@@ -10,6 +10,7 @@ mod tls_reload;
 mod web;
 
 use std::{
+    env,
     fs::OpenOptions,
     path::Path,
     process::exit,
@@ -59,6 +60,22 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
+
+fn secondary_catch_up_from_env(
+    default: storage::SecondaryCatchUp,
+) -> Result<storage::SecondaryCatchUp> {
+    match env::var("GIGANTO_SECONDARY_CATCH_UP") {
+        Ok(value) => match value.as_str() {
+            "1s" => Ok(storage::SecondaryCatchUp::Periodic(Duration::from_secs(1))),
+            "5s" => Ok(storage::SecondaryCatchUp::Periodic(Duration::from_secs(5))),
+            "15s" => Ok(storage::SecondaryCatchUp::Periodic(Duration::from_secs(15))),
+            "on-demand" => Ok(storage::SecondaryCatchUp::OnDemand),
+            _ => bail!("invalid GIGANTO_SECONDARY_CATCH_UP value: {value}"),
+        },
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(err) => Err(anyhow!("failed to read GIGANTO_SECONDARY_CATCH_UP: {err}")),
+    }
+}
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -200,7 +217,15 @@ async fn main() -> Result<()> {
         let database = storage::Database::open(&db_path, &db_options)?;
         let query_database =
             if let Some(secondary_data_dir) = settings.config.visible.secondary_data_dir.as_ref() {
-                storage::Database::open_secondary(&db_path, secondary_data_dir, &db_options)?
+                let secondary_catch_up = secondary_catch_up_from_env(
+                    storage::SecondaryCatchUp::Periodic(Duration::from_secs(5)),
+                )?;
+                storage::Database::open_secondary(
+                    &db_path,
+                    secondary_data_dir,
+                    &db_options,
+                    secondary_catch_up,
+                )?
             } else {
                 database.clone()
             };
@@ -323,6 +348,16 @@ async fn main() -> Result<()> {
             tls_watch.clone(),
             notify_shutdown.clone(),
         ));
+        let secondary_sync_task_handle = match query_database.secondary_catch_up() {
+            Some(storage::SecondaryCatchUp::Periodic(interval)) => {
+                Some(task::spawn(storage::sync_secondary_periodically(
+                    interval,
+                    query_database.clone(),
+                    notify_shutdown.clone(),
+                )))
+            }
+            _ => None,
+        };
 
         let ingest_server =
             ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
@@ -345,7 +380,14 @@ async fn main() -> Result<()> {
                         Ok(()) => {
                             shutdown_web(web_controller.take()).await;
                             notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                            wait_for_task_shutdown(
+                                ingest_task_handle,
+                                publish_task_handle,
+                                peer_task_handle,
+                                secondary_sync_task_handle,
+                                retain_task_handle,
+                            )
+                            .await;
                             break;
                         }
                         Err(e) => {
@@ -357,7 +399,14 @@ async fn main() -> Result<()> {
                     info!("Termination signal: daemon exit");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(
+                        ingest_task_handle,
+                        publish_task_handle,
+                        peer_task_handle,
+                        secondary_sync_task_handle,
+                        retain_task_handle,
+                    )
+                    .await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
@@ -365,7 +414,14 @@ async fn main() -> Result<()> {
                     info!("Restarting the system...");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(
+                        ingest_task_handle,
+                        publish_task_handle,
+                        peer_task_handle,
+                        secondary_sync_task_handle,
+                        retain_task_handle,
+                    )
+                    .await;
                     is_reboot = true;
                     break;
                 }
@@ -373,7 +429,14 @@ async fn main() -> Result<()> {
                     info!("Power off the system...");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    wait_for_task_shutdown(
+                        ingest_task_handle,
+                        publish_task_handle,
+                        peer_task_handle,
+                        secondary_sync_task_handle,
+                        retain_task_handle,
+                    )
+                    .await;
                     is_power_off = true;
                     break;
                 }
@@ -556,10 +619,26 @@ async fn wait_for_task_shutdown(
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
+    secondary_sync_task_handle: Option<JoinHandle<()>>,
     retain_task_handle: std::thread::JoinHandle<()>,
 ) {
     if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        if let Some(handle_secondary_sync) = secondary_sync_task_handle {
+            let _ = tokio::join!(
+                ingest_task_handle,
+                publish_task_handle,
+                handle_peers,
+                handle_secondary_sync
+            );
+        } else {
+            let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        }
+    } else if let Some(handle_secondary_sync) = secondary_sync_task_handle {
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            handle_secondary_sync
+        );
     } else {
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
@@ -724,6 +803,7 @@ mod tests {
             ingest_task_handle,
             publish_task_handle,
             peer_task_handle,
+            None,
             retain_task_handle,
         )
         .await;

@@ -591,6 +591,7 @@ mod tests {
         Database {
             db: std::sync::Arc::new(db),
             mode: DatabaseMode::Primary,
+            secondary_catch_up: None,
         }
     }
 

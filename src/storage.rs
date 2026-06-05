@@ -175,10 +175,17 @@ pub enum DatabaseMode {
     Secondary,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecondaryCatchUp {
+    Periodic(Duration),
+    OnDemand,
+}
+
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
     mode: DatabaseMode,
+    secondary_catch_up: Option<SecondaryCatchUp>,
 }
 
 impl Database {
@@ -199,6 +206,7 @@ impl Database {
         Ok(Database {
             db: Arc::new(db),
             mode: DatabaseMode::Primary,
+            secondary_catch_up: None,
         })
     }
 
@@ -207,6 +215,7 @@ impl Database {
         primary_path: &Path,
         secondary_path: &Path,
         db_options: &DbOptions,
+        catch_up: SecondaryCatchUp,
     ) -> Result<Database> {
         let (db_opts, cf_opts) = rocksdb_options(db_options);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
@@ -224,6 +233,7 @@ impl Database {
         let database = Database {
             db: Arc::new(db),
             mode: DatabaseMode::Secondary,
+            secondary_catch_up: Some(catch_up),
         };
         database
             .try_catch_up_with_primary()
@@ -245,6 +255,10 @@ impl Database {
 
     pub fn mode(&self) -> DatabaseMode {
         self.mode
+    }
+
+    pub fn secondary_catch_up(&self) -> Option<SecondaryCatchUp> {
+        self.secondary_catch_up
     }
 
     pub fn try_catch_up_with_primary(&self) -> Result<()> {
@@ -302,6 +316,12 @@ impl Database {
     }
 
     fn get_cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
+        if self.mode == DatabaseMode::Secondary
+            && matches!(self.secondary_catch_up, Some(SecondaryCatchUp::OnDemand))
+        {
+            self.try_catch_up_with_primary()
+                .with_context(|| format!("cannot catch up secondary database for {cf_name}"))?;
+        }
         self.db
             .cf_handle(cf_name)
             .context("cannot access {cf_name} column family")
@@ -1348,10 +1368,28 @@ pub fn repair_db(
     info!("DB repair duration: {}", to_hms(dur));
 }
 
+pub async fn sync_secondary_periodically(
+    interval: Duration,
+    db: Database,
+    notify_shutdown: Arc<Notify>,
+) {
+    loop {
+        select! {
+            () = time::sleep(interval) => {
+                if let Err(err) = db.try_catch_up_with_primary() {
+                    warn!("Failed to catch up secondary database: {err}");
+                }
+            }
+            () = notify_shutdown.notified() => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
 
     use giganto_client::ingest::network::Conn;
     use giganto_client::ingest::statistics::Statistics;
@@ -1360,7 +1398,7 @@ mod tests {
 
     use super::{
         BoundaryIter, Database, DatabaseMode, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES,
-        RawEventStore, StatisticsIter, StorageKey, read_compression_metadata,
+        RawEventStore, SecondaryCatchUp, StatisticsIter, StorageKey, read_compression_metadata,
         store_compression_metadata,
     };
     use crate::datetime::DateTime;
@@ -1414,8 +1452,13 @@ mod tests {
         primary.db.flush_wal(true).unwrap();
 
         let secondary_dir = dir.path().join("secondary");
-        let secondary =
-            Database::open_secondary(dir.path(), &secondary_dir, &DbOptions::default()).unwrap();
+        let secondary = Database::open_secondary(
+            dir.path(),
+            &secondary_dir,
+            &DbOptions::default(),
+            SecondaryCatchUp::Periodic(Duration::from_secs(5)),
+        )
+        .unwrap();
 
         assert_eq!(secondary.mode(), DatabaseMode::Secondary);
         let mut iter = secondary.conn_store().unwrap().iter_forward();
