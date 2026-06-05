@@ -549,9 +549,9 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::datetime::DateTime;
     use crate::storage::{
-        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
-        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DatabaseMode, DbOptions,
+        DceRpc as DceRpcFromV27, Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26,
+        Http as HttpFromV26, Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
         Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
         Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
@@ -590,6 +590,7 @@ mod tests {
         let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
         Database {
             db: std::sync::Arc::new(db),
+            mode: DatabaseMode::Primary,
         }
     }
 

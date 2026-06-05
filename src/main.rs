@@ -198,6 +198,13 @@ async fn main() -> Result<()> {
         }
 
         let database = storage::Database::open(&db_path, &db_options)?;
+        let query_database =
+            if let Some(secondary_data_dir) = settings.config.visible.secondary_data_dir.as_ref() {
+                storage::Database::open_secondary(&db_path, secondary_data_dir, &db_options)?
+            } else {
+                database.clone()
+            };
+        info!(mode = ?query_database.mode(), "Query database configured");
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());
@@ -218,7 +225,7 @@ async fn main() -> Result<()> {
 
         let schema = graphql::schema(
             NodeName(host_fqdn_from_cert(&cert)?),
-            database.clone(),
+            query_database.clone(),
             pcap_sensors.clone(),
             ingest_sensors.clone(),
             peers.clone(),
@@ -307,7 +314,7 @@ async fn main() -> Result<()> {
         let publish_server =
             publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
         let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
-            database.clone(),
+            query_database.clone(),
             pcap_sensors.clone(),
             stream_direct_channels.clone(),
             ingest_sensors.clone(),

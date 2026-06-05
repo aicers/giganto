@@ -169,9 +169,16 @@ impl DbOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatabaseMode {
+    Primary,
+    Secondary,
+}
+
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
+    mode: DatabaseMode,
 }
 
 impl Database {
@@ -189,7 +196,39 @@ impl Database {
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database { db: Arc::new(db) })
+        Ok(Database {
+            db: Arc::new(db),
+            mode: DatabaseMode::Primary,
+        })
+    }
+
+    /// Opens the database as a secondary query replica of the primary DB.
+    pub fn open_secondary(
+        primary_path: &Path,
+        secondary_path: &Path,
+        db_options: &DbOptions,
+    ) -> Result<Database> {
+        let (db_opts, cf_opts) = rocksdb_options(db_options);
+        let mut cfs_name: Vec<&str> = Vec::with_capacity(
+            RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
+        );
+        cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
+        cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
+
+        let cfs = cfs_name
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+
+        let db = DB::open_cf_descriptors_as_secondary(&db_opts, primary_path, secondary_path, cfs)
+            .context("cannot open secondary database")?;
+        let database = Database {
+            db: Arc::new(db),
+            mode: DatabaseMode::Secondary,
+        };
+        database
+            .try_catch_up_with_primary()
+            .context("cannot catch up secondary database after open")?;
+        Ok(database)
     }
 
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
@@ -201,6 +240,17 @@ impl Database {
         self.db.flush_wal(true)?;
         self.db.cancel_all_background_work(true);
 
+        Ok(())
+    }
+
+    pub fn mode(&self) -> DatabaseMode {
+        self.mode
+    }
+
+    pub fn try_catch_up_with_primary(&self) -> Result<()> {
+        if self.mode == DatabaseMode::Secondary {
+            self.db.try_catch_up_with_primary()?;
+        }
         Ok(())
     }
 
@@ -1309,8 +1359,9 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
-        StatisticsIter, StorageKey, read_compression_metadata, store_compression_metadata,
+        BoundaryIter, Database, DatabaseMode, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES,
+        RawEventStore, StatisticsIter, StorageKey, read_compression_metadata,
+        store_compression_metadata,
     };
     use crate::datetime::DateTime;
 
@@ -1350,6 +1401,27 @@ mod tests {
         let (k, v) = iter.next().unwrap().unwrap();
         assert_eq!(&*k, key);
         assert_eq!(&*v, value);
+    }
+
+    #[test]
+    fn test_open_secondary_reads_primary_data() {
+        let (dir, primary) = setup_db();
+        register_sensor(&primary, "sensor1");
+        let conn_store = primary.conn_store().unwrap();
+        let key = conn_key("sensor1", 1);
+        conn_store.append(&key, b"value").unwrap();
+        primary.db.flush().unwrap();
+        primary.db.flush_wal(true).unwrap();
+
+        let secondary_dir = dir.path().join("secondary");
+        let secondary =
+            Database::open_secondary(dir.path(), &secondary_dir, &DbOptions::default()).unwrap();
+
+        assert_eq!(secondary.mode(), DatabaseMode::Secondary);
+        let mut iter = secondary.conn_store().unwrap().iter_forward();
+        let (read_key, read_value) = iter.next().unwrap().unwrap();
+        assert_eq!(&*read_key, key.as_slice());
+        assert_eq!(&*read_value, b"value");
     }
 
     #[test]

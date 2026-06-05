@@ -95,6 +95,8 @@ pub struct ConfigVisible {
 
     // DB and DB options
     pub data_dir: PathBuf, // DB storage path
+    #[serde(default)]
+    pub secondary_data_dir: Option<PathBuf>, // secondary DB path for query workloads
     pub max_open_files: i32,
     pub max_mb_of_level_base: u64,
     pub num_of_thread: i32,
@@ -204,6 +206,12 @@ impl ConfigVisible {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.data_dir.exists() || !self.data_dir.is_dir() {
             bail!("data directory is invalid");
+        }
+        if let Some(path) = &self.secondary_data_dir
+            && path.exists()
+            && !path.is_dir()
+        {
+            bail!("secondary data directory is invalid");
         }
         Ok(())
     }
@@ -368,6 +376,7 @@ compression = {}
                 publish_srv_addr: "[::]:38371".parse().unwrap(),
                 retention: Duration::from_hours(2400),
                 data_dir: data_dir.path().to_path_buf(),
+                secondary_data_dir: None,
                 export_dir: export_dir.path().to_path_buf(),
                 max_open_files: 8000,
                 max_mb_of_level_base: 512,
@@ -392,6 +401,7 @@ compression = {}
             assert_eq!(visible.publish_srv_addr.to_string(), "0.0.0.0:38371");
             assert_eq!(visible.graphql_srv_addr.to_string(), "0.0.0.0:38372");
             assert_eq!(visible.data_dir, PathBuf::from("data"));
+            assert_eq!(visible.secondary_data_dir, None);
             assert_eq!(visible.retention, Duration::from_hours(2400));
             assert_eq!(visible.max_open_files, 800);
             assert_eq!(visible.max_mb_of_level_base, 512);
@@ -431,6 +441,7 @@ export_dir = "{}"
             export_dir.path().to_path_buf(),
             "export_dir should be loaded from the config file"
         );
+        assert_eq!(settings.config.visible.secondary_data_dir, None);
         assert_eq!(
             settings.config.visible.graphql_srv_addr,
             DEFAULT_GRAPHQL_SRV_ADDR.parse().unwrap(),
@@ -500,6 +511,7 @@ export_dir = "{}"
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
             data_dir: original_config.data_dir.clone(),
+            secondary_data_dir: None,
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files,
             max_mb_of_level_base: original_config.max_mb_of_level_base,
@@ -554,6 +566,7 @@ export_dir = "{}"
             publish_srv_addr: original_config.publish_srv_addr,
             retention: Duration::from_hours(4800), // 200 days
             data_dir: original_config.data_dir.clone(),
+            secondary_data_dir: None,
             export_dir: original_config.export_dir.clone(),
             max_open_files: 9000,
             max_mb_of_level_base: original_config.max_mb_of_level_base,
@@ -612,6 +625,7 @@ export_dir = "{}"
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
             data_dir: original_config.data_dir.clone(),
+            secondary_data_dir: None,
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files + 1,
             max_mb_of_level_base: original_config.max_mb_of_level_base,
@@ -662,6 +676,7 @@ export_dir = "{}"
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
             data_dir: original_config.data_dir.clone(),
+            secondary_data_dir: None,
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files + 1,
             max_mb_of_level_base: original_config.max_mb_of_level_base,
