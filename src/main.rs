@@ -229,7 +229,13 @@ async fn main() -> Result<()> {
             } else {
                 database.clone()
             };
-        info!(mode = ?query_database.mode(), "Query database configured");
+        info!(
+            mode = query_database.mode().as_str(),
+            catch_up = query_database
+                .secondary_catch_up()
+                .map_or_else(|| "disabled".to_string(), storage::SecondaryCatchUp::as_str),
+            "Query database configured"
+        );
 
         let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
         let notify_shutdown = Arc::new(Notify::new());

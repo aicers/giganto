@@ -1997,8 +1997,14 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     }
 
     info!(
-        "File export request received. Protocol: {}, Sensor: {}, Format: {export_type}",
-        filter.protocol, filter.sensor_id
+        "File export request received. Protocol: {}, Sensor: {}, Format: {export_type}, DB mode: {}, Catch-up: {}",
+        filter.protocol,
+        filter.sensor_id,
+        db.mode().as_str(),
+        db.secondary_catch_up().map_or_else(
+            || "disabled".to_string(),
+            crate::storage::SecondaryCatchUp::as_str
+        )
     );
     let filename = format!(
         "{}_{}{}.{export_type}",
@@ -2026,6 +2032,10 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         sensor = filter.sensor_id,
         kind = ?filter.kind,
         export_type,
+        db_mode = db.mode().as_str(),
+        catch_up = db
+            .secondary_catch_up()
+            .map_or_else(|| "disabled".to_string(), crate::storage::SecondaryCatchUp::as_str),
         elapsed_ms = export_start.elapsed().as_millis(),
         "File export request dispatched"
     );

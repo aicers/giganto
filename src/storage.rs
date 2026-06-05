@@ -175,10 +175,30 @@ pub enum DatabaseMode {
     Secondary,
 }
 
+impl DatabaseMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecondaryCatchUp {
     Periodic(Duration),
     OnDemand,
+}
+
+impl SecondaryCatchUp {
+    #[must_use]
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Periodic(interval) => format!("{}s", interval.as_secs()),
+            Self::OnDemand => "on-demand".to_string(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -235,6 +255,12 @@ impl Database {
             mode: DatabaseMode::Secondary,
             secondary_catch_up: Some(catch_up),
         };
+        info!(
+            primary_path = %primary_path.display(),
+            secondary_path = %secondary_path.display(),
+            catch_up = %catch_up.as_str(),
+            "Opened secondary database for query workloads"
+        );
         database
             .try_catch_up_with_primary()
             .context("cannot catch up secondary database after open")?;
@@ -263,7 +289,17 @@ impl Database {
 
     pub fn try_catch_up_with_primary(&self) -> Result<()> {
         if self.mode == DatabaseMode::Secondary {
+            let catch_up = self
+                .secondary_catch_up
+                .map_or_else(|| "unknown".to_string(), SecondaryCatchUp::as_str);
+            let started_at = Instant::now();
             self.db.try_catch_up_with_primary()?;
+            info!(
+                mode = self.mode.as_str(),
+                catch_up = %catch_up,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "Secondary database catch-up completed"
+            );
         }
         Ok(())
     }
@@ -319,6 +355,7 @@ impl Database {
         if self.mode == DatabaseMode::Secondary
             && matches!(self.secondary_catch_up, Some(SecondaryCatchUp::OnDemand))
         {
+            info!(cf_name, "On-demand secondary catch-up requested");
             self.try_catch_up_with_primary()
                 .with_context(|| format!("cannot catch up secondary database for {cf_name}"))?;
         }
@@ -1373,11 +1410,22 @@ pub async fn sync_secondary_periodically(
     db: Database,
     notify_shutdown: Arc<Notify>,
 ) {
+    info!(
+        interval_secs = interval.as_secs(),
+        "Started periodic secondary catch-up task"
+    );
     loop {
         select! {
             () = time::sleep(interval) => {
+                let started_at = Instant::now();
                 if let Err(err) = db.try_catch_up_with_primary() {
                     warn!("Failed to catch up secondary database: {err}");
+                } else {
+                    info!(
+                        interval_secs = interval.as_secs(),
+                        elapsed_ms = started_at.elapsed().as_millis(),
+                        "Periodic secondary catch-up tick completed"
+                    );
                 }
             }
             () = notify_shutdown.notified() => break,
