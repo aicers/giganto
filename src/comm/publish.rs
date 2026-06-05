@@ -6,7 +6,11 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use giganto_client::connection::client_handshake;
@@ -1737,6 +1741,12 @@ async fn process_range_data_in_current_giganto<T>(
 where
     T: DeserializeOwned + ResponseRangeData,
 {
+    let read_start = Instant::now();
+    let sensor = request_range.sensor.clone();
+    let kind = request_range.kind.clone();
+    let start = request_range.start;
+    let end = request_range.end;
+    let count_limit = request_range.count;
     let key_builder = StorageKey::builder().start_key(&request_range.sensor);
     let key_builder = if availed_kind {
         key_builder.mid_key(Some(request_range.kind.as_bytes().to_vec()))
@@ -1754,11 +1764,24 @@ where
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
 
+    let mut sent_count = 0_usize;
     for item in iter.take(request_range.count) {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
         send_range_data(send, Some((val, timestamp, &request_range.sensor))).await?;
+        sent_count += 1;
     }
+
+    debug!(
+        sensor,
+        kind,
+        start,
+        end,
+        count_limit,
+        sent_count,
+        elapsed_ms = read_start.elapsed().as_millis(),
+        "publish range request served from current database"
+    );
 
     Ok(())
 }
@@ -1876,15 +1899,30 @@ async fn process_raw_event_in_current_giganto<T>(
 where
     T: DeserializeOwned + ResponseRangeData,
 {
+    let read_start = Instant::now();
+    let request_sensor_count = handle_by_current_giganto.len();
+    let request_timestamp_count = handle_by_current_giganto
+        .iter()
+        .map(|(_, timestamps)| timestamps.len())
+        .sum::<usize>();
     let mut output: Vec<(i64, String, Vec<u8>)> = Vec::new();
     for (sensor, timestamps) in handle_by_current_giganto {
         output.extend_from_slice(&store.batched_multi_get_with_sensor(&sensor, &timestamps));
     }
 
+    let sent_count = output.len();
     for (timestamp, sensor, value) in output {
         let val = bincode::deserialize::<T>(&value)?;
         send_range_data(send, Some((val, timestamp, &sensor))).await?;
     }
+
+    debug!(
+        request_sensor_count,
+        request_timestamp_count,
+        sent_count,
+        elapsed_ms = read_start.elapsed().as_millis(),
+        "publish raw-events request served from current database"
+    );
 
     Ok(())
 }

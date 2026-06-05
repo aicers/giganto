@@ -10,7 +10,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicI64, AtomicU16, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -38,7 +38,7 @@ use tokio::{
     task, time,
     time::sleep,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use x509_parser::nom::AsBytes;
 
 use crate::comm::publish::send_direct_stream;
@@ -935,6 +935,7 @@ async fn handle_data<T>(
                     err_msg = Some("Failed to deserialize received message".to_string());
                     break;
                 };
+                let batch_start = Instant::now();
                 let mut recv_events_cnt: u16 = 0;
                 #[cfg(feature = "benchmark")]
                 let mut recv_events_len = 0;
@@ -1082,14 +1083,31 @@ async fn handle_data<T>(
                     break;
                 }
 
+                debug!(
+                    sensor,
+                    ?raw_event_kind,
+                    recv_events_cnt,
+                    last_timestamp,
+                    elapsed_ms = batch_start.elapsed().as_millis(),
+                    "ingest batch stored"
+                );
+
                 ack_cnt_rotation.fetch_add(recv_events_cnt, Ordering::SeqCst);
                 ack_time_rotation.store(last_timestamp, Ordering::SeqCst);
                 if ack_trans_cnt <= ack_cnt_rotation.load(Ordering::SeqCst) {
+                    let flush_start = Instant::now();
                     send_ack_timestamp(&mut (*sender_rotation.lock().await), last_timestamp)
                         .await?;
                     ack_cnt_rotation.store(0, Ordering::SeqCst);
                     ack_time_notify.notify_one();
                     store.flush()?;
+                    debug!(
+                        sensor,
+                        ?raw_event_kind,
+                        last_timestamp,
+                        elapsed_ms = flush_start.elapsed().as_millis(),
+                        "ingest batch flushed after ack"
+                    );
                 }
 
                 #[cfg(feature = "benchmark")]
@@ -1113,24 +1131,52 @@ async fn handle_data<T>(
                 }
 
                 if shutdown_signal.load(Ordering::SeqCst) {
+                    let flush_start = Instant::now();
                     store.flush()?;
+                    debug!(
+                        sensor,
+                        ?raw_event_kind,
+                        elapsed_ms = flush_start.elapsed().as_millis(),
+                        "ingest batch flushed on shutdown"
+                    );
                     handler.abort();
                     break;
                 }
             }
             Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly(_))) => {
+                let flush_start = Instant::now();
                 store.flush()?;
+                debug!(
+                    sensor,
+                    ?raw_event_kind,
+                    elapsed_ms = flush_start.elapsed().as_millis(),
+                    "ingest batch flushed on stream finish"
+                );
                 handler.abort();
                 break;
             }
             Err(e) => {
+                let flush_start = Instant::now();
                 store.flush()?;
+                debug!(
+                    sensor,
+                    ?raw_event_kind,
+                    elapsed_ms = flush_start.elapsed().as_millis(),
+                    "ingest batch flushed on error"
+                );
                 handler.abort();
                 bail!("handle {raw_event_kind:?} error: {e}");
             }
         }
     }
+    let flush_start = Instant::now();
     store.flush()?;
+    debug!(
+        sensor,
+        ?raw_event_kind,
+        elapsed_ms = flush_start.elapsed().as_millis(),
+        "ingest stream final flush complete"
+    );
     info!("Raw event {raw_event_kind:?} has been disconnected");
     if let Some(msg) = err_msg {
         bail!(msg);
