@@ -663,6 +663,17 @@ async fn handle_request(
         MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
+            let requested_at = DateTime::now();
+            let timer = Instant::now();
+            let sensor = msg.sensor.clone();
+            let kind = msg.kind.clone();
+            let start = msg.start;
+            let end = msg.end;
+            let count = msg.count;
+            debug!(
+                "Range request received at {} (sensor: {}, kind: {}, start: {}, end: {}, count: {})",
+                requested_at, sensor, kind, start, end, count
+            );
 
             match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
                 RawEventKind::Conn => {
@@ -1183,6 +1194,17 @@ async fn handle_request(
                     warn!("Not expected to reach here");
                 }
             }
+            debug!(
+                "Range request completed at {} (requested at {}, duration: {:?}, sensor: {}, kind: {}, start: {}, end: {}, count: {})",
+                DateTime::now(),
+                requested_at,
+                timer.elapsed(),
+                sensor,
+                kind,
+                start,
+                end,
+                count
+            );
         }
         MessageCode::Pcap => {
             let filters = match bincode::deserialize::<Vec<PcapFilter>>(&msg_buf) {
