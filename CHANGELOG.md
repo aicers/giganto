@@ -21,6 +21,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Moved connected-client identity logging out of certificate parsing helpers
+  into ingest and publish connection handlers. Bootroot builds now log the full
+  SAN-derived client identity (including `instance_id`); legacy builds keep
+  the `service@hostname` display format.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,

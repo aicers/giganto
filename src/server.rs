@@ -9,7 +9,6 @@ use rustls::{
     RootCertStore,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
-use tracing::info;
 #[cfg(feature = "bootroot")]
 use x509_parser::extensions::GeneralName;
 use x509_parser::nom::Parser;
@@ -159,6 +158,20 @@ impl ClientIdentity {
     }
 }
 
+/// Formats a parsed client identity for connected-client log messages.
+///
+/// Under the `bootroot` feature, returns the full SAN-derived identity
+/// (`{instance_id}.{service_name}.{hostname}.{domain}`). Under legacy builds,
+/// returns `{service_name}@{hostname}`.
+fn format_connected_client_display(identity: &ClientIdentity) -> String {
+    match identity {
+        #[cfg(not(feature = "bootroot"))]
+        ClientIdentity::Legacy { service, hostname } => format!("{service}@{hostname}"),
+        #[cfg(feature = "bootroot")]
+        ClientIdentity::Bootroot(identity) => identity.san(),
+    }
+}
+
 #[cfg(feature = "bootroot")]
 impl BootrootIdentity {
     fn san(&self) -> String {
@@ -193,18 +206,31 @@ pub(crate) fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String,
 /// Returns an error if no certificate is present in the chain, the leaf
 /// certificate cannot be parsed, or its identity does not match the configured
 /// certificate format.
-#[cfg(test)]
 pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
     let identity = parse_client_identity(cert_info)?;
     Ok((identity.service_name().to_string(), identity.service_fqdn()))
 }
 
-/// Parses a peer certificate, logs the connected client identity, and returns
-/// `(service_name, service_fqdn)`.
+/// Parses a peer certificate and returns the connected-client display identity.
 ///
-/// Under the `bootroot` feature, `service_fqdn` is the join of SAN DNS labels
-/// 2, 3, 4 (`{service_name}.{hostname}.{domain}`). Under legacy builds it
-/// equals the bare hostname.
+/// Under the `bootroot` feature, returns the full SAN-derived identity
+/// (`{instance_id}.{service_name}.{hostname}.{domain}`). Under legacy builds,
+/// returns `{service_name}@{hostname}`.
+///
+/// # Errors
+///
+/// Returns an error if no certificate is present in the chain, the leaf
+/// certificate cannot be parsed, or its identity does not match the configured
+/// certificate format.
+pub fn connected_client_display_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
+    let identity = parse_client_identity(cert_info)?;
+    Ok(format_connected_client_display(&identity))
+}
+
+/// Parses a peer certificate and returns `(service_name, service_fqdn)`.
+///
+/// This is an alias of [`service_fqdn_from_cert`] retained for call-site
+/// compatibility. Connected-client logging must be performed by callers.
 ///
 /// # Errors
 ///
@@ -212,13 +238,7 @@ pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, S
 /// certificate cannot be parsed, or its identity does not match the configured
 /// certificate format.
 pub fn service_fqdn_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String, String)> {
-    let identity = parse_client_identity(cert_info)?;
-    info!(
-        "Connected client name : {}@{}",
-        identity.service_name(),
-        identity.hostname()
-    );
-    Ok((identity.service_name().to_string(), identity.service_fqdn()))
+    service_fqdn_from_cert(cert_info)
 }
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
@@ -422,6 +442,28 @@ mod tests {
         }
 
         #[test]
+        fn connected_client_display_uses_legacy_service_at_hostname_in_default_build() {
+            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+
+            let display =
+                connected_client_display_from_cert(&certs.certs).expect("legacy display identity");
+
+            assert_eq!(display, "giganto@node1");
+        }
+
+        #[test]
+        fn service_fqdn_from_cert_verbose_matches_service_fqdn_from_cert() {
+            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+
+            let verbose =
+                service_fqdn_from_cert_verbose(&certs.certs).expect("verbose service fqdn identity");
+            let parsed =
+                service_fqdn_from_cert(&certs.certs).expect("service fqdn identity");
+
+            assert_eq!(verbose, parsed);
+        }
+
+        #[test]
         fn peer_name_from_cert_uses_legacy_hostname_in_default_build() {
             let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
 
@@ -611,6 +653,33 @@ mod tests {
                     "piglet.node1.example.test".to_string()
                 )
             );
+        }
+
+        #[test]
+        fn connected_client_display_uses_full_san_identity_under_bootroot() {
+            let certs = build_self_signed_cert_chain(
+                "001.agent.node1.example.test",
+                "001.agent.node1.example.test",
+            );
+
+            let display =
+                connected_client_display_from_cert(&certs).expect("bootroot display identity");
+
+            assert_eq!(display, "001.agent.node1.example.test");
+        }
+
+        #[test]
+        fn service_fqdn_from_cert_verbose_matches_service_fqdn_from_cert() {
+            let certs = build_self_signed_cert_chain(
+                "001.agent.node1.example.test",
+                "001.agent.node1.example.test",
+            );
+
+            let verbose =
+                service_fqdn_from_cert_verbose(&certs).expect("verbose service fqdn identity");
+            let parsed = service_fqdn_from_cert(&certs).expect("service fqdn identity");
+
+            assert_eq!(verbose, parsed);
         }
 
         #[test]

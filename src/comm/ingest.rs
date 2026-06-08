@@ -45,8 +45,9 @@ use crate::comm::publish::send_direct_stream;
 use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::datetime::DateTime;
 use crate::server::{
-    Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server, extract_cert_from_conn,
-    host_fqdn_from_cert, service_fqdn_from_cert_verbose,
+    Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_server,
+    connected_client_display_from_cert, extract_cert_from_conn, host_fqdn_from_cert,
+    service_fqdn_from_cert,
 };
 use crate::storage::{Database, RawEventStore, StorageKey};
 use crate::tls_reload::TlsWatch;
@@ -189,7 +190,11 @@ async fn handle_connection(
     }
 
     let cert_chain = extract_cert_from_conn(&connection)?;
-    let (service_name, sensor) = service_fqdn_from_cert_verbose(&cert_chain)?;
+    info!(
+        "Connected client (ingest) name : {}",
+        connected_client_display_from_cert(&cert_chain)?
+    );
+    let (service_name, sensor) = service_fqdn_from_cert(&cert_chain)?;
     let host_fqdn = host_fqdn_from_cert(&cert_chain)?;
     let is_pcap_sensor = service_name.contains("piglet");
 
