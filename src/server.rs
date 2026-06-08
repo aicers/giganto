@@ -455,10 +455,9 @@ mod tests {
         fn service_fqdn_from_cert_verbose_matches_service_fqdn_from_cert() {
             let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
 
-            let verbose =
-                service_fqdn_from_cert_verbose(&certs.certs).expect("verbose service fqdn identity");
-            let parsed =
-                service_fqdn_from_cert(&certs.certs).expect("service fqdn identity");
+            let verbose = service_fqdn_from_cert_verbose(&certs.certs)
+                .expect("verbose service fqdn identity");
+            let parsed = service_fqdn_from_cert(&certs.certs).expect("service fqdn identity");
 
             assert_eq!(verbose, parsed);
         }
