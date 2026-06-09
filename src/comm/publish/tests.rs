@@ -4903,10 +4903,7 @@ async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substr
         target_sensor: sensor.to_string(),
         record_type: RequestStreamRecord::Conn,
     };
-    stream_direct_channels
-        .write()
-        .await
-        .insert(req_key, tx);
+    stream_direct_channels.write().await.insert(req_key, tx);
 
     let timestamp: i64 = 99;
     let payload = b"time-series-raw-event".to_vec();
@@ -6681,12 +6678,11 @@ mod bootroot_service_fqdn_contract {
         sync::Arc,
     };
 
+    use giganto_client::publish::stream::RequestStreamRecord;
     use tokio::sync::{RwLock, mpsc};
 
     use super::fixtures::decode_semi_supervised_frame;
     use super::{NODE1, NODE2};
-    use giganto_client::publish::stream::RequestStreamRecord;
-
     use crate::comm::{
         StreamDirectChannels,
         ingest::NetworkKey,
