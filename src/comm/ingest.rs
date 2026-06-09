@@ -1236,4 +1236,16 @@ impl NetworkKey {
             all_key,
         }
     }
+
+    pub(crate) fn event_sensor(&self) -> &str {
+        self.sensor_key
+            .split_once('\0')
+            .map_or(self.sensor_key.as_str(), |(sensor, _)| sensor)
+    }
+
+    pub(crate) fn protocol(&self) -> &str {
+        self.all_key
+            .strip_prefix("all\0")
+            .expect("all_key has protocol suffix")
+    }
 }

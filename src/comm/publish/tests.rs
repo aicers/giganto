@@ -4891,6 +4891,45 @@ async fn request_stream_time_series_generator_missing_sensor_logs_error() {
 }
 
 #[tokio::test]
+async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substring() {
+    let sensor = "src1";
+    let kind = "conn";
+    let network_key = NetworkKey::new(sensor, kind);
+
+    let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let req_key = crate::comm::stream_channel_key::StreamChannelKey::TimeSeriesGenerator {
+        id: "SemiSupervised-policy".to_string(),
+        target_sensor: sensor.to_string(),
+        record_type: RequestStreamRecord::Conn,
+    };
+    stream_direct_channels
+        .write()
+        .await
+        .insert(req_key, tx);
+
+    let timestamp: i64 = 99;
+    let payload = b"time-series-raw-event".to_vec();
+    send_direct_stream(
+        &network_key,
+        &payload,
+        timestamp,
+        sensor,
+        stream_direct_channels,
+    )
+    .await
+    .expect("send_direct_stream");
+
+    let frame = rx.recv().await.expect("frame received");
+    let (ts_bytes, rest) = frame.split_at(8);
+    assert_eq!(i64::from_le_bytes(ts_bytes.try_into().unwrap()), timestamp);
+    let (raw_len_bytes, raw_payload) = rest.split_at(4);
+    let raw_len = u32::from_le_bytes(raw_len_bytes.try_into().unwrap()) as usize;
+    assert_eq!(raw_len, payload.len());
+    assert_eq!(raw_payload, payload);
+}
+
+#[tokio::test]
 async fn stream_direct_channels_cleared_after_client_disconnect() {
     with_test_harness(|harness| {
         Box::pin(async move {
@@ -6646,12 +6685,15 @@ mod bootroot_service_fqdn_contract {
 
     use super::fixtures::decode_semi_supervised_frame;
     use super::{NODE1, NODE2};
+    use giganto_client::publish::stream::RequestStreamRecord;
+
     use crate::comm::{
         StreamDirectChannels,
         ingest::NetworkKey,
         new_stream_direct_channels,
         peer::{PeerInfo, Peers},
         publish::{is_current_giganto_in_charge, peer_in_charge_publish_addr, send_direct_stream},
+        stream_channel_key::StreamChannelKey,
     };
     use crate::server::service_fqdn_from_cert;
     use crate::test_bootroot::bootroot_cluster_certs;
@@ -6717,7 +6759,11 @@ mod bootroot_service_fqdn_contract {
 
         let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let req_key = format!("{local_fqdn}\0{kind}\0SemiSupervised");
+        let req_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: local_fqdn.clone(),
+            target_sensor: local_fqdn.clone(),
+            record_type: RequestStreamRecord::Conn,
+        };
         stream_direct_channels.write().await.insert(req_key, tx);
 
         let timestamp: i64 = 42;

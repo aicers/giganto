@@ -1,6 +1,7 @@
 pub(crate) mod ingest;
 pub(crate) mod peer;
 pub(crate) mod publish;
+pub(crate) mod stream_channel_key;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -23,7 +24,10 @@ use crate::{
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
 pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime>>>;
-pub type StreamDirectChannels = Arc<RwLock<HashMap<String, UnboundedSender<Vec<u8>>>>>;
+use self::stream_channel_key::StreamChannelKey;
+
+pub type StreamDirectChannels =
+    Arc<RwLock<HashMap<StreamChannelKey, UnboundedSender<Vec<u8>>>>>;
 
 /// Parses PEM-encoded certificates and returns a certificate chain.
 ///
@@ -101,7 +105,7 @@ pub(crate) fn new_runtime_ingest_sensors() -> RunTimeIngestSensors {
 
 pub(crate) fn new_stream_direct_channels() -> StreamDirectChannels {
     Arc::new(RwLock::new(
-        HashMap::<String, UnboundedSender<Vec<u8>>>::new(),
+        HashMap::<StreamChannelKey, UnboundedSender<Vec<u8>>>::new(),
     ))
 }
 
@@ -499,9 +503,22 @@ gk8wqEpSd+WAAbO1LQBAyBjZWqqrpw7828tkUf7a\n\
 
     #[tokio::test]
     async fn test_new_stream_direct_channels() {
+        use giganto_client::publish::stream::RequestStreamRecord;
+
+        use super::stream_channel_key::StreamChannelKey;
+
         let channels = new_stream_direct_channels();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        assert_string_key_map_inserted(&channels, "channel1", tx).await;
+        let key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "pub".to_string(),
+            target_sensor: "channel1".to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        assert!(channels.read().await.is_empty());
+        channels.write().await.insert(key.clone(), tx);
+        let map_read = channels.read().await;
+        assert_eq!(map_read.len(), 1);
+        assert!(map_read.contains_key(&key));
     }
 
     #[tokio::test]

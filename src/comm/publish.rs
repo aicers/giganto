@@ -499,22 +499,24 @@ pub async fn send_direct_stream(
     stream_direct_channels: StreamDirectChannels,
 ) -> Result<()> {
     for (req_key, sender) in &*stream_direct_channels.read().await {
-        if req_key.contains(&network_key.sensor_key) || req_key.contains(&network_key.all_key) {
-            let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
-            let mut send_buf: Vec<u8> = Vec::new();
-            send_buf.extend_from_slice(&timestamp.to_le_bytes());
-
-            if req_key.contains("SemiSupervised") {
-                let sensor_bytes = bincode::serialize(&sensor)?;
-                let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
-                send_buf.extend_from_slice(&sensor_len);
-                send_buf.extend_from_slice(&sensor_bytes);
-            }
-
-            send_buf.extend_from_slice(&raw_len);
-            send_buf.extend_from_slice(raw_event);
-            sender.send(send_buf)?;
+        if !req_key.matches_network_key(network_key) {
+            continue;
         }
+
+        let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
+        let mut send_buf: Vec<u8> = Vec::new();
+        send_buf.extend_from_slice(&timestamp.to_le_bytes());
+
+        if req_key.embeds_publisher_sensor_in_payload() {
+            let sensor_bytes = bincode::serialize(&sensor)?;
+            let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
+            send_buf.extend_from_slice(&sensor_len);
+            send_buf.extend_from_slice(&sensor_bytes);
+        }
+
+        send_buf.extend_from_slice(&raw_len);
+        send_buf.extend_from_slice(raw_event);
+        sender.send(send_buf)?;
     }
     Ok(())
 }
@@ -535,7 +537,7 @@ where
     N: RequestStreamMessage,
 {
     let mut sender = conn.open_uni().await?;
-    let channel_keys = msg.channel_key(sensor, &record_type.to_string())?;
+    let channel_keys = msg.channel_keys(sensor.as_deref(), record_type)?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
     let channel_remove_keys = channel_keys.clone();

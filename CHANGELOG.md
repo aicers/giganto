@@ -14,6 +14,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.28.0] - 2026-06-19
 
+### Fixed
+
+- Fixed realtime Time Series Generator streams being sent with a
+  semi-supervised frame when the generator id contained the substring
+  `SemiSupervised`.
+
 ### Added
 
 - Added `cancellation` module with `CancellationToken` and `TaskTracker`
