@@ -184,6 +184,13 @@ fn load_test_server_certs() -> Arc<Certs> {
     }
 }
 
+#[test]
+fn logs_connected_client_identity() {
+    let certs = load_test_client_certs();
+
+    super::log_connected_client(&certs.certs).expect("log connected ingest client");
+}
+
 fn server(addr: SocketAddr) -> Server {
     let certs = load_test_server_certs();
     Server::new(addr, &certs)

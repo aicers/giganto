@@ -184,10 +184,7 @@ async fn handle_connection(
         }
     };
     let cert_chain = extract_cert_from_conn(&connection)?;
-    info!(
-        "Connected client (publish) name : {}",
-        connected_client_display_from_cert(&cert_chain)?
-    );
+    log_connected_client(&cert_chain)?;
     let (service_name, sensor) = service_fqdn_from_cert(&cert_chain)?;
 
     let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
@@ -241,6 +238,14 @@ async fn handle_connection(
             },
         }
     }
+}
+
+fn log_connected_client(cert_chain: &[rustls::pki_types::CertificateDer<'_>]) -> Result<()> {
+    info!(
+        "Connected client (publish) name : {}",
+        connected_client_display_from_cert(cert_chain)?
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

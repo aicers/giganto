@@ -190,10 +190,7 @@ async fn handle_connection(
     }
 
     let cert_chain = extract_cert_from_conn(&connection)?;
-    info!(
-        "Connected client (ingest) name : {}",
-        connected_client_display_from_cert(&cert_chain)?
-    );
+    log_connected_client(&cert_chain)?;
     let (service_name, sensor) = service_fqdn_from_cert(&cert_chain)?;
     let host_fqdn = host_fqdn_from_cert(&cert_chain)?;
     let is_pcap_sensor = service_name.contains("piglet");
@@ -259,6 +256,14 @@ async fn handle_connection(
             },
         }
     }
+}
+
+fn log_connected_client(cert_chain: &[rustls::pki_types::CertificateDer<'_>]) -> Result<()> {
+    info!(
+        "Connected client (ingest) name : {}",
+        connected_client_display_from_cert(cert_chain)?
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

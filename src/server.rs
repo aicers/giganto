@@ -102,6 +102,7 @@ impl ClientIdentity {
         }
     }
 
+    #[cfg(test)]
     fn hostname(&self) -> String {
         match self {
             #[cfg(not(feature = "bootroot"))]
@@ -153,6 +154,7 @@ impl ClientIdentity {
         }
     }
 
+    #[cfg(test)]
     fn into_subject_tuple(self) -> (String, String) {
         (self.service_name().to_string(), self.hostname())
     }
@@ -225,20 +227,6 @@ pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, S
 pub fn connected_client_display_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     let identity = parse_client_identity(cert_info)?;
     Ok(format_connected_client_display(&identity))
-}
-
-/// Parses a peer certificate and returns `(service_name, service_fqdn)`.
-///
-/// This is an alias of [`service_fqdn_from_cert`] retained for call-site
-/// compatibility. Connected-client logging must be performed by callers.
-///
-/// # Errors
-///
-/// Returns an error if no certificate is present in the chain, the leaf
-/// certificate cannot be parsed, or its identity does not match the configured
-/// certificate format.
-pub fn service_fqdn_from_cert_verbose(cert_info: &[CertificateDer]) -> Result<(String, String)> {
-    service_fqdn_from_cert(cert_info)
 }
 
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
@@ -452,17 +440,6 @@ mod tests {
         }
 
         #[test]
-        fn service_fqdn_from_cert_verbose_matches_service_fqdn_from_cert() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let verbose = service_fqdn_from_cert_verbose(&certs.certs)
-                .expect("verbose service fqdn identity");
-            let parsed = service_fqdn_from_cert(&certs.certs).expect("service fqdn identity");
-
-            assert_eq!(verbose, parsed);
-        }
-
-        #[test]
         fn peer_name_from_cert_uses_legacy_hostname_in_default_build() {
             let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
 
@@ -665,20 +642,6 @@ mod tests {
                 connected_client_display_from_cert(&certs).expect("bootroot display identity");
 
             assert_eq!(display, "001.agent.node1.example.test");
-        }
-
-        #[test]
-        fn service_fqdn_from_cert_verbose_matches_service_fqdn_from_cert() {
-            let certs = build_self_signed_cert_chain(
-                "001.agent.node1.example.test",
-                "001.agent.node1.example.test",
-            );
-
-            let verbose =
-                service_fqdn_from_cert_verbose(&certs).expect("verbose service fqdn identity");
-            let parsed = service_fqdn_from_cert(&certs).expect("service fqdn identity");
-
-            assert_eq!(verbose, parsed);
         }
 
         #[test]
