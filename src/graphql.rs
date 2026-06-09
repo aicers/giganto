@@ -1672,9 +1672,9 @@ mod tests {
         let filter = SearchFilter {
             time: Some(TimeRange {
                 start: Some(in_range),
-                end: Some(
-                    DateTime::from("2023-01-01T00:02:00Z".parse::<jiff::Timestamp>().unwrap()),
-                ),
+                end: Some(DateTime::from(
+                    "2023-01-01T00:02:00Z".parse::<jiff::Timestamp>().unwrap(),
+                )),
             }),
             sensor: "src 1".to_string(),
             orig_addr: None,
