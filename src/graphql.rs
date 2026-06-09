@@ -226,6 +226,28 @@ fn timestamp_to_sec_nsec(timestamp_ns: i64) -> (i64, i64) {
     (timestamp_ns / A_BILLION, timestamp_ns % A_BILLION)
 }
 
+#[cfg(test)]
+thread_local! {
+    static SEARCH_CANDIDATE_DESERIALIZE_COUNT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_search_candidate_deserialize_count() {
+    SEARCH_CANDIDATE_DESERIALIZE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn search_candidate_deserialize_count() -> usize {
+    SEARCH_CANDIDATE_DESERIALIZE_COUNT.with(std::cell::Cell::get)
+}
+
+fn deserialize_search_candidate<T: DeserializeOwned>(value: &[u8]) -> Option<T> {
+    #[cfg(test)]
+    SEARCH_CANDIDATE_DESERIALIZE_COUNT.with(|count| count.set(count.get() + 1));
+    bincode::deserialize(value).ok()
+}
+
 fn collect_exist_times<T>(
     target_data: &BTreeSet<(DateTime, Vec<u8>)>,
     filter: &SearchFilter,
@@ -237,25 +259,24 @@ where
     target_data
         .iter()
         .filter_map(|(time, value)| {
-            bincode::deserialize::<T>(value).ok().and_then(|raw_event| {
-                if *time >= start && *time < end {
-                    filter
-                        .check(
-                            raw_event.orig_addr(),
-                            raw_event.resp_addr(),
-                            raw_event.orig_port(),
-                            raw_event.resp_port(),
-                            raw_event.log_level(),
-                            raw_event.log_contents(),
-                            raw_event.text(),
-                            raw_event.sensor(),
-                            raw_event.agent_id(),
-                            raw_event.service_name(),
-                        )
-                        .map_or(None, |c| c.then_some(*time))
-                } else {
-                    None
-                }
+            if *time < start || *time >= end {
+                return None;
+            }
+            deserialize_search_candidate::<T>(value).and_then(|raw_event| {
+                filter
+                    .check(
+                        raw_event.orig_addr(),
+                        raw_event.resp_addr(),
+                        raw_event.orig_port(),
+                        raw_event.resp_port(),
+                        raw_event.log_level(),
+                        raw_event.log_contents(),
+                        raw_event.text(),
+                        raw_event.sensor(),
+                        raw_event.agent_id(),
+                        raw_event.service_name(),
+                    )
+                    .map_or(None, |c| c.then_some(*time))
             })
         })
         .collect::<Vec<_>>()
@@ -971,7 +992,8 @@ mod tests {
         NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32, StringNumberU64,
         StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address, check_agent_id,
         check_contents, check_port, collect_exist_times, get_time_from_key,
-        get_time_from_key_prefix, min_max_time, pk, schema, time_range, write_run_tcpdump,
+        get_time_from_key_prefix, min_max_time, pk, reset_search_candidate_deserialize_count,
+        schema, search_candidate_deserialize_count, time_range, write_run_tcpdump,
     };
     use crate::comm::{
         IngestSensors,
@@ -1621,6 +1643,92 @@ mod tests {
 
         let result = collect_exist_times::<DummyEvent>(&target_data, &filter);
         assert_eq!(result, vec![t1]);
+    }
+
+    #[test]
+    fn collect_exist_times_skips_deserialization_for_out_of_range_candidates() {
+        let in_range = DateTime::from("2023-01-01T00:01:00Z".parse::<jiff::Timestamp>().unwrap());
+        let out_of_range =
+            DateTime::from("2023-01-01T00:05:00Z".parse::<jiff::Timestamp>().unwrap());
+
+        let matching_event = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        let serialized = bincode::serialize(&matching_event).unwrap();
+
+        let out_of_range_base = out_of_range.timestamp_nanos_opt().unwrap();
+        let mut target_data = BTreeSet::new();
+        target_data.insert((in_range, serialized.clone()));
+        for offset in 0..100 {
+            let time = DateTime::from_timestamp_nanos(out_of_range_base + offset);
+            target_data.insert((time, serialized.clone()));
+        }
+
+        let filter = SearchFilter {
+            time: Some(TimeRange {
+                start: Some(in_range),
+                end: Some(
+                    DateTime::from("2023-01-01T00:02:00Z".parse::<jiff::Timestamp>().unwrap()),
+                ),
+            }),
+            sensor: "src 1".to_string(),
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            times: Vec::new(),
+            keyword: Some("needle".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+
+        reset_search_candidate_deserialize_count();
+        let result = collect_exist_times::<DummyEvent>(&target_data, &filter);
+
+        assert_eq!(result, vec![in_range]);
+        assert_eq!(search_candidate_deserialize_count(), 1);
+    }
+
+    #[test]
+    fn collect_exist_times_deserializes_all_candidates_when_time_filter_is_none() {
+        let t1 = DateTime::from("2023-01-01T00:01:00Z".parse::<jiff::Timestamp>().unwrap());
+        let t2 = DateTime::from("2023-01-01T00:05:00Z".parse::<jiff::Timestamp>().unwrap());
+
+        let event = DummyEvent {
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            text: Some("needle".to_string()),
+            agent_id: None,
+        };
+        let serialized = bincode::serialize(&event).unwrap();
+
+        let mut target_data = BTreeSet::new();
+        target_data.insert((t1, serialized.clone()));
+        target_data.insert((t2, serialized));
+
+        let filter = SearchFilter {
+            time: None,
+            sensor: "src 1".to_string(),
+            orig_addr: None,
+            resp_addr: None,
+            orig_port: None,
+            resp_port: None,
+            times: Vec::new(),
+            keyword: Some("needle".to_string()),
+            agent_id: None,
+        };
+
+        reset_search_candidate_deserialize_count();
+        let result = collect_exist_times::<DummyEvent>(&target_data, &filter);
+
+        assert_eq!(result, vec![t1, t2]);
+        assert_eq!(search_candidate_deserialize_count(), 2);
     }
 
     #[test]
