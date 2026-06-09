@@ -1987,6 +1987,7 @@ impl RawEventFilter for ExportFilter {
 
 fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
     let export_start = Instant::now();
+    let export_type_for_log = export_type.clone();
     let db = ctx.data::<Database>()?;
     let path = ctx.data::<PathBuf>()?;
     let node_name = ctx.data::<NodeName>()?;
@@ -2022,7 +2023,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     export_by_protocol(
         db.clone(),
         filter,
-        export_type.clone(),
+        export_type,
         export_done_path,
         export_progress_path,
     )?;
@@ -2031,7 +2032,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         protocol = filter.protocol,
         sensor = filter.sensor_id,
         kind = ?filter.kind,
-        export_type,
+        export_type = export_type_for_log,
         db_mode = db.mode().as_str(),
         catch_up = db
             .secondary_catch_up()
