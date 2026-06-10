@@ -670,12 +670,19 @@ async fn handle_request(
             let start = msg.start;
             let end = msg.end;
             let count = msg.count;
+            let selected_kind = RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default();
             debug!(
-                "Range request received at {} (sensor: {}, kind: {}, start: {}, end: {}, count: {})",
-                requested_at, sensor, kind, start, end, count
+                requested_at = %requested_at,
+                sensor,
+                kind,
+                start,
+                end,
+                count,
+                ?selected_kind,
+                db_mode = db.mode().as_str(),
+                "publish range will use database"
             );
-
-            match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
+            match selected_kind {
                 RawEventKind::Conn => {
                     process_range_data::<Conn, u8>(
                         &mut send,
@@ -1231,7 +1238,14 @@ async fn handle_request(
         MessageCode::RawData => {
             let msg: RequestRawData = bincode::deserialize::<RequestRawData>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
-            match RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default() {
+            let selected_kind = RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default();
+            debug!(
+                kind = msg.kind.as_str(),
+                ?selected_kind,
+                db_mode = db.mode().as_str(),
+                "publish raw-events will use database"
+            );
+            match selected_kind {
                 RawEventKind::Conn => {
                     process_raw_events::<Conn, u8>(
                         &mut send,
@@ -1802,7 +1816,7 @@ where
         count_limit,
         sent_count,
         elapsed_ms = read_start.elapsed().as_millis(),
-        "publish range request served from current database"
+        "publish range request served"
     );
 
     Ok(())

@@ -270,7 +270,14 @@ async fn handle_request(
     receive_record_header(&mut recv, &mut buf)
         .await
         .map_err(|e| anyhow!("failed to read record type: {e}"))?;
-    match RawEventKind::try_from(u32::from_le_bytes(buf)).context("unknown raw event kind")? {
+    let raw_event_kind =
+        RawEventKind::try_from(u32::from_le_bytes(buf)).context("unknown raw event kind")?;
+    debug!(
+        db_mode = db.mode().as_str(),
+        ?raw_event_kind,
+        "ingest db selected"
+    );
+    match raw_event_kind {
         RawEventKind::Conn => {
             handle_data(
                 send,
