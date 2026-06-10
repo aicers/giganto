@@ -364,6 +364,10 @@ async fn main() -> Result<()> {
             }
             _ => None,
         };
+        let compaction_monitor_task_handle = Some(task::spawn(storage::monitor_compaction(
+            database.clone(),
+            notify_shutdown.clone(),
+        )));
 
         let ingest_server =
             ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
@@ -378,6 +382,14 @@ async fn main() -> Result<()> {
             ack_transmission_cnt,
             tls_watch.clone(),
         ));
+        let runtime_task_handles = RuntimeTaskHandles {
+            ingest_task_handle,
+            publish_task_handle,
+            peer_task_handle,
+            secondary_sync_task_handle,
+            compaction_monitor_task_handle,
+            retain_task_handle,
+        };
 
         loop {
             select! {
@@ -386,14 +398,7 @@ async fn main() -> Result<()> {
                         Ok(()) => {
                             shutdown_web(web_controller.take()).await;
                             notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(
-                                ingest_task_handle,
-                                publish_task_handle,
-                                peer_task_handle,
-                                secondary_sync_task_handle,
-                                retain_task_handle,
-                            )
-                            .await;
+                            wait_for_task_shutdown(runtime_task_handles).await;
                             break;
                         }
                         Err(e) => {
@@ -405,14 +410,7 @@ async fn main() -> Result<()> {
                     info!("Termination signal: daemon exit");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(
-                        ingest_task_handle,
-                        publish_task_handle,
-                        peer_task_handle,
-                        secondary_sync_task_handle,
-                        retain_task_handle,
-                    )
-                    .await;
+                    wait_for_task_shutdown(runtime_task_handles).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
@@ -420,14 +418,7 @@ async fn main() -> Result<()> {
                     info!("Restarting the system...");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(
-                        ingest_task_handle,
-                        publish_task_handle,
-                        peer_task_handle,
-                        secondary_sync_task_handle,
-                        retain_task_handle,
-                    )
-                    .await;
+                    wait_for_task_shutdown(runtime_task_handles).await;
                     is_reboot = true;
                     break;
                 }
@@ -435,14 +426,7 @@ async fn main() -> Result<()> {
                     info!("Power off the system...");
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(
-                        ingest_task_handle,
-                        publish_task_handle,
-                        peer_task_handle,
-                        secondary_sync_task_handle,
-                        retain_task_handle,
-                    )
-                    .await;
+                    wait_for_task_shutdown(runtime_task_handles).await;
                     is_power_off = true;
                     break;
                 }
@@ -621,29 +605,75 @@ async fn reload_https_server<S>(
     }
 }
 
-async fn wait_for_task_shutdown(
+struct RuntimeTaskHandles {
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
     secondary_sync_task_handle: Option<JoinHandle<()>>,
+    compaction_monitor_task_handle: Option<JoinHandle<()>>,
     retain_task_handle: std::thread::JoinHandle<()>,
-) {
+}
+
+async fn wait_for_task_shutdown(task_handles: RuntimeTaskHandles) {
+    let RuntimeTaskHandles {
+        ingest_task_handle,
+        publish_task_handle,
+        peer_task_handle,
+        secondary_sync_task_handle,
+        compaction_monitor_task_handle,
+        retain_task_handle,
+    } = task_handles;
+
     if let Some(handle_peers) = peer_task_handle {
         if let Some(handle_secondary_sync) = secondary_sync_task_handle {
+            if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
+                let _ = tokio::join!(
+                    ingest_task_handle,
+                    publish_task_handle,
+                    handle_peers,
+                    handle_secondary_sync,
+                    handle_compaction_monitor
+                );
+            } else {
+                let _ = tokio::join!(
+                    ingest_task_handle,
+                    publish_task_handle,
+                    handle_peers,
+                    handle_secondary_sync
+                );
+            }
+        } else {
+            if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
+                let _ = tokio::join!(
+                    ingest_task_handle,
+                    publish_task_handle,
+                    handle_peers,
+                    handle_compaction_monitor
+                );
+            } else {
+                let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+            }
+        }
+    } else if let Some(handle_secondary_sync) = secondary_sync_task_handle {
+        if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
             let _ = tokio::join!(
                 ingest_task_handle,
                 publish_task_handle,
-                handle_peers,
-                handle_secondary_sync
+                handle_secondary_sync,
+                handle_compaction_monitor
             );
         } else {
-            let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+            let _ = tokio::join!(
+                ingest_task_handle,
+                publish_task_handle,
+                handle_secondary_sync
+            );
         }
-    } else if let Some(handle_secondary_sync) = secondary_sync_task_handle {
+    } else if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
         let _ = tokio::join!(
             ingest_task_handle,
             publish_task_handle,
-            handle_secondary_sync
+            handle_compaction_monitor
         );
     } else {
         let _ = tokio::join!(ingest_task_handle, publish_task_handle);
@@ -805,13 +835,14 @@ mod tests {
             }
         });
 
-        wait_for_task_shutdown(
+        wait_for_task_shutdown(RuntimeTaskHandles {
             ingest_task_handle,
             publish_task_handle,
             peer_task_handle,
-            None,
+            secondary_sync_task_handle: None,
+            compaction_monitor_task_handle: None,
             retain_task_handle,
-        )
+        })
         .await;
 
         assert!(ingest_done.load(Ordering::SeqCst));

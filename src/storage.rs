@@ -34,10 +34,9 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
-#[cfg(debug_assertions)]
-use rocksdb::properties;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBIteratorWithThreadMode, Options, ReadOptions,
+    properties,
 };
 use serde::de::DeserializeOwned;
 use tokio::{select, sync::Notify, time};
@@ -237,7 +236,8 @@ impl Database {
         db_options: &DbOptions,
         catch_up: SecondaryCatchUp,
     ) -> Result<Database> {
-        let (db_opts, cf_opts) = rocksdb_options(db_options);
+        let (mut db_opts, cf_opts) = rocksdb_options(db_options);
+        db_opts.set_max_open_files(-1);
         let mut cfs_name: Vec<&str> = Vec::with_capacity(
             RAW_DATA_COLUMN_FAMILY_NAMES.len() + META_DATA_COLUMN_FAMILY_NAMES.len(),
         );
@@ -1427,6 +1427,39 @@ pub async fn sync_secondary_periodically(
                         "Periodic secondary catch-up tick completed"
                     );
                 }
+            }
+            () = notify_shutdown.notified() => break,
+        }
+    }
+}
+
+pub async fn monitor_compaction(db: Database, notify_shutdown: Arc<Notify>) {
+    let mut previous_running = 0;
+
+    loop {
+        select! {
+            () = time::sleep(Duration::from_secs(1)) => {
+                let running = match db.db.property_int_value(properties::NUM_RUNNING_COMPACTIONS) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => 0,
+                    Err(err) => {
+                        warn!("Failed to read RocksDB running compactions: {err}");
+                        continue;
+                    }
+                };
+                if previous_running == 0 && running > 0 {
+                    info!(
+                        db_mode = db.mode().as_str(),
+                        running_compactions = running,
+                        "RocksDB compaction started"
+                    );
+                } else if previous_running > 0 && running == 0 {
+                    info!(
+                        db_mode = db.mode().as_str(),
+                        "RocksDB compaction finished"
+                    );
+                }
+                previous_running = running;
             }
             () = notify_shutdown.notified() => break,
         }
