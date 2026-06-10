@@ -383,12 +383,12 @@ async fn main() -> Result<()> {
             tls_watch.clone(),
         ));
         let runtime_task_handles = RuntimeTaskHandles {
-            ingest_task_handle,
-            publish_task_handle,
-            peer_task_handle,
-            secondary_sync_task_handle,
-            compaction_monitor_task_handle,
-            retain_task_handle,
+            ingest: ingest_task_handle,
+            publish: publish_task_handle,
+            peer: peer_task_handle,
+            secondary_sync: secondary_sync_task_handle,
+            compaction_monitor: compaction_monitor_task_handle,
+            retain: retain_task_handle,
         };
 
         loop {
@@ -606,79 +606,61 @@ async fn reload_https_server<S>(
 }
 
 struct RuntimeTaskHandles {
-    ingest_task_handle: JoinHandle<()>,
-    publish_task_handle: JoinHandle<()>,
-    peer_task_handle: Option<JoinHandle<Result<()>>>,
-    secondary_sync_task_handle: Option<JoinHandle<()>>,
-    compaction_monitor_task_handle: Option<JoinHandle<()>>,
-    retain_task_handle: std::thread::JoinHandle<()>,
+    ingest: JoinHandle<()>,
+    publish: JoinHandle<()>,
+    peer: Option<JoinHandle<Result<()>>>,
+    secondary_sync: Option<JoinHandle<()>>,
+    compaction_monitor: Option<JoinHandle<()>>,
+    retain: std::thread::JoinHandle<()>,
 }
 
 async fn wait_for_task_shutdown(task_handles: RuntimeTaskHandles) {
     let RuntimeTaskHandles {
-        ingest_task_handle,
-        publish_task_handle,
-        peer_task_handle,
-        secondary_sync_task_handle,
-        compaction_monitor_task_handle,
-        retain_task_handle,
+        ingest,
+        publish,
+        peer,
+        secondary_sync,
+        compaction_monitor,
+        retain,
     } = task_handles;
 
-    if let Some(handle_peers) = peer_task_handle {
-        if let Some(handle_secondary_sync) = secondary_sync_task_handle {
-            if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
+    if let Some(handle_peers) = peer {
+        if let Some(handle_secondary_sync) = secondary_sync {
+            if let Some(handle_compaction_monitor) = compaction_monitor {
                 let _ = tokio::join!(
-                    ingest_task_handle,
-                    publish_task_handle,
+                    ingest,
+                    publish,
                     handle_peers,
                     handle_secondary_sync,
                     handle_compaction_monitor
                 );
             } else {
-                let _ = tokio::join!(
-                    ingest_task_handle,
-                    publish_task_handle,
-                    handle_peers,
-                    handle_secondary_sync
-                );
+                let _ = tokio::join!(ingest, publish, handle_peers, handle_secondary_sync);
             }
         } else {
-            if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
-                let _ = tokio::join!(
-                    ingest_task_handle,
-                    publish_task_handle,
-                    handle_peers,
-                    handle_compaction_monitor
-                );
+            if let Some(handle_compaction_monitor) = compaction_monitor {
+                let _ = tokio::join!(ingest, publish, handle_peers, handle_compaction_monitor);
             } else {
-                let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+                let _ = tokio::join!(ingest, publish, handle_peers);
             }
         }
-    } else if let Some(handle_secondary_sync) = secondary_sync_task_handle {
-        if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
+    } else if let Some(handle_secondary_sync) = secondary_sync {
+        if let Some(handle_compaction_monitor) = compaction_monitor {
             let _ = tokio::join!(
-                ingest_task_handle,
-                publish_task_handle,
+                ingest,
+                publish,
                 handle_secondary_sync,
                 handle_compaction_monitor
             );
         } else {
-            let _ = tokio::join!(
-                ingest_task_handle,
-                publish_task_handle,
-                handle_secondary_sync
-            );
+            let _ = tokio::join!(ingest, publish, handle_secondary_sync);
         }
-    } else if let Some(handle_compaction_monitor) = compaction_monitor_task_handle {
-        let _ = tokio::join!(
-            ingest_task_handle,
-            publish_task_handle,
-            handle_compaction_monitor
-        );
+    } else if let Some(handle_compaction_monitor) = compaction_monitor {
+        let _ = tokio::join!(ingest, publish, handle_compaction_monitor);
     } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+        let _ = tokio::join!(ingest, publish);
     }
-    let _ = retain_task_handle.join();
+    let _ = retain.join();
 }
 
 #[cfg(test)]
@@ -836,12 +818,12 @@ mod tests {
         });
 
         wait_for_task_shutdown(RuntimeTaskHandles {
-            ingest_task_handle,
-            publish_task_handle,
-            peer_task_handle,
-            secondary_sync_task_handle: None,
-            compaction_monitor_task_handle: None,
-            retain_task_handle,
+            ingest: ingest_task_handle,
+            publish: publish_task_handle,
+            peer: peer_task_handle,
+            secondary_sync: None,
+            compaction_monitor: None,
+            retain: retain_task_handle,
         })
         .await;
 

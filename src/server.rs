@@ -153,10 +153,6 @@ impl ClientIdentity {
             Self::Bootroot(identity) => identity.san(),
         }
     }
-
-    fn into_subject_tuple(self) -> (String, String) {
-        (self.service_name().to_string(), self.hostname())
-    }
 }
 
 #[cfg(feature = "bootroot")]
@@ -179,7 +175,8 @@ impl BootrootIdentity {
 
 #[cfg(test)]
 pub(crate) fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
-    parse_client_identity(cert_info).map(ClientIdentity::into_subject_tuple)
+    parse_client_identity(cert_info)
+        .map(|identity| (identity.service_name().to_string(), identity.hostname()))
 }
 
 /// Parses a peer certificate and returns `(service_name, service_fqdn)`.

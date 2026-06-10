@@ -205,7 +205,7 @@ fn derive_from_graphql_client_autogen_2(
                     let Ok(GraphQlAutogenFieldAttrs { from_name, recursive_into, skip }) = deluxe::parse_attributes(field) else {
                         panic!(
                             "inappropriate use of field attributes on {}. Allowed field attributes are `from_name: String`, `recursive_into: bool`, `skip: bool`. Found {:?}",
-                            field.to_token_stream().to_string(),
+                            field.to_token_stream(),
                             field.attrs.iter().map(|attr| attr.into_token_stream().to_string()).collect::<Vec<_>>()
                         );
                     };
@@ -215,7 +215,7 @@ fn derive_from_graphql_client_autogen_2(
                     }
 
                     let Some(to_field_name) = &field.ident.clone() else {
-                        panic!("inappropriate field {}. Please make sure the field is named", field.to_token_stream().to_string());
+                        panic!("inappropriate field {}. Please make sure the field is named", field.to_token_stream());
                     };
                     let from_field_name = resolve_from_field_name(&from_name, to_field_name);
                     let field_type = &field.ty;
