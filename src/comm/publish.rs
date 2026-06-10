@@ -241,10 +241,8 @@ async fn handle_connection(
 }
 
 fn log_connected_client(cert_chain: &[rustls::pki_types::CertificateDer<'_>]) -> Result<()> {
-    info!(
-        "Connected client (publish) name : {}",
-        connected_client_display_from_cert(cert_chain)?
-    );
+    let client_display = connected_client_display_from_cert(cert_chain)?;
+    info!("Connected client (publish) name : {}", client_display);
     Ok(())
 }
 
