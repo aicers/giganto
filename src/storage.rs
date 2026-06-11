@@ -1417,15 +1417,8 @@ pub async fn sync_secondary_periodically(
     loop {
         select! {
             () = time::sleep(interval) => {
-                let started_at = Instant::now();
                 if let Err(err) = db.try_catch_up_with_primary() {
                     warn!("Failed to catch up secondary database: {err}");
-                } else {
-                    info!(
-                        interval_secs = interval.as_secs(),
-                        elapsed_ms = started_at.elapsed().as_millis(),
-                        "Periodic secondary catch-up tick completed"
-                    );
                 }
             }
             () = notify_shutdown.notified() => break,
