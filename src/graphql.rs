@@ -14,6 +14,7 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
+use std::time::Instant;
 use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
 
 use anyhow::anyhow;
@@ -21,6 +22,7 @@ use async_graphql::{
     EmptySubscription, InputObject, InputValueError, InputValueResult, MergedObject, OutputType,
     Result, Scalar, ScalarType, Value,
     connection::{Connection, Edge, query},
+    extensions::{Extension, ExtensionContext, ExtensionFactory, NextExecute},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use giganto_client::ingest::Packet as pk;
@@ -29,7 +31,7 @@ use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::NamedTempFile;
 use tokio::sync::{Notify, mpsc::Sender};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
@@ -175,6 +177,45 @@ pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
 
+struct GraphqlQueryDbLogger;
+
+impl ExtensionFactory for GraphqlQueryDbLogger {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(GraphqlQueryDbLoggerExtension)
+    }
+}
+
+struct GraphqlQueryDbLoggerExtension;
+
+#[async_graphql::async_trait::async_trait]
+impl Extension for GraphqlQueryDbLoggerExtension {
+    async fn execute(
+        &self,
+        ctx: &ExtensionContext<'_>,
+        operation_name: Option<&str>,
+        next: NextExecute<'_>,
+    ) -> async_graphql::Response {
+        let started_at = Instant::now();
+        let response = next.run(ctx, operation_name).await;
+        let elapsed_ms = started_at.elapsed().as_millis();
+        let response_bytes = response.data.to_string().len();
+        let error_count = response.errors.len();
+
+        if let Some(db) = ctx.data_opt::<Database>() {
+            info!(
+                operation_name = operation_name.unwrap_or("<anonymous>"),
+                db_mode = db.mode().as_str(),
+                response_bytes,
+                error_count,
+                elapsed_ms,
+                "GraphQL request completed"
+            );
+        }
+
+        response
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
     node_name: NodeName,
@@ -191,6 +232,7 @@ pub fn schema(
     settings: Settings,
 ) -> Schema {
     Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+        .extension(GraphqlQueryDbLogger)
         .data(node_name)
         .data(database)
         .data(pcap_sensors)
