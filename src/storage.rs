@@ -297,7 +297,7 @@ impl Database {
             info!(
                 mode = self.mode.as_str(),
                 catch_up = %catch_up,
-                elapsed_ms = started_at.elapsed().as_millis(),
+                elapsed_ns = started_at.elapsed().as_nanos(),
                 "Secondary database catch-up completed"
             );
         }

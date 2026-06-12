@@ -1095,7 +1095,7 @@ async fn handle_data<T>(
                     ?raw_event_kind,
                     recv_events_cnt,
                     last_timestamp,
-                    elapsed_ms = batch_start.elapsed().as_millis(),
+                    elapsed_ns = batch_start.elapsed().as_nanos(),
                     "ingest batch stored"
                 );
 
@@ -1112,7 +1112,7 @@ async fn handle_data<T>(
                         sensor,
                         ?raw_event_kind,
                         last_timestamp,
-                        elapsed_ms = flush_start.elapsed().as_millis(),
+                        elapsed_ns = flush_start.elapsed().as_nanos(),
                         "ingest batch flushed after ack"
                     );
                 }
@@ -1143,7 +1143,7 @@ async fn handle_data<T>(
                     debug!(
                         sensor,
                         ?raw_event_kind,
-                        elapsed_ms = flush_start.elapsed().as_millis(),
+                        elapsed_ns = flush_start.elapsed().as_nanos(),
                         "ingest batch flushed on shutdown"
                     );
                     handler.abort();
@@ -1156,7 +1156,7 @@ async fn handle_data<T>(
                 debug!(
                     sensor,
                     ?raw_event_kind,
-                    elapsed_ms = flush_start.elapsed().as_millis(),
+                    elapsed_ns = flush_start.elapsed().as_nanos(),
                     "ingest batch flushed on stream finish"
                 );
                 handler.abort();
@@ -1168,7 +1168,7 @@ async fn handle_data<T>(
                 debug!(
                     sensor,
                     ?raw_event_kind,
-                    elapsed_ms = flush_start.elapsed().as_millis(),
+                    elapsed_ns = flush_start.elapsed().as_nanos(),
                     "ingest batch flushed on error"
                 );
                 handler.abort();
@@ -1181,7 +1181,7 @@ async fn handle_data<T>(
     debug!(
         sensor,
         ?raw_event_kind,
-        elapsed_ms = flush_start.elapsed().as_millis(),
+        elapsed_ns = flush_start.elapsed().as_nanos(),
         "ingest stream final flush complete"
     );
     info!("Raw event {raw_event_kind:?} has been disconnected");

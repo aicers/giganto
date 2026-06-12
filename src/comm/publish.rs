@@ -663,8 +663,6 @@ async fn handle_request(
         MessageCode::ReqRange => {
             let msg = bincode::deserialize::<RequestRange>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize message: {e}"))?;
-            let requested_at = DateTime::now();
-            let timer = Instant::now();
             let sensor = msg.sensor.clone();
             let kind = msg.kind.clone();
             let start = msg.start;
@@ -672,7 +670,6 @@ async fn handle_request(
             let count = msg.count;
             let selected_kind = RawEventKind::from_str(msg.kind.as_str()).unwrap_or_default();
             debug!(
-                requested_at = %requested_at,
                 sensor,
                 kind,
                 start,
@@ -1201,17 +1198,6 @@ async fn handle_request(
                     warn!("Not expected to reach here");
                 }
             }
-            debug!(
-                "Range request completed at {} (requested at {}, duration: {:?}, sensor: {}, kind: {}, start: {}, end: {}, count: {})",
-                DateTime::now(),
-                requested_at,
-                timer.elapsed(),
-                sensor,
-                kind,
-                start,
-                end,
-                count
-            );
         }
         MessageCode::Pcap => {
             let filters = match bincode::deserialize::<Vec<PcapFilter>>(&msg_buf) {
@@ -1801,10 +1787,13 @@ where
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
 
     let mut sent_count = 0_usize;
+    let mut send_elapsed_ns = 0_u128;
     for item in iter.take(request_range.count) {
         let (key, val) = item.context("Failed to read Database")?;
         let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+        let send_start = Instant::now();
         send_range_data(send, Some((val, timestamp, &request_range.sensor))).await?;
+        send_elapsed_ns += send_start.elapsed().as_nanos();
         sent_count += 1;
     }
 
@@ -1815,7 +1804,8 @@ where
         end,
         count_limit,
         sent_count,
-        elapsed_ms = read_start.elapsed().as_millis(),
+        elapsed_ns = read_start.elapsed().as_nanos(),
+        send_elapsed_ns,
         "publish range request served"
     );
 
@@ -1947,17 +1937,27 @@ where
     }
 
     let sent_count = output.len();
+    let mut send_elapsed_ns = 0_u128;
     for (timestamp, sensor, value) in output {
         let val = bincode::deserialize::<T>(&value)?;
+        let send_start = Instant::now();
         send_range_data(send, Some((val, timestamp, &sensor))).await?;
+        send_elapsed_ns += send_start.elapsed().as_nanos();
     }
 
     debug!(
         request_sensor_count,
         request_timestamp_count,
         sent_count,
-        elapsed_ms = read_start.elapsed().as_millis(),
+        elapsed_ns = read_start.elapsed().as_nanos(),
         "publish raw-events request served from current database"
+    );
+    debug!(
+        request_sensor_count,
+        request_timestamp_count,
+        sent_count,
+        send_elapsed_ns,
+        "publish raw-events request send total"
     );
 
     Ok(())

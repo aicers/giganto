@@ -2037,7 +2037,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
         catch_up = db
             .secondary_catch_up()
             .map_or_else(|| "disabled".to_string(), crate::storage::SecondaryCatchUp::as_str),
-        elapsed_ms = export_start.elapsed().as_millis(),
+        elapsed_ns = export_start.elapsed().as_nanos(),
         "File export request dispatched"
     );
 
