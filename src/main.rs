@@ -31,7 +31,7 @@ use comm::{
 use settings::{ConfigVisible, Settings};
 use storage::{db_path_and_option, repair_db};
 use tokio::{
-    runtime, select,
+    select,
     sync::{
         Notify,
         mpsc::{self},
@@ -249,24 +249,22 @@ async fn main() -> Result<()> {
             }
         };
 
-        let db = database.clone();
-        let notify_shutdown_copy = notify_shutdown.clone();
-        let running_flag = retain_flag.clone();
-        let retain_task_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-            if let Err(e) = runtime::Builder::new_current_thread()
-                .enable_io()
-                .enable_time()
-                .build()
-                .expect("Cannot create runtime for retain_periodically.")
-                .block_on(storage::retain_periodically(
+        let retain_task_handle: JoinHandle<()> = task::spawn({
+            let db = database.clone();
+            let notify_shutdown_copy = notify_shutdown.clone();
+            let running_flag = retain_flag.clone();
+            async move {
+                if let Err(e) = storage::retain_periodically(
                     ONE_DAY,
                     settings.config.visible.retention,
                     db,
                     notify_shutdown_copy,
                     running_flag,
-                ))
-            {
-                warn!("retain_periodically task terminated unexpectedly: {e}");
+                )
+                .await
+                {
+                    warn!("retain_periodically task terminated unexpectedly: {e}");
+                }
             }
         });
 
@@ -550,14 +548,22 @@ async fn wait_for_task_shutdown(
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
-    retain_task_handle: std::thread::JoinHandle<()>,
+    retain_task_handle: JoinHandle<()>,
 ) {
     if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            handle_peers,
+            retain_task_handle
+        );
     } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+        let _ = tokio::join!(
+            ingest_task_handle,
+            publish_task_handle,
+            retain_task_handle
+        );
     }
-    let _ = retain_task_handle.join();
 }
 
 #[cfg(test)]
@@ -706,10 +712,10 @@ mod tests {
             }
         }));
 
-        let retain_task_handle = std::thread::spawn({
+        let retain_task_handle = tokio::spawn({
             let retain_done = retain_done.clone();
-            move || {
-                std::thread::sleep(Duration::from_millis(20));
+            async move {
+                sleep(Duration::from_millis(20)).await;
                 retain_done.store(true, Ordering::SeqCst);
             }
         });

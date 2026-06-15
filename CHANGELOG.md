@@ -21,6 +21,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Moved blocking RocksDB retention cleanup inside `retain_periodically`
+  via `tokio::task::spawn_blocking`, so callers can start it with ordinary
+  `tokio::spawn` like other background tasks.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
