@@ -74,6 +74,13 @@ use crate::{
 
 static INIT: OnceLock<()> = OnceLock::new();
 
+#[test]
+fn logs_connected_client_identity() {
+    let certs = NODE1.build_certs();
+
+    super::log_connected_client(&certs.certs).expect("log connected publish client");
+}
+
 const SENSOR_SEMI_SUPERVISED_ONE: &str = "src1";
 const SENSOR_SEMI_SUPERVISED_TWO: &str = "src2";
 const SENSOR_TIME_SERIES_GENERATOR_THREE: &str = "src3";

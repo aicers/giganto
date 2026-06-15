@@ -30,6 +30,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
   `NetworkFilter`. These fields were never applied to network events.
 
+### Fixed
+
+- Fixed connected-client log messages in bootroot builds to show the full
+  SAN-derived client identity (including `instance_id`, for example
+  `001.agent.node1.example.test`) instead of the legacy `service@hostname`
+  format. Ingest and publish connections are now labeled separately in these
+  log lines.
+
 ## [0.27.0] - 2026-05-05
 
 ### Added

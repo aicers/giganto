@@ -54,7 +54,8 @@ use crate::comm::{
 use crate::datetime::DateTime;
 use crate::graphql::TIMESTAMP_SIZE;
 use crate::server::{
-    Certs, config_client, config_server, extract_cert_from_conn, service_fqdn_from_cert_verbose,
+    Certs, config_client, config_server, connected_client_display_from_cert,
+    extract_cert_from_conn, service_fqdn_from_cert,
 };
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
@@ -182,8 +183,9 @@ async fn handle_connection(
             bail!("{e}")
         }
     };
-    let (service_name, sensor) =
-        service_fqdn_from_cert_verbose(&extract_cert_from_conn(&connection)?)?;
+    let cert_chain = extract_cert_from_conn(&connection)?;
+    log_connected_client(&cert_chain)?;
+    let (service_name, sensor) = service_fqdn_from_cert(&cert_chain)?;
 
     let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
         tokio::spawn({
@@ -236,6 +238,12 @@ async fn handle_connection(
             },
         }
     }
+}
+
+fn log_connected_client(cert_chain: &[rustls::pki_types::CertificateDer<'_>]) -> Result<()> {
+    let client_display = connected_client_display_from_cert(cert_chain)?;
+    info!("Connected client (publish) name : {}", client_display);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
