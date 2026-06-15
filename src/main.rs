@@ -558,11 +558,7 @@ async fn wait_for_task_shutdown(
             retain_task_handle
         );
     } else {
-        let _ = tokio::join!(
-            ingest_task_handle,
-            publish_task_handle,
-            retain_task_handle
-        );
+        let _ = tokio::join!(ingest_task_handle, publish_task_handle, retain_task_handle);
     }
 }
 
