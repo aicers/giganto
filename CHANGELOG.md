@@ -27,6 +27,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Improved `search*` GraphQL API performance for large `times` inputs by
   avoiding unnecessary work for out-of-range timestamps, without changing
   returned results.
+- Expanded `countByProtocol` to support all protocols covered by the
+  `statistics` API (for example `smtp`, `ntlm`, `kerberos`, `ssh`,
+  `dce_rpc`, `malformed_dns`, and `rdp`). The return type is now
+  `StringNumberU64` so large column families cannot overflow.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
