@@ -3,6 +3,7 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
+use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{
     net::SocketAddr,
@@ -27,6 +28,7 @@ use giganto_client::{
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
     },
+    publish::stream::RequestStreamRecord,
 };
 use quinn::{Endpoint, RecvStream, SendStream, ServerConfig};
 use tokio::{
@@ -1222,30 +1224,24 @@ async fn check_sensors_conn(
 }
 
 pub struct NetworkKey {
-    pub(crate) sensor_key: String,
-    pub(crate) all_key: String,
+    sensor: String,
+    record_type: RequestStreamRecord,
 }
 
 impl NetworkKey {
     pub fn new(sensor: &str, protocol: &str) -> Self {
-        let sensor_key = format!("{sensor}\0{protocol}");
-        let all_key = format!("all\0{protocol}");
-
         Self {
-            sensor_key,
-            all_key,
+            sensor: sensor.to_string(),
+            record_type: RequestStreamRecord::from_str(protocol)
+                .unwrap_or_else(|_| panic!("invalid protocol: {protocol}")),
         }
     }
 
     pub(crate) fn event_sensor(&self) -> &str {
-        self.sensor_key
-            .split_once('\0')
-            .map_or(self.sensor_key.as_str(), |(sensor, _)| sensor)
+        &self.sensor
     }
 
-    pub(crate) fn protocol(&self) -> &str {
-        self.all_key
-            .strip_prefix("all\0")
-            .expect("all_key has protocol suffix")
+    pub(crate) fn record_type(&self) -> RequestStreamRecord {
+        self.record_type
     }
 }

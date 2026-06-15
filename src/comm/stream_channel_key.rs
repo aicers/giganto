@@ -30,7 +30,7 @@ impl Hash for StreamChannelKey {
                 0u8.hash(state);
                 publisher_sensor.hash(state);
                 target_sensor.hash(state);
-                record_type.to_string().hash(state);
+                u32::from(*record_type).hash(state);
             }
             Self::TimeSeriesGenerator {
                 id,
@@ -40,7 +40,7 @@ impl Hash for StreamChannelKey {
                 1u8.hash(state);
                 id.hash(state);
                 target_sensor.hash(state);
-                record_type.to_string().hash(state);
+                u32::from(*record_type).hash(state);
             }
         }
     }
@@ -62,12 +62,10 @@ impl StreamChannelKey {
             } => (target_sensor, record_type),
         };
 
-        let record = record_type.to_string();
-        let protocol = network_key.protocol();
         let sensor_match =
             target_sensor == network_key.event_sensor() || target_sensor.as_str() == "all";
 
-        sensor_match && record == protocol
+        sensor_match && *record_type == network_key.record_type()
     }
 
     /// Returns whether the direct-stream payload embeds the publisher sensor.
@@ -100,6 +98,50 @@ mod tests {
         };
         let network_key = NetworkKey::new("any-sensor", "dns");
         assert!(key.matches_network_key(&network_key));
+    }
+
+    #[test]
+    fn semi_supervised_rejects_sensor_mismatch() {
+        let key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "pub".to_string(),
+            target_sensor: "src1".to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let network_key = NetworkKey::new("src2", "conn");
+        assert!(!key.matches_network_key(&network_key));
+    }
+
+    #[test]
+    fn semi_supervised_rejects_record_type_mismatch() {
+        let key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "pub".to_string(),
+            target_sensor: "src1".to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let network_key = NetworkKey::new("src1", "dns");
+        assert!(!key.matches_network_key(&network_key));
+    }
+
+    #[test]
+    fn time_series_generator_rejects_sensor_mismatch() {
+        let key = StreamChannelKey::TimeSeriesGenerator {
+            id: "tsg-1".to_string(),
+            target_sensor: "src1".to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let network_key = NetworkKey::new("src2", "conn");
+        assert!(!key.matches_network_key(&network_key));
+    }
+
+    #[test]
+    fn time_series_generator_rejects_record_type_mismatch() {
+        let key = StreamChannelKey::TimeSeriesGenerator {
+            id: "tsg-1".to_string(),
+            target_sensor: "src1".to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let network_key = NetworkKey::new("src1", "dns");
+        assert!(!key.matches_network_key(&network_key));
     }
 
     #[test]
