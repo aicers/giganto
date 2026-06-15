@@ -27,6 +27,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `search*` GraphQL APIs now skip deserializing raw-event candidates whose
   timestamps fall outside the requested `time` range, reducing CPU work on
   large `times` inputs without changing returned results.
+- Improved `search*` GraphQL API performance for large `times` inputs by
+  avoiding unnecessary work for out-of-range timestamps, without changing
+  returned results.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
