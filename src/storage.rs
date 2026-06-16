@@ -1113,29 +1113,46 @@ pub async fn retain_periodically(
 
                 let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
                 loop {
-                    select! {
+                    let mut handle = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        let retention_timestamp = retention_timestamp;
+                        move || retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
+                    });
+
+                    let mut shutdown_requested = false;
+
+                    let blocking_result = select! {
+                        result = &mut handle => result,
                         () = notify_shutdown.notified() => {
+                            shutdown_requested = true;
+                            handle.await
+                        }
+                    };
+
+                    match blocking_result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
                             running_flag.store(false, Ordering::Relaxed);
-                            return Ok(());
+                            return Err(e);
                         }
-                        blocking_result = tokio::task::spawn_blocking({
-                            let db = db.clone();
-                            let retention_timestamp = retention_timestamp;
-                            move || retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
-                        }) => {
-                            match blocking_result {
-                                Ok(Ok(())) => {}
-                                Ok(Err(e)) => return Err(e),
-                                Err(e) => {
-                                    warn!(
-                                        "retention cleanup blocking task failed: {e}; \
-                                        retrying after backoff"
-                                    );
-                                    time::sleep(BLOCKING_JOIN_BACKOFF).await;
-                                    continue;
-                                }
+                        Err(e) => {
+                            if shutdown_requested {
+                                running_flag.store(false, Ordering::Relaxed);
+                                return Err(e.into());
                             }
+
+                            warn!(
+                                "retention cleanup blocking task failed: {e}; \
+                                retrying after backoff"
+                            );
+                            time::sleep(BLOCKING_JOIN_BACKOFF).await;
+                            continue;
                         }
+                    }
+
+                    if shutdown_requested {
+                        running_flag.store(false, Ordering::Relaxed);
+                        return Ok(());
                     }
 
                     if !cfg!(test) && check_db_usage().await.1 && usage_flag {
