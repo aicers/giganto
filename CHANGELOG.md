@@ -21,6 +21,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Bumped `giganto-client` to emit RFC 3339 range-data datetimes instead of
+  epoch-decimal text. Range-data consumers must parse the new wire format
+  (`%Y-%m-%dT%H:%M:%S%.f%:z` with a `+00:00` UTC offset) when upgrading.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,

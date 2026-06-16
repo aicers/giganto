@@ -708,7 +708,7 @@ mod fixtures {
                 let rest = parts.next().expect("missing netflow payload");
                 assert_eq!(
                     ts_part,
-                    format_zeek_time(timestamp),
+                    format_range_data_time(timestamp),
                     "netflow timestamp mismatch"
                 );
                 assert!(!rest.is_empty(), "netflow payload is empty");
@@ -720,7 +720,7 @@ mod fixtures {
                 let rest = parts.next().expect("missing payload body");
                 assert_eq!(
                     ts_part,
-                    format_zeek_time(timestamp),
+                    format_range_data_time(timestamp),
                     "range payload timestamp mismatch"
                 );
                 assert_eq!(sensor_part, sensor, "range payload sensor mismatch");
@@ -3046,14 +3046,13 @@ mod fixtures {
         bincode::serialize(&periodic_time_series_body).unwrap()
     }
 
-    pub(super) fn format_zeek_time(timestamp: i64) -> String {
-        pub(super) const A_BILLION: i64 = 1_000_000_000;
-
-        if timestamp > 0 {
-            format!("{}.{:09}", timestamp / A_BILLION, timestamp % A_BILLION)
-        } else {
-            format!("{}.{:09}", timestamp / A_BILLION, -timestamp % A_BILLION)
-        }
+    pub(super) fn format_range_data_time(timestamp: i64) -> String {
+        jiff::Timestamp::from_nanosecond(i128::from(timestamp)).map_or_else(
+            |_| format!("INVALID_TIMESTAMP({timestamp})"),
+            |ts| ts
+                .strftime(giganto_client::RFC3339_RANGE_DATA_FORMAT)
+                .to_string(),
+        )
     }
 
     pub(super) fn validate_csv_payload_with_sensor<
@@ -3071,7 +3070,7 @@ mod fixtures {
         let sensor_part = parts.next().expect("missing sensor");
         let rest = parts.collect::<Vec<_>>().join("\t");
 
-        assert_eq!(ts_part, format_zeek_time(timestamp), "timestamp mismatch");
+        assert_eq!(ts_part, format_range_data_time(timestamp), "timestamp mismatch");
         assert_eq!(sensor_part, sensor, "sensor mismatch");
         assert_eq!(rest, record.to_string(), "payload mismatch");
     }
@@ -3090,7 +3089,7 @@ mod fixtures {
         let ts_part = parts.next().expect("missing timestamp");
         let rest = parts.collect::<Vec<_>>().join("\t");
 
-        assert_eq!(ts_part, format_zeek_time(timestamp), "timestamp mismatch");
+        assert_eq!(ts_part, format_range_data_time(timestamp), "timestamp mismatch");
         assert_eq!(rest, record.to_string(), "payload mismatch");
     }
 

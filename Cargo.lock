@@ -1588,10 +1588,11 @@ dependencies = [
 [[package]]
 name = "giganto-client"
 version = "0.27.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.27.0#f809faa005548e6957e30402e3e45600abf6e9c1"
+source = "git+https://github.com/aicers/giganto-client.git?rev=f7b03ed1c0f8fcb8e52e263aaa13cd6ad9eeb46b#f7b03ed1c0f8fcb8e52e263aaa13cd6ad9eeb46b"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
+ "jiff",
  "num_enum",
  "quinn",
  "semver",
@@ -1646,7 +1647,7 @@ checksum = "aa0141e66c8d0302f8a586df12ad5d0cf87c0fa8c391f2f5b5dc296312dce569"
 dependencies = [
  "graphql-introspection-query",
  "graphql-parser",
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "serde",
@@ -2728,7 +2729,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn",
@@ -4065,7 +4066,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.14",
+ "errno 0.2.8",
  "libc",
 ]
 

@@ -25,7 +25,7 @@ config = { version = "0.15", features = ["toml"], default-features = false }
 data-encoding = "2"
 deluxe = "0.5"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.27.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "f7b03ed1c0f8fcb8e52e263aaa13cd6ad9eeb46b" }
 graphql_client = "0.16"
 humantime = "2"
 humantime-serde = "1"
