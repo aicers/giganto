@@ -3049,9 +3049,10 @@ mod fixtures {
     pub(super) fn format_range_data_time(timestamp: i64) -> String {
         jiff::Timestamp::from_nanosecond(i128::from(timestamp)).map_or_else(
             |_| format!("INVALID_TIMESTAMP({timestamp})"),
-            |ts| ts
-                .strftime(giganto_client::RFC3339_RANGE_DATA_FORMAT)
-                .to_string(),
+            |ts| {
+                ts.strftime(giganto_client::RFC3339_RANGE_DATA_FORMAT)
+                    .to_string()
+            },
         )
     }
 
@@ -3070,7 +3071,11 @@ mod fixtures {
         let sensor_part = parts.next().expect("missing sensor");
         let rest = parts.collect::<Vec<_>>().join("\t");
 
-        assert_eq!(ts_part, format_range_data_time(timestamp), "timestamp mismatch");
+        assert_eq!(
+            ts_part,
+            format_range_data_time(timestamp),
+            "timestamp mismatch"
+        );
         assert_eq!(sensor_part, sensor, "sensor mismatch");
         assert_eq!(rest, record.to_string(), "payload mismatch");
     }
@@ -3089,7 +3094,11 @@ mod fixtures {
         let ts_part = parts.next().expect("missing timestamp");
         let rest = parts.collect::<Vec<_>>().join("\t");
 
-        assert_eq!(ts_part, format_range_data_time(timestamp), "timestamp mismatch");
+        assert_eq!(
+            ts_part,
+            format_range_data_time(timestamp),
+            "timestamp mismatch"
+        );
         assert_eq!(rest, record.to_string(), "payload mismatch");
     }
 
