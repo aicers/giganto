@@ -19,6 +19,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use giganto_client::{
     connection::{client_handshake, server_handshake},
     ingest::{
+        RFC3339_RANGE_DATA_FORMAT,
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
@@ -45,6 +46,7 @@ use giganto_client::{
         },
     },
 };
+use jiff::Timestamp;
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use rustls::{
     RootCertStore,
@@ -3047,12 +3049,9 @@ mod fixtures {
     }
 
     pub(super) fn format_range_data_time(timestamp: i64) -> String {
-        jiff::Timestamp::from_nanosecond(i128::from(timestamp)).map_or_else(
+        Timestamp::from_nanosecond(i128::from(timestamp)).map_or_else(
             |_| format!("INVALID_TIMESTAMP({timestamp})"),
-            |ts| {
-                ts.strftime(giganto_client::RFC3339_RANGE_DATA_FORMAT)
-                    .to_string()
-            },
+            |ts| ts.strftime(RFC3339_RANGE_DATA_FORMAT).to_string(),
         )
     }
 
