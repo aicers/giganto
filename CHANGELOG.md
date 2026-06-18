@@ -31,6 +31,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `statistics` API (for example `smtp`, `ntlm`, `kerberos`, `ssh`,
   `dce_rpc`, `malformed_dns`, and `rdp`). The return type is now
   `StringNumberU64` so large column families cannot overflow.
+- Expanded the QA/testing-only `countByProtocol` GraphQL API to support the
+  same protocol set as the `statistics` API. Its return type is now
+  `StringNumberU64` to avoid overflow on large column families.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
   related queries). It contains only Sysmon-relevant fields (`time`, `sensor`,
