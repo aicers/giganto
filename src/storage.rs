@@ -990,6 +990,90 @@ impl Iterator for Iter<'_> {
     }
 }
 
+/// Performs one iteration of synchronous RocksDB retention cleanup.
+fn retain_cleanup_iteration(
+    db: &Database,
+    retention_timestamp: i64,
+    from_timestamp: [u8; 8],
+) -> Result<()> {
+    let retention_timestamp_vec = retention_timestamp.to_be_bytes();
+    let sensors = db.sensors_store()?.names();
+    let all_store = db.retain_period_store()?;
+
+    for sensor in sensors {
+        let mut from: Vec<u8> = sensor.clone();
+        from.push(0x00);
+        from.extend_from_slice(&from_timestamp);
+
+        let mut to: Vec<u8> = sensor.clone();
+        to.push(0x00);
+        to.extend_from_slice(&retention_timestamp_vec);
+
+        for store in &all_store.standard_cfs {
+            store.flush()?;
+            if store
+                .db
+                .delete_file_in_range_cf(store.cf, &from, &to)
+                .is_ok()
+            {
+                store.flush()?;
+                if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
+                    store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
+                }
+            } else {
+                warn!("Failed to delete file in range");
+            }
+        }
+
+        for store in &all_store.non_standard_cfs {
+            let iterator = store
+                .db
+                .prefix_iterator_cf(store.cf, sensor.clone())
+                .flatten();
+
+            for (key, _) in iterator {
+                let data_timestamp =
+                    i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+
+                if retention_timestamp > data_timestamp {
+                    if store.delete(&key).is_err() {
+                        warn!("Failed to delete data");
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            store.flush()?;
+        }
+    }
+
+    // Handle oplog deletion with timestamp-based range deletion
+    let mut from: Vec<u8> = from_timestamp.to_vec();
+    from.push(0x00);
+    from.extend_from_slice(&1_usize.to_be_bytes());
+
+    let mut to: Vec<u8> = retention_timestamp_vec.to_vec();
+    to.push(0x00);
+    to.extend_from_slice(&usize::MAX.to_be_bytes());
+
+    let store = &all_store.op_log_cf;
+    if store
+        .db
+        .delete_file_in_range_cf(store.cf, &from, &to)
+        .is_ok()
+    {
+        store.flush()?;
+        if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
+            store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
+        }
+    } else {
+        warn!("Failed to delete file in range for operation log");
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn retain_periodically(
     interval: Duration,
@@ -1000,6 +1084,7 @@ pub async fn retain_periodically(
 ) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
     const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
+    const BLOCKING_JOIN_BACKOFF: Duration = Duration::from_secs(1);
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
@@ -1026,84 +1111,53 @@ pub async fn retain_periodically(
                     usage_flag = true;
                 }
 
+                let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
                 loop {
-                    let retention_timestamp_vec = retention_timestamp.to_be_bytes();
-                    let sensors = db.sensors_store()?.names();
-                    let all_store = db.retain_period_store()?;
+                    let mut handle = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        let retention_timestamp = retention_timestamp;
+                        move || retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
+                    });
 
-                    for sensor in sensors {
-                        let mut from: Vec<u8> = sensor.clone();
-                        from.push(0x00);
-                        from.extend_from_slice(&from_timestamp);
+                    let mut shutdown_requested = false;
 
-                        let mut to: Vec<u8> = sensor.clone();
-                        to.push(0x00);
-                        to.extend_from_slice(&retention_timestamp_vec);
-
-                        for store in &all_store.standard_cfs {
-                            store.flush()?;
-                            if store
-                                .db
-                                .delete_file_in_range_cf(store.cf, &from, &to)
-                                .is_ok()
-                            {
-                                store.flush()?;
-                                if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
-                                    store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
-                                }
-                            } else {
-                                warn!("Failed to delete file in range");
-                            }
+                    let blocking_result = select! {
+                        result = &mut handle => result,
+                        () = notify_shutdown.notified() => {
+                            shutdown_requested = true;
+                            handle.await
                         }
+                    };
 
-                        for store in &all_store.non_standard_cfs {
-                            let iterator = store
-                                .db
-                                .prefix_iterator_cf(store.cf, sensor.clone())
-                                .flatten();
-
-                            for (key, _) in iterator {
-                                let data_timestamp =
-                                    i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-
-                                if retention_timestamp > data_timestamp {
-                                    if store.delete(&key).is_err() {
-                                        warn!("Failed to delete data");
-                                        break;
-                                    }
-                                } else {
-                                    break;
-                                }
+                    match blocking_result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            running_flag.store(false, Ordering::Relaxed);
+                            return Err(e);
+                        }
+                        Err(e) => {
+                            if shutdown_requested {
+                                running_flag.store(false, Ordering::Relaxed);
+                                return Err(e.into());
                             }
-                            store.flush()?;
+
+                            warn!(
+                                "retention cleanup blocking task failed: {e}; \
+                                retrying after backoff"
+                            );
+                            time::sleep(BLOCKING_JOIN_BACKOFF).await;
+                            continue;
                         }
                     }
 
-                    // Handle oplog deletion with timestamp-based range deletion
-                    let mut from: Vec<u8> = from_timestamp.to_vec();
-                    from.push(0x00);
-                    from.extend_from_slice(&1_usize.to_be_bytes());
-
-                    let mut to: Vec<u8> = retention_timestamp_vec.to_vec();
-                    to.push(0x00);
-                    to.extend_from_slice(&usize::MAX.to_be_bytes());
-
-                    let store = &all_store.op_log_cf;
-                    if store
-                        .db
-                        .delete_file_in_range_cf(store.cf, &from, &to)
-                        .is_ok()
-                    {
-                        store.flush()?;
-                        if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
-                            store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
-                        }
-                    } else {
-                        warn!("Failed to delete file in range for operation log");
+                    if shutdown_requested {
+                        running_flag.store(false, Ordering::Relaxed);
+                        return Ok(());
                     }
+
                     if !cfg!(test) && check_db_usage().await.1 && usage_flag {
                         retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-                        if retention_timestamp > now.timestamp_nanos_opt().unwrap_or(0) {
+                        if retention_timestamp > now_timestamp {
                             warn!("cannot delete data to usage under {USAGE_LOW}");
                             break;
                         }
@@ -1301,7 +1355,7 @@ pub fn repair_db(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use giganto_client::ingest::network::Conn;
     use giganto_client::ingest::statistics::Statistics;
@@ -2259,6 +2313,66 @@ mod tests {
         notify_shutdown.notify_one();
         let result = task.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_retain_periodically_does_not_block_runtime() {
+        let (_dir, db) = setup_db();
+        let sensor = "block_test_sensor";
+        register_sensor(&db, sensor);
+
+        let store = db.conn_store().unwrap();
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let retention_period = std::time::Duration::from_secs(2);
+        let old_ts_nanos = now_nanos - 10_000_000_000;
+
+        for offset in 0..100 {
+            insert_conn(&store, sensor, old_ts_nanos + offset, b"old");
+        }
+
+        let notify_shutdown = Arc::new(Notify::new());
+        let running_flag = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(AtomicUsize::new(0));
+
+        let progress_clone = progress.clone();
+        let ticker = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
+            loop {
+                interval.tick().await;
+                progress_clone.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        let task = tokio::spawn(super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            retention_period,
+            db.clone(),
+            notify_shutdown.clone(),
+            running_flag.clone(),
+        ));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !running_flag.load(Ordering::Relaxed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "retention did not start"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let progress_before = progress.load(Ordering::Relaxed);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let progress_after = progress.load(Ordering::Relaxed);
+
+        notify_shutdown.notify_one();
+        let result = task.await.unwrap();
+        assert!(result.is_ok());
+        ticker.abort();
+
+        assert!(
+            progress_after > progress_before + 5,
+            "runtime was blocked during retention cleanup"
+        );
     }
 
     #[tokio::test]
