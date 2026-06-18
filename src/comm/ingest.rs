@@ -3,7 +3,6 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{
     net::SocketAddr,
@@ -286,7 +285,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Conn,
-                Some(NetworkKey::new(&sensor, "conn")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Conn)),
                 sensor,
                 db.conn_store()?,
                 stream_direct_channels,
@@ -300,7 +299,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Dns,
-                Some(NetworkKey::new(&sensor, "dns")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Dns)),
                 sensor,
                 db.dns_store()?,
                 stream_direct_channels,
@@ -314,7 +313,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::MalformedDns,
-                Some(NetworkKey::new(&sensor, "malformed_dns")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::MalformedDns)),
                 sensor,
                 db.malformed_dns_store()?,
                 stream_direct_channels,
@@ -328,7 +327,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Log,
-                Some(NetworkKey::new(&sensor, "log")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Log)),
                 sensor,
                 db.log_store()?,
                 stream_direct_channels,
@@ -342,7 +341,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Http,
-                Some(NetworkKey::new(&sensor, "http")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Http)),
                 sensor,
                 db.http_store()?,
                 stream_direct_channels,
@@ -356,7 +355,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Rdp,
-                Some(NetworkKey::new(&sensor, "rdp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Rdp)),
                 sensor,
                 db.rdp_store()?,
                 stream_direct_channels,
@@ -384,7 +383,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Smtp,
-                Some(NetworkKey::new(&sensor, "smtp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Smtp)),
                 sensor,
                 db.smtp_store()?,
                 stream_direct_channels,
@@ -398,7 +397,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ntlm,
-                Some(NetworkKey::new(&sensor, "ntlm")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Ntlm)),
                 sensor,
                 db.ntlm_store()?,
                 stream_direct_channels,
@@ -412,7 +411,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Kerberos,
-                Some(NetworkKey::new(&sensor, "kerberos")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Kerberos)),
                 sensor,
                 db.kerberos_store()?,
                 stream_direct_channels,
@@ -426,7 +425,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ssh,
-                Some(NetworkKey::new(&sensor, "ssh")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Ssh)),
                 sensor,
                 db.ssh_store()?,
                 stream_direct_channels,
@@ -440,7 +439,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::DceRpc,
-                Some(NetworkKey::new(&sensor, "dce rpc")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::DceRpc)),
                 sensor,
                 db.dce_rpc_store()?,
                 stream_direct_channels,
@@ -496,7 +495,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ftp,
-                Some(NetworkKey::new(&sensor, "ftp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Ftp)),
                 sensor,
                 db.ftp_store()?,
                 stream_direct_channels,
@@ -510,7 +509,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Mqtt,
-                Some(NetworkKey::new(&sensor, "mqtt")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Mqtt)),
                 sensor,
                 db.mqtt_store()?,
                 stream_direct_channels,
@@ -524,7 +523,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Ldap,
-                Some(NetworkKey::new(&sensor, "ldap")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Ldap)),
                 sensor,
                 db.ldap_store()?,
                 stream_direct_channels,
@@ -538,7 +537,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Tls,
-                Some(NetworkKey::new(&sensor, "tls")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Tls)),
                 sensor,
                 db.tls_store()?,
                 stream_direct_channels,
@@ -552,7 +551,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Smb,
-                Some(NetworkKey::new(&sensor, "smb")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Smb)),
                 sensor,
                 db.smb_store()?,
                 stream_direct_channels,
@@ -566,7 +565,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Nfs,
-                Some(NetworkKey::new(&sensor, "nfs")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Nfs)),
                 sensor,
                 db.nfs_store()?,
                 stream_direct_channels,
@@ -580,7 +579,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Bootp,
-                Some(NetworkKey::new(&sensor, "bootp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Bootp)),
                 sensor,
                 db.bootp_store()?,
                 stream_direct_channels,
@@ -594,7 +593,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Dhcp,
-                Some(NetworkKey::new(&sensor, "dhcp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Dhcp)),
                 sensor,
                 db.dhcp_store()?,
                 stream_direct_channels,
@@ -608,7 +607,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Radius,
-                Some(NetworkKey::new(&sensor, "radius")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Radius)),
                 sensor,
                 db.radius_store()?,
                 stream_direct_channels,
@@ -622,7 +621,7 @@ async fn handle_request(
                 send,
                 recv,
                 RawEventKind::Icmp,
-                Some(NetworkKey::new(&sensor, "icmp")),
+                Some(NetworkKey::new(&sensor, RequestStreamRecord::Icmp)),
                 sensor,
                 db.icmp_store()?,
                 stream_direct_channels,
@@ -1223,25 +1222,16 @@ async fn check_sensors_conn(
     Ok(())
 }
 
-pub struct NetworkKey {
-    sensor: String,
-    record_type: RequestStreamRecord,
+pub(crate) struct NetworkKey {
+    pub(crate) sensor: String,
+    pub(crate) record_type: RequestStreamRecord,
 }
 
 impl NetworkKey {
-    pub fn new(sensor: &str, protocol: &str) -> Self {
+    pub(crate) fn new(sensor: &str, record_type: RequestStreamRecord) -> Self {
         Self {
             sensor: sensor.to_string(),
-            record_type: RequestStreamRecord::from_str(protocol)
-                .unwrap_or_else(|_| panic!("invalid protocol: {protocol}")),
+            record_type,
         }
-    }
-
-    pub(crate) fn event_sensor(&self) -> &str {
-        &self.sensor
-    }
-
-    pub(crate) fn record_type(&self) -> RequestStreamRecord {
-        self.record_type
     }
 }

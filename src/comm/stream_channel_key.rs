@@ -63,9 +63,9 @@ impl StreamChannelKey {
         };
 
         let sensor_match =
-            target_sensor == network_key.event_sensor() || target_sensor.as_str() == "all";
+            target_sensor == network_key.sensor.as_str() || target_sensor.as_str() == "all";
 
-        sensor_match && *record_type == network_key.record_type()
+        sensor_match && *record_type == network_key.record_type
     }
 
     /// Returns whether the direct-stream payload embeds the publisher sensor.
@@ -85,7 +85,7 @@ mod tests {
             target_sensor: "src1".to_string(),
             record_type: RequestStreamRecord::Conn,
         };
-        let network_key = NetworkKey::new("src1", "conn");
+        let network_key = NetworkKey::new("src1", RequestStreamRecord::Conn);
         assert!(key.matches_network_key(&network_key));
     }
 
@@ -96,7 +96,7 @@ mod tests {
             target_sensor: "all".to_string(),
             record_type: RequestStreamRecord::Dns,
         };
-        let network_key = NetworkKey::new("any-sensor", "dns");
+        let network_key = NetworkKey::new("any-sensor", RequestStreamRecord::Dns);
         assert!(key.matches_network_key(&network_key));
     }
 
@@ -107,7 +107,7 @@ mod tests {
             target_sensor: "src1".to_string(),
             record_type: RequestStreamRecord::Conn,
         };
-        let network_key = NetworkKey::new("src2", "conn");
+        let network_key = NetworkKey::new("src2", RequestStreamRecord::Conn);
         assert!(!key.matches_network_key(&network_key));
     }
 
@@ -118,7 +118,7 @@ mod tests {
             target_sensor: "src1".to_string(),
             record_type: RequestStreamRecord::Conn,
         };
-        let network_key = NetworkKey::new("src1", "dns");
+        let network_key = NetworkKey::new("src1", RequestStreamRecord::Dns);
         assert!(!key.matches_network_key(&network_key));
     }
 
@@ -129,7 +129,7 @@ mod tests {
             target_sensor: "src1".to_string(),
             record_type: RequestStreamRecord::Conn,
         };
-        let network_key = NetworkKey::new("src2", "conn");
+        let network_key = NetworkKey::new("src2", RequestStreamRecord::Conn);
         assert!(!key.matches_network_key(&network_key));
     }
 
@@ -140,7 +140,7 @@ mod tests {
             target_sensor: "src1".to_string(),
             record_type: RequestStreamRecord::Conn,
         };
-        let network_key = NetworkKey::new("src1", "dns");
+        let network_key = NetworkKey::new("src1", RequestStreamRecord::Dns);
         assert!(!key.matches_network_key(&network_key));
     }
 
