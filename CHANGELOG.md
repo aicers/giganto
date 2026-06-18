@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `rev` support to `scripts/fetch-theme.sh` and
+  `docs/theme.toml` so docs-theme can be fetched from a commit SHA for
+  pre-release testing; release-based fetching is unchanged when `rev` is
+  unset.
+
 ### Fixed
 
 - Fixed realtime Time Series Generator streams being sent with a

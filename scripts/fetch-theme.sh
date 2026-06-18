@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Fetch shared docs-theme release assets into docs/.theme/.
+# Fetch shared docs-theme assets into docs/.theme/.
 #
-# Reads repo, version, and template from docs/theme.toml.
-# Requires the GitHub CLI (gh) to download release archives.
+# Reads repo, template, and version from docs/theme.toml, with an optional rev.
+# When rev is unset, downloads a released version via the GitHub CLI (gh).
+# When rev is set, downloads that commit via gh api (for local or pre-release
+# testing).
 #
 # Override via environment variables:
 #   THEME_REPO=aicers/docs-theme THEME_VERSION=0.1.0 THEME_TEMPLATE=manual \
+#     scripts/fetch-theme.sh
+#   THEME_REPO=aicers/docs-theme THEME_REV=COMMIT_SHA THEME_TEMPLATE=manual \
 #     scripts/fetch-theme.sh
 set -euo pipefail
 
@@ -31,6 +35,7 @@ parse_toml_value() {
 
 REPO="${THEME_REPO:-$(parse_toml_value repo)}"
 VERSION="${THEME_VERSION:-$(parse_toml_value version)}"
+REV="${THEME_REV:-$(parse_toml_value rev)}"
 TEMPLATE="${THEME_TEMPLATE:-$(parse_toml_value template)}"
 
 if [ -z "$REPO" ] || [ -z "$VERSION" ] || [ -z "$TEMPLATE" ]; then
@@ -38,52 +43,72 @@ if [ -z "$REPO" ] || [ -z "$VERSION" ] || [ -z "$TEMPLATE" ]; then
   exit 1
 fi
 
-TAG="$VERSION"
-
 # ---------------------------------------------------------------------------
-# Skip if already installed with matching repo/version/template
+# Skip if already installed with matching repo/template and version or rev
 # ---------------------------------------------------------------------------
 MARKER="$DEST/.meta"
 parse_meta_value() {
   sed -n '/^\[/d; s/^'"$1"'[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MARKER" | head -1
 }
 if [ -f "$MARKER" ]; then
-  if [ "$(parse_meta_value repo)" = "$REPO" ] \
-    && [ "$(parse_meta_value version)" = "$TAG" ] \
+  if [ -n "$REV" ]; then
+    if [ "$(parse_meta_value repo)" = "$REPO" ] \
+      && [ "$(parse_meta_value rev)" = "$REV" ] \
+      && [ "$(parse_meta_value template)" = "$TEMPLATE" ]; then
+      echo "Theme $REPO@$REV (template=$TEMPLATE) already installed, skipping."
+      exit 0
+    fi
+  elif [ "$(parse_meta_value repo)" = "$REPO" ] \
+    && [ "$(parse_meta_value version)" = "$VERSION" ] \
     && [ "$(parse_meta_value template)" = "$TEMPLATE" ]; then
-    echo "Theme $REPO@$TAG (template=$TEMPLATE) already installed, skipping."
+    echo "Theme $REPO@$VERSION (template=$TEMPLATE) already installed, skipping."
     exit 0
   fi
 fi
 
-echo "Fetching docs-theme $REPO@$TAG (template=$TEMPLATE) ..."
+if [ -n "$REV" ]; then
+  ARCHIVE_REF="$REV"
+  echo "Fetching docs-theme $REPO@$REV (template=$TEMPLATE) ..."
+else
+  ARCHIVE_REF="$VERSION"
+  echo "Fetching docs-theme $REPO@$VERSION (template=$TEMPLATE) ..."
+fi
 
 # ---------------------------------------------------------------------------
-# Download release archive via gh
+# Download archive
 # ---------------------------------------------------------------------------
 TMPDIR_DL="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_DL"' EXIT
 
-gh release download "$TAG" --repo "$REPO" --archive tar.gz --dir "$TMPDIR_DL"
+if [ -n "$REV" ]; then
+  ARCHIVE="$TMPDIR_DL/archive.tar.gz"
+  if ! gh api "repos/${REPO}/tarball/${ARCHIVE_REF}" > "$ARCHIVE"; then
+    echo "Error: failed to download tarball for $REPO@$ARCHIVE_REF" >&2
+    echo "Check that repo and rev are correct and the archive is reachable." >&2
+    exit 1
+  fi
+else
+  gh release download "$ARCHIVE_REF" --repo "$REPO" --archive tar.gz --dir "$TMPDIR_DL"
+  ARCHIVE="$(find "$TMPDIR_DL" -name '*.tar.gz' | head -1)"
+  if [ -z "$ARCHIVE" ]; then
+    echo "Error: no tar.gz archive found in $TMPDIR_DL" >&2
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Extract the archive
 # ---------------------------------------------------------------------------
-ARCHIVE="$(find "$TMPDIR_DL" -name '*.tar.gz' | head -1)"
-if [ -z "$ARCHIVE" ]; then
-  echo "Error: no tar.gz archive found in $TMPDIR_DL" >&2
-  exit 1
-fi
-
 tar -xzf "$ARCHIVE" -C "$TMPDIR_DL"
 
-# The archive extracts into a directory named REPO_NAME-TAG
-REPO_NAME="$(echo "$REPO" | sed 's|.*/||')"
 EXTRACTED=""
-for d in "$TMPDIR_DL/$REPO_NAME"-*; do
+for d in "$TMPDIR_DL"/*; do
   if [ -d "$d" ]; then
+    if [ -n "$EXTRACTED" ]; then
+      echo "Error: archive contains multiple top-level directories" >&2
+      exit 1
+    fi
     EXTRACTED="$d"
-    break
   fi
 done
 
@@ -145,12 +170,21 @@ fi
 rm -rf "$DEST"
 mv "$STAGE" "$DEST"
 
-# Record installed version so subsequent runs can skip re-download
-cat > "$MARKER" <<EOF
+# Record installed source so subsequent runs can skip re-download
+if [ -n "$REV" ]; then
+  cat > "$MARKER" <<EOF
 [theme]
 repo = "$REPO"
 template = "$TEMPLATE"
-version = "$TAG"
+rev = "$REV"
 EOF
+else
+  cat > "$MARKER" <<EOF
+[theme]
+repo = "$REPO"
+template = "$TEMPLATE"
+version = "$VERSION"
+EOF
+fi
 
 echo "Theme installed to $DEST"
