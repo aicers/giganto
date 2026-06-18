@@ -49,7 +49,7 @@ use crate::{
     graphql::{RawEventFilter, TIMESTAMP_SIZE},
 };
 
-const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
+pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "conn",
     "dns",
     "malformed_dns",
@@ -260,7 +260,7 @@ impl Database {
     /// Creates a snapshot-based iterator for counting entries in a column family.
     /// This is intended for precise counting operations that require consistency.
     #[cfg(feature = "count_events")]
-    pub fn count_cf_entries(&self, cf_name: &str) -> Result<i32> {
+    pub fn count_cf_entries(&self, cf_name: &str) -> Result<u64> {
         let cf = self.get_cf_handle(cf_name)?;
         let snap = self.db.snapshot();
 
@@ -268,7 +268,7 @@ impl Database {
         ro.set_total_order_seek(true);
         let iter = snap.iterator_cf_opt(cf, ro, rocksdb::IteratorMode::Start);
 
-        let mut count = 0i32;
+        let mut count = 0u64;
         for item in iter {
             item.context("failed to read from database")?;
             count = count

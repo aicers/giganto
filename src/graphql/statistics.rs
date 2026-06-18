@@ -100,8 +100,71 @@ pub enum Protocol {
     Session,
     /// DNS events
     Dns,
+    /// Malformed DNS events
+    MalformedDns,
     /// HTTP events
     Http,
+    /// RDP events
+    Rdp,
+    /// SMTP events
+    Smtp,
+    /// NTLM events
+    Ntlm,
+    /// Kerberos events
+    Kerberos,
+    /// SSH events
+    Ssh,
+    /// DCE RPC events
+    DceRpc,
+    /// FTP events
+    Ftp,
+    /// MQTT events
+    Mqtt,
+    /// LDAP events
+    Ldap,
+    /// TLS events
+    Tls,
+    /// SMB events
+    Smb,
+    /// NFS events
+    Nfs,
+    /// BOOTP events
+    Bootp,
+    /// DHCP events
+    Dhcp,
+    /// RADIUS events
+    Radius,
+    /// ICMP events
+    Icmp,
+}
+
+#[cfg(feature = "count_events")]
+impl Protocol {
+    /// Returns the RocksDB column family name for this protocol.
+    pub(crate) fn cf_name(self) -> &'static str {
+        match self {
+            Self::Session => "conn",
+            Self::Dns => "dns",
+            Self::MalformedDns => "malformed_dns",
+            Self::Http => "http",
+            Self::Rdp => "rdp",
+            Self::Smtp => "smtp",
+            Self::Ntlm => "ntlm",
+            Self::Kerberos => "kerberos",
+            Self::Ssh => "ssh",
+            Self::DceRpc => "dce rpc",
+            Self::Ftp => "ftp",
+            Self::Mqtt => "mqtt",
+            Self::Ldap => "ldap",
+            Self::Tls => "tls",
+            Self::Smb => "smb",
+            Self::Nfs => "nfs",
+            Self::Bootp => "bootp",
+            Self::Dhcp => "dhcp",
+            Self::Radius => "radius",
+            Self::Icmp => "icmp",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -191,11 +254,15 @@ impl StatisticsQuery {
     /// * The feature flag `count_events` is not enabled
     #[cfg(feature = "count_events")]
     #[allow(clippy::unused_async)]
-    async fn count_by_protocol(&self, ctx: &Context<'_>, protocol: Protocol) -> Result<i32> {
+    async fn count_by_protocol(
+        &self,
+        ctx: &Context<'_>,
+        protocol: Protocol,
+    ) -> Result<StringNumberU64> {
         tracing::info!("Counting events for protocol: {protocol:?}");
         let db = ctx.data::<Database>()?;
         let n = count_cf_snapshot(db, protocol)?;
-        Ok(n)
+        Ok(StringNumberU64(n))
     }
 }
 
@@ -223,14 +290,8 @@ impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 /// * The column family for the specified protocol is not found
 /// * Database access fails during snapshot creation or iteration
 #[cfg(feature = "count_events")]
-fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<i32> {
-    let cf_name = match protocol {
-        Protocol::Session => "conn",
-        Protocol::Dns => "dns",
-        Protocol::Http => "http",
-    };
-
-    Ok(db.count_cf_entries(cf_name)?)
+fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<u64> {
+    Ok(db.count_cf_entries(protocol.cf_name())?)
 }
 
 fn get_statistics_iter<'c, T>(
@@ -863,6 +924,51 @@ mod tests {
     }
 
     #[cfg(feature = "count_events")]
+    #[test]
+    fn protocol_cf_name_matches_raw_data_column_families() {
+        use std::collections::HashSet;
+
+        use super::Protocol;
+        use crate::storage::RAW_DATA_COLUMN_FAMILY_NAMES;
+
+        let cf_names: HashSet<&str> = RAW_DATA_COLUMN_FAMILY_NAMES.iter().copied().collect();
+        let protocols = [
+            Protocol::Session,
+            Protocol::Dns,
+            Protocol::MalformedDns,
+            Protocol::Http,
+            Protocol::Rdp,
+            Protocol::Smtp,
+            Protocol::Ntlm,
+            Protocol::Kerberos,
+            Protocol::Ssh,
+            Protocol::DceRpc,
+            Protocol::Ftp,
+            Protocol::Mqtt,
+            Protocol::Ldap,
+            Protocol::Tls,
+            Protocol::Smb,
+            Protocol::Nfs,
+            Protocol::Bootp,
+            Protocol::Dhcp,
+            Protocol::Radius,
+            Protocol::Icmp,
+        ];
+
+        for protocol in protocols {
+            let cf_name = protocol.cf_name();
+            assert!(
+                cf_names.contains(cf_name),
+                "Protocol {protocol:?} maps to {cf_name:?}, which is not in \
+                 RAW_DATA_COLUMN_FAMILY_NAMES"
+            );
+        }
+
+        assert_eq!(Protocol::DceRpc.cf_name(), "dce rpc");
+        assert_eq!(Protocol::MalformedDns.cf_name(), "malformed_dns");
+    }
+
+    #[cfg(feature = "count_events")]
     #[tokio::test]
     async fn test_count_by_protocol_empty_db() {
         let schema = TestSchema::new();
@@ -878,10 +984,10 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
 
-        assert_eq!(count_result, 0, "SESSION on empty DB must be 0");
+        assert_eq!(count_result, "0", "SESSION on empty DB must be 0");
 
         let query = r"
             query {
@@ -894,10 +1000,10 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
 
-        assert_eq!(count_result, 0, "DNS on empty DB must be 0");
+        assert_eq!(count_result, "0", "DNS on empty DB must be 0");
 
         let query = r"
             query {
@@ -911,10 +1017,27 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
 
-        assert_eq!(count_result, 0, "HTTP on empty DB must be 0");
+        assert_eq!(count_result, "0", "HTTP on empty DB must be 0");
+
+        let query = r"
+            query {
+                countByProtocol(protocol: DCE_RPC)
+            }
+        ";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+
+        let json = serde_json::to_value(&res.data).unwrap();
+        let count_result = json
+            .get("countByProtocol")
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
+
+        assert_eq!(count_result, "0", "DCE_RPC on empty DB must be 0");
     }
 
     #[cfg(feature = "count_events")]
@@ -955,9 +1078,9 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
-        assert_eq!(count_result, 5, "SESSION count must be 5");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
+        assert_eq!(count_result, "5", "SESSION count must be 5");
 
         let query = r"
             query {
@@ -969,9 +1092,9 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
-        assert_eq!(count_result, 7, "DNS count must be 7");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
+        assert_eq!(count_result, "7", "DNS count must be 7");
 
         let query = r"
             query {
@@ -983,8 +1106,8 @@ mod tests {
         let json = serde_json::to_value(&res.data).unwrap();
         let count_result = json
             .get("countByProtocol")
-            .and_then(serde_json::Value::as_i64)
-            .expect("countByProtocol should be an integer");
-        assert_eq!(count_result, 9, "HTTP count must be 9");
+            .and_then(serde_json::Value::as_str)
+            .expect("countByProtocol should be a string");
+        assert_eq!(count_result, "9", "HTTP count must be 9");
     }
 }
