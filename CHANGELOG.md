@@ -24,9 +24,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Bumped `giganto-client` to emit RFC 3339 range-data datetimes instead of
   epoch-decimal text. Range-data consumers must parse the new wire format
   (`%Y-%m-%dT%H:%M:%S%.f%:z` with a `+00:00` UTC offset) when upgrading.
-- `search*` GraphQL APIs now skip deserializing raw-event candidates whose
-  timestamps fall outside the requested `time` range, reducing CPU work on
-  large `times` inputs without changing returned results.
 - Improved `search*` GraphQL API performance for large `times` inputs by
   avoiding unnecessary work for out-of-range timestamps, without changing
   returned results.
