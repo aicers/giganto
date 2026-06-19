@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.28.0] - 2026-06-19
 
 ### Added
 
@@ -21,14 +21,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Bumped `giganto-client` to emit RFC 3339 range-data datetimes instead of
-  epoch-decimal text. Range-data consumers must parse the new wire format
-  (`%Y-%m-%dT%H:%M:%S%.f%:z` with a `+00:00` UTC offset) when upgrading.
+- Bumped `giganto-client` to 0.28.0 to emit RFC 3339 range-data datetimes
+  instead of epoch-decimal text. Range-data consumers must parse the new wire
+  format (`%Y-%m-%dT%H:%M:%S%.f%:z` with a `+00:00` UTC offset) when upgrading.
 - Improved `search*` GraphQL API performance for large `times` inputs by
   avoiding unnecessary work for out-of-range timestamps, without changing
-  returned results.
-- Expanded the QA/testing-only `countByProtocol` GraphQL API to support the
-  same protocol set as the `statistics` API. Its return type is now
+  returned results. This is a breaking change for clients that connect to
+  Giganto's publish APIs.
+- Expanded the QA/testing-only `countByProtocol` GraphQL API to support the same
+  protocol set as the `statistics` API. Its return type is now
   `StringNumberU64` to avoid overflow on large column families.
 - Introduced a new `SysmonEventFilter` GraphQL input type used by all Sysmon
   event queries (`sysmonEvents`, `processCreateEvents`, `dnsQueryEvents`, and
@@ -38,6 +39,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Removed the unused `logLevel` and `logContents` fields from
   `NetworkFilter` and `SearchFilter`, and removed the `agentId` field from
   `NetworkFilter`. These fields were never applied to network events.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.29.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.29.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.29.0".
+- Updated `PEER_VERSION_REQ` to ">=0.28.0,<0.29.0".
 
 ### Fixed
 
@@ -1105,7 +1110,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.27.0...main
+[0.28.0]: https://github.com/aicers/giganto/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/aicers/giganto/compare/0.26.2...0.27.0
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
 [0.26.1]: https://github.com/aicers/giganto/compare/0.26.0...0.26.1
