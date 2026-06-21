@@ -34,7 +34,7 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
-#[cfg(debug_assertions)]
+#[cfg(feature = "storage_diagnostics")]
 use rocksdb::properties;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBIteratorWithThreadMode, Options, ReadOptions,
@@ -124,7 +124,7 @@ impl<'db, T> RetentionStores<'db, T> {
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "storage_diagnostics")]
 pub struct CfProperties {
     pub estimate_live_data_size: u64,
     pub estimate_num_keys: u64,
@@ -204,7 +204,7 @@ impl Database {
         Ok(())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "storage_diagnostics")]
     pub fn properties_cf(&self, cf_name: &str) -> Result<CfProperties> {
         let stats = if let Some(s) = self
             .db
@@ -259,7 +259,7 @@ impl Database {
 
     /// Creates a snapshot-based iterator for counting entries in a column family.
     /// This is intended for precise counting operations that require consistency.
-    #[cfg(feature = "count_events")]
+    #[cfg(feature = "storage_diagnostics")]
     pub fn count_cf_entries(&self, cf_name: &str) -> Result<u64> {
         let cf = self.get_cf_handle(cf_name)?;
         let snap = self.db.snapshot();
@@ -2134,6 +2134,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     #[test]
     fn test_properties_cf() {
         let (_dir, db) = setup_db();

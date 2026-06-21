@@ -1,7 +1,9 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
-use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{Context, Object, Result, SimpleObject};
+#[cfg(feature = "storage_diagnostics")]
+use async_graphql::InputObject;
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info};
@@ -9,7 +11,7 @@ use tracing::{error, info};
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::graphql::{StringNumberU32, StringNumberU64};
 use crate::settings::ConfigVisible;
-#[cfg(debug_assertions)]
+#[cfg(feature = "storage_diagnostics")]
 use crate::storage::Database;
 use crate::{comm::peer::PeerIdentity, settings::Settings};
 
@@ -32,11 +34,13 @@ struct Status {
     disk_available_bytes: u64,
 }
 
+#[cfg(feature = "storage_diagnostics")]
 #[derive(InputObject)]
 struct PropertyFilter {
     record_type: String,
 }
 
+#[cfg(feature = "storage_diagnostics")]
 #[derive(SimpleObject, Debug)]
 struct Properties {
     estimate_live_data_size: u64,
@@ -133,7 +137,7 @@ impl StatusQuery {
     }
 
     #[allow(clippy::unused_async)]
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "storage_diagnostics")]
     async fn properties_cf(&self, ctx: &Context<'_>, filter: PropertyFilter) -> Result<Properties> {
         let cfname = filter.record_type;
         let db = ctx.data::<Database>()?;
@@ -482,7 +486,7 @@ mod tests {
         assert_eq!(config["retention"].as_str().unwrap(), "100d");
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     #[tokio::test]
     async fn test_properties_cf() {
         let schema = TestSchema::new();

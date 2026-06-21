@@ -79,7 +79,7 @@ default = ["benchmark", "cluster"]
 benchmark = []
 bootroot = []
 cluster = []
-count_events = []
+storage_diagnostics = []
 
 [target.'cfg(not(unix))'.dependencies]
 ctrlc = { version = "3", features = ["termination"] }

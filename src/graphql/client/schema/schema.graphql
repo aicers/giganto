@@ -2728,16 +2728,6 @@ type ProcessTerminatedEventEdge {
 	cursor: String!
 }
 
-type Properties {
-	estimateLiveDataSize: Int!
-	estimateNumKeys: Int!
-	stats: String!
-}
-
-input PropertyFilter {
-	recordType: String!
-}
-
 type Query {
 	"""
 	Returns raw log events for the given sensor.
@@ -2818,7 +2808,6 @@ type Query {
 	Returns the current node status, including CPU, memory, and disk usage.
 	"""
 	status: Status!
-	propertiesCf(filter: PropertyFilter!): Properties!
 	"""
 	Returns the current visible Giganto configuration.
 	"""

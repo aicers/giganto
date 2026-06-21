@@ -15,6 +15,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (IP and port) instead of IP only, so peers on the same host with different
   ports are no longer silently dropped.
 
+### Changed
+
+- Unified storage introspection GraphQL APIs (`propertiesCf` and
+  `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
+  Enable diagnostics with `--features storage_diagnostics`.
+
 ## [0.28.0] - 2026-06-19
 
 ### Added
@@ -279,10 +285,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added RADIUS protocol support with the `RadiusRawEvent` struct and the GraphQL
   APIs (`radiusRawEvents`, `searchRadiusRawEvents`).
 - Added `countByProtocol` GraphQL API for precise event counting by protocol
-  type (Session, DNS, HTTP). This feature is gated behind the `count_events`
-  feature flag and is intended for quality checks and testing. The API iterates
-  over all keys in the database to provide exact counts, which may be expensive
-  on large datasets.
+  type (Session, DNS, HTTP). This feature is gated behind the
+  `storage_diagnostics` feature flag and is intended for quality checks and
+  testing. The API iterates over all keys in the database to provide exact
+  counts, which may be expensive on large datasets.
 
 ### Changed
 
