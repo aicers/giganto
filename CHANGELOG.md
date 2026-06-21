@@ -1118,7 +1118,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.28.0...HEAD
+[Unreleased]: https://github.com/aicers/giganto/compare/0.28.0...main
 [0.28.0]: https://github.com/aicers/giganto/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/aicers/giganto/compare/0.26.2...0.27.0
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
