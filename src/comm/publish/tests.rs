@@ -112,7 +112,7 @@ const NODE2: NodeConfig = NodeConfig {
 };
 
 // Stream types that do not have a time-series generator path.
-type StreamsWithoutTsgCase = (RequestStreamRecord, &'static str, fn() -> Vec<u8>);
+type StreamsWithoutTsgCase = (RequestStreamRecord, fn() -> Vec<u8>);
 
 struct ClusterContext<T> {
     publish: TestClient,
@@ -4193,20 +4193,11 @@ mod fixtures {
         vec![
             (
                 RequestStreamRecord::MalformedDns,
-                "malformed_dns",
                 gen_malformed_dns_raw_event,
             ),
-            (
-                RequestStreamRecord::FileCreate,
-                "file_create",
-                gen_file_create_raw_event,
-            ),
-            (
-                RequestStreamRecord::FileDelete,
-                "file_delete",
-                gen_file_delete_raw_event,
-            ),
-            (RequestStreamRecord::Log, "log", gen_log_raw_event),
+            (RequestStreamRecord::FileCreate, gen_file_create_raw_event),
+            (RequestStreamRecord::FileDelete, gen_file_delete_raw_event),
+            (RequestStreamRecord::Log, gen_log_raw_event),
         ]
     }
 
@@ -4817,7 +4808,7 @@ async fn request_streams_semi_supervised_and_time_series_generator() {
                 .await;
             }
 
-            for (record_type, _kind, payload_fn) in build_streams_without_tsg() {
+            for (record_type, payload_fn) in build_streams_without_tsg() {
                 assert_semi_supervised_stream(
                     publish,
                     record_type,
