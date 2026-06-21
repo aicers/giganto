@@ -1,9 +1,9 @@
 use std::{fs::OpenOptions, io::Write, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
-use async_graphql::{Context, Object, Result, SimpleObject};
 #[cfg(feature = "storage_diagnostics")]
 use async_graphql::InputObject;
+use async_graphql::{Context, Object, Result, SimpleObject};
 use tokio::sync::mpsc::Sender;
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{error, info};
