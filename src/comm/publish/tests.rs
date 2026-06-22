@@ -6767,9 +6767,7 @@ mod send_direct_stream_payload_cache {
     use tokio::sync::mpsc;
 
     use crate::comm::{
-        ingest::NetworkKey,
-        new_stream_direct_channels,
-        publish::send_direct_stream,
+        ingest::NetworkKey, new_stream_direct_channels, publish::send_direct_stream,
         stream_channel_key::StreamChannelKey,
     };
 
