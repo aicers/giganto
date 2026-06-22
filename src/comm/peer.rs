@@ -896,14 +896,8 @@ async fn update_to_new_peer_list(
 ) -> Result<()> {
     let mut is_change = false;
     for recv_peer_info in recv_peer_list {
-        let is_changed = if cfg!(debug_assertions) {
-            !((local_address.ip() == recv_peer_info.addr.ip()
-                && local_address.port() == recv_peer_info.addr.port())
-                || peer_list.read().await.contains(&recv_peer_info))
-        } else {
-            local_address.ip() != recv_peer_info.addr.ip()
-                && !peer_list.read().await.contains(&recv_peer_info)
-        };
+        let is_changed = local_address != recv_peer_info.addr
+            && !peer_list.read().await.contains(&recv_peer_info);
         if is_changed {
             is_change = true;
             peer_list.write().await.insert(recv_peer_info.clone());
@@ -2426,6 +2420,73 @@ pub mod tests {
 
         assert_eq!(peer_list.read().await.len(), 1);
         assert!(peer_list.read().await.contains(&existing_peer));
+        let recv = receiver.try_recv();
+        assert!(
+            matches!(recv, Err(TryRecvError::Empty)),
+            "unexpected peer recv: {recv:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_to_new_peer_list_same_ip_different_port_is_distinct() {
+        let peer_list = Arc::new(RwLock::new(HashSet::new()));
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let local_addr: SocketAddr = "127.0.0.1:8000".parse().unwrap();
+        let doc = toml_edit::DocumentMut::new();
+        let config = TempConfig::from_str("peers = []");
+
+        let peer_on_same_ip = peer_identity("127.0.0.1:8001".parse().unwrap(), "peer-b");
+        let recv_peers: HashSet<PeerIdentity> = vec![peer_on_same_ip.clone()].into_iter().collect();
+
+        let (recv_tx, recv_rx) = oneshot::channel();
+        let recv_handle = tokio::spawn(async move {
+            let recv = drain_peer_receiver(receiver, 1).await;
+            let _ = recv_tx.send(recv);
+        });
+
+        update_to_new_peer_list(
+            recv_peers,
+            local_addr,
+            peer_list.clone(),
+            sender,
+            doc,
+            config.path(),
+        )
+        .await
+        .unwrap();
+
+        assert!(peer_list.read().await.contains(&peer_on_same_ip));
+        let recv = with_timeout("peer recv timeout", recv_rx)
+            .await
+            .expect("peer recv closed");
+        let _ = recv_handle.await;
+        assert!(recv.contains(&peer_on_same_ip));
+    }
+
+    #[tokio::test]
+    async fn test_update_to_new_peer_list_skips_exact_local_address() {
+        let peer_list = Arc::new(RwLock::new(HashSet::new()));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let _sender_keepalive = sender.clone();
+        let local_addr: SocketAddr = "127.0.0.1:8000".parse().unwrap();
+        let doc = toml_edit::DocumentMut::new();
+        let config = TempConfig::from_str("peers = []");
+
+        let self_peer = peer_identity(local_addr, "self");
+        let recv_peers: HashSet<PeerIdentity> = vec![self_peer].into_iter().collect();
+
+        update_to_new_peer_list(
+            recv_peers,
+            local_addr,
+            peer_list.clone(),
+            sender,
+            doc,
+            config.path(),
+        )
+        .await
+        .unwrap();
+
+        assert!(peer_list.read().await.is_empty());
         let recv = receiver.try_recv();
         assert!(
             matches!(recv, Err(TryRecvError::Empty)),

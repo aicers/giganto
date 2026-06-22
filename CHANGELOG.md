@@ -4,6 +4,14 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed peer self-check in release builds to compare full socket addresses
+  (IP and port) instead of IP only, so peers on the same host with different
+  ports are no longer silently dropped.
+
 ## [0.28.0] - 2026-06-19
 
 ### Added
@@ -1110,6 +1118,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.28.0...main
 [0.28.0]: https://github.com/aicers/giganto/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/aicers/giganto/compare/0.26.2...0.27.0
 [0.26.2]: https://github.com/aicers/giganto/compare/0.26.1...0.26.2
