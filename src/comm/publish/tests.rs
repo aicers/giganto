@@ -112,7 +112,7 @@ const NODE2: NodeConfig = NodeConfig {
 };
 
 // Stream types that do not have a time-series generator path.
-type StreamsWithoutTsgCase = (RequestStreamRecord, &'static str, fn() -> Vec<u8>);
+type StreamsWithoutTsgCase = (RequestStreamRecord, fn() -> Vec<u8>);
 
 struct ClusterContext<T> {
     publish: TestClient,
@@ -131,7 +131,6 @@ type StreamInsertFn = fn(&Database, &str, i64) -> Vec<u8>;
 
 struct NetworkStreamCase {
     record_type: RequestStreamRecord,
-    kind: &'static str,
     semi_payload: fn() -> Vec<u8>,
     direct_payload: fn() -> Vec<u8>,
     insert_db: StreamInsertFn,
@@ -2099,7 +2098,6 @@ mod fixtures {
         record_type: RequestStreamRecord,
         request: &RequestSemiSupervisedStream,
         stream_direct_channels: &StreamDirectChannels,
-        kind: &str,
         sensors: &[&str],
         payload_fn: fn() -> Vec<u8>,
     ) {
@@ -2121,7 +2119,7 @@ mod fixtures {
 
         for sensor in sensors {
             let send_time = next_timestamp();
-            let key = NetworkKey::new(sensor, kind);
+            let key = NetworkKey::new(sensor, record_type);
             let payload = payload_fn();
 
             send_direct_stream(
@@ -2149,7 +2147,6 @@ mod fixtures {
         record_type: RequestStreamRecord,
         request: &RequestTimeSeriesGeneratorStream,
         stream_direct_channels: &StreamDirectChannels,
-        kind: &str,
         sensor: &str,
         policy_id: u32,
         db_timestamp: i64,
@@ -2179,7 +2176,7 @@ mod fixtures {
         assert_eq!(db_timestamp, recv_timestamp);
         assert_eq!(db_payload, recv_data);
 
-        let key = NetworkKey::new(sensor, kind);
+        let key = NetworkKey::new(sensor, record_type);
         send_direct_stream(
             &key,
             &direct_payload,
@@ -4083,126 +4080,108 @@ mod fixtures {
         vec![
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Conn,
-                kind: "conn",
                 semi_payload: gen_conn_raw_event,
                 direct_payload: gen_conn_raw_event,
                 insert_db: insert_conn_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Dns,
-                kind: "dns",
                 semi_payload: gen_dns_raw_event,
                 direct_payload: gen_dns_raw_event,
                 insert_db: insert_dns_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Rdp,
-                kind: "rdp",
                 semi_payload: gen_rdp_raw_event,
                 direct_payload: gen_rdp_raw_event,
                 insert_db: insert_rdp_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Http,
-                kind: "http",
                 semi_payload: gen_http_raw_event,
                 direct_payload: gen_http_raw_event,
                 insert_db: insert_http_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Smtp,
-                kind: "smtp",
                 semi_payload: gen_smtp_raw_event,
                 direct_payload: gen_smtp_raw_event,
                 insert_db: insert_smtp_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Ntlm,
-                kind: "ntlm",
                 semi_payload: gen_ntlm_raw_event,
                 direct_payload: gen_ntlm_raw_event,
                 insert_db: insert_ntlm_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Kerberos,
-                kind: "kerberos",
                 semi_payload: gen_kerberos_raw_event,
                 direct_payload: gen_kerberos_raw_event,
                 insert_db: insert_kerberos_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Ssh,
-                kind: "ssh",
                 semi_payload: gen_ssh_raw_event,
                 direct_payload: gen_ssh_raw_event,
                 insert_db: insert_ssh_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::DceRpc,
-                kind: "dce rpc",
                 semi_payload: gen_dce_rpc_raw_event,
                 direct_payload: gen_dce_rpc_raw_event,
                 insert_db: insert_dce_rpc_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Ftp,
-                kind: "ftp",
                 semi_payload: gen_ftp_raw_event,
                 direct_payload: gen_ftp_raw_event,
                 insert_db: insert_ftp_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Mqtt,
-                kind: "mqtt",
                 semi_payload: gen_mqtt_raw_event,
                 direct_payload: gen_mqtt_raw_event,
                 insert_db: insert_mqtt_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Ldap,
-                kind: "ldap",
                 semi_payload: gen_ldap_raw_event,
                 direct_payload: gen_ldap_raw_event,
                 insert_db: insert_ldap_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Tls,
-                kind: "tls",
                 semi_payload: gen_tls_raw_event,
                 direct_payload: gen_tls_raw_event,
                 insert_db: insert_tls_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Smb,
-                kind: "smb",
                 semi_payload: gen_smb_raw_event,
                 direct_payload: gen_smb_raw_event,
                 insert_db: insert_smb_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Nfs,
-                kind: "nfs",
                 semi_payload: gen_nfs_raw_event,
                 direct_payload: gen_nfs_raw_event,
                 insert_db: insert_nfs_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Bootp,
-                kind: "bootp",
                 semi_payload: gen_bootp_raw_event,
                 direct_payload: gen_bootp_raw_event,
                 insert_db: insert_bootp_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Dhcp,
-                kind: "dhcp",
                 semi_payload: gen_dhcp_raw_event,
                 direct_payload: gen_dhcp_raw_event,
                 insert_db: insert_dhcp_stream,
             },
             NetworkStreamCase {
                 record_type: RequestStreamRecord::Radius,
-                kind: "radius",
                 semi_payload: gen_radius_raw_event,
                 direct_payload: gen_radius_raw_event,
                 insert_db: insert_radius_stream,
@@ -4214,20 +4193,11 @@ mod fixtures {
         vec![
             (
                 RequestStreamRecord::MalformedDns,
-                "malformed_dns",
                 gen_malformed_dns_raw_event,
             ),
-            (
-                RequestStreamRecord::FileCreate,
-                "file_create",
-                gen_file_create_raw_event,
-            ),
-            (
-                RequestStreamRecord::FileDelete,
-                "file_delete",
-                gen_file_delete_raw_event,
-            ),
-            (RequestStreamRecord::Log, "log", gen_log_raw_event),
+            (RequestStreamRecord::FileCreate, gen_file_create_raw_event),
+            (RequestStreamRecord::FileDelete, gen_file_delete_raw_event),
+            (RequestStreamRecord::Log, gen_log_raw_event),
         ]
     }
 
@@ -4812,7 +4782,6 @@ async fn request_streams_semi_supervised_and_time_series_generator() {
                     case.record_type,
                     &semi_supervised_msg,
                     &stream_direct_channels,
-                    case.kind,
                     &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
                     case.semi_payload,
                 )
@@ -4829,7 +4798,6 @@ async fn request_streams_semi_supervised_and_time_series_generator() {
                     case.record_type,
                     &time_series_generator_msg,
                     &stream_direct_channels,
-                    case.kind,
                     SENSOR_TIME_SERIES_GENERATOR_THREE,
                     POLICY_ID,
                     db_timestamp,
@@ -4840,13 +4808,12 @@ async fn request_streams_semi_supervised_and_time_series_generator() {
                 .await;
             }
 
-            for (record_type, kind, payload_fn) in build_streams_without_tsg() {
+            for (record_type, payload_fn) in build_streams_without_tsg() {
                 assert_semi_supervised_stream(
                     publish,
                     record_type,
                     &semi_supervised_msg,
                     &stream_direct_channels,
-                    kind,
                     &[SENSOR_SEMI_SUPERVISED_ONE],
                     payload_fn,
                 )
@@ -4891,6 +4858,41 @@ async fn request_stream_time_series_generator_missing_sensor_logs_error() {
 }
 
 #[tokio::test]
+async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substring() {
+    let sensor = "src1";
+    let network_key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
+
+    let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let req_key = crate::comm::stream_channel_key::StreamChannelKey::TimeSeriesGenerator {
+        id: "SemiSupervised-policy".to_string(),
+        target_sensor: sensor.to_string(),
+        record_type: RequestStreamRecord::Conn,
+    };
+    stream_direct_channels.write().await.insert(req_key, tx);
+
+    let timestamp: i64 = 99;
+    let payload = b"time-series-raw-event".to_vec();
+    send_direct_stream(
+        &network_key,
+        &payload,
+        timestamp,
+        sensor,
+        stream_direct_channels,
+    )
+    .await
+    .expect("send_direct_stream");
+
+    let frame = rx.recv().await.expect("frame received");
+    let (ts_bytes, rest) = frame.split_at(8);
+    assert_eq!(i64::from_le_bytes(ts_bytes.try_into().unwrap()), timestamp);
+    let (raw_len_bytes, raw_payload) = rest.split_at(4);
+    let raw_len = u32::from_le_bytes(raw_len_bytes.try_into().unwrap()) as usize;
+    assert_eq!(raw_len, payload.len());
+    assert_eq!(raw_payload, payload);
+}
+
+#[tokio::test]
 async fn stream_direct_channels_cleared_after_client_disconnect() {
     with_test_harness(|harness| {
         Box::pin(async move {
@@ -4920,7 +4922,7 @@ async fn stream_direct_channels_cleared_after_client_disconnect() {
             drop(stream);
             harness.publish.close(b"client_done").await;
 
-            let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, "conn");
+            let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn);
             let payload = gen_conn_raw_event();
             send_direct_stream(
                 &key,
@@ -6642,6 +6644,7 @@ mod bootroot_service_fqdn_contract {
         sync::Arc,
     };
 
+    use giganto_client::publish::stream::RequestStreamRecord;
     use tokio::sync::{RwLock, mpsc};
 
     use super::fixtures::decode_semi_supervised_frame;
@@ -6652,6 +6655,7 @@ mod bootroot_service_fqdn_contract {
         new_stream_direct_channels,
         peer::{PeerInfo, Peers},
         publish::{is_current_giganto_in_charge, peer_in_charge_publish_addr, send_direct_stream},
+        stream_channel_key::StreamChannelKey,
     };
     use crate::server::service_fqdn_from_cert;
     use crate::test_bootroot::bootroot_cluster_certs;
@@ -6712,12 +6716,15 @@ mod bootroot_service_fqdn_contract {
     #[tokio::test]
     async fn send_direct_stream_embeds_cert_derived_fqdn_in_semi_supervised_payload() {
         let local_fqdn = cert_derived_fqdn(NODE1.test_node);
-        let kind = "conn";
-        let key = NetworkKey::new(&local_fqdn, kind);
+        let key = NetworkKey::new(&local_fqdn, RequestStreamRecord::Conn);
 
         let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let req_key = format!("{local_fqdn}\0{kind}\0SemiSupervised");
+        let req_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: local_fqdn.clone(),
+            target_sensor: local_fqdn.clone(),
+            record_type: RequestStreamRecord::Conn,
+        };
         stream_direct_channels.write().await.insert(req_key, tx);
 
         let timestamp: i64 = 42;
