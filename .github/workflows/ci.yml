@@ -70,6 +70,26 @@ jobs:
       - name: Schema snapshot check
         run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date
           --no-default-features -- --ignored
+  # Detect build/test warnings under all feature combinations (#1665).
+  build-all-features:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - name: Increase ulimit size
+        run: ulimit -n 8096
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: ./.github/cache-cargo
+      - name: Install libcap on Ubuntu
+        run: |
+          sudo apt-get install libpcap-dev libpcap0.8
+      - name: Build (all features)
+        run: cargo build --workspace --all-features --all-targets
+      - name: Run tests (all features)
+        run: cargo test --workspace --all-features
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
