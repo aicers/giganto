@@ -15,6 +15,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (IP and port) instead of IP only, so peers on the same host with different
   ports are no longer silently dropped.
 
+### Changed
+
+- Unified storage introspection GraphQL APIs (`propertiesCf` and
+  `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
+  Enable diagnostics with `--features storage_diagnostics`.
+
 ## [0.28.0] - 2026-06-19
 
 ### Added

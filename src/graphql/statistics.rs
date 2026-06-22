@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-#[cfg(feature = "count_events")]
+#[cfg(feature = "storage_diagnostics")]
 use async_graphql::Enum;
 use async_graphql::{Context, Object, Result, SimpleObject};
 use giganto_client::{RawEventKind, ingest::statistics::Statistics};
@@ -93,7 +93,7 @@ pub struct StatisticsDetail {
     pub size: Option<StringNumberU64>,
 }
 
-#[cfg(feature = "count_events")]
+#[cfg(feature = "storage_diagnostics")]
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Protocol {
     /// Session(connection) events
@@ -138,7 +138,7 @@ pub enum Protocol {
     Icmp,
 }
 
-#[cfg(feature = "count_events")]
+#[cfg(feature = "storage_diagnostics")]
 impl Protocol {
     /// Returns the RocksDB column family name for this protocol.
     pub(crate) fn cf_name(self) -> &'static str {
@@ -251,8 +251,8 @@ impl StatisticsQuery {
     /// This function will return an error if:
     /// * The database connection fails
     /// * The specified column family is not found
-    /// * The feature flag `count_events` is not enabled
-    #[cfg(feature = "count_events")]
+    /// * The feature flag `storage_diagnostics` is not enabled
+    #[cfg(feature = "storage_diagnostics")]
     #[allow(clippy::unused_async)]
     async fn count_by_protocol(
         &self,
@@ -289,7 +289,7 @@ impl_from_giganto_time_range_struct_for_graphql_client!(stats);
 /// This function will return an error if:
 /// * The column family for the specified protocol is not found
 /// * Database access fails during snapshot creation or iteration
-#[cfg(feature = "count_events")]
+#[cfg(feature = "storage_diagnostics")]
 fn count_cf_snapshot(db: &Database, protocol: Protocol) -> Result<u64> {
     Ok(db.count_cf_entries(protocol.cf_name())?)
 }
@@ -448,7 +448,7 @@ mod tests {
     use giganto_client::{RawEventKind, ingest::statistics::Statistics};
 
     use crate::graphql::StringNumberU64;
-    #[cfg(feature = "count_events")]
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     use crate::graphql::network::tests::{
         insert_conn_raw_event, insert_dns_raw_event, insert_http_raw_event,
     };
@@ -923,7 +923,7 @@ mod tests {
         mock.assert_async().await;
     }
 
-    #[cfg(feature = "count_events")]
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     #[test]
     fn protocol_cf_name_matches_raw_data_column_families() {
         use std::collections::HashSet;
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(Protocol::MalformedDns.cf_name(), "malformed_dns");
     }
 
-    #[cfg(feature = "count_events")]
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     #[tokio::test]
     async fn test_count_by_protocol_empty_db() {
         let schema = TestSchema::new();
@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(count_result, "0", "DCE_RPC on empty DB must be 0");
     }
 
-    #[cfg(feature = "count_events")]
+    #[cfg(all(test, feature = "storage_diagnostics"))]
     #[tokio::test]
     async fn test_count_by_protocol_basic() {
         let schema = TestSchema::new();
