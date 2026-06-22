@@ -3,4 +3,4 @@ repo = "aicers/docs-theme"
 template = "manual"
 version = "0.1.0"
 # optional commit SHA for pre-release testing.
-# rev = "COMMIT_SHA"
+rev = "f0d2a02"
