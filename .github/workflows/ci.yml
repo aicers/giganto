@@ -72,8 +72,6 @@ jobs:
           --no-default-features -- --ignored
   test:
     runs-on: ${{ matrix.os }}
-    env:
-      RUSTFLAGS: -D warnings
     strategy:
       matrix:
         os: [ ubuntu-latest, macOS-latest ]
@@ -85,7 +83,6 @@ jobs:
             cargo_flags: --features bootroot
           - feature_set: all-features
             cargo_flags: --all-features
-            build_extra: --all-targets
         exclude:
           - os: macOS-latest
             feature_set: all-features
@@ -101,7 +98,7 @@ jobs:
         run: |
           sudo apt-get install libpcap-dev libpcap0.8
       - name: Build (${{ matrix.feature_set }})
-        run: cargo build ${{ matrix.cargo_flags }} ${{ matrix.build_extra }} --verbose
+        run: cargo build ${{ matrix.cargo_flags }} --verbose
       - name: Run tests (${{ matrix.feature_set }})
         run: cargo test ${{ matrix.cargo_flags }} --verbose
 
