@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use giganto_client::publish::stream::RequestStreamRecord;
+use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
 
 use crate::comm::ingest::NetworkKey;
 
@@ -62,8 +62,8 @@ impl StreamChannelKey {
             } => (target_sensor, record_type),
         };
 
-        let sensor_match =
-            target_sensor == network_key.sensor.as_str() || target_sensor.as_str() == "all";
+        let sensor_match = target_sensor == network_key.sensor.as_str()
+            || target_sensor.as_str() == STREAM_REQUEST_ALL_SENSOR;
 
         sensor_match && *record_type == network_key.record_type
     }
@@ -93,7 +93,7 @@ mod tests {
     fn semi_supervised_matches_all_sensor() {
         let key = StreamChannelKey::SemiSupervised {
             publisher_sensor: "pub".to_string(),
-            target_sensor: "all".to_string(),
+            target_sensor: STREAM_REQUEST_ALL_SENSOR.to_string(),
             record_type: RequestStreamRecord::Dns,
         };
         let network_key = NetworkKey::new("any-sensor", RequestStreamRecord::Dns);
