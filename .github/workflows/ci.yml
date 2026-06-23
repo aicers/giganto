@@ -73,7 +73,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     env:
-      RUSTFLAGS: ${{ matrix.rustflags }}
+      RUSTFLAGS: -D warnings
     strategy:
       matrix:
         os: [ ubuntu-latest, macOS-latest ]
@@ -84,9 +84,8 @@ jobs:
           - feature_set: bootroot
             cargo_flags: --features bootroot
           - feature_set: all-features
-            cargo_flags: --workspace --all-features
+            cargo_flags: --all-features
             build_extra: --all-targets
-            rustflags: -D warnings
         exclude:
           - os: macOS-latest
             feature_set: all-features
