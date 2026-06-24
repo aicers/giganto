@@ -6794,7 +6794,7 @@ mod send_direct_stream_payload_cache {
     }
 
     #[tokio::test]
-    async fn reuses_identical_semi_supervised_payload_across_matching_channels() {
+    async fn routes_semi_supervised_payload_across_matching_channels() {
         let sensor = "src1";
         let network_key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
         let stream_direct_channels = new_stream_direct_channels();
@@ -6843,7 +6843,7 @@ mod send_direct_stream_payload_cache {
     }
 
     #[tokio::test]
-    async fn reuses_identical_time_series_generator_payload_across_matching_channels() {
+    async fn routes_time_series_generator_payload_across_matching_channels() {
         let sensor = "src1";
         let network_key = NetworkKey::new(sensor, RequestStreamRecord::Dns);
         let stream_direct_channels = new_stream_direct_channels();
