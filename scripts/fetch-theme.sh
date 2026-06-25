@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Fetch shared docs-theme assets into docs/.theme/.
 #
-# Reads repo, template, and version from docs/theme.toml, with an optional rev.
-# When rev is unset, downloads a released version via the GitHub CLI (gh).
-# When rev is set, downloads that commit via gh api (for local or pre-release
-# testing).
+# Reads repo, template, and exactly one source selector from docs/theme.toml:
+# version (released tag) or rev (commit SHA for pre-release testing).
+# When version is set, downloads a release via the GitHub CLI (gh).
+# When rev is set, downloads that commit via gh api.
 #
 # Override via environment variables:
 #   THEME_REPO=aicers/docs-theme THEME_VERSION=0.1.0 THEME_TEMPLATE=manual \
@@ -38,8 +38,18 @@ VERSION="${THEME_VERSION:-$(parse_toml_value version)}"
 REV="${THEME_REV:-$(parse_toml_value rev)}"
 TEMPLATE="${THEME_TEMPLATE:-$(parse_toml_value template)}"
 
-if [ -z "$REPO" ] || [ -z "$VERSION" ] || [ -z "$TEMPLATE" ]; then
-  echo "Error: could not read repo/version/template from $THEME_TOML" >&2
+if [ -z "$REPO" ] || [ -z "$TEMPLATE" ]; then
+  echo "Error: could not read repo/template from $THEME_TOML" >&2
+  exit 1
+fi
+
+if [ -n "$VERSION" ] && [ -n "$REV" ]; then
+  echo "Error: set exactly one of version (released theme) or rev (commit SHA), not both." >&2
+  exit 1
+fi
+
+if [ -z "$VERSION" ] && [ -z "$REV" ]; then
+  echo "Error: set exactly one of version (released theme) or rev (commit SHA)." >&2
   exit 1
 fi
 
