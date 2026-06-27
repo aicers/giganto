@@ -75,12 +75,17 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest, macOS-latest ]
-        feature_set: [ default, bootroot ]
+        feature_set: [ default, bootroot, all-features ]
         include:
           - feature_set: default
             cargo_flags: ""
           - feature_set: bootroot
             cargo_flags: --features bootroot
+          - feature_set: all-features
+            cargo_flags: --all-features
+        exclude:
+          - os: macOS-latest
+            feature_set: all-features
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096
