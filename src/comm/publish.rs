@@ -498,24 +498,41 @@ pub async fn send_direct_stream(
     sensor: &str,
     stream_direct_channels: StreamDirectChannels,
 ) -> Result<()> {
+    let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
+    let mut network_payload_with_sensor: Option<Vec<u8>> = None;
+    let mut network_payload_without_sensor: Option<Vec<u8>> = None;
+
     for (req_key, sender) in &*stream_direct_channels.read().await {
         if !req_key.matches_network_key(network_key) {
             continue;
         }
 
-        let raw_len = u32::try_from(raw_event.len())?.to_le_bytes();
-        let mut send_buf: Vec<u8> = Vec::new();
-        send_buf.extend_from_slice(&timestamp.to_le_bytes());
+        let send_buf = if req_key.embeds_publisher_sensor_in_payload() {
+            if let Some(payload) = &network_payload_with_sensor {
+                payload.clone()
+            } else {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&timestamp.to_le_bytes());
+                let sensor_bytes = bincode::serialize(&sensor)?;
+                let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
+                payload.extend_from_slice(&sensor_len);
+                payload.extend_from_slice(&sensor_bytes);
+                payload.extend_from_slice(&raw_len);
+                payload.extend_from_slice(raw_event);
+                network_payload_with_sensor = Some(payload.clone());
+                payload
+            }
+        } else if let Some(payload) = &network_payload_without_sensor {
+            payload.clone()
+        } else {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&timestamp.to_le_bytes());
+            payload.extend_from_slice(&raw_len);
+            payload.extend_from_slice(raw_event);
+            network_payload_without_sensor = Some(payload.clone());
+            payload
+        };
 
-        if req_key.embeds_publisher_sensor_in_payload() {
-            let sensor_bytes = bincode::serialize(&sensor)?;
-            let sensor_len = u32::try_from(sensor_bytes.len())?.to_le_bytes();
-            send_buf.extend_from_slice(&sensor_len);
-            send_buf.extend_from_slice(&sensor_bytes);
-        }
-
-        send_buf.extend_from_slice(&raw_len);
-        send_buf.extend_from_slice(raw_event);
         sender.send(send_buf)?;
     }
     Ok(())

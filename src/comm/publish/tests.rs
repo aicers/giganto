@@ -6761,3 +6761,129 @@ mod bootroot_service_fqdn_contract {
         assert_eq!(recv_payload, payload);
     }
 }
+
+mod send_direct_stream_payload_cache {
+    use giganto_client::publish::stream::RequestStreamRecord;
+    use tokio::sync::mpsc;
+
+    use crate::comm::{
+        ingest::NetworkKey, new_stream_direct_channels, publish::send_direct_stream,
+        stream_channel_key::StreamChannelKey,
+    };
+
+    fn expected_payload_with_sensor(timestamp: i64, sensor: &str, raw_event: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&timestamp.to_le_bytes());
+        let sensor_bytes = bincode::serialize(&sensor).unwrap();
+        let sensor_len = u32::try_from(sensor_bytes.len()).unwrap().to_le_bytes();
+        payload.extend_from_slice(&sensor_len);
+        payload.extend_from_slice(&sensor_bytes);
+        let raw_len = u32::try_from(raw_event.len()).unwrap().to_le_bytes();
+        payload.extend_from_slice(&raw_len);
+        payload.extend_from_slice(raw_event);
+        payload
+    }
+
+    fn expected_payload_without_sensor(timestamp: i64, raw_event: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&timestamp.to_le_bytes());
+        let raw_len = u32::try_from(raw_event.len()).unwrap().to_le_bytes();
+        payload.extend_from_slice(&raw_len);
+        payload.extend_from_slice(raw_event);
+        payload
+    }
+
+    #[tokio::test]
+    async fn routes_semi_supervised_payload_across_matching_channels() {
+        let sensor = "src1";
+        let network_key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
+        let stream_direct_channels = new_stream_direct_channels();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        for publisher_sensor in ["pub-a", "pub-b"] {
+            stream_direct_channels.write().await.insert(
+                StreamChannelKey::SemiSupervised {
+                    publisher_sensor: publisher_sensor.to_string(),
+                    target_sensor: sensor.to_string(),
+                    record_type: RequestStreamRecord::Conn,
+                },
+                tx1.clone(),
+            );
+        }
+        stream_direct_channels.write().await.insert(
+            StreamChannelKey::SemiSupervised {
+                publisher_sensor: "pub-c".to_string(),
+                target_sensor: "all".to_string(),
+                record_type: RequestStreamRecord::Conn,
+            },
+            tx2,
+        );
+
+        let timestamp = 1_234_567_890_i64;
+        let raw_event = b"raw-event-bytes".as_slice();
+        send_direct_stream(
+            &network_key,
+            raw_event,
+            timestamp,
+            sensor,
+            stream_direct_channels,
+        )
+        .await
+        .expect("send_direct_stream");
+
+        let expected = expected_payload_with_sensor(timestamp, sensor, raw_event);
+        let frame1 = rx1.recv().await.expect("first semi-supervised frame");
+        let frame2 = rx1.recv().await.expect("second semi-supervised frame");
+        let frame3 = rx2.recv().await.expect("all-sensor semi-supervised frame");
+
+        assert_eq!(frame1, expected);
+        assert_eq!(frame2, expected);
+        assert_eq!(frame3, expected);
+    }
+
+    #[tokio::test]
+    async fn routes_time_series_generator_payload_across_matching_channels() {
+        let sensor = "src1";
+        let network_key = NetworkKey::new(sensor, RequestStreamRecord::Dns);
+        let stream_direct_channels = new_stream_direct_channels();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        stream_direct_channels.write().await.insert(
+            StreamChannelKey::TimeSeriesGenerator {
+                id: "tsg-a".to_string(),
+                target_sensor: sensor.to_string(),
+                record_type: RequestStreamRecord::Dns,
+            },
+            tx1.clone(),
+        );
+        stream_direct_channels.write().await.insert(
+            StreamChannelKey::TimeSeriesGenerator {
+                id: "tsg-b".to_string(),
+                target_sensor: "all".to_string(),
+                record_type: RequestStreamRecord::Dns,
+            },
+            tx2,
+        );
+
+        let timestamp = 9_876_543_210_i64;
+        let raw_event = b"dns-raw-event".as_slice();
+        send_direct_stream(
+            &network_key,
+            raw_event,
+            timestamp,
+            sensor,
+            stream_direct_channels,
+        )
+        .await
+        .expect("send_direct_stream");
+
+        let expected = expected_payload_without_sensor(timestamp, raw_event);
+        let frame1 = rx1.recv().await.expect("first time-series frame");
+        let frame2 = rx2.recv().await.expect("all-sensor time-series frame");
+
+        assert_eq!(frame1, expected);
+        assert_eq!(frame2, expected);
+    }
+}
