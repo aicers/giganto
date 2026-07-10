@@ -412,9 +412,9 @@ fn expected_raw_event_bytes(kind: RawEventKind, body_bytes: Vec<u8>) -> Vec<u8> 
 
 fn read_single_raw_event<T: DeserializeOwned>(store: &RawEventStore<'_, T>) -> Option<Vec<u8>> {
     let mut iter = store.iter_forward();
-    let first = match iter.next() {
-        None => return None,
-        Some(value) => value.expect("failed to read stored event"),
+    let first = {
+        let value = iter.next()?;
+        value.expect("failed to read stored event")
     };
     assert!(iter.next().is_none(), "expected exactly one stored event");
     let (_key, value) = first;
@@ -425,9 +425,9 @@ fn read_single_raw_event_kv<T: DeserializeOwned>(
     store: &RawEventStore<'_, T>,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut iter = store.iter_forward();
-    let first = match iter.next() {
-        None => return None,
-        Some(value) => value.expect("failed to read stored event"),
+    let first = {
+        let value = iter.next()?;
+        value.expect("failed to read stored event")
     };
     assert!(iter.next().is_none(), "expected exactly one stored event");
     let (key, value) = first;

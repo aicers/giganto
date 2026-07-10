@@ -1712,7 +1712,7 @@ where
     } else {
         bail!(
             "Neither current nor peer gigantos are in charge of requested sensor {}",
-            &request_range.sensor
+            request_range.sensor
         )
     }
     send_range_data::<T>(send, None).await?;
