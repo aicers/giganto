@@ -967,7 +967,7 @@ pub mod tests {
             future::Future,
             net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
             sync::{Arc, OnceLock},
-            time::{Duration, Instant},
+            time::Duration,
         };
 
         use anyhow::{Result, bail};
@@ -995,6 +995,15 @@ pub mod tests {
 
         pub(super) const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
         pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+        /// Caps one dial attempt (QUIC connect + protocol handshake).
+        /// Short enough that a genuine server hang fails fast across all
+        /// attempts, yet far larger than a healthy localhost handshake.
+        pub(super) const DIAL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
+        /// Number of bounded dial attempts before a test dial gives up.
+        pub(super) const DIAL_ATTEMPTS: usize = 5;
+        /// Pause between dial attempts, giving a stalled runner room to
+        /// recover before the next try.
+        pub(super) const DIAL_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
         static INIT: OnceLock<()> = OnceLock::new();
         static CLIENT_CONFIG: OnceLock<ClientConfig> = OnceLock::new();
@@ -1105,17 +1114,7 @@ pub mod tests {
 
         impl TestClient {
             pub(super) async fn new(server_addr: SocketAddr) -> Self {
-                let endpoint = init_client();
-                let conn = endpoint
-                    .connect(server_addr, test_connect_name())
-                    .expect(
-                        "Failed to connect server's endpoint, Please check if the setting value is correct",
-                    )
-                    .await
-                    .expect(
-                        "Failed to connect server's endpoint, Please make sure the Server is alive",
-                    );
-                let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
+                let (conn, send, recv) = connect_client_handshake(server_addr).await;
                 Self { send, recv, conn }
             }
         }
@@ -1285,52 +1284,147 @@ pub mod tests {
             setup_server_endpoint_with_certs(&certs)
         }
 
+        /// Runs a bounded dial `attempt` until one succeeds, returning its
+        /// value.
+        ///
+        /// QUIC liveness rides on wall-clock timers, so on an
+        /// oversubscribed CI runner a scheduler stall can expire quinn's
+        /// idle timeout mid-handshake even though both peers are healthy.
+        /// A single long-timeout dial dies permanently in that case, while
+        /// retrying lets the first clean scheduling window complete the
+        /// dial. A genuine hang still fails fast because every attempt is
+        /// capped at `DIAL_ATTEMPT_TIMEOUT`; the accumulated error is
+        /// surfaced in the final panic.
+        async fn retry_dial<T>(
+            what: &str,
+            server_addr: SocketAddr,
+            mut attempt: impl AsyncFnMut() -> Result<T, String>,
+        ) -> T {
+            let mut last_error = String::new();
+            for _ in 0..DIAL_ATTEMPTS {
+                match tokio::time::timeout(DIAL_ATTEMPT_TIMEOUT, attempt()).await {
+                    Ok(Ok(value)) => return value,
+                    Ok(Err(e)) => last_error = e,
+                    Err(_) => {
+                        last_error = format!("attempt timed out after {DIAL_ATTEMPT_TIMEOUT:?}");
+                    }
+                }
+                sleep(DIAL_RETRY_INTERVAL).await;
+            }
+            panic!(
+                "{what} at {server_addr} failed after {DIAL_ATTEMPTS} attempts; last error: {last_error}"
+            );
+        }
+
+        /// Establishes a raw client/server QUIC connection pair, retrying
+        /// the whole accept+connect pair per attempt so a scheduler stall
+        /// on a loaded runner cannot expire quinn's idle timeout and
+        /// permanently wedge the fixture.
+        ///
+        /// The server endpoint's accept queue is shared across attempts, so
+        /// an aborted earlier attempt can leave a stale incoming ahead of
+        /// this attempt's client. The accept side therefore matches each
+        /// incoming to the current client endpoint by source port and
+        /// ignores any other, guaranteeing the returned `server_conn` and
+        /// `client_conn` belong to the same handshake rather than being
+        /// cross-paired (which would later dead-lock `open_bi`/`accept_bi`).
         pub(super) async fn connect_client_server(
             server_endpoint: &Endpoint,
             server_addr: SocketAddr,
         ) -> ConnectedPeers {
-            let client_endpoint = init_client();
-            let connect_fut = client_endpoint
-                .connect(server_addr, test_connect_name())
-                .unwrap();
-            let accept_fut = async {
-                let incoming = accept_incoming(server_endpoint, "server accept timeout").await;
-                incoming.await.unwrap()
-            };
-            let (server_conn, client_conn_res) = tokio::join!(accept_fut, connect_fut);
-            let client_conn = client_conn_res.unwrap();
-
-            ConnectedPeers {
-                client_endpoint,
-                server_conn,
-                client_conn,
-            }
+            retry_dial("client/server pair", server_addr, async || {
+                let client_endpoint = init_client();
+                // Bound synchronously, so the source port that identifies
+                // this attempt's client is known before the dial races.
+                let client_port = client_endpoint
+                    .local_addr()
+                    .map_err(|e| format!("client local addr failed: {e}"))?
+                    .port();
+                let connect_fut = async {
+                    client_endpoint
+                        .connect(server_addr, test_connect_name())
+                        .map_err(|e| format!("connect setup failed: {e}"))?
+                        .await
+                        .map_err(|e| format!("connect failed: {e}"))
+                };
+                let accept_fut = async {
+                    loop {
+                        let incoming = server_endpoint
+                            .accept()
+                            .await
+                            .ok_or_else(|| "server endpoint closed".to_string())?;
+                        // The client binds `[::]:0`, so only the port is
+                        // stable between its `local_addr()` and the source
+                        // address the server observes; the IP differs
+                        // (unspecified vs loopback).
+                        if incoming.remote_address().port() != client_port {
+                            incoming.ignore();
+                            continue;
+                        }
+                        return incoming
+                            .await
+                            .map_err(|e| format!("server accept failed: {e}"));
+                    }
+                };
+                let (server_conn, client_conn) = tokio::try_join!(accept_fut, connect_fut)?;
+                Ok(ConnectedPeers {
+                    client_endpoint,
+                    server_conn,
+                    client_conn,
+                })
+            })
+            .await
         }
 
+        /// Dials the test peer server with a fresh client endpoint per
+        /// attempt, completing both the QUIC connect and the protocol
+        /// handshake within one bounded attempt. Wrapping the connect and
+        /// handshake together matters: if only the connect were bounded,
+        /// the immediately following handshake would die on the same
+        /// stall.
         pub(super) async fn connect_client_handshake(
             server_addr: SocketAddr,
         ) -> (Connection, SendStream, RecvStream) {
-            let client_endpoint = init_client();
-            let conn = with_timeout(
-                "client connect timeout",
-                client_endpoint
+            retry_dial("client dial to peer server", server_addr, async || {
+                let client_endpoint = init_client();
+                let conn = client_endpoint
                     .connect(server_addr, test_connect_name())
-                    .unwrap(),
-            )
+                    .map_err(|e| format!("connect setup failed: {e}"))?
+                    .await
+                    .map_err(|e| format!("connect failed: {e}"))?;
+                let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION)
+                    .await
+                    .map_err(|e| format!("client handshake failed: {e}"))?;
+                Ok((conn, send, recv))
+            })
             .await
-            .unwrap();
-            let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
-            (conn, send, recv)
         }
 
+        /// Accepts connections until one completes the server handshake.
+        /// A retrying dialer (`connect_client_handshake`) may abandon
+        /// earlier attempts, so failed or dead incoming connections are
+        /// skipped instead of unwrapping the first one.
         pub(super) async fn accept_server_handshake(
             server_endpoint: Endpoint,
         ) -> (SendStream, RecvStream) {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            let server_conn = incoming.await.unwrap();
-            server_handshake(&server_conn, PEER_VERSION_REQ)
-                .await
-                .unwrap()
+            let mut last_error = String::new();
+            for _ in 0..DIAL_ATTEMPTS {
+                let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
+                let server_conn = match incoming.await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        last_error = format!("incoming connection failed: {e}");
+                        continue;
+                    }
+                };
+                match server_handshake(&server_conn, PEER_VERSION_REQ).await {
+                    Ok(streams) => return streams,
+                    Err(e) => last_error = format!("server handshake failed: {e}"),
+                }
+            }
+            panic!(
+                "no client dial completed the server handshake after {DIAL_ATTEMPTS} accepts; last error: {last_error}"
+            );
         }
 
         pub(super) fn assert_peer_info_eq(actual: &PeerInfo, expected: &PeerInfo) {
@@ -1348,27 +1442,6 @@ pub mod tests {
                 0,
             )
             .unwrap()
-        }
-
-        pub(super) async fn connect_test_client(server_addr: SocketAddr) -> TestClient {
-            let start = Instant::now();
-            let endpoint = init_client();
-            loop {
-                let connect = endpoint.connect(server_addr, test_connect_name());
-                if let Ok(connecting) = connect
-                    && let Ok(conn) = tokio::time::timeout(Duration::from_secs(1), connecting).await
-                    && let Ok(conn) = conn
-                    && let Ok((send, recv)) = client_handshake(&conn, PROTOCOL_VERSION).await
-                {
-                    return TestClient { send, recv, conn };
-                }
-
-                assert!(
-                    start.elapsed() <= Duration::from_secs(2),
-                    "server did not accept connection in time"
-                );
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
         }
 
         pub(super) async fn wait_for_peer_info<F>(
@@ -1554,6 +1627,57 @@ pub mod tests {
         }
     }
 
+    /// A scheduler stall can leave a stale incoming in the shared server
+    /// accept queue ahead of a retry's own dial. `connect_client_server`
+    /// must skip it and pair the server side with its own client, or the
+    /// returned pair would be cross-wired and dead-lock later stream I/O.
+    #[tokio::test]
+    async fn connect_client_server_pairs_live_dial_over_stale_incoming() {
+        init_crypto();
+        let (server_endpoint, server_addr) = setup_server_endpoint();
+
+        // Queue a stale incoming ahead of the helper's own dial: a client
+        // sends its Initial but is never accepted, mimicking a connection
+        // left behind by an attempt that a scheduler stall aborted.
+        let stale_client = init_client();
+        let stale_connecting = stale_client
+            .connect(server_addr, test_connect_name())
+            .expect("stale client dial setup");
+        // Let the server receive the Initial and queue the incoming first.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let peers = connect_client_server(&server_endpoint, server_addr).await;
+
+        // The returned server side must belong to the helper's own client,
+        // not the stale one queued ahead of it.
+        assert_eq!(
+            peers.server_conn.remote_address().port(),
+            peers
+                .client_endpoint
+                .local_addr()
+                .expect("client local addr")
+                .port(),
+            "server_conn must pair with the helper's own client_conn"
+        );
+
+        // And the pair must truly be one connection: a bidirectional
+        // stream opened on the client is observed on the server.
+        let (mut send, _recv) = peers.client_conn.open_bi().await.expect("open_bi");
+        send.write_all(b"ping").await.expect("write");
+        send.finish().expect("finish");
+        let (_srv_send, mut srv_recv) = peers.server_conn.accept_bi().await.expect("accept_bi");
+        assert_eq!(
+            srv_recv.read_to_end(16).await.expect("read"),
+            b"ping".to_vec(),
+            "round-trip must flow over the paired connection"
+        );
+
+        // Keep the stale connection alive until here so the helper had to
+        // actively skip it rather than win by the peer disappearing.
+        drop(stale_connecting);
+        drop(stale_client);
+    }
+
     #[tokio::test]
     async fn recv_peer_data_updates_peer_and_sensor_lists() {
         init_crypto();
@@ -1705,7 +1829,7 @@ pub mod tests {
         let run_addr = with_timeout("peer server ready timeout", ready_rx)
             .await
             .expect("peer server did not report addr");
-        let mut client = connect_test_client(run_addr).await;
+        let mut client = TestClient::new(run_addr).await;
         let peer_list: HashSet<PeerIdentity> =
             HashSet::from([peer_identity(other_addr, test_connect_name_node2())]);
         let client_info = peer_info(&["client-sensor"], Some(9201), Some(9202));
@@ -1907,7 +2031,7 @@ pub mod tests {
                 .unwrap();
         });
 
-        let mut client = connect_test_client(server_addr).await;
+        let mut client = TestClient::new(server_addr).await;
         let client_info = peer_info(&["client-sensor"], Some(9001), Some(9002));
         let new_peer = peer_identity("127.0.0.1:3333".parse().unwrap(), "node-new");
         let client_peer_list: HashSet<PeerIdentity> = HashSet::from([new_peer.clone()]);
