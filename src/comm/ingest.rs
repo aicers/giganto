@@ -74,6 +74,11 @@ pub struct Server {
     server_address: SocketAddr,
 }
 
+pub struct BoundServer {
+    endpoint: Endpoint,
+    local_addr: SocketAddr,
+}
+
 impl Server {
     pub fn new(addr: SocketAddr, certs: &Certs) -> Self {
         let server_config =
@@ -82,6 +87,51 @@ impl Server {
             server_config,
             server_address: addr,
         }
+    }
+
+    pub fn bind(self) -> Result<BoundServer> {
+        let endpoint = Endpoint::server(self.server_config, self.server_address)?;
+        let local_addr = endpoint.local_addr()?;
+        Ok(BoundServer {
+            endpoint,
+            local_addr,
+        })
+    }
+
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    pub async fn run(
+        self,
+        db: Database,
+        pcap_sensors: PcapSensors,
+        ingest_sensors: IngestSensors,
+        runtime_ingest_sensors: RunTimeIngestSensors,
+        stream_direct_channels: StreamDirectChannels,
+        notify_shutdown: Arc<Notify>,
+        notify_sensor: Option<Arc<Notify>>,
+        ack_transmission_cnt: u16,
+        tls_watch: TlsWatch,
+    ) {
+        self.bind()
+            .expect("endpoint")
+            .run(
+                db,
+                pcap_sensors,
+                ingest_sensors,
+                runtime_ingest_sensors,
+                stream_direct_channels,
+                notify_shutdown,
+                notify_sensor,
+                ack_transmission_cnt,
+                tls_watch,
+            )
+            .await;
+    }
+}
+
+impl BoundServer {
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -97,11 +147,9 @@ impl Server {
         ack_transmission_cnt: u16,
         mut tls_watch: TlsWatch,
     ) {
-        let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
-        info!(
-            "Ingest listening on {}",
-            endpoint.local_addr().expect("for local addr display")
-        );
+        let local_addr = self.local_addr();
+        let endpoint = self.endpoint;
+        info!("Ingest listening on {local_addr}");
 
         let (tx, rx): (Sender<SensorInfo>, Receiver<SensorInfo>) = channel(100);
         let sensor_db = db.clone();
