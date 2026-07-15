@@ -74,7 +74,7 @@ pub struct Server {
     server_address: SocketAddr,
 }
 
-pub struct BoundServer {
+pub(crate) struct BoundServer {
     endpoint: Endpoint,
     local_addr: SocketAddr,
 }
@@ -89,7 +89,7 @@ impl Server {
         }
     }
 
-    pub fn bind(self) -> Result<BoundServer> {
+    pub(crate) fn bind(self) -> Result<BoundServer> {
         let endpoint = Endpoint::server(self.server_config, self.server_address)?;
         let local_addr = endpoint.local_addr()?;
         Ok(BoundServer {
@@ -98,7 +98,7 @@ impl Server {
         })
     }
 
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         self,
         db: Database,
@@ -130,12 +130,12 @@ impl Server {
 
 impl BoundServer {
     #[must_use]
-    pub fn local_addr(&self) -> SocketAddr {
+    pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-    pub async fn run(
+    pub(crate) async fn run(
         self,
         db: Database,
         pcap_sensors: PcapSensors,

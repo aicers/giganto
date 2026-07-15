@@ -24,9 +24,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Refactored the ingest and publish QUIC listeners to expose their bound
-  addresses through `bind()` and `BoundServer`, allowing callers and tests to
-  use the actual ephemeral port without probe-and-drop socket reservations.
 - Unified storage introspection GraphQL APIs (`propertiesCf` and
   `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
   Enable diagnostics with `--features storage_diagnostics`.
