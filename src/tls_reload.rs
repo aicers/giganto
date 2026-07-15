@@ -837,7 +837,7 @@ mod listener_reload_contract_tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn ingest_server_run_reloads_tls_via_watch_end_to_end() {
-        use std::{net::UdpSocket, sync::Arc};
+        use std::sync::Arc;
 
         use tempfile::tempdir;
         use tokio::{
@@ -856,20 +856,17 @@ mod listener_reload_contract_tests {
         let set_a = build_cert_set();
         let set_b = build_cert_set();
 
-        // Reserve a loopback port by binding-and-dropping a UDP socket. The
-        // listener rebinds to the same port, which is the standard way to
-        // obtain a free ephemeral port for a server that performs its own
-        // bind inside `run`.
-        let server_addr = {
-            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
-                .expect("bind probe");
-            probe.local_addr().expect("probe local addr")
-        };
-
         let db_dir = tempdir().expect("db tempdir");
         let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
 
-        let server = crate::comm::ingest::Server::new(server_addr, &set_a.server);
+        let server = crate::comm::ingest::Server::new(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            &set_a.server,
+        )
+        .bind()
+        .expect("bind ingest server");
+        let server_addr = server.local_addr();
+        assert_ne!(server_addr.port(), 0);
 
         let (tls_sender, tls_watch) = watch::channel(Arc::new(TlsMaterial {
             certs: Arc::new(set_a.server.clone()),
@@ -981,7 +978,7 @@ mod listener_reload_contract_tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn publish_server_run_reloads_tls_via_watch_end_to_end() {
-        use std::{net::UdpSocket, sync::Arc};
+        use std::sync::Arc;
 
         use tempfile::tempdir;
         use tokio::{
@@ -999,16 +996,17 @@ mod listener_reload_contract_tests {
         let set_a = build_cert_set();
         let set_b = build_cert_set();
 
-        let server_addr = {
-            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
-                .expect("bind probe");
-            probe.local_addr().expect("probe local addr")
-        };
-
         let db_dir = tempdir().expect("db tempdir");
         let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
 
-        let server = crate::comm::publish::Server::new(server_addr, &set_a.server);
+        let server = crate::comm::publish::Server::new(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            &set_a.server,
+        )
+        .bind()
+        .expect("bind publish server");
+        let server_addr = server.local_addr();
+        assert_ne!(server_addr.port(), 0);
 
         let (tls_sender, tls_watch) = watch::channel(Arc::new(TlsMaterial {
             certs: Arc::new(set_a.server.clone()),
@@ -1115,7 +1113,7 @@ mod listener_reload_contract_tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_ingest_listener_end_to_end() {
-        use std::{fs, net::UdpSocket, sync::Arc};
+        use std::{fs, sync::Arc};
 
         use tempfile::tempdir;
         use tokio::{sync::Notify, time::sleep};
@@ -1153,18 +1151,17 @@ mod listener_reload_contract_tests {
         let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
-        // Reserve a loopback port via probe-and-drop, same pattern as the
-        // other end-to-end tests in this module.
-        let server_addr = {
-            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
-                .expect("bind probe");
-            probe.local_addr().expect("probe local addr")
-        };
-
         let db_dir = tempdir().expect("db tempdir");
         let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
 
-        let server = crate::comm::ingest::Server::new(server_addr, &set_a.server);
+        let server = crate::comm::ingest::Server::new(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            &set_a.server,
+        )
+        .bind()
+        .expect("bind ingest server");
+        let server_addr = server.local_addr();
+        assert_ne!(server_addr.port(), 0);
 
         let notify_shutdown = Arc::new(Notify::new());
         let pcap_sensors = new_pcap_sensors();
@@ -1274,7 +1271,7 @@ mod listener_reload_contract_tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_publish_listener_end_to_end() {
-        use std::{fs, net::UdpSocket, sync::Arc};
+        use std::{fs, sync::Arc};
 
         use tempfile::tempdir;
         use tokio::{sync::Notify, time::sleep};
@@ -1309,16 +1306,17 @@ mod listener_reload_contract_tests {
         let initial_material = Arc::new(load_tls_material(&cert_paths).expect("initial load"));
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, initial_material);
 
-        let server_addr = {
-            let probe = UdpSocket::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
-                .expect("bind probe");
-            probe.local_addr().expect("probe local addr")
-        };
-
         let db_dir = tempdir().expect("db tempdir");
         let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
 
-        let server = crate::comm::publish::Server::new(server_addr, &set_a.server);
+        let server = crate::comm::publish::Server::new(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            &set_a.server,
+        )
+        .bind()
+        .expect("bind publish server");
+        let server_addr = server.local_addr();
+        assert_ne!(server_addr.port(), 0);
 
         let notify_shutdown = Arc::new(Notify::new());
         let pcap_sensors = new_pcap_sensors();

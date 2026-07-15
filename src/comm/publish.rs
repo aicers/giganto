@@ -67,6 +67,11 @@ pub struct Server {
     server_address: SocketAddr,
 }
 
+pub(crate) struct BoundServer {
+    endpoint: Endpoint,
+    local_addr: SocketAddr,
+}
+
 impl Server {
     pub fn new(addr: SocketAddr, certs: &Certs) -> Self {
         let server_config =
@@ -75,6 +80,15 @@ impl Server {
             server_config,
             server_address: addr,
         }
+    }
+
+    pub(crate) fn bind(self) -> Result<BoundServer> {
+        let endpoint = Endpoint::server(self.server_config, self.server_address)?;
+        let local_addr = endpoint.local_addr()?;
+        Ok(BoundServer {
+            endpoint,
+            local_addr,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -86,14 +100,46 @@ impl Server {
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
+        tls_watch: TlsWatch,
+        notify_shutdown: Arc<Notify>,
+    ) {
+        self.bind()
+            .expect("endpoint")
+            .run(
+                db,
+                pcap_sensors,
+                stream_direct_channels,
+                ingest_sensors,
+                peers,
+                peer_idents,
+                tls_watch,
+                notify_shutdown,
+            )
+            .await;
+    }
+}
+
+impl BoundServer {
+    #[must_use]
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn run(
+        self,
+        db: Database,
+        pcap_sensors: PcapSensors,
+        stream_direct_channels: StreamDirectChannels,
+        ingest_sensors: IngestSensors,
+        peers: Peers,
+        peer_idents: PeerIdents,
         mut tls_watch: TlsWatch,
         notify_shutdown: Arc<Notify>,
     ) {
-        let endpoint = Endpoint::server(self.server_config, self.server_address).expect("endpoint");
-        info!(
-            "Publish listening on {}",
-            endpoint.local_addr().expect("for local addr display")
-        );
+        let local_addr = self.local_addr();
+        let endpoint = self.endpoint;
+        info!("Publish listening on {local_addr}");
 
         let mut conn_hdl: Option<tokio::task::JoinHandle<()>> = None;
         loop {
