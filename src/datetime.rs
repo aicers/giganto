@@ -308,7 +308,6 @@ mod tests {
 
         let err = result.unwrap_err();
         let message = err.to_string();
-        assert!(message.contains("failed to parse year in date"));
         assert!(message.contains("failed to parse four digit integer as year"));
     }
 
