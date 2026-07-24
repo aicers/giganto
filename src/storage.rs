@@ -1,5 +1,6 @@
 //! Raw event storage based on RocksDB.
 
+mod customer_deletion_jobs;
 mod migration;
 
 use std::{
@@ -15,6 +16,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(any(test, feature = "bootroot"))]
+pub use customer_deletion_jobs::CustomerDeletionJob;
+pub use customer_deletion_jobs::{CustomerDeletionJobStatus, CustomerDeletionJobStore};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     Packet,
@@ -34,6 +38,8 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
+#[cfg(any(test, feature = "bootroot"))]
+use rocksdb::WriteBatch;
 #[cfg(feature = "storage_diagnostics")]
 use rocksdb::properties;
 use rocksdb::{
@@ -93,7 +99,57 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "netflow9",
     "seculog",
 ];
-const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
+const CUSTOMER_DELETION_JOBS_CF: &str = "customer_deletion_jobs";
+const META_DATA_COLUMN_FAMILY_NAMES: [&str; 2] = ["sensors", CUSTOMER_DELETION_JOBS_CF];
+
+/// Event column families written by Piglet and keyed by its service FQDN.
+///
+/// Periodic time series, statistics, and oplog are deliberately excluded from
+/// customer deletion. The remaining non-Piglet event families are also not
+/// included so a future service using the same host cannot lose its data.
+#[cfg(any(test, feature = "bootroot"))]
+const PIGLET_CUSTOMER_DATA_CFS: [&str; 21] = [
+    "conn",
+    "dns",
+    "malformed_dns",
+    "http",
+    "rdp",
+    "smtp",
+    "ntlm",
+    "kerberos",
+    "ssh",
+    "dce rpc",
+    "packet",
+    "ftp",
+    "mqtt",
+    "ldap",
+    "tls",
+    "smb",
+    "nfs",
+    "bootp",
+    "dhcp",
+    "radius",
+    "icmp",
+];
+
+/// Event column families written by Reproduce and keyed by its service FQDN.
+#[cfg(any(test, feature = "bootroot"))]
+const REPRODUCE_CUSTOMER_DATA_CFS: [&str; 14] = [
+    "process create",
+    "file create time",
+    "network connect",
+    "process terminate",
+    "image load",
+    "file create",
+    "registry value set",
+    "registry key rename",
+    "file create stream hash",
+    "pipe event",
+    "dns query",
+    "file delete",
+    "process tamper",
+    "file delete detected",
+];
 
 // Not a `sensor`+`time` event.
 const NON_STANDARD_CFS: [&str; 6] = [
@@ -189,7 +245,11 @@ impl Database {
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database { db: Arc::new(db) })
+        let database = Database { db: Arc::new(db) };
+        database
+            .customer_deletion_jobs()?
+            .fail_in_progress_jobs(DateTime::now().timestamp_nanos_opt().unwrap_or(i64::MAX))?;
+        Ok(database)
     }
 
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
@@ -375,6 +435,44 @@ impl Database {
         Ok(SensorStore { db: &self.db, cf })
     }
 
+    /// Returns the typed customer-deletion job metadata store.
+    pub fn customer_deletion_jobs(&self) -> Result<CustomerDeletionJobStore<'_>> {
+        let cf = self.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
+        Ok(CustomerDeletionJobStore::new(&self.db, cf))
+    }
+
+    /// Deletes all Piglet and Reproduce event data belonging to `host_fqdn`.
+    ///
+    /// Event keys begin with `service_fqdn + 0x00`. Appending `0x01` to the
+    /// same service FQDN therefore forms the precise exclusive upper bound.
+    /// In particular, this does not delete a similar service FQDN such as
+    /// `piglet.example.com-extra`.
+    #[cfg(any(test, feature = "bootroot"))]
+    pub fn delete_customer_data(&self, host_fqdn: &str) -> Result<()> {
+        let piglet_fqdn = format!("piglet.{host_fqdn}");
+        let reproduce_fqdn = format!("reproduce.{host_fqdn}");
+        let mut batch = WriteBatch::default();
+
+        for cf_name in PIGLET_CUSTOMER_DATA_CFS {
+            let cf = self.get_cf_handle(cf_name)?;
+            let (start, end) = service_fqdn_range(&piglet_fqdn);
+            batch.delete_range_cf(cf, start, end);
+        }
+        for cf_name in REPRODUCE_CUSTOMER_DATA_CFS {
+            let cf = self.get_cf_handle(cf_name)?;
+            let (start, end) = service_fqdn_range(&reproduce_fqdn);
+            batch.delete_range_cf(cf, start, end);
+        }
+
+        let sensors_cf = self.get_cf_handle("sensors")?;
+        batch.delete_cf(sensors_cf, piglet_fqdn.as_bytes());
+        batch.delete_cf(sensors_cf, reproduce_fqdn.as_bytes());
+
+        self.db.write(batch)?;
+        self.db.flush_wal(true)?;
+        Ok(())
+    }
+
     /// Returns the store for Ftp
     pub fn ftp_store(&self) -> Result<RawEventStore<'_, Ftp>> {
         let cf = self.get_cf_handle("ftp")?;
@@ -536,6 +634,18 @@ impl Database {
         let cf = self.get_cf_handle("seculog")?;
         Ok(RawEventStore::new(&self.db, cf))
     }
+}
+
+#[cfg(any(test, feature = "bootroot"))]
+fn service_fqdn_range(service_fqdn: &str) -> (Vec<u8>, Vec<u8>) {
+    let mut start = Vec::with_capacity(service_fqdn.len() + 1);
+    start.extend_from_slice(service_fqdn.as_bytes());
+    start.push(0x00);
+
+    let mut end = Vec::with_capacity(service_fqdn.len() + 1);
+    end.extend_from_slice(service_fqdn.as_bytes());
+    end.push(0x01);
+    (start, end)
 }
 
 pub struct RawEventStore<'db, T> {
@@ -1363,8 +1473,10 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
-        StatisticsIter, StorageKey, read_compression_metadata, store_compression_metadata,
+        BoundaryIter, CustomerDeletionJob, CustomerDeletionJobStatus, Database, DbOptions,
+        PIGLET_CUSTOMER_DATA_CFS, RAW_DATA_COLUMN_FAMILY_NAMES, REPRODUCE_CUSTOMER_DATA_CFS,
+        RawEventStore, StatisticsIter, StorageKey, read_compression_metadata,
+        store_compression_metadata,
     };
     use crate::datetime::DateTime;
 
@@ -1404,6 +1516,193 @@ mod tests {
         let (k, v) = iter.next().unwrap().unwrap();
         assert_eq!(&*k, key);
         assert_eq!(&*v, value);
+    }
+
+    fn service_event_key(service_fqdn: &str, suffix: u8) -> Vec<u8> {
+        let mut key = service_fqdn.as_bytes().to_vec();
+        key.push(0);
+        key.push(suffix);
+        key
+    }
+
+    #[test]
+    fn customer_deletion_job_status_transitions_enforce_invariants() {
+        let (_dir, db) = setup_db();
+        let store = db.customer_deletion_jobs().unwrap();
+
+        let success = CustomerDeletionJob::in_progress(1, "one.example".to_string(), 10, 20);
+        store.create(&success).unwrap();
+        let success = store.mark_succeeded(1, 30).unwrap();
+        assert_eq!(success.status, CustomerDeletionJobStatus::Succeeded);
+        assert_eq!(success.completed_at, Some(30));
+        assert_eq!(success.error_message, None);
+        assert!(
+            store
+                .mark_failed(1, 40, "late failure".to_string())
+                .is_err()
+        );
+
+        let failure = CustomerDeletionJob::in_progress(2, "two.example".to_string(), 11, 21);
+        store.create(&failure).unwrap();
+        assert!(store.mark_failed(2, 31, String::new()).is_err());
+        let failure = store
+            .mark_failed(2, 31, "deletion failed".to_string())
+            .unwrap();
+        assert_eq!(failure.status, CustomerDeletionJobStatus::Failed);
+        assert_eq!(failure.completed_at, Some(31));
+        assert_eq!(failure.error_message.as_deref(), Some("deletion failed"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn customer_data_deletion_uses_exact_service_ranges_and_sensor_keys() {
+        let (_dir, db) = setup_db();
+        let host = "customer.example";
+        let other_host = "other.example";
+        let piglet = format!("piglet.{host}");
+        let reproduce = format!("reproduce.{host}");
+        let similar_piglet = format!("{piglet}-archive");
+        let similar_reproduce = format!("{reproduce}-archive");
+
+        for (service, cfs) in [
+            (piglet.as_str(), PIGLET_CUSTOMER_DATA_CFS.as_slice()),
+            (reproduce.as_str(), REPRODUCE_CUSTOMER_DATA_CFS.as_slice()),
+        ] {
+            for cf_name in cfs {
+                let cf = db.get_cf_handle(cf_name).unwrap();
+                db.db
+                    .put_cf(cf, service_event_key(service, 1), b"delete")
+                    .unwrap();
+                db.db
+                    .put_cf(
+                        cf,
+                        service_event_key(
+                            &format!("{}.{}", &service[..service.find('.').unwrap()], other_host),
+                            2,
+                        ),
+                        b"other customer",
+                    )
+                    .unwrap();
+                let similar = if service.starts_with("piglet.") {
+                    &similar_piglet
+                } else {
+                    &similar_reproduce
+                };
+                db.db
+                    .put_cf(cf, service_event_key(similar, 3), b"similar prefix")
+                    .unwrap();
+            }
+        }
+
+        for excluded_cf in ["periodic time series", "statistics", "oplog"] {
+            let cf = db.get_cf_handle(excluded_cf).unwrap();
+            db.db
+                .put_cf(cf, service_event_key(&piglet, 4), b"excluded")
+                .unwrap();
+        }
+
+        let sensors = db.sensors_store().unwrap();
+        let now = DateTime::now();
+        for sensor in [
+            piglet.as_str(),
+            reproduce.as_str(),
+            similar_piglet.as_str(),
+            similar_reproduce.as_str(),
+            "piglet.other.example",
+        ] {
+            sensors.insert(sensor, now).unwrap();
+        }
+
+        db.delete_customer_data(host).unwrap();
+
+        for (service, cfs) in [
+            (piglet.as_str(), PIGLET_CUSTOMER_DATA_CFS.as_slice()),
+            (reproduce.as_str(), REPRODUCE_CUSTOMER_DATA_CFS.as_slice()),
+        ] {
+            for cf_name in cfs {
+                let cf = db.get_cf_handle(cf_name).unwrap();
+                assert!(
+                    db.db
+                        .get_cf(cf, service_event_key(service, 1))
+                        .unwrap()
+                        .is_none(),
+                    "{cf_name}"
+                );
+                let other_service =
+                    format!("{}.{}", &service[..service.find('.').unwrap()], other_host);
+                assert!(
+                    db.db
+                        .get_cf(cf, service_event_key(&other_service, 2))
+                        .unwrap()
+                        .is_some(),
+                    "{cf_name}"
+                );
+                let similar = if service.starts_with("piglet.") {
+                    &similar_piglet
+                } else {
+                    &similar_reproduce
+                };
+                assert!(
+                    db.db
+                        .get_cf(cf, service_event_key(similar, 3))
+                        .unwrap()
+                        .is_some(),
+                    "{cf_name}"
+                );
+            }
+        }
+        for excluded_cf in ["periodic time series", "statistics", "oplog"] {
+            let cf = db.get_cf_handle(excluded_cf).unwrap();
+            assert!(
+                db.db
+                    .get_cf(cf, service_event_key(&piglet, 4))
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        let sensors = db.sensors_store().unwrap().sensor_list();
+        assert!(!sensors.contains(&piglet));
+        assert!(!sensors.contains(&reproduce));
+        assert!(sensors.contains(&similar_piglet));
+        assert!(sensors.contains(&similar_reproduce));
+        assert!(sensors.contains("piglet.other.example"));
+
+        // Repeating a deletion over missing data is a successful no-op.
+        db.delete_customer_data(host).unwrap();
+    }
+
+    #[test]
+    fn database_open_recovers_in_progress_customer_deletion_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+            db.customer_deletion_jobs()
+                .unwrap()
+                .create(&CustomerDeletionJob::in_progress(
+                    99,
+                    "recover.example".to_string(),
+                    1,
+                    2,
+                ))
+                .unwrap();
+        }
+
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let recovered = db
+            .customer_deletion_jobs()
+            .unwrap()
+            .get(99)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.status, CustomerDeletionJobStatus::Failed);
+        assert!(recovered.completed_at.is_some());
+        assert!(
+            recovered
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("restarted"))
+        );
     }
 
     #[test]

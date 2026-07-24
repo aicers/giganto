@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added the bootroot-only `deleteCustomerData` GraphQL mutation for asynchronous
+  customer Piglet and Reproduce data deletion, including durable deletion-job
+  status and failure tracking across restarts.
 - Added `rev` support to `scripts/fetch-theme.sh` and `docs/theme.toml` so
   docs-theme can be fetched from a commit SHA for pre-release testing.
   `version` and `rev` are mutually exclusive source selectors: set
