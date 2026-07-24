@@ -18,7 +18,7 @@ path = "src/gen_schema.rs"
 [dependencies]
 anyhow = "1"
 async-graphql = { version = "7", features = ["string_number"] }
-base64 = "0.22"
+base64 = "0.23"
 bincode = "1"
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
