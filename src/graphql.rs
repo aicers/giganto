@@ -1,5 +1,6 @@
 #[cfg(feature = "cluster")]
 mod client;
+mod customer_deletion;
 mod export;
 mod log;
 mod netflow;
@@ -72,7 +73,10 @@ pub struct Query(
 );
 
 #[derive(Default, MergedObject)]
-pub struct Mutation(status::ConfigMutation);
+pub struct Mutation(
+    status::ConfigMutation,
+    customer_deletion::CustomerDeletionMutation,
+);
 
 /// Time range filter.
 ///

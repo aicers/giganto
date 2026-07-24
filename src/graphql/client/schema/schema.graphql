@@ -266,6 +266,17 @@ type ConnRawEventEdge {
 	cursor: String!
 }
 
+enum CustomerDataDeletionJobStatus {
+	IN_PROGRESS
+	SUCCEEDED
+	FAILED
+}
+
+type CustomerDataDeletionRequestStatus {
+	jobId: StringNumberU64!
+	status: CustomerDataDeletionJobStatus!
+}
+
 scalar DateTime
 
 """
@@ -2014,6 +2025,11 @@ type Mutation {
 	stop: Boolean!
 	reboot: Boolean!
 	shutdown: Boolean!
+	"""
+	Accepts an asynchronous request to delete one customer's Piglet and
+	Reproduce data. This operation is available only in bootroot builds.
+	"""
+	deleteCustomerData(hostFqdn: String!, requestedAt: StringNumberI64!): CustomerDataDeletionRequestStatus!
 }
 
 type Netflow5RawEvent {
