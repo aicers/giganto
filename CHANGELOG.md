@@ -8,6 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added the `bootroot`-only `deleteCustomerData` GraphQL mutation for
+  asynchronous customer data deletion. Deletion requests are tracked in a
+  persistent RocksDB job store with in-progress, succeeded, and failed
+  statuses, including retry support for failed jobs.
 - Added `rev` support to `scripts/fetch-theme.sh` and `docs/theme.toml` so
   docs-theme can be fetched from a commit SHA for pre-release testing.
   `version` and `rev` are mutually exclusive source selectors: set

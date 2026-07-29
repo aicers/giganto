@@ -1,5 +1,7 @@
 #[cfg(feature = "cluster")]
 mod client;
+#[cfg(feature = "bootroot")]
+mod customer_deletion;
 mod export;
 mod log;
 mod netflow;
@@ -72,7 +74,10 @@ pub struct Query(
 );
 
 #[derive(Default, MergedObject)]
-pub struct Mutation(status::ConfigMutation);
+pub struct Mutation(
+    status::ConfigMutation,
+    #[cfg(feature = "bootroot")] customer_deletion::CustomerDeletionMutation,
+);
 
 /// Time range filter.
 ///
@@ -195,7 +200,7 @@ pub fn schema(
     notify_terminate: Arc<Notify>,
     settings: Settings,
 ) -> Schema {
-    Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+    let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
         .data(database)
         .data(pcap_sensors)
@@ -207,8 +212,12 @@ pub fn schema(
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
-        .data(settings)
-        .finish()
+        .data(settings);
+    #[cfg(feature = "bootroot")]
+    let schema = schema.data(Arc::new(
+        customer_deletion::CustomerDeletionTaskManager::default(),
+    ));
+    schema.finish()
 }
 
 /// The default page size for connections when neither `first` nor `last` is
@@ -1084,6 +1093,18 @@ mod tests {
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
             Self::setup_with_node_name(ingest_sensors, peers, node_name)
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn new_with_ingest_sensors(sensors: &[&str]) -> Self {
+            let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
+                sensors
+                    .iter()
+                    .map(|sensor| (*sensor).to_string())
+                    .collect::<HashSet<String>>(),
+            ));
+            let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+            Self::setup(ingest_sensors, peers)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
