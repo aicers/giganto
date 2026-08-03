@@ -215,7 +215,7 @@ pub fn schema(
         .data(settings);
     #[cfg(feature = "bootroot")]
     let schema = schema.data(Arc::new(
-        customer_deletion::CustomerDeletionTaskManager::default(),
+        customer_deletion::CustomerDeletionRequestManager::default(),
     ));
     schema.finish()
 }

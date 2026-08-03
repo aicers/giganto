@@ -7,7 +7,6 @@ use tracing::{error, info};
 
 use super::StringNumberU32;
 use crate::{
-    cancellation::TaskTracker,
     comm::IngestSensors,
     datetime::DateTime,
     storage::{CustomerDataDeletion, CustomerDataDeletionStatus, Database},
@@ -69,18 +68,9 @@ pub enum CustomerDataDeletionRequestStatus {
     NoLocalTarget,
 }
 
-pub struct CustomerDeletionTaskManager {
-    tracker: Arc<TaskTracker>,
+#[derive(Default)]
+pub struct CustomerDeletionRequestManager {
     request_lock: Mutex<()>,
-}
-
-impl Default for CustomerDeletionTaskManager {
-    fn default() -> Self {
-        Self {
-            tracker: Arc::new(TaskTracker::new()),
-            request_lock: Mutex::new(()),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -98,7 +88,7 @@ impl CustomerDeletionMutation {
         let provided_targets = validate_service_fqdn_list(service_fqdn_list)?;
         let db = ctx.data::<Database>()?.clone();
         let ingest_sensors = ctx.data::<IngestSensors>()?;
-        let manager = ctx.data::<Arc<CustomerDeletionTaskManager>>()?;
+        let manager = ctx.data::<Arc<CustomerDeletionRequestManager>>()?;
         let _request_guard = manager.request_lock.lock().await;
 
         let store = db.customer_deletion_job_store()?;
@@ -153,7 +143,7 @@ impl CustomerDeletionMutation {
             store.create(customer_id.0, &in_progress)?;
         }
 
-        start_customer_deletion_worker(&manager.tracker, db, customer_id.0, local_targets)?;
+        start_customer_deletion_worker(db, customer_id.0, local_targets);
         Ok(CustomerDataDeletionRequestStatus::Accepted)
     }
 }
@@ -222,80 +212,58 @@ fn delete_customer_data_with(
     Ok(())
 }
 
-fn start_customer_deletion_worker(
-    tracker: &TaskTracker,
-    db: Database,
-    customer_id: u32,
-    service_fqdn_list: Vec<String>,
-) -> AnyhowResult<()> {
+fn start_customer_deletion_worker(db: Database, customer_id: u32, service_fqdn_list: Vec<String>) {
     let worker_db = db.clone();
-    let worker = tracker.spawn(
-        format!("customer-data-deletion-{customer_id}"),
-        move |_token| async move {
-            match delete_customer_data_from_db(&worker_db, &service_fqdn_list) {
-                Ok(()) => {
-                    if let Err(err) = mark_job_succeeded(&worker_db, customer_id) {
-                        error!(
-                            customer_id,
-                            "Failed to persist successful customer data deletion: {err:#}"
-                        );
-                    } else {
-                        info!(customer_id, "Customer data deletion completed");
-                    }
-                }
-                Err(err) => {
-                    let message = format!("{err:#}");
-                    if let Err(update_err) =
-                        mark_job_failed(&worker_db, customer_id, message.clone())
-                    {
-                        error!(
-                            customer_id,
-                            "Failed to persist customer data deletion failure: {update_err:#}"
-                        );
-                    }
-                    error!(customer_id, "Customer data deletion failed: {message}");
+    let worker = tokio::task::spawn_blocking(move || {
+        match delete_customer_data_from_db(&worker_db, &service_fqdn_list) {
+            Ok(()) => {
+                if let Err(err) = mark_job_succeeded(&worker_db, customer_id) {
+                    error!(
+                        customer_id,
+                        "Failed to persist successful customer data deletion: {err:#}"
+                    );
+                } else {
+                    info!(customer_id, "Customer data deletion completed");
                 }
             }
-            Ok(())
-        },
-    );
-
-    let worker = match worker {
-        Ok(worker) => worker,
-        Err(err) => {
-            let message = format!("Failed to start customer data deletion task: {err}");
-            mark_job_failed(&db, customer_id, message.clone())?;
-            return Err(anyhow!(message));
+            Err(err) => {
+                let message = format!("{err:#}");
+                if let Err(update_err) = mark_job_failed(&worker_db, customer_id, message.clone()) {
+                    error!(
+                        customer_id,
+                        "Failed to persist customer data deletion failure: {update_err:#}"
+                    );
+                }
+                error!(customer_id, "Customer data deletion failed: {message}");
+            }
         }
-    };
+    });
 
     tokio::spawn(supervise_worker(worker, db, customer_id));
-    Ok(())
 }
 
-async fn supervise_worker(
-    worker: tokio::task::JoinHandle<std::result::Result<(), crate::cancellation::CancelledError>>,
-    db: Database,
-    customer_id: u32,
-) {
+async fn supervise_worker(worker: tokio::task::JoinHandle<()>, db: Database, customer_id: u32) {
     match worker.await {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            let message = format!("Customer data deletion task terminated unexpectedly: {err}");
-            if let Err(update_err) = mark_job_failed(&db, customer_id, message) {
-                error!(
-                    customer_id,
-                    "Failed to record unexpected customer deletion termination: {update_err:#}"
-                );
-            }
-        }
+        Ok(()) => {}
         Err(err) => {
             let message = format!("Customer data deletion task join failure: {err}");
-            if let Err(update_err) = mark_job_failed(&db, customer_id, message) {
-                error!(
-                    customer_id,
-                    "Failed to record customer deletion task join failure: {update_err:#}"
-                );
+            let update =
+                tokio::task::spawn_blocking(move || mark_job_failed(&db, customer_id, message))
+                    .await;
+            match update {
+                Ok(Ok(())) => {}
+                Ok(Err(update_err)) => {
+                    error!(
+                        customer_id,
+                        "Failed to record customer deletion task join failure: {update_err:#}"
+                    );
+                }
+                Err(update_err) => {
+                    error!(
+                        customer_id,
+                        "Failed to join customer deletion failure recorder: {update_err}"
+                    );
+                }
             }
         }
     }
@@ -337,11 +305,9 @@ mod tests {
 
     use super::{
         PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, delete_customer_data_from_db,
-        delete_customer_data_with, start_customer_deletion_worker, supervise_worker,
-        validate_service_fqdn_list,
+        delete_customer_data_with, supervise_worker, validate_service_fqdn_list,
     };
     use crate::{
-        cancellation::{CancelledError, TaskTracker},
         datetime::DateTime,
         graphql::tests::TestSchema,
         storage::{CustomerDataDeletion, CustomerDataDeletionStatus, Database, DbOptions},
@@ -639,7 +605,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_and_unexpected_task_failures_are_persisted() {
+    async fn unexpected_task_failure_is_persisted() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
         let make_job = || CustomerDataDeletion {
@@ -651,34 +617,11 @@ mod tests {
         };
         let store = db.customer_deletion_job_store().unwrap();
         store.create(1, &make_job()).unwrap();
-        let tracker = TaskTracker::new();
-        tracker.close().unwrap();
-        let error = start_customer_deletion_worker(
-            &tracker,
-            db.clone(),
-            1,
-            vec!["piglet.node1.example.test".to_string()],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("Failed to start"));
-        let failed = store.get(1).unwrap().unwrap();
-        assert_eq!(failed.status, CustomerDataDeletionStatus::Failed);
-        assert!(failed.completed_at.is_some());
-        assert!(
-            failed
-                .error
-                .as_deref()
-                .is_some_and(|message| message.contains("Failed to start"))
-        );
-
-        store.create(2, &make_job()).unwrap();
-        let panicking_worker = tokio::spawn(async {
+        let panicking_worker = tokio::task::spawn_blocking(|| {
             panic!("injected worker panic");
-            #[allow(unreachable_code)]
-            Ok::<(), CancelledError>(())
         });
-        supervise_worker(panicking_worker, db.clone(), 2).await;
-        let failed = store.get(2).unwrap().unwrap();
+        supervise_worker(panicking_worker, db.clone(), 1).await;
+        let failed = store.get(1).unwrap().unwrap();
         assert_eq!(failed.status, CustomerDataDeletionStatus::Failed);
         assert!(failed.completed_at.is_some());
         assert!(
