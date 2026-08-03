@@ -70,7 +70,7 @@ mockito = "1"
 pretty_assertions = "1"
 rcgen = "0.14"
 regex = "1"
-serial_test = "3"
+serial_test = "4"
 tempfile = "3"
 url = "2"
 
