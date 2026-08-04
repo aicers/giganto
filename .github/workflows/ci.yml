@@ -47,6 +47,12 @@ jobs:
         run: git diff-index --quiet HEAD --
       - name: markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v23
+        with:
+          # Recursive, deliberately. The action's default glob is
+          # `*.{md,markdown}` — repository root only — and `.markdownlint.yaml`
+          # supplies no `globs` of its own, so 13 of the 15 tracked documents,
+          # every one of them under `docs/`, went unlinted.
+          globs: "**/*.md"
       - name: Fetch docs theme
         run: scripts/fetch-theme.sh
         env:
