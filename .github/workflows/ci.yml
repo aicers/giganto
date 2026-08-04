@@ -1,12 +1,18 @@
 name: CI
 
+# TRIGGERS: `push` is scoped to `main`. Without a branch filter it also matches
+# pushes to pull-request branches, which already match `pull_request`, so every
+# job ran twice per commit, on two separate workflow runs. Naming `branches:`
+# also stops tag pushes from matching. `pull_request` checks out the branch
+# already merged into its base, so merge coverage is not what is being dropped
+# here — the one thing lost is CI on a branch with no pull request open, and
+# `workflow_dispatch` replaces it (`gh workflow run ci.yml --ref <branch>`).
+
 on:
-  push:
-    branches:
-      - "**"
   pull_request:
-    branches:
-      - main
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
