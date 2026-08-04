@@ -2,6 +2,8 @@
 
 mod migration;
 
+#[cfg(feature = "bootroot")]
+use std::sync::Mutex;
 use std::{
     collections::HashSet,
     marker::PhantomData,
@@ -194,6 +196,8 @@ impl DbOptions {
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
+    #[cfg(feature = "bootroot")]
+    customer_deletion_job_lock: Arc<Mutex<()>>,
 }
 
 impl Database {
@@ -213,7 +217,11 @@ impl Database {
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database { db: Arc::new(db) })
+        Ok(Database {
+            db: Arc::new(db),
+            #[cfg(feature = "bootroot")]
+            customer_deletion_job_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
@@ -402,7 +410,11 @@ impl Database {
     #[cfg(feature = "bootroot")]
     pub fn customer_deletion_job_store(&self) -> Result<CustomerDeletionJobStore<'_>> {
         let cf = self.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
-        Ok(CustomerDeletionJobStore { db: &self.db, cf })
+        Ok(CustomerDeletionJobStore {
+            db: &self.db,
+            cf,
+            lock: &self.customer_deletion_job_lock,
+        })
     }
 
     #[cfg(feature = "bootroot")]
@@ -779,11 +791,23 @@ unsafe impl Send for SensorStore<'_> {}
 pub struct CustomerDeletionJobStore<'db> {
     db: &'db DB,
     cf: &'db ColumnFamily,
+    lock: &'db Mutex<()>,
 }
 
 #[cfg(feature = "bootroot")]
 impl CustomerDeletionJobStore<'_> {
     pub fn create(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
+        if self
+            .db
+            .get_cf(self.cf, customer_id.to_be_bytes())?
+            .is_some()
+        {
+            bail!("customer deletion job already exists for customer {customer_id}");
+        }
         self.put(customer_id, job)
     }
 
@@ -795,11 +819,26 @@ impl CustomerDeletionJobStore<'_> {
     }
 
     pub fn update(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
+        if self
+            .db
+            .get_cf(self.cf, customer_id.to_be_bytes())?
+            .is_none()
+        {
+            bail!("customer deletion job does not exist for customer {customer_id}");
+        }
         self.put(customer_id, job)
     }
 
     #[allow(dead_code)]
     pub fn delete(&self, customer_id: u32) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
         self.db.delete_cf(self.cf, customer_id.to_be_bytes())?;
         Ok(())
     }
@@ -1518,6 +1557,19 @@ mod tests {
         store.create(customer_id, &job).unwrap();
 
         assert_eq!(store.get(customer_id).unwrap(), Some(job.clone()));
+        let duplicate = CustomerDataDeletion {
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(requested_at),
+            error: Some("must not replace the existing job".to_string()),
+            ..job.clone()
+        };
+        assert!(store.create(customer_id, &duplicate).is_err());
+        assert_eq!(store.get(customer_id).unwrap(), Some(job.clone()));
+
+        let missing_customer_id = customer_id + 1;
+        assert!(store.update(missing_customer_id, &duplicate).is_err());
+        assert!(store.get(missing_customer_id).unwrap().is_none());
+
         let cf = db.get_cf_handle(CUSTOMER_DELETION_JOBS_CF).unwrap();
         let entries = db
             .db
